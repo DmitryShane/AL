@@ -7,7 +7,6 @@ AL is an Activity Logger monorepo. It contains the first Unity plugin (`UAL`), a
 - `packages/ual` - Unity Activity Logger package for Unity Package Manager.
 - `apps/backend` - FastAPI API server with MongoDB persistence and ALR1 decoding.
 - `apps/frontend` - React/Vite dashboard.
-- `references/originals` - copied original Unity script and decoder source used as reference material.
 - `docs/REMINDERS.md` - follow-up product and deployment reminders.
 
 ## Local Requirements

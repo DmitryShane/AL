@@ -18,7 +18,7 @@ When working on the Unity Activity Logger plugin, edit the linked package folder
 /Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual
 ```
 
-Do not recreate a separate `packages/ual` copy in this repository unless the user explicitly asks for that structure again. Treat `com.al.ual` as the active plugin source for Unity work.
+Treat `com.al.ual` as the active plugin source for Unity work.
 
 ## Backend And Frontend
 
