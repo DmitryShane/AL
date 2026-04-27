@@ -19,20 +19,6 @@ AL is an Activity Logger monorepo. It contains the first Unity plugin (`UAL`), a
 
 MongoDB and Node are not bundled with this repo. On macOS they can be installed with Homebrew.
 
-## Git Hooks
-
-Install repository hooks once after cloning:
-
-```bash
-./scripts/install-git-hooks.sh
-```
-
-The hooks automatically bump `packages/ual/package.json` patch version on every commit and create an annotated tag named `ual-vX.Y.Z` after the commit. The installer also enables `push.followTags`, so ordinary pushes publish the generated package tags too:
-
-```bash
-git push origin main
-```
-
 ## Backend
 
 ```bash
