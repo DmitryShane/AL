@@ -1,0 +1,15 @@
+{
+  "title": "UAL decode command",
+  "usage": {
+    "default": "decode",
+    "shortName": "decode ualds",
+    "customLog": "decode /path/to/UALxx.json"
+  },
+  "notes": [
+    "Run this in a new VS Code terminal.",
+    "If the terminal was already open, run: source ~/.zshrc",
+    "Use decode ualip for Assets/Plugins/UAL/UALip.json, decode ualds for Assets/Plugins/UAL/UALds.json, etc.",
+    "The default command decodes /Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Assets/Plugins/UAL/UALds.json",
+    "The decoder automatically reads the key from /Volumes/MacMiniExternal2TB/Development/UAL-Decoder/UnityActivityLoggerKey.json"
+  ]
+}
