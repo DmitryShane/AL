@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PACKAGE_JSON="packages/ual/package.json"
+
+if [ ! -f "$PACKAGE_JSON" ]; then
+  exit 0
+fi
+
+version="$(python3 - "$PACKAGE_JSON" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+print(json.loads(Path(sys.argv[1]).read_text())["version"])
+PY
+)"
+tag="ual-v${version}"
+
+if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+  echo "Tag already exists: ${tag}"
+  exit 0
+fi
+
+git tag -a "$tag" -m "UAL ${version}"
+echo "Created tag: ${tag}"

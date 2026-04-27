@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PACKAGE_JSON="packages/ual/package.json"
+
+if [ ! -f "$PACKAGE_JSON" ]; then
+  echo "UAL package file not found: $PACKAGE_JSON" >&2
+  exit 1
+fi
+
+python3 - "$PACKAGE_JSON" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+version = data.get("version", "")
+match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
+
+if not match:
+    raise SystemExit(f"Unsupported package version format: {version!r}")
+
+major, minor, patch = (int(part) for part in match.groups())
+data["version"] = f"{major}.{minor}.{patch + 1}"
+path.write_text(json.dumps(data, indent=2) + "\n")
+print(f"UAL package version bumped: {version} -> {data['version']}")
+PY
+
+git add "$PACKAGE_JSON"
