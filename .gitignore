@@ -10,6 +10,7 @@ dist/
 build/
 .vite/
 *.log
+.runtime/
 Library/
 Temp/
 Obj/

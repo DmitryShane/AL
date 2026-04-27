@@ -1,1 +1,0 @@
-"com.al.ual": "https://github.com/DmitryShane/AL.git?path=/packages/ual#ual-v0.1.4",

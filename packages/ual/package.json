@@ -1,11 +1,11 @@
 {
   "name": "com.al.ual",
   "displayName": "UAL",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "unity": "2021.3",
   "description": "Unity Activity Logger plugin for the AL platform.",
   "author": {
-    "name": "AL"
+    "name": "Shein"
   },
   "keywords": [
     "activity",
