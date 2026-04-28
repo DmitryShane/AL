@@ -5,7 +5,7 @@ import { AuthorsTable } from "./components/AuthorsTable";
 import { HourlyActivityChart } from "./components/HourlyActivityChart";
 import "./styles.css";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
+const API_URL = import.meta.env.VITE_API_URL ?? "http://64.225.108.88:8000";
 const REFRESH_INTERVAL_MS = 10000;
 const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
 
@@ -29,7 +29,10 @@ type Report = {
   receivedAt?: string;
   timeZoneId?: string;
   timeZoneDisplayName?: string;
-  reportType?: "auto" | "manual";
+  reportType?: string;
+  activityType?: string;
+  telegramEventType?: string;
+  telegramStatus?: string;
   pluginVersion?: string;
 };
 
@@ -102,6 +105,8 @@ type AuthorProfile = {
   telegramUsername?: string;
   pluginEnabled?: boolean;
   authorColor?: string;
+  timeZoneId?: string;
+  timeZoneDisplayName?: string;
 };
 
 type ActivityCount = {
@@ -288,6 +293,11 @@ function App() {
         startDate: dateRange.startDate,
         endDate: dateRange.endDate
       });
+
+      if (dateRangePreset(dateRange) === "today") {
+        params.set("dateMode", "authorLocalToday");
+      }
+
       const [healthResponse, summaryResponse] = await Promise.all([
         fetch(`${API_URL}/api/v1/health`),
         fetch(`${API_URL}/api/v1/reports/summary?${params.toString()}`)
@@ -1395,6 +1405,8 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
   const [saving, setSaving] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
   const [deleteTarget, setDeleteTarget] = useState<AuthorProfile | null>(null);
+  const [deleteProfileTarget, setDeleteProfileTarget] = useState<AuthorProfile | null>(null);
+  const [newProfile, setNewProfile] = useState<AuthorProfile>(() => emptyAuthorProfile());
 
   useEffect(() => {
     const nextDrafts: Record<string, AuthorProfile> = {};
@@ -1421,7 +1433,7 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
       const response = await fetch(`${API_URL}/api/v1/authors/profile`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(profile)
+        body: JSON.stringify(authorProfilePayload(profile))
       });
 
       if (!response.ok) {
@@ -1436,6 +1448,47 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
       setSaving(null);
       window.setTimeout(() => {
         setSaveStatus((items) => ({ ...items, [rawAuthor]: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function createProfile() {
+    const rawAuthor = normalizeAuthorInput(newProfile.rawAuthor);
+
+    if (!rawAuthor) {
+      setSaveStatus((items) => ({ ...items, newProfile: "error" }));
+      return;
+    }
+
+    const profile = {
+      ...newProfile,
+      rawAuthor,
+      displayName: (newProfile.displayName || rawAuthor).trim()
+    };
+
+    setSaving("newProfile");
+    setSaveStatus((items) => ({ ...items, newProfile: undefined }));
+
+    try {
+      const response = await fetch(`${API_URL}/api/v1/authors/profile`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(authorProfilePayload(profile))
+      });
+
+      if (!response.ok) {
+        throw new Error("Profile create failed");
+      }
+
+      setNewProfile(emptyAuthorProfile());
+      setSaveStatus((items) => ({ ...items, newProfile: "saved" }));
+      onSaved();
+    } catch {
+      setSaveStatus((items) => ({ ...items, newProfile: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, newProfile: undefined }));
       }, 2500);
     }
   }
@@ -1494,6 +1547,33 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
     }
   }
 
+  async function deleteAuthorProfile(rawAuthor: string) {
+    const deleteKey = `delete-profile:${rawAuthor}`;
+    setSaving(deleteKey);
+    setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
+
+    try {
+      const response = await fetch(`${API_URL}/api/v1/authors/${encodeURIComponent(rawAuthor)}/profile`, {
+        method: "DELETE"
+      });
+
+      if (!response.ok) {
+        throw new Error("Author profile delete failed");
+      }
+
+      setDeleteProfileTarget(null);
+      setSaveStatus((items) => ({ ...items, [deleteKey]: "saved" }));
+      onSaved();
+    } catch {
+      setSaveStatus((items) => ({ ...items, [deleteKey]: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
+      }, 2500);
+    }
+  }
+
   function isProfileDirty(profile: AuthorProfile) {
     const draft = drafts[profile.rawAuthor] ?? profile;
 
@@ -1530,13 +1610,75 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
         <h2>Author Profiles</h2>
         <p className="settings-caption">
           Telegram username links chat messages to the author. Use the same username from the work chat, with or without @.
+          Raw Author must exactly match the value that Unity or Blender will send from git config user.name.
         </p>
+        <div className="profile-create-card">
+          <label>
+            Raw Author
+            <input
+              value={newProfile.rawAuthor}
+              onChange={(event) => setNewProfile((profile) => ({ ...profile, rawAuthor: event.target.value }))}
+              placeholder="Git user.name"
+            />
+          </label>
+          <label>
+            Display Name
+            <input
+              value={newProfile.displayName}
+              onChange={(event) => setNewProfile((profile) => ({ ...profile, displayName: event.target.value }))}
+              placeholder="Shown on dashboard"
+            />
+          </label>
+          <label>
+            Team
+            <input
+              value={newProfile.team ?? ""}
+              onChange={(event) => setNewProfile((profile) => ({ ...profile, team: event.target.value }))}
+              placeholder="Team"
+            />
+          </label>
+          <label>
+            Telegram
+            <input
+              value={newProfile.telegramUsername ?? ""}
+              onChange={(event) => setNewProfile((profile) => ({ ...profile, telegramUsername: event.target.value }))}
+              placeholder="@username"
+            />
+          </label>
+          <label>
+            Color
+            <input
+              type="color"
+              value={newProfile.authorColor ?? "#13a37b"}
+              onChange={(event) => setNewProfile((profile) => ({ ...profile, authorColor: event.target.value }))}
+            />
+          </label>
+          <label>
+            Plugin
+            <span className="checkbox-cell">
+              <input
+                type="checkbox"
+                checked={newProfile.pluginEnabled ?? true}
+                onChange={(event) => setNewProfile((profile) => ({ ...profile, pluginEnabled: event.target.checked }))}
+              />
+              Enabled
+            </span>
+          </label>
+          <button
+            className={settingsSaveButtonClassName(saveStatus.newProfile)}
+            onClick={() => void createProfile()}
+            disabled={saving === "newProfile" || !newProfile.rawAuthor.trim()}
+          >
+            {saving === "newProfile" ? "Creating..." : saveStatus.newProfile === "saved" ? "Created" : saveStatus.newProfile === "error" ? "Failed" : "Add profile"}
+          </button>
+        </div>
         <div className="profile-table">
           <div className="profile-table-head">
             <span>Raw Author</span>
             <span>Display Name</span>
             <span>Team</span>
             <span>Telegram</span>
+            <span>Timezone</span>
             <span>Color</span>
             <span>Plugin</span>
             <span>Actions</span>
@@ -1545,6 +1687,7 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
             const draft = drafts[profile.rawAuthor] ?? profile;
             const profileDirty = isProfileDirty(profile);
             const deleteKey = `delete:${profile.rawAuthor}`;
+            const deleteProfileKey = `delete-profile:${profile.rawAuthor}`;
             return (
               <div className="profile-row" key={profile.rawAuthor}>
                 <span className="profile-author-cell" title={profile.authorEmail || profile.rawAuthor}>
@@ -1566,6 +1709,7 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
                   }
                   placeholder="@username"
                 />
+                <span className="profile-readonly-cell" title={formatProfileTimeZoneTitle(profile)}>{formatProfileTimeZoneLabel(profile)}</span>
                 <input
                   type="color"
                   value={draft.authorColor ?? "#13a37b"}
@@ -1596,6 +1740,13 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
                   >
                     {saving === deleteKey ? "Deleting..." : saveStatus[deleteKey] === "error" ? "Failed" : "Delete data"}
                   </button>
+                  <button
+                    className={`${settingsSaveButtonClassName(saveStatus[deleteProfileKey], true)} danger-button`}
+                    onClick={() => setDeleteProfileTarget(profile)}
+                    disabled={saving === deleteProfileKey}
+                  >
+                    {saving === deleteProfileKey ? "Deleting..." : saveStatus[deleteProfileKey] === "error" ? "Failed" : "Delete profile"}
+                  </button>
                 </div>
               </div>
             );
@@ -1608,6 +1759,14 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
           saving={saving === `delete:${deleteTarget.rawAuthor}`}
           onCancel={() => setDeleteTarget(null)}
           onDelete={() => void deleteAuthorData(deleteTarget.rawAuthor)}
+        />
+      ) : null}
+      {deleteProfileTarget ? (
+        <AuthorProfileDeleteConfirm
+          profile={deleteProfileTarget}
+          saving={saving === `delete-profile:${deleteProfileTarget.rawAuthor}`}
+          onCancel={() => setDeleteProfileTarget(null)}
+          onDelete={() => void deleteAuthorProfile(deleteProfileTarget.rawAuthor)}
         />
       ) : null}
     </section>
@@ -1637,6 +1796,36 @@ function AuthorDeleteConfirm({
           <button className="primary-outline-button" onClick={onCancel} disabled={saving}>Cancel</button>
           <button className="primary-button danger-solid-button" onClick={onDelete} disabled={saving}>
             {saving ? "Deleting..." : "Delete all author data"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AuthorProfileDeleteConfirm({
+  profile,
+  saving,
+  onCancel,
+  onDelete
+}: {
+  profile: AuthorProfile;
+  saving: boolean;
+  onCancel: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="modal-backdrop">
+      <div className="calendar-modal">
+        <h2>Delete profile for {profile.displayName}</h2>
+        <p className="calendar-helper">
+          This will remove the author profile, Telegram mapping, plugin settings, reports, raw activity events, Telegram day/break data,
+          calendar marks, alerts, and activity statistics for this author. This action cannot be undone.
+        </p>
+        <div className="modal-actions">
+          <button className="primary-outline-button" onClick={onCancel} disabled={saving}>Cancel</button>
+          <button className="primary-button danger-solid-button" onClick={onDelete} disabled={saving}>
+            {saving ? "Deleting..." : "Delete profile and all data"}
           </button>
         </div>
       </div>
@@ -1681,7 +1870,7 @@ function ReportsTable({ reports }: { reports: Report[] }) {
             <span>{formatReportMinutes(report.idleDeltaSeconds ?? 0)}</span>
             <span>{formatReportOvertime(report.overtimeActiveDeltaSeconds ?? 0)}</span>
             <span>{formatAuthorTime(report)}</span>
-            <span className={reportTypeBadgeClassName(report.reportType)}>{formatReportType(report.reportType)}</span>
+            <span className={reportTypeBadgeClassName(report.reportType)}>{formatReportType(report)}</span>
             <span>{formatTimeZoneLabel(report) ?? "-"}</span>
           </div>
         ))}
@@ -1745,6 +1934,32 @@ function settingsSaveButtonClassName(status: "saved" | "error" | undefined, outl
   }
 
   return baseClassName;
+}
+
+function emptyAuthorProfile(): AuthorProfile {
+  return {
+    rawAuthor: "",
+    displayName: "",
+    team: "",
+    telegramUsername: "",
+    pluginEnabled: true,
+    authorColor: "#13a37b"
+  };
+}
+
+function authorProfilePayload(profile: AuthorProfile) {
+  return {
+    rawAuthor: profile.rawAuthor,
+    displayName: profile.displayName,
+    team: profile.team ?? "",
+    telegramUsername: profile.telegramUsername ?? "",
+    pluginEnabled: profile.pluginEnabled ?? true,
+    authorColor: profile.authorColor ?? "#13a37b"
+  };
+}
+
+function normalizeAuthorInput(value: string) {
+  return value.trim().normalize("NFC");
 }
 
 type DonutPanelItem = {
@@ -2030,6 +2245,10 @@ function formatSource(source?: string) {
     return "Blender";
   }
 
+  if (source === "telegram") {
+    return "Telegram";
+  }
+
   return source ?? "-";
 }
 
@@ -2045,8 +2264,12 @@ function sourceIcon(source?: string) {
   return <Activity size={16} />;
 }
 
-function formatReportType(reportType?: string) {
-  if (reportType === "manual") {
+function formatReportType(report: Report) {
+  if (report.reportType === "telegram") {
+    return formatTelegramEvent(report.telegramEventType ?? report.activityType);
+  }
+
+  if (report.reportType === "manual") {
     return "manual";
   }
 
@@ -2054,11 +2277,28 @@ function formatReportType(reportType?: string) {
 }
 
 function reportTypeBadgeClassName(reportType?: string) {
+  if (reportType === "telegram") {
+    return "report-type-badge manual";
+  }
+
   if (reportType === "manual") {
     return "report-type-badge manual";
   }
 
   return "report-type-badge auto";
+}
+
+function formatTelegramEvent(eventType?: string) {
+  const labels: Record<string, string> = {
+    online: "online",
+    afk: "afk",
+    offline: "offline",
+    telegram_online: "online",
+    telegram_afk: "afk",
+    telegram_offline: "offline"
+  };
+
+  return labels[eventType ?? ""] ?? "telegram";
 }
 
 function formatActivityType(type: string) {
@@ -2102,6 +2342,26 @@ function formatTimeZoneLabel(report: Report) {
   }
 
   return report.timeZoneDisplayName;
+}
+
+function formatProfileTimeZoneLabel(profile: AuthorProfile) {
+  if (profile.timeZoneId) {
+    const city = profile.timeZoneId.split("/").pop()?.replace(/_/g, " ");
+
+    if (city) {
+      return city;
+    }
+  }
+
+  return profile.timeZoneDisplayName || "-";
+}
+
+function formatProfileTimeZoneTitle(profile: AuthorProfile) {
+  if (profile.timeZoneId && profile.timeZoneDisplayName && profile.timeZoneDisplayName !== profile.timeZoneId) {
+    return `${profile.timeZoneDisplayName} (${profile.timeZoneId})`;
+  }
+
+  return profile.timeZoneId || profile.timeZoneDisplayName || "Timezone will be detected from plugin reports";
 }
 
 function formatTimestamp(value?: string) {

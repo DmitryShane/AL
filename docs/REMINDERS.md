@@ -7,4 +7,4 @@
 - Add UI for individual author interval overrides.
 - Move private keys and production secrets out of the repository before public deployment.
 - Before publishing, configure the Telegram bot worker on the server with `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_CHAT_ID`, and production `AL_BACKEND_URL`.
-- Before publishing, change the default backend URL in both Unity and Blender plugins from `http://127.0.0.1:8000` to the external backend server URL.
+- Before publishing, verify the default backend URL in Unity and Blender plugins is the production endpoint: `http://64.225.108.88:8000`.

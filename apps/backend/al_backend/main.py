@@ -183,6 +183,11 @@ def delete_author_data(raw_author: str) -> dict:
     return app.state.repo.delete_author_data(raw_author=raw_author)
 
 
+@app.delete("/api/v1/authors/{raw_author}/profile")
+def delete_author_profile(raw_author: str) -> dict:
+    return app.state.repo.delete_author_profile(raw_author=raw_author)
+
+
 @app.post("/api/v1/break-events")
 def record_break_event(event: BreakEventIn) -> dict:
     return app.state.repo.record_break_event(
@@ -228,10 +233,14 @@ def delete_calendar_reason(reason_id: str) -> dict:
 
 
 @app.get("/api/v1/reports/summary", response_model=SummaryResponse)
-def reports_summary(start_date: str | None = Query(default=None, alias="startDate"), end_date: str | None = Query(default=None, alias="endDate")) -> SummaryResponse:
+def reports_summary(
+    start_date: str | None = Query(default=None, alias="startDate"),
+    end_date: str | None = Query(default=None, alias="endDate"),
+    date_mode: str | None = Query(default=None, alias="dateMode"),
+) -> SummaryResponse:
     return SummaryResponse(
         authors=app.state.repo.list_authors(),
-        reports=app.state.repo.latest_reports(start_date=start_date, end_date=end_date),
+        reports=app.state.repo.latest_reports(start_date=start_date, end_date=end_date, date_mode=date_mode),
         intervalSettings=app.state.repo.get_interval_settings(),
-        activitySummary=app.state.repo.activity_summary(start_date=start_date, end_date=end_date),
+        activitySummary=app.state.repo.activity_summary(start_date=start_date, end_date=end_date, date_mode=date_mode),
     )

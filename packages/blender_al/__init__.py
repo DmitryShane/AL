@@ -27,18 +27,41 @@ SOURCE = "bal"
 PLUGIN_VERSION = "0.1.0"
 MAX_QUEUED_EVENTS = 1000
 CONFIG_FETCH_SECONDS = 60
-DEPSGRAPH_THROTTLE_SECONDS = 2
+INPUT_THROTTLE_SECONDS = 5
 TIMER_SECONDS = 5
+INPUT_MOUSE_EVENTS = {
+    "MOUSEMOVE",
+    "INBETWEEN_MOUSEMOVE",
+    "LEFTMOUSE",
+    "RIGHTMOUSE",
+    "MIDDLEMOUSE",
+    "WHEELUPMOUSE",
+    "WHEELDOWNMOUSE",
+    "TRACKPADPAN",
+    "TRACKPADZOOM",
+}
+IGNORED_INPUT_EVENTS = {
+    "TIMER",
+    "TIMER0",
+    "TIMER1",
+    "TIMER2",
+    "TIMER_JOBS",
+    "TIMER_AUTOSAVE",
+    "TIMER_REPORT",
+    "WINDOW_DEACTIVATE",
+    "NONE",
+}
 
 _pending_events: list[dict] = []
 _session_id = uuid.uuid4().hex
 _last_activity_at: dt.datetime | None = None
 _last_send_at = dt.datetime.now(dt.UTC)
 _last_config_fetch_at = dt.datetime.min.replace(tzinfo=dt.UTC)
-_last_depsgraph_event_at = dt.datetime.min.replace(tzinfo=dt.UTC)
+_last_input_event_at = dt.datetime.min.replace(tzinfo=dt.UTC)
 _server_enabled = True
 _send_interval_seconds = 300
 _timer_registered = False
+_modal_running = False
 _device_id = ""
 
 
@@ -57,6 +80,30 @@ class AL_OT_submit_report_now(Operator):
             self.report({"WARNING"}, "AL Blender report was not submitted; check settings or console")
 
         return {"FINISHED"}
+
+
+class AL_OT_activity_modal(Operator):
+    bl_idname = "al.blender_activity_modal"
+    bl_label = "AL Blender Activity Tracker"
+    bl_description = "Track real Blender user input for AL activity reports"
+
+    def modal(self, context, event):
+        global _modal_running
+
+        if not _modal_running:
+            return {"CANCELLED"}
+
+        if is_user_input_event(event):
+            queue_input_activity(event.type)
+
+        return {"PASS_THROUGH"}
+
+    def invoke(self, context, event):
+        global _modal_running
+
+        _modal_running = True
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
 
 
 def queue_event(event_type: str, metadata: dict | None = None) -> None:
@@ -152,17 +199,29 @@ def timer_tick():
     return TIMER_SECONDS
 
 
-@persistent
-def depsgraph_update_handler(scene, depsgraph):
-    global _last_depsgraph_event_at
+def is_user_input_event(event) -> bool:
+    if event.type in IGNORED_INPUT_EVENTS:
+        return False
+
+    if event.type in INPUT_MOUSE_EVENTS:
+        return True
+
+    if event.value in {"PRESS", "CLICK", "DOUBLE_CLICK"}:
+        return True
+
+    return False
+
+
+def queue_input_activity(input_type: str) -> None:
+    global _last_input_event_at
 
     now = dt.datetime.now(dt.UTC)
 
-    if (now - _last_depsgraph_event_at).total_seconds() < DEPSGRAPH_THROTTLE_SECONDS:
+    if (now - _last_input_event_at).total_seconds() < INPUT_THROTTLE_SECONDS:
         return
 
-    _last_depsgraph_event_at = now
-    queue_event("scene_changed", metadata={"filepath": bpy.data.filepath or ""})
+    _last_input_event_at = now
+    queue_event("scene_changed", metadata={"filepath": bpy.data.filepath or "", "inputType": input_type})
 
 
 @persistent
@@ -186,7 +245,7 @@ def project_id() -> str:
 
 
 def server_url() -> str:
-    return os.environ.get("AL_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+    return os.environ.get("AL_BACKEND_URL", "http://64.225.108.88:8000").rstrip("/")
 
 
 def timezone_id() -> str:
@@ -230,7 +289,15 @@ def device_id() -> str:
 
 def run_git_config(key: str) -> str:
     try:
-        result = subprocess.run(["git", "config", "--global", key], capture_output=True, text=True, timeout=2, check=False)
+        result = subprocess.run(
+            ["git", "config", "--global", key],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=2,
+            check=False,
+        )
     except Exception:
         return ""
 
@@ -241,9 +308,7 @@ def register():
     global _timer_registered
 
     bpy.utils.register_class(AL_OT_submit_report_now)
-
-    if depsgraph_update_handler not in bpy.app.handlers.depsgraph_update_post:
-        bpy.app.handlers.depsgraph_update_post.append(depsgraph_update_handler)
+    bpy.utils.register_class(AL_OT_activity_modal)
 
     if save_post_handler not in bpy.app.handlers.save_post:
         bpy.app.handlers.save_post.append(save_post_handler)
@@ -255,9 +320,13 @@ def register():
         bpy.app.timers.register(timer_tick, first_interval=TIMER_SECONDS, persistent=True)
         _timer_registered = True
 
+    start_activity_modal()
+
 
 def unregister():
-    global _timer_registered
+    global _timer_registered, _modal_running
+
+    _modal_running = False
 
     if bpy.app.timers.is_registered(timer_tick):
         bpy.app.timers.unregister(timer_tick)
@@ -266,12 +335,19 @@ def unregister():
     for handlers, handler in (
         (bpy.app.handlers.load_post, load_post_handler),
         (bpy.app.handlers.save_post, save_post_handler),
-        (bpy.app.handlers.depsgraph_update_post, depsgraph_update_handler),
     ):
         if handler in handlers:
             handlers.remove(handler)
 
+    bpy.utils.unregister_class(AL_OT_activity_modal)
     bpy.utils.unregister_class(AL_OT_submit_report_now)
+
+
+def start_activity_modal() -> None:
+    try:
+        bpy.ops.al.blender_activity_modal("INVOKE_DEFAULT")
+    except Exception as exc:
+        print(f"[AL Blender] Activity tracker failed to start: {exc}")
 
 
 if __name__ == "__main__":

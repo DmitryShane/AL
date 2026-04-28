@@ -19,6 +19,8 @@ input {
 
 button {
   cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 button:focus-visible,
@@ -92,7 +94,7 @@ p {
 .side-nav-item.active {
   background: #eef0ff;
   color: #5b4dff;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .workspace {
@@ -168,7 +170,8 @@ p {
   justify-content: center;
   gap: 8px;
   border-radius: 8px;
-  font-weight: 800;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .date-presets button {
@@ -1140,6 +1143,7 @@ p {
 }
 
 .settings-row label,
+.profile-create-card label,
 .profile-row label:not(.checkbox-cell),
 .score-settings-grid label {
   display: grid;
@@ -1150,6 +1154,7 @@ p {
 }
 
 .settings-row input,
+.profile-create-card input,
 .profile-row input,
 .score-settings-grid input {
   min-height: 38px;
@@ -1296,7 +1301,8 @@ p {
   border-radius: 8px;
   background: #f9fbfd;
   cursor: pointer;
-  font-weight: 800;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .calendar-day.selected {
@@ -1403,7 +1409,8 @@ p {
   border: 0;
   color: #425466;
   cursor: pointer;
-  font-weight: 900;
+  font-size: 12px;
+  font-weight: 600;
   padding: 5px 8px;
 }
 
@@ -1508,16 +1515,32 @@ p {
 }
 
 .profile-table {
-  --profile-columns: minmax(220px, 1.3fr) minmax(180px, 1.1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(76px, 0.55fr) minmax(110px, 0.7fr) 190px;
+  --profile-columns: minmax(220px, 1.3fr) minmax(180px, 1.1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(76px, 0.55fr) minmax(110px, 0.7fr) 300px;
   display: grid;
   overflow-x: auto;
+}
+
+.profile-create-card {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr)) 86px 120px auto;
+  gap: 12px;
+  align-items: start;
+  border: 1px solid #e5eaf0;
+  border-radius: 14px;
+  background: #f8fafc;
+  margin: 14px 0;
+  padding: 12px;
+}
+
+.profile-create-card button {
+  align-self: end;
 }
 
 .profile-table-head,
 .profile-row {
   display: grid;
   grid-template-columns: var(--profile-columns);
-  min-width: 1220px;
+  min-width: 1480px;
   gap: 12px;
   align-items: center;
   border-bottom: 1px solid #e5eaf0;
@@ -1532,14 +1555,30 @@ p {
 }
 
 .profile-row input,
-.profile-row .checkbox-cell {
+.profile-row .checkbox-cell,
+.profile-row .profile-readonly-cell {
   box-sizing: border-box;
   width: 100%;
 }
 
+.profile-readonly-cell {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #e5eaf0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #5c6b7a;
+  font-weight: 800;
+  padding: 8px 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .profile-actions {
   display: grid;
-  grid-template-columns: 82px 1fr;
+  grid-template-columns: 72px 100px 112px;
   gap: 8px;
 }
 
@@ -1568,6 +1607,12 @@ p {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-height: 38px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+  box-sizing: border-box;
   color: #202a36;
   font-weight: 800;
   white-space: nowrap;

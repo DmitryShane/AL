@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import unicodedata
 import uuid
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
@@ -43,7 +45,7 @@ AUTHOR_COLORS = ["#13a37b", "#5b4dff", "#f59e0b", "#dc2626", "#0ea5e9", "#a855f7
 
 
 class Repository:
-    aggregates_version = 11
+    aggregates_version = 14
 
     def __init__(self, settings: Settings):
         self.client: MongoClient = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=1500)
@@ -94,6 +96,7 @@ class Repository:
         return True
 
     def get_interval_for_author(self, author: str) -> int:
+        author = _normalize_author(author)
         author_setting = self.db.interval_settings.find_one({"kind": "author", "author": author})
 
         if author_setting and author_setting.get("sendIntervalSeconds"):
@@ -107,6 +110,7 @@ class Repository:
         return self.default_send_interval_seconds
 
     def is_plugin_enabled_for_author(self, author: str) -> bool:
+        author = _normalize_author(author)
         profile = self.db.author_profiles.find_one({"rawAuthor": author}, {"pluginEnabled": 1})
 
         if profile and profile.get("pluginEnabled") is False:
@@ -130,6 +134,7 @@ class Repository:
             )
 
         if author and author_send_interval_seconds is not None:
+            author = _normalize_author(author)
             self.db.interval_settings.update_one(
                 {"kind": "author", "author": author},
                 {
@@ -165,7 +170,7 @@ class Repository:
             "challengeId": challenge_id,
             "source": challenge_in.source,
             "pluginVersion": challenge_in.plugin_version,
-            "author": challenge_in.author,
+            "author": _normalize_author(challenge_in.author),
             "authorEmail": challenge_in.author_email or "",
             "projectId": challenge_in.project_id or "",
             "sessionId": challenge_in.session_id or "",
@@ -237,6 +242,9 @@ class Repository:
         device_id: str | None = None,
     ) -> str:
         now = dt.datetime.now(dt.UTC)
+        payload = dict(payload)
+        payload["author"] = _normalize_author(payload.get("author") or "Unknown User")
+        self.update_author_time_zone(payload.get("author"), payload.get("timeZoneId"), payload.get("timeZoneDisplayName"))
         report_type = self.consume_expected_report_type(payload.get("author"))
         raw_result = self.db.raw_reports.insert_one(
             {
@@ -325,7 +333,13 @@ class Repository:
 
         return "auto"
 
-    def latest_reports(self, limit: int = 100, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+    def latest_reports(
+        self,
+        limit: int = 100,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_mode: str | None = None,
+    ) -> list[dict[str, Any]]:
         reports = []
         projection = {
             "_id": 0,
@@ -346,19 +360,38 @@ class Repository:
             "workWindowSeconds": 0,
         }
 
-        query = _date_query(start_date, end_date)
         profiles = self._profiles_by_raw_author()
+        now = dt.datetime.now(dt.UTC)
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
-        for item in self.db.report_rows.find(query, projection).sort("receivedAt", DESCENDING).limit(limit):
+        for item in self.db.report_rows.find(query, projection).sort("receivedAt", DESCENDING):
+            if date_mode == "authorLocalToday" and not _is_author_local_today(
+                item.get("date"),
+                item.get("author") or "Unknown User",
+                profiles,
+                item.get("timeZoneId"),
+                now,
+            ):
+                continue
+
             profile = profiles.get(item.get("author") or "Unknown User", {})
             item["displayName"] = _display_name(item.get("author"), profile)
             item["team"] = profile.get("team", "")
             item["receivedAt"] = _iso(item.get("receivedAt"))
             reports.append(item)
 
+            if len(reports) >= limit:
+                break
+
         return reports
 
-    def activity_summary(self, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+    def activity_summary(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_mode: str | None = None,
+        now: dt.datetime | None = None,
+    ) -> dict[str, Any]:
         totals = {
             "daySeconds": 0,
             "telegramDaySeconds": 0,
@@ -376,14 +409,27 @@ class Repository:
         telegram_seconds_by_author_date: dict[tuple[str, str], int] = {}
         break_seconds_by_author_date: dict[tuple[str, str], int] = {}
         profiles = self._profiles_by_raw_author()
+        now = now or dt.datetime.now(dt.UTC)
         daily_items = sorted(
-            self.db.daily_author_activity.find(_date_query(start_date, end_date), {"_id": 0}),
+            self.db.daily_author_activity.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0}),
             key=lambda item: (
                 str(item.get("date") or ""),
                 str(item.get("lastRecordedAt") or item.get("lastReceivedAt") or ""),
                 str(item.get("source") or ""),
             ),
         )
+        if date_mode == "authorLocalToday":
+            daily_items = [
+                item
+                for item in daily_items
+                if _is_author_local_today(
+                    item.get("date"),
+                    item.get("author") or "Unknown User",
+                    profiles,
+                    item.get("timeZoneId"),
+                    now,
+                )
+            ]
         break_buckets = self._break_buckets_for_daily_items(daily_items)
 
         for item in daily_items:
@@ -514,7 +560,6 @@ class Repository:
             for activity_type, count in activity_counts.items()
         ]
 
-        now = dt.datetime.now(dt.UTC)
         self._apply_live_telegram_summary(
             authors_by_raw,
             totals,
@@ -523,6 +568,7 @@ class Repository:
             break_seconds_by_author_date,
             start_date,
             end_date,
+            date_mode,
             now,
         )
         security_alerts_by_author = self._security_alerts_by_author(start_date, end_date)
@@ -783,8 +829,8 @@ class Repository:
         for raw_author in known_authors:
             profile = profiles.get(raw_author, {})
             author_activity = self.db.daily_author_activity.find_one(
-                {"author": raw_author, "authorEmail": {"$nin": [None, ""]}},
-                {"_id": 0, "authorEmail": 1},
+                {"author": raw_author},
+                {"_id": 0, "authorEmail": 1, "timeZoneId": 1, "timeZoneDisplayName": 1},
                 sort=[("lastReceivedAt", DESCENDING)],
             )
             result.append(
@@ -796,12 +842,16 @@ class Repository:
                     "telegramUsername": profile.get("telegramUsername", ""),
                     "pluginEnabled": profile.get("pluginEnabled", True),
                     "authorColor": profile.get("authorColor") or _author_color(raw_author),
+                    "timeZoneId": profile.get("timeZoneId") or (author_activity or {}).get("timeZoneId", ""),
+                    "timeZoneDisplayName": profile.get("timeZoneDisplayName")
+                    or (author_activity or {}).get("timeZoneDisplayName", ""),
                 }
             )
 
         return result
 
     def update_author_email(self, raw_author: str, author_email: str | None) -> None:
+        raw_author = _normalize_author(raw_author)
         normalized_email = (author_email or "").strip()
 
         if not raw_author or not normalized_email:
@@ -827,6 +877,80 @@ class Repository:
             upsert=True,
         )
 
+    def update_author_time_zone(
+        self, raw_author: str, time_zone_id: Any, time_zone_display_name: Any | None = None
+    ) -> None:
+        raw_author = _normalize_author(raw_author)
+        normalized_time_zone = _valid_time_zone_id(time_zone_id)
+
+        if not raw_author or not normalized_time_zone:
+            return
+
+        display_name = str(time_zone_display_name or "").strip() or normalized_time_zone
+        current = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0, "timeZoneId": 1}) or {}
+        previous_time_zone = _valid_time_zone_id(current.get("timeZoneId"))
+        self.db.author_profiles.update_one(
+            {"rawAuthor": raw_author},
+            {
+                "$set": {
+                    "rawAuthor": raw_author,
+                    "timeZoneId": normalized_time_zone,
+                    "timeZoneDisplayName": display_name,
+                    "updatedAt": dt.datetime.now(dt.UTC),
+                },
+                "$setOnInsert": {
+                    "displayName": raw_author,
+                    "team": "",
+                    "pluginEnabled": True,
+                },
+            },
+            upsert=True,
+        )
+
+        if previous_time_zone != normalized_time_zone:
+            self._rebucket_author_telegram_time_zone(raw_author, normalized_time_zone)
+
+    def _rebucket_author_telegram_time_zone(self, raw_author: str, time_zone_id: str) -> None:
+        for event in self.db.break_events.find({"rawAuthor": raw_author}, {"_id": 1, "timestamp": 1}):
+            event_time = _coerce_datetime(event.get("timestamp"))
+
+            if event_time:
+                self.db.break_events.update_one(
+                    _document_identity_query(event),
+                    {"$set": {"date": _telegram_event_date(event_time, time_zone_id), "timeZoneId": time_zone_id}},
+                )
+
+        for collection_name, time_field in (
+            ("day_sessions", "startedAt"),
+            ("break_sessions", "startedAt"),
+            ("break_intervals", "startedAt"),
+        ):
+            collection = getattr(self.db, collection_name)
+
+            for item in collection.find({"rawAuthor": raw_author}, {"_id": 1, time_field: 1}):
+                event_time = _coerce_datetime(item.get(time_field))
+
+                if event_time:
+                    collection.update_one(
+                        _document_identity_query(item),
+                        {"$set": {"date": _telegram_event_date(event_time, time_zone_id), "timeZoneId": time_zone_id}},
+                    )
+
+        for row in self.db.report_rows.find({"source": "telegram", "author": raw_author}, {"_id": 1, "recordedAt": 1}):
+            event_time = _coerce_datetime(row.get("recordedAt"))
+
+            if event_time:
+                self.db.report_rows.update_one(
+                    _document_identity_query(row),
+                    {
+                        "$set": {
+                            "date": _telegram_event_date(event_time, time_zone_id),
+                            "timeZoneId": time_zone_id,
+                            "timeZoneDisplayName": time_zone_id,
+                        }
+                    },
+                )
+
     def upsert_author_profile(
         self,
         raw_author: str,
@@ -835,8 +959,10 @@ class Repository:
         telegram_username: str | None,
         plugin_enabled: bool = True,
         author_color: str | None = None,
+        time_zone_id: str | None = None,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
+        raw_author = _normalize_author(raw_author)
         normalized_telegram = _normalize_telegram_username(telegram_username)
         update = {
             "rawAuthor": raw_author,
@@ -846,6 +972,10 @@ class Repository:
             "authorColor": _valid_color(author_color) or _author_color(raw_author),
             "updatedAt": now,
         }
+        normalized_time_zone = _valid_time_zone_id(time_zone_id)
+
+        if normalized_time_zone:
+            update["timeZoneId"] = normalized_time_zone
 
         operation: dict[str, Any] = {"$set": update}
 
@@ -858,7 +988,7 @@ class Repository:
         return {"ok": True, "profile": {k: v for k, v in update.items() if k != "updatedAt"}}
 
     def delete_author_data(self, raw_author: str) -> dict[str, Any]:
-        normalized_author = (raw_author or "").strip()
+        normalized_author = _normalize_author(raw_author)
 
         if not normalized_author:
             return {"ok": False, "error": "Author is required"}
@@ -901,21 +1031,41 @@ class Repository:
 
         return {"ok": True, "author": normalized_author, "deleted": counts}
 
+    def delete_author_profile(self, raw_author: str) -> dict[str, Any]:
+        normalized_author = _normalize_author(raw_author)
+
+        if not normalized_author:
+            return {"ok": False, "error": "Author is required"}
+
+        data_result = self.delete_author_data(normalized_author)
+        counts = dict(data_result.get("deleted", {}))
+        counts["authorProfiles"] = self.db.author_profiles.delete_many({"rawAuthor": normalized_author}).deleted_count
+        counts["intervalSettings"] = self.db.interval_settings.delete_many({"kind": "author", "author": normalized_author}).deleted_count
+        counts["calendarMarks"] = self.db.calendar_marks.delete_many({"rawAuthor": normalized_author}).deleted_count
+
+        return {"ok": True, "author": normalized_author, "deleted": counts}
+
     def record_break_event(self, telegram_username: str, event_type: str, timestamp: str | None = None) -> dict[str, Any]:
         normalized_telegram = _normalize_telegram_username(telegram_username)
         event_time = _parse_timestamp(timestamp)
+        received_at = dt.datetime.now(dt.UTC)
         profile = self.db.author_profiles.find_one({"telegramUsername": normalized_telegram})
 
         if not profile:
             return {"ok": False, "error": "Unknown telegram username"}
 
         raw_author = profile["rawAuthor"]
+        time_zone_id = _valid_time_zone_id(profile.get("timeZoneId")) or "UTC"
+        event_date = _telegram_event_date(event_time, time_zone_id)
         self.db.break_events.insert_one(
             {
                 "telegramUsername": normalized_telegram,
                 "rawAuthor": raw_author,
                 "eventType": event_type,
                 "timestamp": event_time,
+                "date": event_date,
+                "timeZoneId": time_zone_id,
+                "createdAt": received_at,
             }
         )
 
@@ -923,21 +1073,34 @@ class Repository:
             session = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
 
             if session:
+                self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "break_already_started")
                 return {"ok": True, "status": "break_already_started"}
 
             self.db.break_sessions.update_one(
                 {"telegramUsername": normalized_telegram},
-                {"$set": {"telegramUsername": normalized_telegram, "rawAuthor": raw_author, "startedAt": event_time}},
+                {
+                    "$set": {
+                        "telegramUsername": normalized_telegram,
+                        "rawAuthor": raw_author,
+                        "startedAt": event_time,
+                        "date": event_date,
+                        "timeZoneId": time_zone_id,
+                    }
+                },
                 upsert=True,
             )
+            self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "break_started")
             return {"ok": True, "status": "break_started"}
 
         if event_type == "offline":
             break_result = self._close_break_session(normalized_telegram, raw_author, event_time)
-            day_date = event_time.date().isoformat()
+            day_date = event_date
             day_state = self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": day_date})
 
             if not day_state:
+                self._insert_telegram_report_row(
+                    raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "offline_without_online", break_result
+                )
                 return {"ok": True, "status": "offline_without_online", **break_result}
 
             started_at = _coerce_datetime(day_state["startedAt"]) or event_time
@@ -951,9 +1114,20 @@ class Repository:
                 {"author": raw_author, "date": day_date},
                 {"$set": {"dayStartedAt": started_at, "dayEndedAt": event_time, "daySeconds": day_seconds}},
             )
+            self._insert_telegram_report_row(
+                raw_author,
+                normalized_telegram,
+                event_type,
+                event_time,
+                event_date,
+                time_zone_id,
+                received_at,
+                "day_closed",
+                {"daySeconds": day_seconds, **break_result},
+            )
             return {"ok": True, "status": "day_closed", "daySeconds": day_seconds, **break_result}
 
-        online_date = event_time.date().isoformat()
+        online_date = event_date
         self.db.day_sessions.update_one(
             {"rawAuthor": raw_author, "date": online_date},
             {
@@ -963,6 +1137,7 @@ class Repository:
                     "date": online_date,
                     "startedAt": event_time,
                     "daySeconds": 0,
+                    "timeZoneId": time_zone_id,
                 },
                 "$set": {"lastOnlineAt": event_time},
             },
@@ -972,9 +1147,50 @@ class Repository:
         break_result = self._close_break_session(normalized_telegram, raw_author, event_time)
 
         if not break_result:
+            self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "online_recorded")
             return {"ok": True, "status": "online_recorded"}
 
+        self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "break_closed", break_result)
         return {"ok": True, "status": "break_closed", **break_result}
+
+    def _insert_telegram_report_row(
+        self,
+        raw_author: str,
+        telegram_username: str,
+        event_type: str,
+        event_time: dt.datetime,
+        event_date: str,
+        time_zone_id: str,
+        received_at: dt.datetime,
+        status: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        deltas = _empty_event_deltas()
+        self.db.report_rows.insert_one(
+            {
+                "source": "telegram",
+                "pluginVersion": "telegram-bot",
+                "author": raw_author,
+                "authorEmail": "",
+                "projectId": "telegram",
+                "sessionId": telegram_username,
+                "deviceId": "",
+                "date": event_date,
+                "recordedAt": event_time.isoformat(),
+                "receivedAt": received_at,
+                "lastRecordedAt": event_time.isoformat(),
+                "lastReceivedAt": received_at,
+                "timeZoneId": time_zone_id,
+                "timeZoneDisplayName": time_zone_id,
+                "reportType": "telegram",
+                "activityType": f"telegram_{event_type}",
+                "telegramEventType": event_type,
+                "telegramStatus": status,
+                "telegramUsername": telegram_username,
+                "metadata": metadata or {},
+                **deltas,
+            }
+        )
 
     def _close_break_session(self, normalized_telegram: str, raw_author: str, event_time: dt.datetime) -> dict[str, Any]:
         session = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
@@ -984,7 +1200,7 @@ class Repository:
 
         started_at = _coerce_datetime(session["startedAt"]) or event_time
         break_seconds = max(0, int((event_time - started_at).total_seconds()))
-        break_date = started_at.date().isoformat()
+        break_date = str(session.get("date") or _telegram_event_date(started_at, _valid_time_zone_id(session.get("timeZoneId")) or "UTC"))
         self.db.break_sessions.delete_one({"telegramUsername": normalized_telegram})
         self.db.break_intervals.insert_one(
             {
@@ -1053,9 +1269,10 @@ class Repository:
         break_seconds_by_author_date: dict[tuple[str, str], int],
         start_date: str | None,
         end_date: str | None,
+        date_mode: str | None,
         now: dt.datetime,
     ) -> None:
-        for session in self.db.day_sessions.find(_date_query(start_date, end_date), {"_id": 0}):
+        for session in self.db.day_sessions.find({}, {"_id": 0}):
             raw_author = session.get("rawAuthor") or "Unknown User"
             day_date = session.get("date") or ""
             started_at = _coerce_datetime(session.get("startedAt"))
@@ -1064,6 +1281,10 @@ class Repository:
                 continue
 
             ended_at = _coerce_datetime(session.get("lastOfflineAt"))
+
+            if ended_at and not _date_in_summary_scope(day_date, raw_author, profiles, None, now, start_date, end_date, date_mode):
+                continue
+
             live_day_seconds = int(session.get("daySeconds", 0))
 
             if not ended_at:
@@ -1081,6 +1302,23 @@ class Repository:
                 totals["daySeconds"] += day_delta_seconds
                 totals["telegramDaySeconds"] += day_delta_seconds
 
+        for interval in self.db.break_intervals.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0}):
+            raw_author = interval.get("rawAuthor") or "Unknown User"
+            break_date = interval.get("date") or ""
+
+            if not _date_in_summary_scope(break_date, raw_author, profiles, interval.get("timeZoneId"), now, start_date, end_date, date_mode):
+                continue
+
+            break_seconds = int(interval.get("breakSeconds", 0))
+            existing_break_seconds = break_seconds_by_author_date.get((raw_author, break_date), 0)
+            break_delta_seconds = max(0, break_seconds - existing_break_seconds)
+
+            if break_delta_seconds:
+                author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
+                author_row["breakSeconds"] += break_delta_seconds
+                totals["breakSeconds"] += break_delta_seconds
+                break_seconds_by_author_date[(raw_author, break_date)] = existing_break_seconds + break_delta_seconds
+
         for session in self.db.break_sessions.find({}, {"_id": 0}):
             raw_author = session.get("rawAuthor") or "Unknown User"
             started_at = _coerce_datetime(session.get("startedAt"))
@@ -1088,9 +1326,9 @@ class Repository:
             if not started_at:
                 continue
 
-            break_date = started_at.date().isoformat()
+            break_date = str(session.get("date") or _telegram_event_date(started_at, _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))))
 
-            if not _date_in_range(break_date, start_date, end_date):
+            if not _date_in_summary_scope(break_date, raw_author, profiles, session.get("timeZoneId"), now, start_date, end_date, date_mode):
                 continue
 
             live_break_seconds = max(0, int((now - started_at).total_seconds()))
@@ -1186,6 +1424,25 @@ class Repository:
                 }
             )
 
+        for event in self.db.break_events.find({}).sort("timestamp", ASCENDING):
+            event_time = _coerce_datetime(event.get("timestamp"))
+
+            if not event_time:
+                continue
+
+            received_at = _coerce_datetime(event.get("createdAt")) or event_time
+            time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
+            self._insert_telegram_report_row(
+                str(event.get("rawAuthor") or "Unknown User"),
+                str(event.get("telegramUsername") or ""),
+                str(event.get("eventType") or "telegram"),
+                event_time,
+                str(event.get("date") or _telegram_event_date(event_time, time_zone_id)),
+                time_zone_id,
+                received_at,
+                str(event.get("eventType") or "telegram"),
+            )
+
         self.db.aggregate_metadata.update_one(
             {"kind": "activity"},
             {"$set": {"kind": "activity", "version": self.aggregates_version, "rebuiltAt": dt.datetime.now(dt.UTC)}},
@@ -1193,6 +1450,7 @@ class Repository:
         )
 
     def _apply_snapshot_to_aggregates(self, snapshot: dict[str, Any]) -> None:
+        self.update_author_time_zone(snapshot.get("author") or "Unknown User", snapshot.get("timeZoneId"), snapshot.get("timeZoneDisplayName"))
         session_key = _session_key(snapshot)
         previous = self.db.aggregate_session_state.find_one({"_id": session_key}) or {}
         deltas = _build_deltas(snapshot, previous.get("snapshot", {}))
@@ -1321,6 +1579,7 @@ class Repository:
         self.db.report_rows.insert_one(row)
 
     def _apply_raw_event_to_aggregates(self, event: dict[str, Any]) -> dict[str, Any]:
+        self.update_author_time_zone(event.get("author") or "Unknown User", event.get("timeZoneId"), event.get("timeZoneDisplayName"))
         state_key = _raw_event_session_key(event)
         previous = self.db.aggregate_session_state.find_one({"_id": state_key}) or {}
         state = dict(previous.get("state", {}))
@@ -1333,8 +1592,11 @@ class Repository:
         last_accounting_at = _coerce_datetime(state.get("lastAccountingAt"))
         last_activity_local_at = _parse_local_datetime(state.get("lastActivityLocalAt"))
         last_accounting_local_at = _parse_local_datetime(state.get("lastAccountingLocalAt"))
+        last_activity_source = str(state.get("lastActivitySource") or "")
+        last_accounting_source = str(state.get("lastAccountingSource") or "")
+        current_source = str(event.get("source") or "")
         deltas = _empty_event_deltas()
-        is_activity = _is_activity_event(event_type)
+        is_activity = _is_activity_event(event)
         consumed_normal_seconds = self._normal_seconds_consumed_for_event(event)
         idle_threshold_seconds = self.get_interval_for_author(str(event.get("author") or "Unknown User"))
 
@@ -1343,6 +1605,7 @@ class Repository:
                 first_activity_at = occurred_at
                 last_accounting_at = occurred_at
                 last_accounting_local_at = occurred_local_at
+                last_accounting_source = current_source
             elif last_activity_at and last_accounting_at and occurred_at > last_activity_at:
                 interval_is_active = (occurred_at - last_activity_at).total_seconds() < idle_threshold_seconds
                 interval_deltas = _interval_deltas(
@@ -1356,10 +1619,19 @@ class Repository:
                 _merge_batch_deltas(deltas, interval_deltas)
                 last_accounting_at = occurred_at
                 last_accounting_local_at = occurred_local_at
+                last_accounting_source = current_source
 
             last_activity_at = occurred_at
             last_activity_local_at = occurred_local_at
-        elif event_type == "heartbeat" and first_activity_at and last_activity_at and last_accounting_at and occurred_at > last_accounting_at:
+            last_activity_source = current_source
+        elif (
+            event_type == "heartbeat"
+            and first_activity_at
+            and last_activity_at
+            and last_accounting_at
+            and occurred_at > last_accounting_at
+            and (not last_activity_source or current_source == last_activity_source)
+        ):
             if (occurred_at - last_activity_at).total_seconds() >= idle_threshold_seconds:
                 interval_seconds = int((occurred_at - last_accounting_at).total_seconds())
 
@@ -1377,8 +1649,9 @@ class Repository:
                 _merge_batch_deltas(deltas, interval_deltas)
                 last_accounting_at = occurred_at
                 last_accounting_local_at = occurred_local_at
+                last_accounting_source = current_source
 
-        if event_type not in NON_ACTIVITY_EVENT_TYPES:
+        if is_activity:
             activity_type = _activity_count_type(event_type)
             deltas["activityCountDeltas"].append({"type": activity_type, "count": 1})
 
@@ -1413,6 +1686,8 @@ class Repository:
                         "lastAccountingAt": last_accounting_at.isoformat() if last_accounting_at else None,
                         "lastActivityLocalAt": last_activity_local_at.isoformat() if last_activity_local_at else None,
                         "lastAccountingLocalAt": last_accounting_local_at.isoformat() if last_accounting_local_at else None,
+                        "lastActivitySource": last_activity_source or None,
+                        "lastAccountingSource": last_accounting_source or None,
                     },
                     "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
                 }
@@ -1578,7 +1853,16 @@ def _raw_event_session_key(event: dict[str, Any]) -> str:
     )
 
 
-def _is_activity_event(event_type: str) -> bool:
+def _is_activity_event(event: dict[str, Any] | str) -> bool:
+    if isinstance(event, dict):
+        event_type = str(event.get("eventType") or "")
+
+        if event.get("source") == "bal" and event_type == "scene_changed":
+            metadata = event.get("metadata") or {}
+            return bool(metadata.get("inputType"))
+    else:
+        event_type = event
+
     return event_type in RAW_ACTIVITY_EVENT_TYPES and event_type not in NON_ACTIVITY_EVENT_TYPES
 
 
@@ -1691,6 +1975,83 @@ def _date_query(start_date: str | None, end_date: str | None) -> dict[str, Any]:
         query["date"] = date_filter
 
     return query
+
+
+def _report_date_query(
+    start_date: str | None,
+    end_date: str | None,
+    date_mode: str | None,
+    profiles: dict[str, dict[str, Any]],
+    now: dt.datetime,
+) -> dict[str, Any]:
+    if date_mode != "authorLocalToday":
+        return _date_query(start_date, end_date)
+
+    dates = {now.astimezone(dt.UTC).date().isoformat()}
+
+    for profile in profiles.values():
+        dates.add(_local_date_for_time_zone(now, _author_time_zone_id(profile.get("rawAuthor"), profiles)))
+
+    return {"date": {"$in": sorted(dates)}}
+
+
+def _document_identity_query(item: dict[str, Any]) -> dict[str, Any]:
+    if item.get("_id") is not None:
+        return {"_id": item["_id"]}
+
+    return dict(item)
+
+
+def _is_author_local_today(
+    value: Any,
+    raw_author: str,
+    profiles: dict[str, dict[str, Any]],
+    fallback_time_zone_id: Any,
+    now: dt.datetime,
+) -> bool:
+    if not value:
+        return False
+
+    return str(value) == _local_date_for_time_zone(
+        now, _author_time_zone_id(raw_author, profiles, fallback_time_zone_id)
+    )
+
+
+def _date_in_summary_scope(
+    value: str,
+    raw_author: str,
+    profiles: dict[str, dict[str, Any]],
+    fallback_time_zone_id: Any,
+    now: dt.datetime,
+    start_date: str | None,
+    end_date: str | None,
+    date_mode: str | None,
+) -> bool:
+    if date_mode == "authorLocalToday":
+        return _is_author_local_today(value, raw_author, profiles, fallback_time_zone_id, now)
+
+    return _date_in_range(value, start_date, end_date)
+
+
+def _author_time_zone_id(
+    raw_author: Any, profiles: dict[str, dict[str, Any]], fallback_time_zone_id: Any = None
+) -> str:
+    profile = profiles.get(str(raw_author or ""))
+    profile_time_zone = _valid_time_zone_id((profile or {}).get("timeZoneId"))
+
+    if profile_time_zone:
+        return profile_time_zone
+
+    return _valid_time_zone_id(fallback_time_zone_id) or "UTC"
+
+
+def _local_date_for_time_zone(value: dt.datetime, time_zone_id: str) -> str:
+    try:
+        zone = ZoneInfo(time_zone_id)
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
+
+    return value.astimezone(zone).date().isoformat()
 
 
 def _date_in_range(value: str, start_date: str | None, end_date: str | None) -> bool:
@@ -1811,9 +2172,28 @@ def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.dat
 
 
 def _author_color(raw_author: Any) -> str:
-    value = str(raw_author or "")
+    value = _normalize_author(raw_author)
     index = sum(ord(char) for char in value) % len(AUTHOR_COLORS)
     return AUTHOR_COLORS[index]
+
+
+def _normalize_author(value: Any) -> str:
+    normalized = unicodedata.normalize("NFC", str(value or "")).strip()
+    return normalized or "Unknown User"
+
+
+def _valid_time_zone_id(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+
+    if not normalized:
+        return None
+
+    try:
+        ZoneInfo(normalized)
+    except ZoneInfoNotFoundError:
+        return None
+
+    return normalized
 
 
 def _valid_color(value: str | None) -> str | None:
@@ -2023,6 +2403,15 @@ def _parse_timestamp(value: str | None) -> dt.datetime:
         return parsed.replace(tzinfo=dt.UTC)
 
     return parsed.astimezone(dt.UTC)
+
+
+def _telegram_event_date(event_time: dt.datetime, time_zone_id: str) -> str:
+    try:
+        zone = ZoneInfo(time_zone_id)
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
+
+    return event_time.astimezone(zone).date().isoformat()
 
 
 def _parse_local_datetime(value: Any) -> dt.datetime | None:

@@ -1,4 +1,6 @@
 import datetime as dt
+import re
+import unicodedata
 
 from al_backend.repository import (
     Repository,
@@ -59,12 +61,34 @@ class FakeCollection:
     def delete_one(self, query):
         self.items = [item for item in self.items if not self._matches(item, query)]
 
+    def delete_many(self, query):
+        matching = [item for item in self.items if self._matches(item, query)]
+        self.items = [item for item in self.items if not self._matches(item, query)]
+
+        class Result:
+            def __init__(self, deleted_count):
+                self.deleted_count = deleted_count
+
+        return Result(len(matching))
+
+    def distinct(self, key):
+        return sorted({item.get(key) for item in self.items if item.get(key)})
+
+    def count_documents(self, query):
+        return len([item for item in self.items if self._matches(item, query)])
+
     def _matches(self, item, query):
         for key, value in query.items():
             item_value = item.get(key)
 
             if isinstance(value, dict):
                 if "$in" in value and item_value not in value["$in"]:
+                    return False
+
+                if "$nin" in value and item_value in value["$nin"]:
+                    return False
+
+                if "$regex" in value and not re.search(value["$regex"], str(item_value or "")):
                     return False
 
                 if "$gte" in value and item_value < value["$gte"]:
@@ -98,13 +122,22 @@ class FakeCollection:
 class FakeDb:
     def __init__(self):
         self.author_profiles = FakeCollection()
+        self.activity_snapshots = FakeCollection()
         self.break_events = FakeCollection()
         self.break_sessions = FakeCollection()
         self.day_sessions = FakeCollection()
         self.break_intervals = FakeCollection()
+        self.calendar_marks = FakeCollection()
         self.daily_author_activity = FakeCollection()
         self.aggregate_session_state = FakeCollection()
         self.interval_settings = FakeCollection()
+        self.manual_report_expectations = FakeCollection()
+        self.raw_activity_events = FakeCollection()
+        self.raw_event_batches = FakeCollection()
+        self.raw_reports = FakeCollection()
+        self.report_challenges = FakeCollection()
+        self.report_refresh_requests = FakeCollection()
+        self.report_rows = FakeCollection()
         self.report_security_events = FakeCollection()
 
 
@@ -146,6 +179,206 @@ def test_telegram_bot_parses_team_commands():
 
 def test_telegram_bot_uses_sender_username():
     assert telegram_username({"username": "@Dmitry_Shane"}) == "dmitry_shane"
+
+
+def test_manual_profile_is_listed_before_activity_and_can_receive_email():
+    repo = fake_repository()
+
+    repo.upsert_author_profile(
+        raw_author="Future Artist",
+        display_name="Future Artist",
+        team="Art",
+        telegram_username="@future_artist",
+        plugin_enabled=True,
+        author_color="#13a37b",
+        time_zone_id="UTC",
+    )
+
+    assert repo.list_authors() == ["Future Artist"]
+    assert repo.author_profiles()[0]["telegramUsername"] == "future_artist"
+
+    repo.update_author_email("Future Artist", "future@example.com")
+
+    assert repo.author_profiles()[0]["authorEmail"] == "future@example.com"
+
+
+def test_cyrillic_author_names_are_unicode_normalized_for_profile_matching():
+    repo = fake_repository()
+    decomposed_author = "Але\u0308на Иванова"
+    composed_author = unicodedata.normalize("NFC", decomposed_author)
+
+    repo.upsert_author_profile(
+        raw_author=decomposed_author,
+        display_name=None,
+        team="Art",
+        telegram_username="@alena",
+        plugin_enabled=True,
+        author_color="#13a37b",
+        time_zone_id="UTC",
+    )
+    repo.update_author_email(composed_author, "alena@example.com")
+
+    assert repo.list_authors() == [composed_author]
+    assert repo.author_profiles()[0]["rawAuthor"] == composed_author
+    assert repo.author_profiles()[0]["authorEmail"] == "alena@example.com"
+
+
+def test_telegram_online_creates_visible_report_row_and_live_day_time():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+
+    result = repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    authors = {}
+    totals = {"daySeconds": 0, "telegramDaySeconds": 0, "breakSeconds": 0}
+    repo._apply_live_telegram_summary(
+        authors,
+        totals,
+        repo._profiles_by_raw_author(),
+        {},
+        {},
+        "2026-04-28",
+        "2026-04-28",
+        None,
+        dt.datetime(2026, 4, 28, 9, 10, tzinfo=dt.UTC),
+    )
+
+    assert result["status"] == "online_recorded"
+    assert repo.db.report_rows.items[0]["source"] == "telegram"
+    assert repo.db.report_rows.items[0]["reportType"] == "telegram"
+    assert repo.db.report_rows.items[0]["telegramEventType"] == "online"
+    assert authors["Future Artist"]["telegramDaySeconds"] == 10 * 60
+    assert totals["telegramDaySeconds"] == 10 * 60
+
+
+def test_telegram_online_uses_author_time_zone_for_date():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "telegramUsername": "igormats", "timeZoneId": "UTC"})
+
+    repo.record_break_event("igormats", "online", "2026-04-29T00:06:17+02:00")
+
+    assert repo.db.day_sessions.items[0]["date"] == "2026-04-28"
+    assert repo.db.report_rows.items[0]["date"] == "2026-04-28"
+
+
+def test_telegram_online_uses_madrid_author_time_zone_for_date():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "telegramUsername": "dmitryshane", "timeZoneId": "Europe/Madrid"}
+    )
+
+    repo.record_break_event("dmitryshane", "online", "2026-04-29T00:06:17+02:00")
+
+    assert repo.db.day_sessions.items[0]["date"] == "2026-04-29"
+    assert repo.db.report_rows.items[0]["date"] == "2026-04-29"
+
+
+def test_author_time_zone_update_rebuckets_existing_telegram_rows():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "telegramUsername": "dmitryshane"})
+
+    repo.record_break_event("dmitryshane", "online", "2026-04-29T00:06:17+02:00")
+
+    assert repo.db.day_sessions.items[0]["date"] == "2026-04-28"
+    assert repo.db.report_rows.items[0]["date"] == "2026-04-28"
+
+    repo.update_author_time_zone("Dmitry Shane", "Europe/Madrid", "CEST")
+
+    assert repo.db.author_profiles.items[0]["timeZoneId"] == "Europe/Madrid"
+    assert repo.db.break_events.items[0]["date"] == "2026-04-29"
+    assert repo.db.day_sessions.items[0]["date"] == "2026-04-29"
+    assert repo.db.report_rows.items[0]["date"] == "2026-04-29"
+    assert repo.db.report_rows.items[0]["timeZoneId"] == "Europe/Madrid"
+
+
+def test_author_local_today_summary_includes_authors_on_different_local_dates():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Madrid Author", "displayName": "Madrid Author", "timeZoneId": "Europe/Madrid"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Utc Author", "displayName": "Utc Author", "timeZoneId": "UTC"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "projectId": "unity",
+            "author": "Madrid Author",
+            "date": "2026-04-29",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "projectId": "unity",
+            "author": "Utc Author",
+            "date": "2026-04-28",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "timeZoneId": "UTC",
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        date_mode="authorLocalToday",
+        now=dt.datetime(2026, 4, 28, 22, 30, tzinfo=dt.UTC),
+    )
+
+    authors = {author["rawAuthor"]: author for author in summary["authors"]}
+    assert authors["Madrid Author"]["activeSeconds"] == 60
+    assert authors["Utc Author"]["activeSeconds"] == 120
+
+
+def test_live_telegram_summary_includes_open_session_outside_selected_date_range():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "telegramUsername": "igormats", "timeZoneId": "UTC"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "telegramUsername": "igormats",
+            "date": "2026-04-28",
+            "startedAt": dt.datetime(2026, 4, 28, 22, 6, tzinfo=dt.UTC),
+            "daySeconds": 0,
+        }
+    )
+    authors = {}
+    totals = {"daySeconds": 0, "telegramDaySeconds": 0, "breakSeconds": 0}
+
+    repo._apply_live_telegram_summary(
+        authors,
+        totals,
+        repo._profiles_by_raw_author(),
+        {},
+        {},
+        "2026-04-29",
+        "2026-04-29",
+        "authorLocalToday",
+        dt.datetime(2026, 4, 28, 22, 16, tzinfo=dt.UTC),
+    )
+
+    assert authors["Igor Mats"]["telegramDaySeconds"] == 10 * 60
+    assert totals["telegramDaySeconds"] == 10 * 60
+
+
+def test_delete_author_data_preserves_profile_but_delete_profile_removes_it():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "telegramUsername": "future_artist"})
+    repo.db.report_rows.insert_one({"author": "Future Artist"})
+    repo.db.day_sessions.insert_one({"rawAuthor": "Future Artist", "telegramUsername": "future_artist", "date": "2026-04-28"})
+
+    data_result = repo.delete_author_data("Future Artist")
+
+    assert data_result["ok"] is True
+    assert repo.db.author_profiles.items == [{"rawAuthor": "Future Artist", "telegramUsername": "future_artist"}]
+
+    repo.db.report_rows.insert_one({"author": "Future Artist"})
+    profile_result = repo.delete_author_profile("Future Artist")
+
+    assert profile_result["ok"] is True
+    assert repo.db.author_profiles.items == []
+    assert repo.db.report_rows.items == []
 
 
 def test_break_event_flow_records_day_and_break():
@@ -229,9 +462,10 @@ def test_raw_event_state_spans_unity_and_blender_sources():
         "sessionId": "blender-session",
         "date": "2026-04-28",
         "eventType": "scene_changed",
-        "occurredAtUtc": "2026-04-28T10:03:00Z",
-        "occurredAtLocal": "2026-04-28T10:03:00+00:00",
-        "receivedAt": dt.datetime(2026, 4, 28, 10, 3, tzinfo=dt.UTC),
+        "occurredAtUtc": "2026-04-28T10:00:30Z",
+        "occurredAtLocal": "2026-04-28T10:00:30+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 0, 30, tzinfo=dt.UTC),
+        "metadata": {"inputType": "MOUSEMOVE"},
     }
     unity_heartbeat = {
         "source": "ual",
@@ -240,16 +474,16 @@ def test_raw_event_state_spans_unity_and_blender_sources():
         "sessionId": "unity-session",
         "date": "2026-04-28",
         "eventType": "heartbeat",
-        "occurredAtUtc": "2026-04-28T10:06:00Z",
-        "occurredAtLocal": "2026-04-28T10:06:00+00:00",
-        "receivedAt": dt.datetime(2026, 4, 28, 10, 6, tzinfo=dt.UTC),
+        "occurredAtUtc": "2026-04-28T10:01:20Z",
+        "occurredAtLocal": "2026-04-28T10:01:20+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 1, 20, tzinfo=dt.UTC),
     }
 
     repo._apply_raw_event_to_aggregates(unity_event)
     blender_deltas = repo._apply_raw_event_to_aggregates(blender_event)
     heartbeat_deltas = repo._apply_raw_event_to_aggregates(unity_heartbeat)
 
-    assert blender_deltas["activeDeltaSeconds"] == 3 * 60
+    assert blender_deltas["activeDeltaSeconds"] == 30
     assert heartbeat_deltas["idleDeltaSeconds"] == 0
     assert heartbeat_deltas["activeDeltaSeconds"] == 0
 
@@ -292,6 +526,98 @@ def test_second_plugin_heartbeat_does_not_create_tiny_duplicate_idle_row():
     assert unity_deltas["idleDeltaSeconds"] == 6 * 60
     assert blender_deltas["idleDeltaSeconds"] == 0
     assert blender_deltas["activeDeltaSeconds"] == 0
+
+
+def test_idle_is_accounted_by_last_activity_source_not_unrelated_heartbeat():
+    repo = fake_repository()
+    unity_event = {
+        "source": "ual",
+        "author": "Dmitry Shane",
+        "projectId": "unity",
+        "sessionId": "unity-session",
+        "date": "2026-04-28",
+        "eventType": "selection",
+        "occurredAtUtc": "2026-04-28T10:00:00Z",
+        "occurredAtLocal": "2026-04-28T10:00:00+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 0, tzinfo=dt.UTC),
+    }
+    blender_event = {
+        **unity_event,
+        "source": "bal",
+        "projectId": "blender",
+        "sessionId": "blender-session",
+        "eventType": "scene_changed",
+        "occurredAtUtc": "2026-04-28T10:00:20Z",
+        "occurredAtLocal": "2026-04-28T10:00:20+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 0, 20, tzinfo=dt.UTC),
+        "metadata": {"inputType": "MOUSEMOVE"},
+    }
+    unity_heartbeat = {
+        **unity_event,
+        "eventType": "heartbeat",
+        "occurredAtUtc": "2026-04-28T10:01:20Z",
+        "occurredAtLocal": "2026-04-28T10:01:20+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 1, 20, tzinfo=dt.UTC),
+    }
+    blender_heartbeat = {
+        **blender_event,
+        "eventType": "heartbeat",
+        "occurredAtUtc": "2026-04-28T10:01:25Z",
+        "occurredAtLocal": "2026-04-28T10:01:25+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 1, 25, tzinfo=dt.UTC),
+    }
+
+    repo._apply_raw_event_to_aggregates(unity_event)
+    repo._apply_raw_event_to_aggregates(blender_event)
+    unity_deltas = repo._apply_raw_event_to_aggregates(unity_heartbeat)
+    blender_deltas = repo._apply_raw_event_to_aggregates(blender_heartbeat)
+
+    assert unity_deltas["idleDeltaSeconds"] == 0
+    assert unity_deltas["activeDeltaSeconds"] == 0
+    assert blender_deltas["idleDeltaSeconds"] == 65
+    assert blender_deltas["activeDeltaSeconds"] == 0
+
+
+def test_blender_scene_changed_without_input_metadata_is_not_activity():
+    repo = fake_repository()
+    file_saved = {
+        "source": "bal",
+        "author": "Dmitry Shane",
+        "projectId": "blender",
+        "sessionId": "blender-session",
+        "date": "2026-04-28",
+        "eventType": "file_saved",
+        "occurredAtUtc": "2026-04-28T10:00:00Z",
+        "occurredAtLocal": "2026-04-28T10:00:00+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 0, tzinfo=dt.UTC),
+        "metadata": {"path": "/project/Scene.blend", "name": "Scene.blend"},
+    }
+    background_scene_changed = {
+        **file_saved,
+        "eventType": "scene_changed",
+        "occurredAtUtc": "2026-04-28T10:00:03Z",
+        "occurredAtLocal": "2026-04-28T10:00:03+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 0, 3, tzinfo=dt.UTC),
+        "metadata": {"filepath": "/project/Scene.blend"},
+    }
+    heartbeat = {
+        **file_saved,
+        "eventType": "heartbeat",
+        "occurredAtUtc": "2026-04-28T10:01:03Z",
+        "occurredAtLocal": "2026-04-28T10:01:03+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 1, 3, tzinfo=dt.UTC),
+        "metadata": {},
+    }
+
+    repo._apply_raw_event_to_aggregates(file_saved)
+    background_deltas = repo._apply_raw_event_to_aggregates(background_scene_changed)
+    heartbeat_deltas = repo._apply_raw_event_to_aggregates(heartbeat)
+
+    assert background_deltas["activeDeltaSeconds"] == 0
+    assert background_deltas["idleDeltaSeconds"] == 0
+    assert background_deltas["activityCountDeltas"] == []
+    assert heartbeat_deltas["idleDeltaSeconds"] == 63
+    assert heartbeat_deltas["activeDeltaSeconds"] == 0
 
 
 def test_heartbeat_idle_threshold_uses_plugin_interval():
@@ -366,6 +692,7 @@ def test_live_telegram_summary_adds_open_day_and_break():
         {},
         "2026-04-28",
         "2026-04-28",
+        None,
         dt.datetime(2026, 4, 28, 10, 0, tzinfo=dt.UTC),
     )
 

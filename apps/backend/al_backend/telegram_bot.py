@@ -4,11 +4,11 @@ import json
 import logging
 import os
 import re
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 
@@ -46,7 +46,7 @@ def load_config() -> BotConfig:
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
 
-    backend_url = os.getenv("AL_BACKEND_URL", "http://127.0.0.1:8000").strip().rstrip("/")
+    backend_url = os.getenv("AL_BACKEND_URL", "http://64.225.108.88:8000").strip().rstrip("/")
     allowed_chat_id = _parse_chat_id(os.getenv("TELEGRAM_ALLOWED_CHAT_ID"))
     return BotConfig(token=token, backend_url=backend_url, allowed_chat_id=allowed_chat_id)
 
@@ -127,7 +127,7 @@ def submit_break_event(backend_url: str, telegram_username_value: str, event_typ
     timestamp = None
 
     if isinstance(telegram_timestamp, int):
-        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(telegram_timestamp))
+        timestamp = datetime.fromtimestamp(telegram_timestamp).astimezone().isoformat()
 
     payload = {
         "telegramUsername": telegram_username_value,

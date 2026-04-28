@@ -29,7 +29,7 @@ uv run fastapi dev al_backend/main.py
 
 The backend defaults to:
 
-- API: `http://127.0.0.1:8000`
+- API: `http://64.225.108.88:8000`
 - Mongo URI: `mongodb://127.0.0.1:27017`
 - Mongo database: `al`
 
@@ -43,7 +43,7 @@ npm install
 npm run dev
 ```
 
-The dashboard defaults to `http://127.0.0.1:8000` for API calls. Override with `VITE_API_URL`.
+The dashboard defaults to `http://64.225.108.88:8000` for API calls. Override with `VITE_API_URL`.
 
 ## Telegram Bot
 
@@ -66,7 +66,7 @@ scripts/start-bot-local.sh
 scripts/stop-bot-local.sh
 ```
 
-If `TELEGRAM_ALLOWED_CHAT_ID` is omitted, the bot logs incoming chat ids so you can copy the correct one and restart it locked to that chat. The bot posts events to `AL_BACKEND_URL`, which defaults to `http://127.0.0.1:8000`. For production, use the same variables with the public backend URL.
+If `TELEGRAM_ALLOWED_CHAT_ID` is omitted, the bot logs incoming chat ids so you can copy the correct one and restart it locked to that chat. The bot posts events to `AL_BACKEND_URL`, which defaults to `http://64.225.108.88:8000`. For production, use the same variables with the public backend URL.
 
 ## Unity Package
 
