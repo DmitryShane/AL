@@ -12,6 +12,8 @@ class Settings:
     private_key_path: Path
     default_send_interval_seconds: int
     cors_origins: list[str]
+    admin_email: str
+    admin_password: str
 
 
 def load_settings() -> Settings:
@@ -24,4 +26,6 @@ def load_settings() -> Settings:
         private_key_path=Path(os.getenv("AL_PRIVATE_KEY_PATH", base_dir / "UnityActivityLoggerKey.json")),
         default_send_interval_seconds=int(os.getenv("AL_DEFAULT_SEND_INTERVAL_SECONDS", "300")),
         cors_origins=[origin.strip() for origin in raw_origins.split(",") if origin.strip()],
+        admin_email=os.getenv("AL_ADMIN_EMAIL", "").strip(),
+        admin_password=os.getenv("AL_ADMIN_PASSWORD", ""),
     )

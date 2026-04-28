@@ -53,6 +53,19 @@ class IntervalSettingsIn(ApiModel):
     author_send_interval_seconds: int | None = Field(default=None, alias="authorSendIntervalSeconds", ge=30)
 
 
+class LoginIn(ApiModel):
+    email: str = Field(min_length=3)
+    password: str = Field(min_length=1)
+
+
+class SiteUserIn(ApiModel):
+    email: str = Field(min_length=3)
+    password: str | None = Field(default=None, min_length=8)
+    display_name: str | None = Field(default=None, alias="displayName")
+    role: str = Field(default="viewer", pattern="^(admin|editor|viewer)$")
+    active: bool = True
+
+
 class AuthorProfileIn(ApiModel):
     raw_author: str = Field(alias="rawAuthor", min_length=1)
     display_name: str | None = Field(default=None, alias="displayName")

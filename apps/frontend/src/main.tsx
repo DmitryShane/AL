@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, BarChart3, Bell, Box, Boxes, CalendarDays, RefreshCw, Search, Settings, UsersRound } from "lucide-react";
+import { Activity, BarChart3, Bell, Box, Boxes, CalendarDays, LogOut, RefreshCw, Search, Settings, ShieldCheck, UsersRound } from "lucide-react";
 import { AuthorsTable } from "./components/AuthorsTable";
 import { HourlyActivityChart } from "./components/HourlyActivityChart";
 import "./styles.css";
@@ -8,6 +8,10 @@ import "./styles.css";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://64.225.108.88:8000";
 const REFRESH_INTERVAL_MS = 10000;
 const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
+
+function apiFetch(path: string, init: RequestInit = {}) {
+  return fetch(`${API_URL}${path}`, { ...init, credentials: "include" });
+}
 
 type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings";
 
@@ -147,6 +151,15 @@ type Summary = {
   activitySummary: ActivitySummary;
 };
 
+type SiteUserRole = "admin" | "editor" | "viewer";
+
+type SiteUser = {
+  email: string;
+  displayName: string;
+  role: SiteUserRole;
+  active: boolean;
+};
+
 type AnalyticsTotals = {
   daySeconds: number;
   activeSeconds: number;
@@ -272,6 +285,8 @@ const emptyActivitySummary: ActivitySummary = {
 
 function App() {
   const [page, setPage] = useState<Page>(() => loadSavedPage());
+  const [authUser, setAuthUser] = useState<SiteUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [health, setHealth] = useState<Health | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>(() => todayRange());
@@ -281,7 +296,31 @@ function App() {
   const [refreshingReports, setRefreshingReports] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    async function loadAuth() {
+      try {
+        const response = await apiFetch("/api/v1/auth/me");
+
+        if (response.ok) {
+          const payload = await response.json();
+          setAuthUser(payload.user);
+        }
+      } catch {
+        setAuthUser(null);
+      } finally {
+        setAuthLoading(false);
+      }
+    }
+
+    void loadAuth();
+  }, []);
+
   async function load(showLoading = true) {
+    if (!authUser) {
+      setLoading(false);
+      return;
+    }
+
     if (showLoading) {
       setLoading(true);
     }
@@ -299,9 +338,14 @@ function App() {
       }
 
       const [healthResponse, summaryResponse] = await Promise.all([
-        fetch(`${API_URL}/api/v1/health`),
-        fetch(`${API_URL}/api/v1/reports/summary?${params.toString()}`)
+        apiFetch(`/api/v1/health`),
+        apiFetch(`/api/v1/reports/summary?${params.toString()}`)
       ]);
+
+      if (summaryResponse.status === 401) {
+        setAuthUser(null);
+        return;
+      }
 
       if (!healthResponse.ok || !summaryResponse.ok) {
         throw new Error("Backend request failed");
@@ -318,14 +362,14 @@ function App() {
 
   useEffect(() => {
     void load();
-  }, [dateRange.startDate, dateRange.endDate]);
+  }, [authUser?.email, dateRange.startDate, dateRange.endDate]);
 
   async function requestReportRefresh(author?: string | null) {
     setRefreshingReports(true);
     setError(null);
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/reports/request-refresh`, {
+      const response = await apiFetch(`/api/v1/reports/request-refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ author: author ?? null })
@@ -346,6 +390,10 @@ function App() {
   const dashboardRefreshMs = dashboardRefreshIntervalMs(summary);
 
   useEffect(() => {
+    if (!authUser) {
+      return;
+    }
+
     const intervalId = window.setInterval(() => {
       void load(false);
     }, dashboardRefreshMs);
@@ -353,7 +401,7 @@ function App() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [dateRange.startDate, dateRange.endDate, dashboardRefreshMs]);
+  }, [authUser?.email, dateRange.startDate, dateRange.endDate, dashboardRefreshMs]);
 
   const activitySummary = summary?.activitySummary ?? emptyActivitySummary;
   const authors = useMemo(() => activitySummary.authors.filter((author) => matchesAuthorSearch(author, search)), [activitySummary, search]);
@@ -368,6 +416,21 @@ function App() {
   function selectPage(nextPage: Page) {
     setPage(nextPage);
     localStorage.setItem(PAGE_STORAGE_KEY, nextPage);
+  }
+
+  async function handleLogout() {
+    await apiFetch("/api/v1/auth/logout", { method: "POST" });
+    setAuthUser(null);
+    setSummary(null);
+    setHealth(null);
+  }
+
+  if (authLoading) {
+    return <LoginPage loading onLogin={setAuthUser} />;
+  }
+
+  if (!authUser) {
+    return <LoginPage onLogin={setAuthUser} />;
   }
 
   return (
@@ -398,6 +461,13 @@ function App() {
               <DateRangePicker value={dateRange} onChange={setDateRange} />
             </div>
           ) : null}
+          <div className="session-card">
+            <span>{authUser.displayName}</span>
+            <small>{formatSiteRole(authUser.role)}</small>
+            <button className="icon-button" onClick={() => void handleLogout()} title="Log out">
+              <LogOut size={16} />
+            </button>
+          </div>
         </header>
 
         {loading ? <p className="notice">Loading dashboard data...</p> : null}
@@ -425,9 +495,86 @@ function App() {
         {page === "analytics" ? <AnalyticsPage /> : null}
         {page === "calendar" ? <CalendarPage /> : null}
         {page === "alerts" ? <AlertsPage authors={activitySummary.authors} /> : null}
-        {page === "settings" ? <SettingsPage summary={summary} health={health} onSaved={() => void load(false)} /> : null}
+        {page === "settings" ? <SettingsPage summary={summary} health={health} currentUser={authUser} onSaved={() => void load(false)} /> : null}
       </main>
     </div>
+  );
+}
+
+function LoginPage({ loading = false, onLogin }: { loading?: boolean; onLogin: (user: SiteUser) => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      const response = await apiFetch("/api/v1/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+
+      if (!response.ok) {
+        throw new Error("Invalid email or password");
+      }
+
+      const payload = await response.json();
+      onLogin(payload.user);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Login failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="login-shell">
+      <section className="login-hero">
+        <div className="login-orbit">
+          <span className="bike-wheel wheel-left" />
+          <span className="bike-wheel wheel-right" />
+          <span className="bike-frame-line frame-top" />
+          <span className="bike-frame-line frame-down" />
+          <span className="bike-frame-line frame-seat" />
+        </div>
+        <p className="eyebrow">Activity Logger HQ</p>
+        <h1>Welcome to the team ride control room.</h1>
+        <p>
+          Track Unity and Blender activity, spot stalled reports, and keep the production sprint moving from one focused dashboard.
+        </p>
+      </section>
+      <form className="login-card" onSubmit={(event) => void submit(event)}>
+        <div className="login-card-icon">
+          <ShieldCheck size={28} />
+        </div>
+        <h2>Sign in</h2>
+        <p>Use the email and password issued by your site administrator.</p>
+        <label>
+          Email
+          <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" required />
+        </label>
+        <label>
+          Password
+          <input
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            type="password"
+            autoComplete="current-password"
+            required
+          />
+        </label>
+        {error ? <p className="notice error">{error}</p> : null}
+        {loading ? <p className="notice">Checking session...</p> : null}
+        <button className="primary-button" type="submit" disabled={loading || submitting}>
+          {submitting ? "Signing in..." : "Enter dashboard"}
+        </button>
+      </form>
+    </main>
   );
 }
 
@@ -484,7 +631,7 @@ function AnalyticsPage() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/analytics/summary`);
+      const response = await apiFetch(`/api/v1/analytics/summary`);
 
       if (!response.ok) {
         throw new Error("Analytics request failed");
@@ -573,7 +720,7 @@ function CalendarPage() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/calendar/summary?year=${year}`);
+      const response = await apiFetch(`/api/v1/calendar/summary?year=${year}`);
 
       if (!response.ok) {
         throw new Error("Calendar request failed");
@@ -663,7 +810,7 @@ function CalendarPage() {
       return;
     }
 
-    const response = await fetch(`${API_URL}/api/v1/calendar/marks`, {
+    const response = await apiFetch(`/api/v1/calendar/marks`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ authors: markAuthors, dates: selectedDates, reasonId: markReason, note: markNote.trim() })
@@ -689,7 +836,7 @@ function CalendarPage() {
     for (const author of clearAuthors) {
       for (const date of selectedDates) {
         const params = new URLSearchParams({ author, date });
-        const response = await fetch(`${API_URL}/api/v1/calendar/marks?${params.toString()}`, { method: "DELETE" });
+        const response = await apiFetch(`/api/v1/calendar/marks?${params.toString()}`, { method: "DELETE" });
 
         if (!response.ok) {
           setError("Calendar mark delete failed.");
@@ -708,7 +855,7 @@ function CalendarPage() {
       return;
     }
 
-    const response = await fetch(`${API_URL}/api/v1/calendar/reasons`, {
+    const response = await apiFetch(`/api/v1/calendar/reasons`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: reasonEditId, label: reasonLabel.trim() })
@@ -1398,8 +1545,19 @@ function ActivityPage({
   );
 }
 
-function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; health: Health | null; onSaved: () => void }) {
+function SettingsPage({
+  summary,
+  health,
+  currentUser,
+  onSaved
+}: {
+  summary: Summary | null;
+  health: Health | null;
+  currentUser: SiteUser;
+  onSaved: () => void;
+}) {
   const profiles = summary?.activitySummary.profiles ?? [];
+  const [settingsTab, setSettingsTab] = useState<"authors" | "users">("authors");
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
   const [saving, setSaving] = useState<string | null>(null);
@@ -1430,7 +1588,7 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
     setSaveStatus((items) => ({ ...items, [rawAuthor]: undefined }));
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/authors/profile`, {
+      const response = await apiFetch(`/api/v1/authors/profile`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(authorProfilePayload(profile))
@@ -1470,7 +1628,7 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
     setSaveStatus((items) => ({ ...items, newProfile: undefined }));
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/authors/profile`, {
+      const response = await apiFetch(`/api/v1/authors/profile`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(authorProfilePayload(profile))
@@ -1498,7 +1656,7 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
     setSaveStatus((items) => ({ ...items, interval: undefined }));
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/settings/intervals`, {
+      const response = await apiFetch(`/api/v1/settings/intervals`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ defaultSendIntervalSeconds: Number(globalInterval) })
@@ -1526,7 +1684,7 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
     setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/authors/${encodeURIComponent(rawAuthor)}/data`, {
+      const response = await apiFetch(`/api/v1/authors/${encodeURIComponent(rawAuthor)}/data`, {
         method: "DELETE"
       });
 
@@ -1553,7 +1711,7 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
     setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/authors/${encodeURIComponent(rawAuthor)}/profile`, {
+      const response = await apiFetch(`/api/v1/authors/${encodeURIComponent(rawAuthor)}/profile`, {
         method: "DELETE"
       });
 
@@ -1588,6 +1746,12 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
 
   return (
     <section className="page-section settings-layout">
+      <div className="settings-tabs">
+        <button className={settingsTab === "authors" ? "active" : ""} onClick={() => setSettingsTab("authors")}>Author Profiles</button>
+        <button className={settingsTab === "users" ? "active" : ""} onClick={() => setSettingsTab("users")}>Site Users</button>
+      </div>
+      {settingsTab === "authors" ? (
+        <>
       <div className="panel">
         <h2>System Status</h2>
         <span className={health?.ok ? "status-pill online" : "status-pill"}>{health?.ok ? "Backend online" : "Backend offline"}</span>
@@ -1769,7 +1933,226 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
           onDelete={() => void deleteAuthorProfile(deleteProfileTarget.rawAuthor)}
         />
       ) : null}
+        </>
+      ) : (
+        <SiteUsersPanel currentUser={currentUser} />
+      )}
     </section>
+  );
+}
+
+function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
+  const canManageUsers = currentUser.role === "admin";
+  const [users, setUsers] = useState<SiteUser[]>([]);
+  const [drafts, setDrafts] = useState<Record<string, SiteUser>>({});
+  const [newUser, setNewUser] = useState<SiteUser & { password: string }>({
+    email: "",
+    displayName: "",
+    role: "viewer",
+    active: true,
+    password: ""
+  });
+  const [saving, setSaving] = useState<string | null>(null);
+  const [status, setStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
+
+  async function loadUsers() {
+    if (!canManageUsers) {
+      return;
+    }
+
+    const response = await apiFetch("/api/v1/site-users");
+
+    if (response.ok) {
+      const payload = await response.json();
+      const nextUsers = payload.users ?? [];
+      setUsers(nextUsers);
+      setDrafts(Object.fromEntries(nextUsers.map((user: SiteUser) => [user.email, user])));
+    }
+  }
+
+  useEffect(() => {
+    void loadUsers();
+  }, [canManageUsers]);
+
+  async function saveUser(email: string, password?: string) {
+    const draft = drafts[email];
+
+    if (!draft) {
+      return;
+    }
+
+    await persistUser(email, { ...draft, password });
+  }
+
+  async function createUser() {
+    await persistUser("newUser", newUser);
+  }
+
+  async function persistUser(key: string, user: SiteUser & { password?: string }) {
+    setSaving(key);
+    setStatus((items) => ({ ...items, [key]: undefined }));
+
+    try {
+      const response = await apiFetch("/api/v1/site-users", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: user.email,
+          displayName: user.displayName,
+          role: user.role,
+          active: user.active,
+          password: user.password || undefined
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("User save failed");
+      }
+
+      if (key === "newUser") {
+        setNewUser({ email: "", displayName: "", role: "viewer", active: true, password: "" });
+      }
+
+      setStatus((items) => ({ ...items, [key]: "saved" }));
+      await loadUsers();
+    } catch {
+      setStatus((items) => ({ ...items, [key]: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setStatus((items) => ({ ...items, [key]: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function deleteUser(email: string) {
+    setSaving(`delete:${email}`);
+    setStatus((items) => ({ ...items, [`delete:${email}`]: undefined }));
+
+    try {
+      const response = await apiFetch(`/api/v1/site-users/${encodeURIComponent(email)}`, { method: "DELETE" });
+
+      if (!response.ok) {
+        throw new Error("User delete failed");
+      }
+
+      setStatus((items) => ({ ...items, [`delete:${email}`]: "saved" }));
+      await loadUsers();
+    } catch {
+      setStatus((items) => ({ ...items, [`delete:${email}`]: "error" }));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  if (!canManageUsers) {
+    return (
+      <div className="panel">
+        <h2>Site Users</h2>
+        <p className="settings-caption">Only admins can create users, reset passwords, and change access rights.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel">
+      <h2>Site Users</h2>
+      <p className="settings-caption">Create dashboard logins, issue temporary passwords, and choose what each person can do on the site.</p>
+      <div className="site-user-create-card">
+        <label>
+          Email
+          <input value={newUser.email} onChange={(event) => setNewUser((user) => ({ ...user, email: event.target.value }))} />
+        </label>
+        <label>
+          Display Name
+          <input value={newUser.displayName} onChange={(event) => setNewUser((user) => ({ ...user, displayName: event.target.value }))} />
+        </label>
+        <label>
+          Password
+          <input
+            value={newUser.password}
+            onChange={(event) => setNewUser((user) => ({ ...user, password: event.target.value }))}
+            type="password"
+            minLength={8}
+          />
+        </label>
+        <label>
+          Role
+          <select value={newUser.role} onChange={(event) => setNewUser((user) => ({ ...user, role: event.target.value as SiteUserRole }))}>
+            <option value="admin">Admin</option>
+            <option value="editor">Editor</option>
+            <option value="viewer">Viewer</option>
+          </select>
+        </label>
+        <button
+          className={settingsSaveButtonClassName(status.newUser)}
+          onClick={() => void createUser()}
+          disabled={saving === "newUser" || !newUser.email.trim() || newUser.password.length < 8}
+        >
+          {saving === "newUser" ? "Creating..." : status.newUser === "saved" ? "Created" : status.newUser === "error" ? "Failed" : "Add user"}
+        </button>
+      </div>
+      <div className="site-users-table">
+        <div className="site-users-head">
+          <span>Email</span>
+          <span>Name</span>
+          <span>Role</span>
+          <span>Status</span>
+          <span>New Password</span>
+          <span>Actions</span>
+        </div>
+        {users.map((user) => {
+          const draft = drafts[user.email] ?? user;
+          const deleteKey = `delete:${user.email}`;
+          return (
+            <div className="site-user-row" key={user.email}>
+              <strong>{user.email}</strong>
+              <input
+                value={draft.displayName}
+                onChange={(event) => setDrafts((items) => ({ ...items, [user.email]: { ...draft, displayName: event.target.value } }))}
+              />
+              <select
+                value={draft.role}
+                onChange={(event) => setDrafts((items) => ({ ...items, [user.email]: { ...draft, role: event.target.value as SiteUserRole } }))}
+              >
+                <option value="admin">Admin</option>
+                <option value="editor">Editor</option>
+                <option value="viewer">Viewer</option>
+              </select>
+              <label className="checkbox-cell">
+                <input
+                  type="checkbox"
+                  checked={draft.active}
+                  onChange={(event) => setDrafts((items) => ({ ...items, [user.email]: { ...draft, active: event.target.checked } }))}
+                />
+                Active
+              </label>
+              <input
+                type="password"
+                placeholder="Leave unchanged"
+                onChange={(event) => setDrafts((items) => ({ ...items, [user.email]: { ...draft, password: event.target.value } as SiteUser }))}
+              />
+              <div className="profile-actions">
+                <button
+                  className={settingsSaveButtonClassName(status[user.email], true)}
+                  onClick={() => void saveUser(user.email, (draft as SiteUser & { password?: string }).password)}
+                  disabled={saving === user.email}
+                >
+                  {settingsSaveButtonLabel(user.email, saving, status)}
+                </button>
+                <button
+                  className={`${settingsSaveButtonClassName(status[deleteKey], true)} danger-button`}
+                  onClick={() => void deleteUser(user.email)}
+                  disabled={saving === deleteKey || user.email === currentUser.email}
+                >
+                  {saving === deleteKey ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -1920,6 +2303,18 @@ function settingsSaveButtonLabel(key: string, saving: string | null, statuses: R
 function dashboardRefreshIntervalMs(summary: Summary | null) {
   const seconds = summary?.intervalSettings.defaultSendIntervalSeconds ?? REFRESH_INTERVAL_MS / 1000;
   return Math.max(1000, seconds * 1000);
+}
+
+function formatSiteRole(role: SiteUserRole) {
+  if (role === "admin") {
+    return "Admin";
+  }
+
+  if (role === "editor") {
+    return "Editor";
+  }
+
+  return "Viewer";
 }
 
 function settingsSaveButtonClassName(status: "saved" | "error" | undefined, outline = false) {

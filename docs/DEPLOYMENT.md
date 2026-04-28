@@ -30,7 +30,11 @@ AL_MONGO_DATABASE=al
 AL_PRIVATE_KEY_PATH=/opt/al/current/apps/backend/al_backend/UnityActivityLoggerKey.json
 AL_DEFAULT_SEND_INTERVAL_SECONDS=300
 AL_CORS_ORIGINS=http://64.225.108.88,http://64.225.108.88:8000
+AL_ADMIN_EMAIL=admin@example.com
+AL_ADMIN_PASSWORD=replace-with-initial-admin-password
 ```
+
+`AL_ADMIN_EMAIL` and `AL_ADMIN_PASSWORD` bootstrap the first site admin. After logging in, create normal user profiles from `Settings -> Site Users`.
 
 Create `/etc/al/telegram-bot.env`:
 

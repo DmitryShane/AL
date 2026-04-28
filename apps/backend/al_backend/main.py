@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .models import (
     AuthorProfileIn,
@@ -12,11 +13,13 @@ from .models import (
     CalendarReasonIn,
     HealthResponse,
     IntervalSettingsIn,
+    LoginIn,
     PluginConfig,
     ReportChallengeIn,
     ReportChallengeResponse,
     ReportIn,
     ReportRefreshRequest,
+    SiteUserIn,
     SubmitReportResponse,
     SummaryResponse,
 )
@@ -33,6 +36,7 @@ async def lifespan(app: FastAPI):
     repo = Repository(settings)
     try:
         repo.ensure_indexes()
+        repo.ensure_bootstrap_site_admin(settings.admin_email, settings.admin_password)
     except Exception:
         pass
     app.state.repo = repo
@@ -48,6 +52,126 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+SESSION_COOKIE_NAME = "al_session"
+SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+ROLE_PERMISSIONS = {
+    "admin": {"viewDashboard", "manageSettings", "manageUsers"},
+    "editor": {"viewDashboard", "manageSettings"},
+    "viewer": {"viewDashboard"},
+}
+PUBLIC_API_PATHS = {
+    "/api/v1/health",
+    "/api/v1/plugins/config",
+    "/api/v1/reports",
+    "/api/v1/reports/challenge",
+    "/api/v1/break-events",
+    "/api/v1/auth/login",
+    "/api/v1/auth/me",
+}
+
+
+@app.middleware("http")
+async def site_auth_middleware(request: Request, call_next):
+    if request.method == "OPTIONS" or request.url.path not in PUBLIC_API_PATHS and not request.url.path.startswith("/api/v1/"):
+        return await call_next(request)
+
+    if request.url.path in PUBLIC_API_PATHS:
+        return await call_next(request)
+
+    user = request.app.state.repo.site_user_for_session(request.cookies.get(SESSION_COOKIE_NAME))
+
+    if not user:
+        return JSONResponse({"detail": "Authentication required"}, status_code=401)
+
+    request.state.site_user = user
+    return await call_next(request)
+
+
+def current_site_user(request: Request) -> dict:
+    user = getattr(request.state, "site_user", None)
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    return user
+
+
+def require_permission(permission: str):
+    def dependency(user: dict = Depends(current_site_user)) -> dict:
+        role = user.get("role", "viewer")
+
+        if permission not in ROLE_PERMISSIONS.get(role, set()):
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+        return user
+
+    return dependency
+
+
+@app.post("/api/v1/auth/login")
+def login(credentials: LoginIn, response: Response) -> dict:
+    user = app.state.repo.authenticate_site_user(credentials.email, credentials.password)
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = app.state.repo.create_site_session(user["email"])
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+    return {"ok": True, "user": user}
+
+
+@app.post("/api/v1/auth/logout")
+def logout(request: Request, response: Response) -> dict:
+    app.state.repo.delete_site_session(request.cookies.get(SESSION_COOKIE_NAME))
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+@app.get("/api/v1/auth/me")
+def auth_me(request: Request) -> dict:
+    user = app.state.repo.site_user_for_session(request.cookies.get(SESSION_COOKIE_NAME))
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    return {"user": user}
+
+
+@app.get("/api/v1/site-users")
+def site_users(_: dict = Depends(require_permission("manageUsers"))) -> dict:
+    return {"users": app.state.repo.site_users()}
+
+
+@app.put("/api/v1/site-users")
+def upsert_site_user(user_in: SiteUserIn, _: dict = Depends(require_permission("manageUsers"))) -> dict:
+    result = app.state.repo.upsert_site_user(
+        email=user_in.email,
+        display_name=user_in.display_name,
+        role=user_in.role,
+        active=user_in.active,
+        password=user_in.password,
+    )
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "User save failed"))
+
+    return result
+
+
+@app.delete("/api/v1/site-users/{email}")
+def delete_site_user(email: str, current_user: dict = Depends(require_permission("manageUsers"))) -> dict:
+    if email.strip().lower() == current_user.get("email"):
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+
+    return app.state.repo.delete_site_user(email)
 
 
 @app.get("/api/v1/health", response_model=HealthResponse)
@@ -153,12 +277,12 @@ def create_report_challenge(challenge_in: ReportChallengeIn) -> ReportChallengeR
 
 
 @app.post("/api/v1/reports/request-refresh")
-def request_report_refresh(refresh: ReportRefreshRequest) -> dict:
+def request_report_refresh(refresh: ReportRefreshRequest, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.request_report_refresh(author=refresh.author)
 
 
 @app.put("/api/v1/settings/intervals")
-def update_intervals(settings_in: IntervalSettingsIn) -> dict:
+def update_intervals(settings_in: IntervalSettingsIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.upsert_interval_settings(
         default_send_interval_seconds=settings_in.default_send_interval_seconds,
         author=settings_in.author,
@@ -167,7 +291,7 @@ def update_intervals(settings_in: IntervalSettingsIn) -> dict:
 
 
 @app.put("/api/v1/authors/profile")
-def upsert_author_profile(profile: AuthorProfileIn) -> dict:
+def upsert_author_profile(profile: AuthorProfileIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.upsert_author_profile(
         raw_author=profile.raw_author,
         display_name=profile.display_name,
@@ -179,12 +303,12 @@ def upsert_author_profile(profile: AuthorProfileIn) -> dict:
 
 
 @app.delete("/api/v1/authors/{raw_author}/data")
-def delete_author_data(raw_author: str) -> dict:
+def delete_author_data(raw_author: str, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.delete_author_data(raw_author=raw_author)
 
 
 @app.delete("/api/v1/authors/{raw_author}/profile")
-def delete_author_profile(raw_author: str) -> dict:
+def delete_author_profile(raw_author: str, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.delete_author_profile(raw_author=raw_author)
 
 
@@ -208,7 +332,7 @@ def calendar_summary(year: int = Query(ge=2000, le=2100)) -> dict:
 
 
 @app.put("/api/v1/calendar/marks")
-def upsert_calendar_marks(mark: CalendarMarkIn) -> dict:
+def upsert_calendar_marks(mark: CalendarMarkIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.upsert_calendar_marks(
         authors=mark.authors,
         dates=mark.dates,
@@ -218,17 +342,19 @@ def upsert_calendar_marks(mark: CalendarMarkIn) -> dict:
 
 
 @app.delete("/api/v1/calendar/marks")
-def delete_calendar_mark(author: str = Query(min_length=1), date: str = Query(min_length=1)) -> dict:
+def delete_calendar_mark(
+    author: str = Query(min_length=1), date: str = Query(min_length=1), _: dict = Depends(require_permission("manageSettings"))
+) -> dict:
     return app.state.repo.delete_calendar_mark(raw_author=author, date=date)
 
 
 @app.put("/api/v1/calendar/reasons")
-def upsert_calendar_reason(reason: CalendarReasonIn) -> dict:
+def upsert_calendar_reason(reason: CalendarReasonIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.upsert_calendar_reason(reason_id=reason.id or reason.label, label=reason.label)
 
 
 @app.delete("/api/v1/calendar/reasons/{reason_id}")
-def delete_calendar_reason(reason_id: str) -> dict:
+def delete_calendar_reason(reason_id: str, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.delete_calendar_reason(reason_id=reason_id)
 
 
