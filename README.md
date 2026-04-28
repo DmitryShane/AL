@@ -1,13 +1,12 @@
 # AL
 
-AL is an Activity Logger monorepo. It contains the first Unity plugin (`UAL`), a FastAPI backend, and a React frontend.
+AL is an Activity Logger workspace. It contains the FastAPI backend, React frontend, and local tooling.
 
 ## Layout
 
-- `packages/ual` - Unity Activity Logger package for Unity Package Manager.
 - `apps/backend` - FastAPI API server with MongoDB persistence and ALR1 decoding.
 - `apps/frontend` - React/Vite dashboard.
-- `packages/blender_al` - Blender Activity Logger add-on.
+- `/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual` - linked Unity package and Blender Activity Logger add-on source.
 - `docs/REMINDERS.md` - follow-up product and deployment reminders.
 
 ## Local Requirements
@@ -43,7 +42,7 @@ npm install
 npm run dev
 ```
 
-The dashboard defaults to `http://64.225.108.88:8000` for API calls. Override with `VITE_API_URL`.
+The dashboard defaults to `http://64.225.108.88:8000` for API calls. Production builds override `VITE_API_URL` to the public site origin so browser requests use nginx's same-origin `/api/` proxy.
 
 ## Telegram Bot
 
@@ -68,13 +67,13 @@ scripts/stop-bot-local.sh
 
 If `TELEGRAM_ALLOWED_CHAT_ID` is omitted, the bot logs incoming chat ids so you can copy the correct one and restart it locked to that chat. The bot posts events to `AL_BACKEND_URL`, which defaults to `http://64.225.108.88:8000`. For production, use the same variables with the public backend URL.
 
-## Unity Package
+## Unity And Blender Package
 
-Import `packages/ual` into Unity through Package Manager from a Git URL with a path:
+The active plugin source is the linked package at:
 
 ```text
-https://github.com/DmitryShane/AL.git?path=/packages/ual
+/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual
 ```
 
-For local testing, add the package from disk using Unity Package Manager and select `packages/ual`.
+Blender add-on source lives in `blender_al` inside that package, with the installable archive at `blender_al.zip`.
 
