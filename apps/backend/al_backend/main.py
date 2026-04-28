@@ -6,7 +6,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from .models import HealthResponse, IntervalSettingsIn, PluginConfig, ReportIn, SubmitReportResponse, SummaryResponse
+from .models import (
+    AuthorProfileIn,
+    BreakEventIn,
+    HealthResponse,
+    IntervalSettingsIn,
+    PluginConfig,
+    ReportIn,
+    SubmitReportResponse,
+    SummaryResponse,
+)
 from .protocol import decode_alr1
 from .repository import Repository
 from .settings import load_settings
@@ -94,10 +103,30 @@ def update_intervals(settings_in: IntervalSettingsIn) -> dict:
     )
 
 
+@app.put("/api/v1/authors/profile")
+def upsert_author_profile(profile: AuthorProfileIn) -> dict:
+    return app.state.repo.upsert_author_profile(
+        raw_author=profile.raw_author,
+        display_name=profile.display_name,
+        team=profile.team,
+        telegram_username=profile.telegram_username,
+    )
+
+
+@app.post("/api/v1/break-events")
+def record_break_event(event: BreakEventIn) -> dict:
+    return app.state.repo.record_break_event(
+        telegram_username=event.telegram_username,
+        event_type=event.event_type,
+        timestamp=event.timestamp,
+    )
+
+
 @app.get("/api/v1/reports/summary", response_model=SummaryResponse)
-def reports_summary() -> SummaryResponse:
+def reports_summary(start_date: str | None = Query(default=None, alias="startDate"), end_date: str | None = Query(default=None, alias="endDate")) -> SummaryResponse:
     return SummaryResponse(
         authors=app.state.repo.list_authors(),
-        reports=app.state.repo.latest_reports(),
+        reports=app.state.repo.latest_reports(start_date=start_date, end_date=end_date),
         intervalSettings=app.state.repo.get_interval_settings(),
+        activitySummary=app.state.repo.activity_summary(start_date=start_date, end_date=end_date),
     )

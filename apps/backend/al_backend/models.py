@@ -29,6 +29,19 @@ class IntervalSettingsIn(ApiModel):
     author_send_interval_seconds: int | None = Field(default=None, alias="authorSendIntervalSeconds", ge=30)
 
 
+class AuthorProfileIn(ApiModel):
+    raw_author: str = Field(alias="rawAuthor", min_length=1)
+    display_name: str | None = Field(default=None, alias="displayName")
+    team: str | None = None
+    telegram_username: str | None = Field(default=None, alias="telegramUsername")
+
+
+class BreakEventIn(ApiModel):
+    telegram_username: str = Field(alias="telegramUsername", min_length=1)
+    event_type: str = Field(alias="eventType", pattern="^(afk|online|offline)$")
+    timestamp: str | None = None
+
+
 class SubmitReportResponse(ApiModel):
     ok: bool
     report_id: str = Field(alias="reportId")
@@ -43,3 +56,4 @@ class SummaryResponse(ApiModel):
     authors: list[str]
     reports: list[dict[str, Any]]
     interval_settings: dict[str, Any] = Field(alias="intervalSettings")
+    activity_summary: dict[str, Any] = Field(alias="activitySummary")
