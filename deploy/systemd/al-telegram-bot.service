@@ -1,0 +1,19 @@
+[Unit]
+Description=AL Telegram Bot
+After=network-online.target al-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_DIR__/apps/backend
+EnvironmentFile=/etc/al/telegram-bot.env
+Environment=HOME=__APP_ROOT__
+Environment=UV_PYTHON_INSTALL_DIR=__APP_ROOT__/python
+ExecStart=__APP_DIR__/apps/backend/.venv/bin/python -m al_backend.telegram_bot
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
