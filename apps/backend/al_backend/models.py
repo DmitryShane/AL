@@ -12,7 +12,26 @@ class ApiModel(BaseModel):
 class ReportIn(ApiModel):
     source: str = Field(min_length=1, examples=["ual"])
     plugin_version: str = Field(default="0.1.0", alias="pluginVersion")
+    challenge_id: str = Field(alias="challengeId", min_length=1)
+    device_id: str | None = Field(default=None, alias="deviceId")
     encrypted_packet: str = Field(alias="encryptedPacket")
+
+
+class ReportChallengeIn(ApiModel):
+    source: str = Field(min_length=1, examples=["ual"])
+    plugin_version: str = Field(default="0.1.0", alias="pluginVersion")
+    author: str = Field(default="Unknown User")
+    author_email: str | None = Field(default=None, alias="authorEmail")
+    project_id: str | None = Field(default=None, alias="projectId")
+    session_id: str | None = Field(default=None, alias="sessionId")
+    device_id: str | None = Field(default=None, alias="deviceId")
+
+
+class ReportChallengeResponse(ApiModel):
+    challenge_id: str = Field(alias="challengeId")
+    public_modulus: str = Field(alias="publicModulus")
+    public_exponent: str = Field(alias="publicExponent")
+    expires_at: str = Field(alias="expiresAt")
 
 
 class PluginConfig(ApiModel):
@@ -32,14 +51,6 @@ class IntervalSettingsIn(ApiModel):
     default_send_interval_seconds: int | None = Field(default=None, alias="defaultSendIntervalSeconds", ge=30)
     author: str | None = None
     author_send_interval_seconds: int | None = Field(default=None, alias="authorSendIntervalSeconds", ge=30)
-
-
-class AnalyticsScoreSettingsIn(ApiModel):
-    active_time_weight: float = Field(alias="activeTimeWeight", ge=0)
-    productivity_weight: float = Field(alias="productivityWeight", ge=0)
-    break_penalty_weight: float = Field(alias="breakPenaltyWeight", ge=0)
-    alerts_penalty_weight: float = Field(alias="alertsPenaltyWeight", ge=0)
-    stale_reports_penalty_weight: float = Field(alias="staleReportsPenaltyWeight", ge=0)
 
 
 class AuthorProfileIn(ApiModel):

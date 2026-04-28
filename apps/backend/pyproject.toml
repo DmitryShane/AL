@@ -9,6 +9,9 @@ dependencies = [
     "pymongo>=4.10.0",
 ]
 
+[project.scripts]
+al-telegram-bot = "al_backend.telegram_bot:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",

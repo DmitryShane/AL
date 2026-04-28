@@ -20,6 +20,20 @@ When working on the Unity Activity Logger plugin, edit the linked package folder
 
 Treat `com.al.ual` as the active plugin source for Unity work.
 
+## Blender Plugin
+
+The Blender Activity Logger add-on source lives in `packages/blender_al`.
+
+After every code change in `packages/blender_al`, rebuild the installable add-on archive:
+
+```bash
+cd /Volumes/MacMiniExternal2TB/Development/AL/packages
+rm -f blender_al.zip
+zip -r blender_al.zip blender_al -x "*/__pycache__/*" "*.pyc"
+```
+
+Treat `packages/blender_al.zip` as the current installable Blender add-on archive.
+
 ## Backend And Frontend
 
 Continue working on the server and website in this AL repository:

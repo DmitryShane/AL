@@ -8,6 +8,7 @@ import struct
 from dataclasses import dataclass
 
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -18,6 +19,30 @@ MAGIC = b"ALR1"
 @dataclass(frozen=True)
 class DecodedReport:
     payload: dict
+
+
+@dataclass(frozen=True)
+class ReportChallengeKeys:
+    private_key_pem: str
+    public_modulus: str
+    public_exponent: str
+
+
+def generate_report_challenge_keys() -> ReportChallengeKeys:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_numbers = private_key.public_key().public_numbers()
+    modulus = _int_to_base64(public_numbers.n)
+    exponent = _int_to_base64(public_numbers.e)
+    return ReportChallengeKeys(
+        private_key_pem=private_key_pem,
+        public_modulus=modulus,
+        public_exponent=exponent,
+    )
 
 
 def _read_int(data: bytes, offset: int) -> tuple[int, int]:
@@ -78,3 +103,8 @@ def decode_alr1(private_key_pem: str, encrypted_packet: str) -> DecodedReport:
 
     payload = json.loads(padded[:-pad_length].decode("utf-8"))
     return DecodedReport(payload=payload)
+
+
+def _int_to_base64(value: int) -> str:
+    byte_length = max(1, (value.bit_length() + 7) // 8)
+    return base64.b64encode(value.to_bytes(byte_length, "big")).decode("ascii")

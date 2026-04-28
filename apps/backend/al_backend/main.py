@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from .models import (
-    AnalyticsScoreSettingsIn,
     AuthorProfileIn,
     BreakEventIn,
     CalendarMarkIn,
@@ -15,12 +13,14 @@ from .models import (
     HealthResponse,
     IntervalSettingsIn,
     PluginConfig,
+    ReportChallengeIn,
+    ReportChallengeResponse,
     ReportIn,
     ReportRefreshRequest,
     SubmitReportResponse,
     SummaryResponse,
 )
-from .protocol import decode_alr1
+from .protocol import decode_alr1, generate_report_challenge_keys
 from .repository import Repository
 from .settings import load_settings
 
@@ -36,8 +36,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     app.state.repo = repo
-    key_data = json.loads(settings.private_key_path.read_text())
-    app.state.private_key_pem = key_data["privateKeyPem"]
     yield
     repo.client.close()
 
@@ -84,14 +82,51 @@ def plugin_config(
 
 @app.post("/api/v1/reports", response_model=SubmitReportResponse)
 def submit_report(report: ReportIn) -> SubmitReportResponse:
+    challenge = app.state.repo.claim_report_challenge(report.challenge_id, report.source, report.device_id)
+
+    if not challenge:
+        app.state.repo.log_report_security_event(
+            event_type="invalid_challenge",
+            source=report.source,
+            plugin_version=report.plugin_version,
+            device_id=report.device_id,
+            challenge_id=report.challenge_id,
+            message="Report used an unknown, expired, or already consumed challenge.",
+        )
+        raise HTTPException(status_code=400, detail="Invalid report challenge")
+
     try:
-        decoded = decode_alr1(app.state.private_key_pem, report.encrypted_packet)
+        decoded = decode_alr1(challenge["privateKeyPem"], report.encrypted_packet)
     except Exception as exc:
+        app.state.repo.log_report_security_event(
+            event_type="decode_failed",
+            source=report.source,
+            plugin_version=report.plugin_version,
+            author=challenge.get("author"),
+            author_email=challenge.get("authorEmail"),
+            project_id=challenge.get("projectId"),
+            session_id=challenge.get("sessionId"),
+            device_id=report.device_id or challenge.get("deviceId"),
+            challenge_id=report.challenge_id,
+            message=f"Report decode failed: {exc}",
+        )
         raise HTTPException(status_code=400, detail=f"Report decode failed: {exc}") from exc
 
     payload_source = decoded.payload.get("source")
 
     if payload_source and payload_source != report.source:
+        app.state.repo.log_report_security_event(
+            event_type="source_mismatch",
+            source=report.source,
+            plugin_version=report.plugin_version,
+            author=decoded.payload.get("author") or challenge.get("author"),
+            author_email=decoded.payload.get("authorEmail") or challenge.get("authorEmail"),
+            project_id=decoded.payload.get("projectId") or challenge.get("projectId"),
+            session_id=decoded.payload.get("sessionId") or challenge.get("sessionId"),
+            device_id=report.device_id or decoded.payload.get("deviceId") or challenge.get("deviceId"),
+            challenge_id=report.challenge_id,
+            message="Report source does not match encrypted payload source.",
+        )
         raise HTTPException(status_code=400, detail="Report source does not match encrypted payload source")
 
     report_id = app.state.repo.save_report(
@@ -99,8 +134,22 @@ def submit_report(report: ReportIn) -> SubmitReportResponse:
         plugin_version=report.plugin_version,
         encrypted_packet=report.encrypted_packet,
         payload=decoded.payload,
+        challenge_id=report.challenge_id,
+        device_id=report.device_id,
     )
     return SubmitReportResponse(ok=True, reportId=report_id)
+
+
+@app.post("/api/v1/reports/challenge", response_model=ReportChallengeResponse)
+def create_report_challenge(challenge_in: ReportChallengeIn) -> ReportChallengeResponse:
+    keys = generate_report_challenge_keys()
+    challenge = app.state.repo.create_report_challenge(challenge_in, keys)
+    return ReportChallengeResponse(
+        challengeId=challenge["challengeId"],
+        publicModulus=challenge["publicModulus"],
+        publicExponent=challenge["publicExponent"],
+        expiresAt=challenge["expiresAt"],
+    )
 
 
 @app.post("/api/v1/reports/request-refresh")
@@ -117,16 +166,6 @@ def update_intervals(settings_in: IntervalSettingsIn) -> dict:
     )
 
 
-@app.get("/api/v1/settings/analytics-score")
-def analytics_score_settings() -> dict:
-    return app.state.repo.get_analytics_score_settings()
-
-
-@app.put("/api/v1/settings/analytics-score")
-def update_analytics_score_settings(settings_in: AnalyticsScoreSettingsIn) -> dict:
-    return app.state.repo.upsert_analytics_score_settings(settings_in.model_dump(by_alias=True))
-
-
 @app.put("/api/v1/authors/profile")
 def upsert_author_profile(profile: AuthorProfileIn) -> dict:
     return app.state.repo.upsert_author_profile(
@@ -137,6 +176,11 @@ def upsert_author_profile(profile: AuthorProfileIn) -> dict:
         plugin_enabled=profile.plugin_enabled,
         author_color=profile.author_color,
     )
+
+
+@app.delete("/api/v1/authors/{raw_author}/data")
+def delete_author_data(raw_author: str) -> dict:
+    return app.state.repo.delete_author_data(raw_author=raw_author)
 
 
 @app.post("/api/v1/break-events")

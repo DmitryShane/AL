@@ -3,6 +3,7 @@ type HourlyActivity = {
   activeSeconds: number;
   idleSeconds: number;
   breakSeconds?: number;
+  overtimeActiveSeconds?: number;
 };
 
 type AuthorHourlyActivity = {
@@ -20,6 +21,7 @@ type AuthorHourlyChart = {
     activeMinutes: number;
     breakMinutes: number;
     idleMinutes: number;
+    overtimeMinutes: number;
   }>;
 };
 
@@ -62,6 +64,10 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                               style={{ height: `${segments.activePercent}%` }}
                             />
                             <div
+                              className="hourly-chart-segment overtime"
+                              style={{ height: `${segments.overtimePercent}%` }}
+                            />
+                            <div
                               className="hourly-chart-segment break"
                               style={{ height: `${segments.breakPercent}%` }}
                             />
@@ -87,6 +93,7 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
               </div>
               <div className="hourly-chart-legend">
                 <span><i className="active" />Active</span>
+                <span><i className="overtime" />Overtime</span>
                 <span><i className="break" />AFK</span>
                 <span><i className="idle" />Idle</span>
               </div>
@@ -101,7 +108,13 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
 }
 
 function createEmptyHourlyActivity(): Required<HourlyActivity>[] {
-  return Array.from({ length: 24 }, (_, hour) => ({ hour, activeSeconds: 0, idleSeconds: 0, breakSeconds: 0 }));
+  return Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    activeSeconds: 0,
+    idleSeconds: 0,
+    breakSeconds: 0,
+    overtimeActiveSeconds: 0
+  }));
 }
 
 function normalizeHourlyActivity(source: HourlyActivity[]) {
@@ -115,6 +128,7 @@ function normalizeHourlyActivity(source: HourlyActivity[]) {
     hourlyActivity[sourceHour.hour].activeSeconds = sourceHour.activeSeconds ?? 0;
     hourlyActivity[sourceHour.hour].idleSeconds = sourceHour.idleSeconds ?? 0;
     hourlyActivity[sourceHour.hour].breakSeconds = sourceHour.breakSeconds ?? 0;
+    hourlyActivity[sourceHour.hour].overtimeActiveSeconds = sourceHour.overtimeActiveSeconds ?? 0;
   }
 
   return hourlyActivity;
@@ -130,7 +144,8 @@ function toAuthorHourlyActivity(author: AuthorHourlyActivity): AuthorHourlyChart
       hour: hour.hour,
       activeMinutes: Math.min(60, hour.activeSeconds / 60),
       breakMinutes: Math.min(60, (hour.breakSeconds ?? 0) / 60),
-      idleMinutes: Math.min(60, hour.idleSeconds / 60)
+      idleMinutes: Math.min(60, hour.idleSeconds / 60),
+      overtimeMinutes: Math.min(60, (hour.overtimeActiveSeconds ?? 0) / 60)
     }))
   };
 }
@@ -139,14 +154,15 @@ function toPercentOfHour(minutes: number) {
   return Math.min(100, Math.max(0, (minutes / 60) * 100));
 }
 
-function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; idleMinutes: number }) {
+function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; idleMinutes: number; overtimeMinutes: number }) {
   const activeMinutes = Math.max(0, hour.activeMinutes);
+  const overtimeMinutes = Math.max(0, hour.overtimeMinutes);
   const breakMinutes = Math.max(0, hour.breakMinutes);
   const idleMinutes = Math.max(0, hour.idleMinutes);
-  const totalMinutes = activeMinutes + breakMinutes + idleMinutes;
+  const totalMinutes = activeMinutes + overtimeMinutes + breakMinutes + idleMinutes;
 
   if (totalMinutes <= 0) {
-    return { activePercent: 0, breakPercent: 0, idlePercent: 0 };
+    return { activePercent: 0, overtimePercent: 0, breakPercent: 0, idlePercent: 0 };
   }
 
   const normalizedTotal = totalMinutes >= 59 ? 60 : Math.min(60, totalMinutes);
@@ -154,13 +170,14 @@ function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; 
 
   return {
     activePercent: toPercentOfHour(activeMinutes * scale),
+    overtimePercent: toPercentOfHour(overtimeMinutes * scale),
     breakPercent: toPercentOfHour(breakMinutes * scale),
     idlePercent: toPercentOfHour(idleMinutes * scale)
   };
 }
 
-function hasHourlyActivity(hour: { activeMinutes: number; breakMinutes: number; idleMinutes: number }) {
-  return hour.activeMinutes > 0 || hour.breakMinutes > 0 || hour.idleMinutes > 0;
+function hasHourlyActivity(hour: { activeMinutes: number; breakMinutes: number; idleMinutes: number; overtimeMinutes: number }) {
+  return hour.activeMinutes > 0 || hour.overtimeMinutes > 0 || hour.breakMinutes > 0 || hour.idleMinutes > 0;
 }
 
 function formatHour(hour: number) {
@@ -169,8 +186,8 @@ function formatHour(hour: number) {
   return `${displayHour}:00`;
 }
 
-function formatHourTitle(hour: { hour: number; activeMinutes: number; breakMinutes: number; idleMinutes: number }) {
-  return `${formatHour(hour.hour)}: ${Math.round(hour.activeMinutes)}m active, ${Math.round(hour.breakMinutes)}m AFK, ${Math.round(hour.idleMinutes)}m idle`;
+function formatHourTitle(hour: { hour: number; activeMinutes: number; breakMinutes: number; idleMinutes: number; overtimeMinutes: number }) {
+  return `${formatHour(hour.hour)}: ${Math.round(hour.activeMinutes)}m active, ${Math.round(hour.overtimeMinutes)}m overtime, ${Math.round(hour.breakMinutes)}m AFK, ${Math.round(hour.idleMinutes)}m idle`;
 }
 
 function formatTimeZoneLabel(author: AuthorHourlyActivity) {

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
+import uuid
 from typing import Any
 
-from pymongo import ASCENDING, DESCENDING, MongoClient
+from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
+from pymongo.errors import DuplicateKeyError
 from pymongo.database import Database
 
 from .settings import Settings
@@ -11,21 +14,26 @@ from .settings import Settings
 LOW_PRODUCTIVITY_THRESHOLD = 50
 LONG_BREAK_THRESHOLD_SECONDS = 3600
 DEFAULT_PLUGIN_WORK_WINDOW_SECONDS = 32400
+MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS = 10
 SELECT_HEAVY_THRESHOLD_PERCENT = 90
 SELECT_HEAVY_MIN_EVENTS = 20
-ANALYTICS_PERIOD_DAYS = {
-    "7d": 7,
-    "30d": 30,
-    "90d": 90,
-    "year": 365,
+REPORT_CHALLENGE_TTL_SECONDS = 120
+RAW_ACTIVITY_EVENT_TYPES = {
+    "selection",
+    "select",
+    "scene_saved",
+    "asset_saved",
+    "prefab_saved",
+    "undo_redo",
+    "play_mode",
+    "focus",
+    "scene_changed",
+    "file_saved",
+    "file_loaded",
+    "manual_report_requested",
+    "external",
 }
-DEFAULT_ANALYTICS_SCORE_SETTINGS = {
-    "activeTimeWeight": 0.35,
-    "productivityWeight": 0.35,
-    "breakPenaltyWeight": 0.15,
-    "alertsPenaltyWeight": 0.10,
-    "staleReportsPenaltyWeight": 0.05,
-}
+NON_ACTIVITY_EVENT_TYPES = {"heartbeat", "blur"}
 DEFAULT_CALENDAR_REASONS = [
     {"id": "vacation", "label": "Vacation"},
     {"id": "day_off", "label": "Day off"},
@@ -35,7 +43,7 @@ AUTHOR_COLORS = ["#13a37b", "#5b4dff", "#f59e0b", "#dc2626", "#0ea5e9", "#a855f7
 
 
 class Repository:
-    aggregates_version = 3
+    aggregates_version = 11
 
     def __init__(self, settings: Settings):
         self.client: MongoClient = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=1500)
@@ -44,6 +52,15 @@ class Repository:
 
     def ensure_indexes(self) -> None:
         self.db.raw_reports.create_index([("source", ASCENDING), ("receivedAt", DESCENDING)])
+        self.db.raw_event_batches.create_index([("source", ASCENDING), ("receivedAt", DESCENDING)])
+        self.db.raw_activity_events.create_index("eventId", unique=True)
+        self.db.raw_activity_events.create_index(
+            [("source", ASCENDING), ("author", ASCENDING), ("projectId", ASCENDING), ("sessionId", ASCENDING), ("occurredAtUtc", ASCENDING)]
+        )
+        self.db.report_challenges.create_index("challengeId", unique=True)
+        self.db.report_challenges.create_index("expiresAt")
+        self.db.report_security_events.create_index([("createdAt", DESCENDING)])
+        self.db.report_security_events.create_index([("author", ASCENDING), ("createdAt", DESCENDING)])
         self.db.activity_snapshots.create_index(
             [("source", ASCENDING), ("author", ASCENDING), ("date", ASCENDING)]
         )
@@ -67,7 +84,6 @@ class Repository:
         self.db.report_refresh_requests.create_index("author", unique=True)
         self.db.report_refresh_requests.create_index("requestedAt")
         self.db.manual_report_expectations.create_index("author", unique=True)
-        self.db.analytics_settings.create_index("kind", unique=True)
         self.db.calendar_marks.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
         self.db.calendar_marks.create_index("date")
         self.db.calendar_reasons.create_index("id", unique=True)
@@ -141,32 +157,113 @@ class Repository:
             "authors": author_settings,
         }
 
-    def get_analytics_score_settings(self) -> dict[str, float]:
-        settings = self.db.analytics_settings.find_one({"kind": "score"}, {"_id": 0}) or {}
-        return _normalize_score_settings(settings)
+    def create_report_challenge(self, challenge_in: Any, keys: Any) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        expires_at = now + dt.timedelta(seconds=REPORT_CHALLENGE_TTL_SECONDS)
+        challenge_id = _new_id()
+        challenge = {
+            "challengeId": challenge_id,
+            "source": challenge_in.source,
+            "pluginVersion": challenge_in.plugin_version,
+            "author": challenge_in.author,
+            "authorEmail": challenge_in.author_email or "",
+            "projectId": challenge_in.project_id or "",
+            "sessionId": challenge_in.session_id or "",
+            "deviceId": challenge_in.device_id or "",
+            "privateKeyPem": keys.private_key_pem,
+            "publicModulus": keys.public_modulus,
+            "publicExponent": keys.public_exponent,
+            "createdAt": now,
+            "expiresAt": expires_at,
+        }
+        self.db.report_challenges.insert_one(challenge)
+        return {**challenge, "expiresAt": expires_at.isoformat()}
 
-    def upsert_analytics_score_settings(self, settings: dict[str, Any]) -> dict[str, float]:
-        normalized = _normalize_score_settings(settings)
-        self.db.analytics_settings.update_one(
-            {"kind": "score"},
-            {"$set": {**normalized, "kind": "score", "updatedAt": dt.datetime.now(dt.UTC)}},
-            upsert=True,
+    def claim_report_challenge(self, challenge_id: str, source: str, device_id: str | None) -> dict[str, Any] | None:
+        now = dt.datetime.now(dt.UTC)
+        query: dict[str, Any] = {
+            "challengeId": challenge_id,
+            "source": source,
+            "expiresAt": {"$gt": now},
+            "consumedAt": {"$exists": False},
+        }
+
+        if device_id:
+            query["deviceId"] = {"$in": [device_id, ""]}
+
+        return self.db.report_challenges.find_one_and_update(
+            query,
+            {"$set": {"consumedAt": now}},
+            return_document=ReturnDocument.AFTER,
         )
-        return normalized
 
-    def save_report(self, source: str, plugin_version: str, encrypted_packet: str, payload: dict[str, Any]) -> str:
+    def log_report_security_event(
+        self,
+        event_type: str,
+        source: str,
+        plugin_version: str | None = None,
+        author: str | None = None,
+        author_email: str | None = None,
+        project_id: str | None = None,
+        session_id: str | None = None,
+        device_id: str | None = None,
+        challenge_id: str | None = None,
+        message: str | None = None,
+    ) -> None:
+        self.db.report_security_events.insert_one(
+            {
+                "type": event_type,
+                "severity": "critical",
+                "source": source,
+                "pluginVersion": plugin_version or "",
+                "author": author or "Unknown User",
+                "authorEmail": author_email or "",
+                "projectId": project_id or "",
+                "sessionId": session_id or "",
+                "deviceId": device_id or "",
+                "challengeId": challenge_id or "",
+                "message": message or "Suspicious report submission detected.",
+                "createdAt": dt.datetime.now(dt.UTC),
+            }
+        )
+
+    def save_report(
+        self,
+        source: str,
+        plugin_version: str,
+        encrypted_packet: str,
+        payload: dict[str, Any],
+        challenge_id: str,
+        device_id: str | None = None,
+    ) -> str:
         now = dt.datetime.now(dt.UTC)
         report_type = self.consume_expected_report_type(payload.get("author"))
         raw_result = self.db.raw_reports.insert_one(
             {
                 "source": source,
                 "pluginVersion": plugin_version,
+                "challengeId": challenge_id,
+                "deviceId": device_id or payload.get("deviceId", ""),
                 "encryptedPacket": encrypted_packet,
                 "receivedAt": now,
                 "status": "decoded",
                 "reportType": report_type,
             }
         )
+
+        if isinstance(payload.get("events"), list):
+            self._save_event_batch(
+                source=source,
+                plugin_version=plugin_version,
+                payload=payload,
+                raw_report_id=raw_result.inserted_id,
+                report_type=report_type,
+                received_at=now,
+                challenge_id=challenge_id,
+                device_id=device_id,
+            )
+            return str(raw_result.inserted_id)
+
         snapshot = dict(payload)
         snapshot.update(
             {
@@ -175,6 +272,8 @@ class Repository:
                 "rawReportId": raw_result.inserted_id,
                 "receivedAt": now,
                 "reportType": report_type,
+                "challengeId": challenge_id,
+                "deviceId": device_id or payload.get("deviceId", ""),
             }
         )
         self.db.activity_snapshots.insert_one(snapshot)
@@ -182,7 +281,11 @@ class Repository:
         return str(raw_result.inserted_id)
 
     def list_authors(self) -> list[str]:
-        return sorted(author for author in self.db.activity_snapshots.distinct("author") if author)
+        authors = set(author for author in self.db.activity_snapshots.distinct("author") if author)
+        authors.update(author for author in self.db.daily_author_activity.distinct("author") if author)
+        authors.update(author for author in self.db.raw_activity_events.distinct("author") if author)
+        authors.update(author for author in self.db.author_profiles.distinct("rawAuthor") if author)
+        return sorted(authors)
 
     def request_report_refresh(self, author: str | None = None) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
@@ -269,27 +372,45 @@ class Repository:
         saved_prefabs: dict[str, dict[str, Any]] = {}
         hourly_by_author: dict[str, dict[str, Any]] = {}
         authors_by_raw: dict[str, dict[str, Any]] = {}
+        normal_consumed_by_author_date: dict[tuple[str, str], int] = {}
+        telegram_seconds_by_author_date: dict[tuple[str, str], int] = {}
+        break_seconds_by_author_date: dict[tuple[str, str], int] = {}
         profiles = self._profiles_by_raw_author()
-        daily_items = list(self.db.daily_author_activity.find(_date_query(start_date, end_date), {"_id": 0}))
+        daily_items = sorted(
+            self.db.daily_author_activity.find(_date_query(start_date, end_date), {"_id": 0}),
+            key=lambda item: (
+                str(item.get("date") or ""),
+                str(item.get("lastRecordedAt") or item.get("lastReceivedAt") or ""),
+                str(item.get("source") or ""),
+            ),
+        )
         break_buckets = self._break_buckets_for_daily_items(daily_items)
 
         for item in daily_items:
             raw_author = item.get("author") or "Unknown User"
+            item_date = item.get("date") or ""
+            author_date_key = (raw_author, item_date)
             profile = profiles.get(raw_author, {})
             display_name = _display_name(raw_author, profile)
             hourly_activity = _apply_breaks_to_hourly_activity(
-                item.get("hourlyActivity", []), break_buckets.get((raw_author, item.get("date") or ""), [])
+                item.get("hourlyActivity", []), break_buckets.get(author_date_key, [])
             )
             report_active_seconds = int(item.get("activeSeconds", 0))
             report_idle_seconds = int(item.get("idleSeconds", 0))
             effective_break_seconds = sum(int(hour.get("breakSeconds", 0)) for hour in hourly_activity)
             telegram_day_seconds = int(item.get("daySeconds", 0))
-            plugin_day_seconds = _plugin_day_seconds(item, report_active_seconds, report_idle_seconds)
+            work_window_seconds = int(item.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS)
+            normal_consumed = normal_consumed_by_author_date.get(author_date_key, 0)
+            normal_available = max(0, work_window_seconds - normal_consumed)
+            plugin_day_seconds = min(max(0, report_active_seconds + report_idle_seconds), normal_available)
             effective_active_seconds = min(report_active_seconds, plugin_day_seconds)
             effective_idle_seconds = min(
                 max(0, report_idle_seconds - effective_break_seconds),
                 max(0, plugin_day_seconds - effective_active_seconds),
             )
+            normal_consumed_by_author_date[author_date_key] = normal_consumed + plugin_day_seconds
+            telegram_seconds_by_author_date[author_date_key] = telegram_seconds_by_author_date.get(author_date_key, 0) + telegram_day_seconds
+            break_seconds_by_author_date[author_date_key] = break_seconds_by_author_date.get(author_date_key, 0) + effective_break_seconds
             totals["daySeconds"] += telegram_day_seconds
             totals["telegramDaySeconds"] += telegram_day_seconds
             totals["pluginDaySeconds"] += plugin_day_seconds
@@ -394,6 +515,47 @@ class Repository:
         ]
 
         now = dt.datetime.now(dt.UTC)
+        self._apply_live_telegram_summary(
+            authors_by_raw,
+            totals,
+            profiles,
+            telegram_seconds_by_author_date,
+            break_seconds_by_author_date,
+            start_date,
+            end_date,
+            now,
+        )
+        security_alerts_by_author = self._security_alerts_by_author(start_date, end_date)
+
+        for raw_author, alerts in security_alerts_by_author.items():
+            author_row = authors_by_raw.get(raw_author)
+
+            if not author_row:
+                profile = profiles.get(raw_author, {})
+                author_row = {
+                    "rawAuthor": raw_author,
+                    "authorEmail": profile.get("authorEmail") or alerts[0].get("authorEmail", ""),
+                    "displayName": _display_name(raw_author, profile),
+                    "team": profile.get("team", ""),
+                    "telegramUsername": profile.get("telegramUsername", ""),
+                    "authorColor": profile.get("authorColor") or _author_color(raw_author),
+                    "source": alerts[0].get("source"),
+                    "pluginVersion": alerts[0].get("pluginVersion"),
+                    "lastRecordedAt": "",
+                    "lastReceivedAt": alerts[0].get("createdAt"),
+                    "daySeconds": 0,
+                    "telegramDaySeconds": 0,
+                    "pluginDaySeconds": 0,
+                    "activeSeconds": 0,
+                    "idleSeconds": 0,
+                    "breakSeconds": 0,
+                    "overtimeActiveSeconds": 0,
+                    "activityCounts": [],
+                }
+                authors_by_raw[raw_author] = author_row
+
+            author_row["securityAlerts"] = alerts
+
         author_rows = [
             _with_alerts(_with_productivity(author), self.get_interval_for_author(author["rawAuthor"]), now)
             for author in authors_by_raw.values()
@@ -409,59 +571,71 @@ class Repository:
         }
 
     def analytics_summary(self, period: str = "7d") -> dict[str, Any]:
-        score_settings = self.get_analytics_score_settings()
+        year = dt.date.today().year
         profiles = self._profiles_by_raw_author()
-        period_ranges = _analytics_period_ranges()
-        docs_by_period = {
-            key: {
-                "current": list(self.db.daily_author_activity.find(_date_query(value["startDate"], value["endDate"]), {"_id": 0})),
-                "previous": list(
-                    self.db.daily_author_activity.find(
-                        _date_query(value["previousStartDate"], value["previousEndDate"]), {"_id": 0}
-                    )
-                ),
-            }
-            for key, value in period_ranges.items()
-        }
+        start_date = dt.date(year - 1, 12, 1).isoformat()
+        end_date = dt.date(year, 12, 31).isoformat()
+        docs = list(self.db.daily_author_activity.find(_date_query(start_date, end_date), {"_id": 0}))
         authors = set(self.list_authors())
 
-        for period_docs in docs_by_period.values():
-            for item in [*period_docs["current"], *period_docs["previous"]]:
-                if item.get("author"):
-                    authors.add(str(item.get("author")))
+        for item in docs:
+            if item.get("author"):
+                authors.add(str(item.get("author")))
 
         author_summaries = []
 
         for raw_author in sorted(authors):
             profile = profiles.get(raw_author, {})
-            period_stats = {}
-
-            for key, period_docs in docs_by_period.items():
-                current_docs = [item for item in period_docs["current"] if item.get("author") == raw_author]
-                previous_docs = [item for item in period_docs["previous"] if item.get("author") == raw_author]
-                period_stats[key] = _analytics_period_stat(current_docs, previous_docs, score_settings)
-
-            year_delta = period_stats["year"]["deltas"]["score"]
-            month_delta = period_stats["month"]["deltas"]["score"]
+            author_docs = [item for item in docs if item.get("author") == raw_author]
             author_summaries.append(
                 {
                     "rawAuthor": raw_author,
                     "authorEmail": profile.get("authorEmail", ""),
                     "displayName": _display_name(raw_author, profile),
                     "team": profile.get("team", ""),
-                    "periodStats": period_stats,
-                    "status": "regressing" if month_delta < 0 else "improving",
-                    "score": period_stats["month"]["score"],
-                    "scoreDelta": month_delta,
-                    "yearScoreDelta": year_delta,
+                    "months": _analytics_year_months(author_docs, year),
                 }
             )
 
         return {
-            "scoreSettings": score_settings,
-            "periods": period_ranges,
+            "year": year,
             "authors": sorted(author_summaries, key=lambda item: item["displayName"].lower()),
         }
+
+    def _security_alerts_by_author(self, start_date: str | None = None, end_date: str | None = None) -> dict[str, list[dict[str, Any]]]:
+        query: dict[str, Any] = {}
+        created_filter: dict[str, dt.datetime] = {}
+
+        if start_date:
+            created_filter["$gte"] = _date_start(start_date)
+
+        if end_date:
+            created_filter["$lt"] = _date_start(end_date) + dt.timedelta(days=1)
+
+        if created_filter:
+            query["createdAt"] = created_filter
+
+        by_author: dict[str, list[dict[str, Any]]] = {}
+
+        for event in self.db.report_security_events.find(query, {"_id": 0}).sort("createdAt", DESCENDING).limit(100):
+            raw_author = event.get("author") or "Unknown User"
+            alert = {
+                "type": "report_forgery_attempt",
+                "severity": "critical",
+                "title": "Report forgery attempt",
+                "message": event.get("message") or "A suspicious report submission was rejected.",
+                "value": None,
+                "threshold": None,
+                "source": event.get("source"),
+                "pluginVersion": event.get("pluginVersion"),
+                "authorEmail": event.get("authorEmail"),
+                "deviceId": event.get("deviceId"),
+                "challengeId": event.get("challengeId"),
+                "createdAt": _iso(event.get("createdAt")),
+            }
+            by_author.setdefault(raw_author, []).append(alert)
+
+        return by_author
 
     def calendar_summary(self, year: int) -> dict[str, Any]:
         self._ensure_calendar_reasons()
@@ -683,6 +857,50 @@ class Repository:
         self.db.author_profiles.update_one({"rawAuthor": raw_author}, operation, upsert=True)
         return {"ok": True, "profile": {k: v for k, v in update.items() if k != "updatedAt"}}
 
+    def delete_author_data(self, raw_author: str) -> dict[str, Any]:
+        normalized_author = (raw_author or "").strip()
+
+        if not normalized_author:
+            return {"ok": False, "error": "Author is required"}
+
+        profile = self.db.author_profiles.find_one({"rawAuthor": normalized_author}, {"_id": 0, "telegramUsername": 1}) or {}
+        raw_report_ids = set()
+
+        for snapshot in self.db.activity_snapshots.find({"author": normalized_author}, {"rawReportId": 1}):
+            if snapshot.get("rawReportId"):
+                raw_report_ids.add(snapshot["rawReportId"])
+
+        for batch in self.db.raw_event_batches.find({"author": normalized_author}, {"rawReportId": 1}):
+            if batch.get("rawReportId"):
+                raw_report_ids.add(batch["rawReportId"])
+
+        state_key_pattern = f"(^|\\|){re.escape(normalized_author)}\\|"
+        counts = {
+            "rawReports": self.db.raw_reports.delete_many({"_id": {"$in": list(raw_report_ids)}}).deleted_count if raw_report_ids else 0,
+            "activitySnapshots": self.db.activity_snapshots.delete_many({"author": normalized_author}).deleted_count,
+            "rawEventBatches": self.db.raw_event_batches.delete_many({"author": normalized_author}).deleted_count,
+            "rawActivityEvents": self.db.raw_activity_events.delete_many({"author": normalized_author}).deleted_count,
+            "reportRows": self.db.report_rows.delete_many({"author": normalized_author}).deleted_count,
+            "dailyAuthorActivity": self.db.daily_author_activity.delete_many({"author": normalized_author}).deleted_count,
+            "aggregateSessionState": self.db.aggregate_session_state.delete_many({"_id": {"$regex": state_key_pattern}}).deleted_count,
+            "reportSecurityEvents": self.db.report_security_events.delete_many({"author": normalized_author}).deleted_count,
+            "reportRefreshRequests": self.db.report_refresh_requests.delete_many({"author": normalized_author}).deleted_count,
+            "manualReportExpectations": self.db.manual_report_expectations.delete_many({"author": normalized_author}).deleted_count,
+            "breakEvents": self.db.break_events.delete_many({"rawAuthor": normalized_author}).deleted_count,
+            "breakSessions": self.db.break_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
+            "breakIntervals": self.db.break_intervals.delete_many({"rawAuthor": normalized_author}).deleted_count,
+            "daySessions": self.db.day_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
+            "reportChallenges": self.db.report_challenges.delete_many({"author": normalized_author}).deleted_count,
+        }
+
+        telegram_username = profile.get("telegramUsername")
+
+        if telegram_username:
+            counts["breakEvents"] += self.db.break_events.delete_many({"telegramUsername": telegram_username}).deleted_count
+            counts["breakSessions"] += self.db.break_sessions.delete_many({"telegramUsername": telegram_username}).deleted_count
+
+        return {"ok": True, "author": normalized_author, "deleted": counts}
+
     def record_break_event(self, telegram_username: str, event_type: str, timestamp: str | None = None) -> dict[str, Any]:
         normalized_telegram = _normalize_telegram_username(telegram_username)
         event_time = _parse_timestamp(timestamp)
@@ -702,6 +920,11 @@ class Repository:
         )
 
         if event_type == "afk":
+            session = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
+
+            if session:
+                return {"ok": True, "status": "break_already_started"}
+
             self.db.break_sessions.update_one(
                 {"telegramUsername": normalized_telegram},
                 {"$set": {"telegramUsername": normalized_telegram, "rawAuthor": raw_author, "startedAt": event_time}},
@@ -710,13 +933,14 @@ class Repository:
             return {"ok": True, "status": "break_started"}
 
         if event_type == "offline":
+            break_result = self._close_break_session(normalized_telegram, raw_author, event_time)
             day_date = event_time.date().isoformat()
             day_state = self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": day_date})
 
             if not day_state:
-                return {"ok": True, "status": "offline_without_online"}
+                return {"ok": True, "status": "offline_without_online", **break_result}
 
-            started_at = day_state["startedAt"]
+            started_at = _coerce_datetime(day_state["startedAt"]) or event_time
             day_seconds = max(0, int((event_time - started_at).total_seconds()))
             self.db.day_sessions.update_one(
                 {"rawAuthor": raw_author, "date": day_date},
@@ -727,7 +951,7 @@ class Repository:
                 {"author": raw_author, "date": day_date},
                 {"$set": {"dayStartedAt": started_at, "dayEndedAt": event_time, "daySeconds": day_seconds}},
             )
-            return {"ok": True, "status": "day_closed", "daySeconds": day_seconds}
+            return {"ok": True, "status": "day_closed", "daySeconds": day_seconds, **break_result}
 
         online_date = event_time.date().isoformat()
         self.db.day_sessions.update_one(
@@ -745,12 +969,20 @@ class Repository:
             upsert=True,
         )
 
+        break_result = self._close_break_session(normalized_telegram, raw_author, event_time)
+
+        if not break_result:
+            return {"ok": True, "status": "online_recorded"}
+
+        return {"ok": True, "status": "break_closed", **break_result}
+
+    def _close_break_session(self, normalized_telegram: str, raw_author: str, event_time: dt.datetime) -> dict[str, Any]:
         session = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
 
         if not session:
-            return {"ok": True, "status": "online_recorded"}
+            return {}
 
-        started_at = session["startedAt"]
+        started_at = _coerce_datetime(session["startedAt"]) or event_time
         break_seconds = max(0, int((event_time - started_at).total_seconds()))
         break_date = started_at.date().isoformat()
         self.db.break_sessions.delete_one({"telegramUsername": normalized_telegram})
@@ -768,7 +1000,7 @@ class Repository:
             {"author": raw_author, "date": break_date},
             {"$inc": {"breakSeconds": break_seconds}, "$set": {"updatedAt": dt.datetime.now(dt.UTC)}},
         )
-        return {"ok": True, "status": "break_closed", "breakSeconds": break_seconds}
+        return {"breakSeconds": break_seconds}
 
     def _break_buckets_for_daily_items(self, daily_items: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, int]]]:
         author_dates = {
@@ -812,6 +1044,96 @@ class Repository:
 
         return buckets
 
+    def _apply_live_telegram_summary(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        telegram_seconds_by_author_date: dict[tuple[str, str], int],
+        break_seconds_by_author_date: dict[tuple[str, str], int],
+        start_date: str | None,
+        end_date: str | None,
+        now: dt.datetime,
+    ) -> None:
+        for session in self.db.day_sessions.find(_date_query(start_date, end_date), {"_id": 0}):
+            raw_author = session.get("rawAuthor") or "Unknown User"
+            day_date = session.get("date") or ""
+            started_at = _coerce_datetime(session.get("startedAt"))
+
+            if not day_date or not started_at:
+                continue
+
+            ended_at = _coerce_datetime(session.get("lastOfflineAt"))
+            live_day_seconds = int(session.get("daySeconds", 0))
+
+            if not ended_at:
+                live_day_seconds = max(0, int((now - started_at).total_seconds()))
+            elif live_day_seconds <= 0:
+                live_day_seconds = max(0, int((ended_at - started_at).total_seconds()))
+
+            existing_day_seconds = telegram_seconds_by_author_date.get((raw_author, day_date), 0)
+            day_delta_seconds = max(0, live_day_seconds - existing_day_seconds)
+
+            if day_delta_seconds:
+                author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
+                author_row["daySeconds"] += day_delta_seconds
+                author_row["telegramDaySeconds"] += day_delta_seconds
+                totals["daySeconds"] += day_delta_seconds
+                totals["telegramDaySeconds"] += day_delta_seconds
+
+        for session in self.db.break_sessions.find({}, {"_id": 0}):
+            raw_author = session.get("rawAuthor") or "Unknown User"
+            started_at = _coerce_datetime(session.get("startedAt"))
+
+            if not started_at:
+                continue
+
+            break_date = started_at.date().isoformat()
+
+            if not _date_in_range(break_date, start_date, end_date):
+                continue
+
+            live_break_seconds = max(0, int((now - started_at).total_seconds()))
+            existing_break_seconds = break_seconds_by_author_date.get((raw_author, break_date), 0)
+            break_delta_seconds = max(0, live_break_seconds - existing_break_seconds)
+
+            if break_delta_seconds:
+                author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
+                author_row["breakSeconds"] += break_delta_seconds
+                totals["breakSeconds"] += break_delta_seconds
+
+    def _ensure_summary_author(
+        self, authors_by_raw: dict[str, dict[str, Any]], raw_author: str, profiles: dict[str, dict[str, Any]]
+    ) -> dict[str, Any]:
+        author_row = authors_by_raw.get(raw_author)
+
+        if author_row:
+            return author_row
+
+        profile = profiles.get(raw_author, {})
+        author_row = {
+            "rawAuthor": raw_author,
+            "authorEmail": profile.get("authorEmail", ""),
+            "displayName": _display_name(raw_author, profile),
+            "team": profile.get("team", ""),
+            "telegramUsername": profile.get("telegramUsername", ""),
+            "authorColor": profile.get("authorColor") or _author_color(raw_author),
+            "source": None,
+            "pluginVersion": None,
+            "lastRecordedAt": "",
+            "lastReceivedAt": "",
+            "daySeconds": 0,
+            "telegramDaySeconds": 0,
+            "pluginDaySeconds": 0,
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "breakSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "activityCounts": [],
+        }
+        authors_by_raw[raw_author] = author_row
+        return author_row
+
     def _profiles_by_raw_author(self) -> dict[str, dict[str, Any]]:
         return {
             item["rawAuthor"]: item
@@ -834,6 +1156,36 @@ class Repository:
         for snapshot in snapshots:
             self._apply_snapshot_to_aggregates(snapshot)
 
+        raw_events = self.db.raw_activity_events.find({}).sort("occurredAtUtc", ASCENDING)
+
+        for event in raw_events:
+            deltas = self._apply_raw_event_to_aggregates(event)
+            if not _has_time_delta(deltas):
+                continue
+
+            self.db.report_rows.insert_one(
+                {
+                    "source": event.get("source"),
+                    "pluginVersion": event.get("pluginVersion"),
+                    "author": event.get("author") or "Unknown User",
+                    "authorEmail": event.get("authorEmail", ""),
+                    "projectId": event.get("projectId") or "",
+                    "sessionId": event.get("sessionId") or "",
+                    "deviceId": event.get("deviceId") or "",
+                    "date": event.get("date"),
+                    "recordedAt": event.get("occurredAtLocal") or event.get("occurredAtUtc"),
+                    "receivedAt": event.get("receivedAt"),
+                    "lastRecordedAt": event.get("occurredAtLocal") or event.get("occurredAtUtc"),
+                    "lastReceivedAt": event.get("receivedAt"),
+                    "timeZoneId": event.get("timeZoneId"),
+                    "timeZoneDisplayName": event.get("timeZoneDisplayName"),
+                    "rawReportId": event.get("rawReportId"),
+                    "batchId": event.get("batchId"),
+                    "reportType": event.get("reportType", "auto"),
+                    **deltas,
+                }
+            )
+
         self.db.aggregate_metadata.update_one(
             {"kind": "activity"},
             {"$set": {"kind": "activity", "version": self.aggregates_version, "rebuiltAt": dt.datetime.now(dt.UTC)}},
@@ -854,6 +1206,234 @@ class Repository:
             {"$set": {"snapshot": _state_snapshot(snapshot), "updatedAt": snapshot.get("receivedAt", dt.datetime.now(dt.UTC))}},
             upsert=True,
         )
+
+    def _save_event_batch(
+        self,
+        source: str,
+        plugin_version: str,
+        payload: dict[str, Any],
+        raw_report_id: Any,
+        report_type: str,
+        received_at: dt.datetime,
+        challenge_id: str,
+        device_id: str | None,
+    ) -> None:
+        author = str(payload.get("author") or "Unknown User")
+        author_email = str(payload.get("authorEmail") or "")
+        project_id = str(payload.get("projectId") or "")
+        session_id = str(payload.get("sessionId") or "")
+        resolved_device_id = str(device_id or payload.get("deviceId") or "")
+        batch_id = _new_id()
+        batch_deltas = _empty_batch_deltas()
+        last_event: dict[str, Any] | None = None
+
+        self.update_author_email(author, author_email)
+        self.db.raw_event_batches.insert_one(
+            {
+                "batchId": batch_id,
+                "rawReportId": raw_report_id,
+                "challengeId": challenge_id,
+                "source": source,
+                "pluginVersion": plugin_version,
+                "author": author,
+                "authorEmail": author_email,
+                "projectId": project_id,
+                "sessionId": session_id,
+                "deviceId": resolved_device_id,
+                "receivedAt": received_at,
+                "sentAt": payload.get("sentAt"),
+                "eventCount": len(payload.get("events") or []),
+                "reportType": report_type,
+            }
+        )
+
+        events = sorted(payload.get("events") or [], key=lambda item: str(item.get("occurredAtUtc") or item.get("occurredAtLocal") or ""))
+
+        for raw_event in events:
+            event = _normalize_raw_event(
+                raw_event,
+                source=source,
+                plugin_version=plugin_version,
+                author=author,
+                author_email=author_email,
+                project_id=project_id,
+                session_id=session_id,
+                device_id=resolved_device_id,
+                batch_id=batch_id,
+                raw_report_id=raw_report_id,
+                received_at=received_at,
+                report_type=report_type,
+                time_zone_id=payload.get("timeZoneId"),
+                time_zone_display_name=payload.get("timeZoneDisplayName"),
+            )
+
+            if not event:
+                continue
+
+            try:
+                self.db.raw_activity_events.insert_one(event)
+            except DuplicateKeyError:
+                self.log_report_security_event(
+                    event_type="duplicate_event",
+                    source=source,
+                    plugin_version=plugin_version,
+                    author=author,
+                    author_email=author_email,
+                    project_id=project_id,
+                    session_id=session_id,
+                    device_id=resolved_device_id,
+                    challenge_id=challenge_id,
+                    message="Raw event id was submitted more than once.",
+                )
+                continue
+
+            deltas = self._apply_raw_event_to_aggregates(event)
+            _merge_batch_deltas(batch_deltas, deltas)
+            last_event = event
+
+        if not last_event:
+            return
+
+        if not _has_time_delta(batch_deltas):
+            return
+
+        row = {
+            "source": source,
+            "pluginVersion": plugin_version,
+            "author": author,
+            "authorEmail": author_email,
+            "projectId": project_id,
+            "sessionId": session_id,
+            "deviceId": resolved_device_id,
+            "date": last_event.get("date"),
+            "recordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
+            "receivedAt": received_at,
+            "lastRecordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
+            "lastReceivedAt": received_at,
+            "timeZoneId": payload.get("timeZoneId"),
+            "timeZoneDisplayName": payload.get("timeZoneDisplayName"),
+            "rawReportId": raw_report_id,
+            "batchId": batch_id,
+            "challengeId": challenge_id,
+            "reportType": report_type,
+            **batch_deltas,
+        }
+        self.db.report_rows.insert_one(row)
+
+    def _apply_raw_event_to_aggregates(self, event: dict[str, Any]) -> dict[str, Any]:
+        state_key = _raw_event_session_key(event)
+        previous = self.db.aggregate_session_state.find_one({"_id": state_key}) or {}
+        state = dict(previous.get("state", {}))
+        event_type = str(event.get("eventType") or "")
+        occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or event.get("occurredAt")
+        occurred_at = occurred_at if isinstance(occurred_at, dt.datetime) else dt.datetime.now(dt.UTC)
+        occurred_local_at = _parse_local_datetime(event.get("occurredAtLocal")) or occurred_at
+        first_activity_at = _coerce_datetime(state.get("firstActivityAt"))
+        last_activity_at = _coerce_datetime(state.get("lastActivityAt"))
+        last_accounting_at = _coerce_datetime(state.get("lastAccountingAt"))
+        last_activity_local_at = _parse_local_datetime(state.get("lastActivityLocalAt"))
+        last_accounting_local_at = _parse_local_datetime(state.get("lastAccountingLocalAt"))
+        deltas = _empty_event_deltas()
+        is_activity = _is_activity_event(event_type)
+        consumed_normal_seconds = self._normal_seconds_consumed_for_event(event)
+        idle_threshold_seconds = self.get_interval_for_author(str(event.get("author") or "Unknown User"))
+
+        if is_activity:
+            if not first_activity_at:
+                first_activity_at = occurred_at
+                last_accounting_at = occurred_at
+                last_accounting_local_at = occurred_local_at
+            elif last_activity_at and last_accounting_at and occurred_at > last_activity_at:
+                interval_is_active = (occurred_at - last_activity_at).total_seconds() < idle_threshold_seconds
+                interval_deltas = _interval_deltas(
+                    last_accounting_at,
+                    occurred_at,
+                    last_accounting_local_at or last_accounting_at,
+                    occurred_local_at,
+                    interval_is_active,
+                    consumed_normal_seconds,
+                )
+                _merge_batch_deltas(deltas, interval_deltas)
+                last_accounting_at = occurred_at
+                last_accounting_local_at = occurred_local_at
+
+            last_activity_at = occurred_at
+            last_activity_local_at = occurred_local_at
+        elif event_type == "heartbeat" and first_activity_at and last_activity_at and last_accounting_at and occurred_at > last_accounting_at:
+            if (occurred_at - last_activity_at).total_seconds() >= idle_threshold_seconds:
+                interval_seconds = int((occurred_at - last_accounting_at).total_seconds())
+
+                if interval_seconds < MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS:
+                    return deltas
+
+                interval_deltas = _interval_deltas(
+                    last_accounting_at,
+                    occurred_at,
+                    last_accounting_local_at or last_accounting_at,
+                    occurred_local_at,
+                    False,
+                    consumed_normal_seconds,
+                )
+                _merge_batch_deltas(deltas, interval_deltas)
+                last_accounting_at = occurred_at
+                last_accounting_local_at = occurred_local_at
+
+        if event_type not in NON_ACTIVITY_EVENT_TYPES:
+            activity_type = _activity_count_type(event_type)
+            deltas["activityCountDeltas"].append({"type": activity_type, "count": 1})
+
+        saved_prefab = _saved_prefab_delta(event)
+
+        if saved_prefab:
+            deltas["savedPrefabDeltas"].append(saved_prefab)
+
+        snapshot = {
+            "source": event.get("source"),
+            "author": event.get("author") or "Unknown User",
+            "authorEmail": event.get("authorEmail", ""),
+            "pluginVersion": event.get("pluginVersion"),
+            "projectId": event.get("projectId") or "",
+            "sessionId": event.get("sessionId") or "",
+            "deviceId": event.get("deviceId") or "",
+            "date": event.get("date") or occurred_at.date().isoformat(),
+            "receivedAt": event.get("receivedAt"),
+            "recordedAt": event.get("occurredAtLocal") or event.get("occurredAtUtc"),
+            "timeZoneId": event.get("timeZoneId"),
+            "timeZoneDisplayName": event.get("timeZoneDisplayName"),
+            "workWindowSeconds": DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
+        }
+        self._update_daily_author_activity(snapshot, deltas)
+        self.db.aggregate_session_state.update_one(
+            {"_id": state_key},
+            {
+                "$set": {
+                    "state": {
+                        "firstActivityAt": first_activity_at.isoformat() if first_activity_at else None,
+                        "lastActivityAt": last_activity_at.isoformat() if last_activity_at else None,
+                        "lastAccountingAt": last_accounting_at.isoformat() if last_accounting_at else None,
+                        "lastActivityLocalAt": last_activity_local_at.isoformat() if last_activity_local_at else None,
+                        "lastAccountingLocalAt": last_accounting_local_at.isoformat() if last_accounting_local_at else None,
+                    },
+                    "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
+                }
+            },
+            upsert=True,
+        )
+        return deltas
+
+    def _normal_seconds_consumed_for_event(self, event: dict[str, Any]) -> int:
+        consumed = 0
+
+        for current in self.db.daily_author_activity.find(
+            {
+                "author": event.get("author") or "Unknown User",
+                "date": event.get("date") or "",
+            },
+            {"_id": 0, "activeSeconds": 1, "idleSeconds": 1},
+        ):
+            consumed += int(current.get("activeSeconds", 0)) + int(current.get("idleSeconds", 0))
+
+        return min(DEFAULT_PLUGIN_WORK_WINDOW_SECONDS, max(0, consumed))
 
     def _update_daily_author_activity(self, snapshot: dict[str, Any], deltas: dict[str, Any]) -> None:
         key = {
@@ -894,6 +1474,202 @@ class Repository:
         )
 
 
+def _new_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _empty_event_deltas() -> dict[str, Any]:
+    return {
+        "activeDeltaSeconds": 0,
+        "idleDeltaSeconds": 0,
+        "overtimeActiveDeltaSeconds": 0,
+        "activityCountDeltas": [],
+        "savedPrefabDeltas": [],
+        "hourlyActivityDelta": _empty_hourly_activity(),
+    }
+
+
+def _empty_batch_deltas() -> dict[str, Any]:
+    return _empty_event_deltas()
+
+
+def _merge_batch_deltas(target: dict[str, Any], source: dict[str, Any]) -> None:
+    target["activeDeltaSeconds"] = int(target.get("activeDeltaSeconds", 0)) + int(source.get("activeDeltaSeconds", 0))
+    target["idleDeltaSeconds"] = int(target.get("idleDeltaSeconds", 0)) + int(source.get("idleDeltaSeconds", 0))
+    target["overtimeActiveDeltaSeconds"] = int(target.get("overtimeActiveDeltaSeconds", 0)) + int(
+        source.get("overtimeActiveDeltaSeconds", 0)
+    )
+    _merge_hourly_activity(target["hourlyActivityDelta"], source.get("hourlyActivityDelta", []))
+    target["activityCountDeltas"] = _merge_count_list(
+        target.get("activityCountDeltas", []), source.get("activityCountDeltas", []), "type", "count"
+    )
+    target["savedPrefabDeltas"] = _merge_count_list(
+        target.get("savedPrefabDeltas", []), source.get("savedPrefabDeltas", []), "path", "saveCount"
+    )
+
+
+def _has_time_delta(deltas: dict[str, Any]) -> bool:
+    return (
+        int(deltas.get("activeDeltaSeconds", 0)) > 0
+        or int(deltas.get("idleDeltaSeconds", 0)) > 0
+        or int(deltas.get("overtimeActiveDeltaSeconds", 0)) > 0
+    )
+
+
+def _normalize_raw_event(
+    raw_event: dict[str, Any],
+    source: str,
+    plugin_version: str,
+    author: str,
+    author_email: str,
+    project_id: str,
+    session_id: str,
+    device_id: str,
+    batch_id: str,
+    raw_report_id: Any,
+    received_at: dt.datetime,
+    report_type: str,
+    time_zone_id: Any,
+    time_zone_display_name: Any,
+) -> dict[str, Any] | None:
+    event_type = str(raw_event.get("eventType") or "").strip()
+
+    if not event_type:
+        return None
+
+    occurred_at = _coerce_datetime(raw_event.get("occurredAtUtc") or raw_event.get("occurredAtLocal"))
+
+    if not occurred_at:
+        occurred_at = received_at
+
+    occurred_local = str(raw_event.get("occurredAtLocal") or occurred_at.isoformat())
+    event_id = str(raw_event.get("eventId") or _new_id())
+    date = str(raw_event.get("date") or occurred_local[:10] or occurred_at.date().isoformat())
+    return {
+        "eventId": event_id,
+        "eventType": event_type,
+        "source": source,
+        "pluginVersion": plugin_version,
+        "author": author,
+        "authorEmail": author_email,
+        "projectId": project_id,
+        "sessionId": session_id,
+        "deviceId": device_id,
+        "batchId": batch_id,
+        "rawReportId": raw_report_id,
+        "reportType": report_type,
+        "occurredAtUtc": occurred_at,
+        "occurredAtLocal": occurred_local,
+        "date": date,
+        "metadata": raw_event.get("metadata") or {},
+        "timeZoneId": time_zone_id,
+        "timeZoneDisplayName": time_zone_display_name,
+        "receivedAt": received_at,
+    }
+
+
+def _raw_event_session_key(event: dict[str, Any]) -> str:
+    return "|".join(
+        [
+            "author_day_v1",
+            str(event.get("author") or "Unknown User"),
+            str(event.get("date") or ""),
+        ]
+    )
+
+
+def _is_activity_event(event_type: str) -> bool:
+    return event_type in RAW_ACTIVITY_EVENT_TYPES and event_type not in NON_ACTIVITY_EVENT_TYPES
+
+
+def _activity_count_type(event_type: str) -> str:
+    if event_type == "selection":
+        return "select"
+
+    return event_type
+
+
+def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
+    event_type = str(event.get("eventType") or "")
+
+    if event_type not in {"prefab_saved", "asset_saved", "file_saved"}:
+        return None
+
+    metadata = event.get("metadata") or {}
+    path = str(metadata.get("path") or "")
+
+    if not path:
+        return None
+
+    lower_path = path.lower()
+
+    if event_type in {"prefab_saved", "asset_saved"} and not lower_path.endswith(".prefab"):
+        return None
+
+    if event_type == "file_saved" and not lower_path.endswith(".blend"):
+        return None
+
+    name = str(metadata.get("name") or path.rsplit("/", 1)[-1])
+    return {"path": path, "name": name, "saveCount": 1}
+
+
+def _interval_deltas(
+    start: dt.datetime,
+    end: dt.datetime,
+    local_start: dt.datetime,
+    local_end: dt.datetime,
+    is_active: bool,
+    consumed_normal_seconds: int,
+) -> dict[str, Any]:
+    deltas = _empty_event_deltas()
+
+    if end <= start:
+        return deltas
+
+    interval_seconds = int((end - start).total_seconds())
+    remaining_normal_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - consumed_normal_seconds)
+    normal_seconds = min(interval_seconds, remaining_normal_seconds)
+
+    if normal_seconds > 0:
+        local_normal_end = local_start + dt.timedelta(seconds=normal_seconds)
+
+        if is_active:
+            deltas["activeDeltaSeconds"] += normal_seconds
+            _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_normal_end, "active")
+        else:
+            deltas["idleDeltaSeconds"] += normal_seconds
+            _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_normal_end, "idle")
+
+    if is_active and interval_seconds > normal_seconds:
+        local_overtime_start = local_start + dt.timedelta(seconds=normal_seconds)
+        overtime_seconds = interval_seconds - normal_seconds
+        deltas["overtimeActiveDeltaSeconds"] += overtime_seconds
+        _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_overtime_start, local_end, "overtime")
+
+    return deltas
+
+
+def _add_interval_to_hourly(target: list[dict[str, Any]], start: dt.datetime, end: dt.datetime, bucket: str) -> None:
+    target_by_hour = {int(item.get("hour", 0)): item for item in target}
+    cursor = start
+
+    while cursor < end:
+        hour_end = cursor.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+        segment_end = min(hour_end, end)
+        seconds = max(0, int((segment_end - cursor).total_seconds()))
+        item = target_by_hour.get(cursor.hour)
+
+        if item:
+            if bucket == "active":
+                item["activeSeconds"] = int(item.get("activeSeconds", 0)) + seconds
+            elif bucket == "idle":
+                item["idleSeconds"] = int(item.get("idleSeconds", 0)) + seconds
+            elif bucket == "overtime":
+                item["overtimeActiveSeconds"] = int(item.get("overtimeActiveSeconds", 0)) + seconds
+
+        cursor = segment_end
+
+
 def _iso(value: Any) -> Any:
     if isinstance(value, dt.datetime):
         return value.isoformat()
@@ -917,6 +1693,16 @@ def _date_query(start_date: str | None, end_date: str | None) -> dict[str, Any]:
     return query
 
 
+def _date_in_range(value: str, start_date: str | None, end_date: str | None) -> bool:
+    if start_date and value < start_date:
+        return False
+
+    if end_date and value > end_date:
+        return False
+
+    return True
+
+
 def _display_name(raw_author: Any, profile: dict[str, Any]) -> str:
     return str(profile.get("displayName") or raw_author or "Unknown User")
 
@@ -934,7 +1720,7 @@ def _with_productivity(author: dict[str, Any]) -> dict[str, Any]:
 
 def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.datetime) -> dict[str, Any]:
     item = dict(author)
-    alerts = []
+    alerts = list(item.get("securityAlerts") or [])
     last_received_at = _coerce_datetime(item.get("lastReceivedAt"))
     stale_threshold_seconds = max(0, send_interval_seconds * 2)
 
@@ -1024,20 +1810,6 @@ def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.dat
     return item
 
 
-def _normalize_score_settings(settings: dict[str, Any]) -> dict[str, float]:
-    normalized = {}
-
-    for key, default_value in DEFAULT_ANALYTICS_SCORE_SETTINGS.items():
-        try:
-            value = float(settings.get(key, default_value))
-        except (TypeError, ValueError):
-            value = default_value
-
-        normalized[key] = max(0, value)
-
-    return normalized
-
-
 def _author_color(raw_author: Any) -> str:
     value = str(raw_author or "")
     index = sum(ord(char) for char in value) % len(AUTHOR_COLORS)
@@ -1066,183 +1838,111 @@ def _parse_date(value: str) -> dt.date:
     return dt.date.fromisoformat(value)
 
 
-def _analytics_period(period: str) -> dict[str, str | int]:
-    normalized_period = period if period in ANALYTICS_PERIOD_DAYS else "7d"
-    days = ANALYTICS_PERIOD_DAYS[normalized_period]
-    end_date = dt.date.today()
-    start_date = end_date - dt.timedelta(days=days - 1)
-    previous_end_date = start_date - dt.timedelta(days=1)
-    previous_start_date = previous_end_date - dt.timedelta(days=days - 1)
-    return {
-        "preset": normalized_period,
-        "days": days,
-        "startDate": start_date.isoformat(),
-        "endDate": end_date.isoformat(),
-        "previousStartDate": previous_start_date.isoformat(),
-        "previousEndDate": previous_end_date.isoformat(),
-    }
-
-
-def _analytics_period_ranges() -> dict[str, dict[str, str]]:
+def _analytics_year_months(docs: list[dict[str, Any]], year: int) -> list[dict[str, Any]]:
+    docs_by_date = {str(item.get("date") or ""): item for item in docs if item.get("date")}
+    months = []
     today = dt.date.today()
-    week_start = today - dt.timedelta(days=today.weekday())
-    month_start = today.replace(day=1)
-    year_start = today.replace(month=1, day=1)
-    previous_month_end = month_start - dt.timedelta(days=1)
-    previous_month_start = previous_month_end.replace(day=1)
-    previous_year_start = year_start.replace(year=year_start.year - 1)
-    previous_year_end = year_start - dt.timedelta(days=1)
+    if year < today.year:
+        last_month = 12
+    elif year == today.year:
+        last_month = today.month
+    else:
+        last_month = 0
 
-    return {
-        "day": {
-            "label": "Today",
-            "startDate": today.isoformat(),
-            "endDate": today.isoformat(),
-            "previousStartDate": (today - dt.timedelta(days=1)).isoformat(),
-            "previousEndDate": (today - dt.timedelta(days=1)).isoformat(),
-        },
-        "week": {
-            "label": "Week",
-            "startDate": week_start.isoformat(),
-            "endDate": today.isoformat(),
-            "previousStartDate": (week_start - dt.timedelta(days=7)).isoformat(),
-            "previousEndDate": (week_start - dt.timedelta(days=1)).isoformat(),
-        },
-        "month": {
-            "label": "Month",
-            "startDate": month_start.isoformat(),
-            "endDate": today.isoformat(),
-            "previousStartDate": previous_month_start.isoformat(),
-            "previousEndDate": previous_month_end.isoformat(),
-        },
-        "year": {
-            "label": "Year",
-            "startDate": year_start.isoformat(),
-            "endDate": today.isoformat(),
-            "previousStartDate": previous_year_start.isoformat(),
-            "previousEndDate": previous_year_end.isoformat(),
-        },
-    }
+    for month in range(last_month, 0, -1):
+        month_start = dt.date(year, month, 1)
+        if month == 12:
+            month_end = dt.date(year, 12, 31)
+        else:
+            month_end = dt.date(year, month + 1, 1) - dt.timedelta(days=1)
 
-
-def _analytics_period_stat(
-    current_docs: list[dict[str, Any]], previous_docs: list[dict[str, Any]], score_settings: dict[str, float]
-) -> dict[str, Any]:
-    current = _analytics_totals(current_docs, score_settings)
-    previous = _analytics_totals(previous_docs, score_settings)
-    deltas = {
-        "score": round(current["score"] - previous["score"], 2),
-        "productivity": round(current["productivity"] - previous["productivity"], 2),
-        "activeSeconds": current["activeSeconds"] - previous["activeSeconds"],
-        "idleSeconds": current["idleSeconds"] - previous["idleSeconds"],
-        "breakSeconds": current["breakSeconds"] - previous["breakSeconds"],
-        "pluginDaySeconds": current["pluginDaySeconds"] - previous["pluginDaySeconds"],
-        "telegramDaySeconds": current["telegramDaySeconds"] - previous["telegramDaySeconds"],
-    }
-    return {
-        **current,
-        "previous": previous,
-        "deltas": deltas,
-        "insights": _analytics_insights(deltas),
-    }
-
-
-def _analytics_insights(deltas: dict[str, Any]) -> list[dict[str, Any]]:
-    insights = []
-
-    if abs(float(deltas["productivity"])) >= 1:
-        insights.append(
+        month_docs = _docs_for_range(docs_by_date, month_start, month_end)
+        previous_month_end = month_start - dt.timedelta(days=1)
+        previous_month_start = previous_month_end.replace(day=1)
+        previous_month_docs = _docs_for_range(docs_by_date, previous_month_start, previous_month_end)
+        weeks = _analytics_month_weeks(docs_by_date, month_start, month_end)
+        totals = _analytics_totals(month_docs)
+        previous = _analytics_totals(previous_month_docs)
+        months.append(
             {
-                "type": "productivity",
-                "direction": "up" if deltas["productivity"] > 0 else "down",
-                "message": "Productivity grew" if deltas["productivity"] > 0 else "Productivity dropped",
-                "value": deltas["productivity"],
-                "unit": "percent",
+                "month": month,
+                "label": month_start.strftime("%B"),
+                "startDate": month_start.isoformat(),
+                "endDate": month_end.isoformat(),
+                "totals": totals,
+                "previousMonthDeltas": _analytics_deltas(totals, previous),
+                "weeks": weeks,
             }
         )
 
-    if abs(int(deltas["breakSeconds"])) >= 300:
-        insights.append(
+    return months
+
+
+def _analytics_month_weeks(
+    docs_by_date: dict[str, dict[str, Any]], month_start: dt.date, month_end: dt.date
+) -> list[dict[str, Any]]:
+    weeks = []
+    cursor = month_start - dt.timedelta(days=month_start.weekday())
+
+    while cursor <= month_end:
+        week_start = cursor
+        week_end = week_start + dt.timedelta(days=6)
+        days = []
+        week_docs = []
+
+        for offset in range(7):
+            day = week_start + dt.timedelta(days=offset)
+            doc = docs_by_date.get(day.isoformat())
+            day_totals = _analytics_totals([doc] if doc else [])
+            days.append(
+                {
+                    "date": day.isoformat(),
+                    "label": day.strftime("%a %d"),
+                    "inMonth": month_start <= day <= month_end,
+                    "totals": day_totals,
+                }
+            )
+
+            if month_start <= day <= month_end and doc:
+                week_docs.append(doc)
+
+        previous_week_start = week_start - dt.timedelta(days=7)
+        previous_week_end = week_start - dt.timedelta(days=1)
+        previous_week_docs = _docs_for_range(docs_by_date, previous_week_start, previous_week_end)
+        totals = _analytics_totals(week_docs)
+        previous = _analytics_totals(previous_week_docs)
+        weeks.append(
             {
-                "type": "break",
-                "direction": "down" if deltas["breakSeconds"] > 0 else "up",
-                "message": "Breaks got longer" if deltas["breakSeconds"] > 0 else "Breaks got shorter",
-                "value": deltas["breakSeconds"],
-                "unit": "seconds",
+                "week": len(weeks) + 1,
+                "label": f"{week_start.strftime('%b %d')} - {week_end.strftime('%b %d')}",
+                "startDate": week_start.isoformat(),
+                "endDate": week_end.isoformat(),
+                "totals": totals,
+                "previousWeekDeltas": _analytics_deltas(totals, previous),
+                "days": days,
             }
         )
+        cursor += dt.timedelta(days=7)
 
-    if abs(int(deltas["pluginDaySeconds"])) >= 300:
-        insights.append(
-            {
-                "type": "workday",
-                "direction": "up" if deltas["pluginDaySeconds"] > 0 else "down",
-                "message": "Work day got longer" if deltas["pluginDaySeconds"] > 0 else "Work day got shorter",
-                "value": deltas["pluginDaySeconds"],
-                "unit": "seconds",
-            }
-        )
-
-    if abs(int(deltas["activeSeconds"])) >= 300:
-        insights.append(
-            {
-                "type": "activity",
-                "direction": "up" if deltas["activeSeconds"] > 0 else "down",
-                "message": "Activity increased" if deltas["activeSeconds"] > 0 else "Activity dropped",
-                "value": deltas["activeSeconds"],
-                "unit": "seconds",
-            }
-        )
-
-    if not insights:
-        insights.append(
-            {
-                "type": "stable",
-                "direction": "neutral",
-                "message": "No major changes",
-                "value": 0,
-                "unit": "none",
-            }
-        )
-
-    return insights
+    return weeks
 
 
-def _date_series(start_date: str, end_date: str) -> list[str]:
-    start = dt.date.fromisoformat(start_date)
-    end = dt.date.fromisoformat(end_date)
-    days = (end - start).days + 1
-    return [(start + dt.timedelta(days=offset)).isoformat() for offset in range(days)]
+def _docs_for_range(docs_by_date: dict[str, dict[str, Any]], start: dt.date, end: dt.date) -> list[dict[str, Any]]:
+    docs = []
+    cursor = start
+
+    while cursor <= end:
+        doc = docs_by_date.get(cursor.isoformat())
+
+        if doc:
+            docs.append(doc)
+
+        cursor += dt.timedelta(days=1)
+
+    return docs
 
 
-def _docs_by_author(docs: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    by_author: dict[str, list[dict[str, Any]]] = {}
-
-    for item in docs:
-        author = str(item.get("author") or "Unknown User")
-        by_author.setdefault(author, []).append(item)
-
-    return by_author
-
-
-def _docs_by_date(docs: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    by_date: dict[str, list[dict[str, Any]]] = {}
-
-    for item in docs:
-        date = str(item.get("date") or "")
-
-        if date:
-            by_date.setdefault(date, []).append(item)
-
-    return by_date
-
-
-def _analytics_point(date: str, docs: list[dict[str, Any]], score_settings: dict[str, float]) -> dict[str, Any]:
-    totals = _analytics_totals(docs, score_settings)
-    return {"date": date, **totals}
-
-
-def _analytics_totals(docs: list[dict[str, Any]], score_settings: dict[str, float]) -> dict[str, Any]:
+def _analytics_totals(docs: list[dict[str, Any]]) -> dict[str, Any]:
     active_seconds = sum(int(item.get("activeSeconds", 0)) for item in docs)
     idle_seconds = sum(int(item.get("idleSeconds", 0)) for item in docs)
     break_seconds = sum(int(item.get("breakSeconds", 0)) for item in docs)
@@ -1250,19 +1950,8 @@ def _analytics_totals(docs: list[dict[str, Any]], score_settings: dict[str, floa
     telegram_day_seconds = sum(int(item.get("daySeconds", 0)) for item in docs)
     plugin_day_seconds = sum(_plugin_day_seconds(item) for item in docs)
     productivity = _productivity(active_seconds, idle_seconds, break_seconds)
-    alert_count = sum(_analytics_alert_count(item) for item in docs)
-    stale_count = sum(1 for item in docs if not item.get("lastReceivedAt"))
-    score = _analytics_score(
-        active_seconds=active_seconds,
-        idle_seconds=idle_seconds,
-        break_seconds=break_seconds,
-        productivity=productivity,
-        alert_count=alert_count,
-        stale_count=stale_count,
-        settings=score_settings,
-    )
     return {
-        "score": round(score, 2),
+        "daySeconds": telegram_day_seconds,
         "activeSeconds": active_seconds,
         "idleSeconds": idle_seconds,
         "breakSeconds": break_seconds,
@@ -1270,8 +1959,18 @@ def _analytics_totals(docs: list[dict[str, Any]], score_settings: dict[str, floa
         "telegramDaySeconds": telegram_day_seconds,
         "pluginDaySeconds": plugin_day_seconds,
         "productivity": round(productivity, 2),
-        "alerts": alert_count,
-        "staleReports": stale_count,
+    }
+
+
+def _analytics_deltas(current: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "activeSeconds": current["activeSeconds"] - previous["activeSeconds"],
+        "idleSeconds": current["idleSeconds"] - previous["idleSeconds"],
+        "breakSeconds": current["breakSeconds"] - previous["breakSeconds"],
+        "overtimeActiveSeconds": current["overtimeActiveSeconds"] - previous["overtimeActiveSeconds"],
+        "telegramDaySeconds": current["telegramDaySeconds"] - previous["telegramDaySeconds"],
+        "pluginDaySeconds": current["pluginDaySeconds"] - previous["pluginDaySeconds"],
+        "productivity": round(float(current["productivity"]) - float(previous["productivity"]), 2),
     }
 
 
@@ -1286,73 +1985,6 @@ def _plugin_day_seconds(item: dict[str, Any], active_seconds: int | None = None,
     idle = int(item.get("idleSeconds", 0) if idle_seconds is None else idle_seconds)
     work_window_seconds = int(item.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS)
     return min(max(0, work_window_seconds), max(0, active + idle))
-
-
-def _analytics_alert_count(item: dict[str, Any]) -> int:
-    alerts = 0
-    productivity = _productivity(
-        int(item.get("activeSeconds", 0)),
-        int(item.get("idleSeconds", 0)),
-        int(item.get("breakSeconds", 0)),
-    )
-    plugin_day_seconds = int(item.get("activeSeconds", 0)) + int(item.get("idleSeconds", 0))
-
-    if plugin_day_seconds > 0 and productivity < LOW_PRODUCTIVITY_THRESHOLD:
-        alerts += 1
-
-    if int(item.get("breakSeconds", 0)) > LONG_BREAK_THRESHOLD_SECONDS:
-        alerts += 1
-
-    activity_counts = item.get("activityCounts", [])
-    total_activity_events = sum(int(count.get("count", 0)) for count in activity_counts)
-    select_events = sum(int(count.get("count", 0)) for count in activity_counts if count.get("type") == "select")
-    select_percent = round((select_events / total_activity_events) * 100) if total_activity_events else 0
-
-    if total_activity_events >= SELECT_HEAVY_MIN_EVENTS and select_percent >= SELECT_HEAVY_THRESHOLD_PERCENT:
-        alerts += 1
-
-    return alerts
-
-
-def _analytics_score(
-    active_seconds: int,
-    idle_seconds: int,
-    break_seconds: int,
-    productivity: float,
-    alert_count: int,
-    stale_count: int,
-    settings: dict[str, float],
-) -> float:
-    weight_total = sum(settings.values()) or 1
-    active_score = min(active_seconds / 21600, 1) * 100
-    productivity_score = max(0, min(productivity, 100))
-    break_penalty = min(break_seconds / 7200, 1) * 100
-    alerts_penalty = min(alert_count / 3, 1) * 100
-    stale_penalty = 100 if stale_count else 0
-    score = (
-        active_score * settings["activeTimeWeight"]
-        + productivity_score * settings["productivityWeight"]
-        - break_penalty * settings["breakPenaltyWeight"]
-        - alerts_penalty * settings["alertsPenaltyWeight"]
-        - stale_penalty * settings["staleReportsPenaltyWeight"]
-    ) / weight_total
-    return max(0, min(score, 100))
-
-
-def _average(values: list[float | int]) -> float:
-    return sum(values) / len(values) if values else 0
-
-
-def _analytics_leaderboards(authors: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    return {
-        "topPerformers": sorted(authors, key=lambda item: item["score"], reverse=True)[:5],
-        "bottomPerformers": sorted(authors, key=lambda item: item["score"])[:5],
-        "biggestGrowth": sorted(
-            authors, key=lambda item: item["comparisons"]["previousPeriod"]["scoreDelta"], reverse=True
-        )[:5],
-        "biggestRegression": sorted(authors, key=lambda item: item["comparisons"]["previousPeriod"]["scoreDelta"])[:5],
-        "activeTime": sorted(authors, key=lambda item: item["activeSeconds"], reverse=True)[:5],
-    }
 
 
 def _coerce_datetime(value: Any) -> dt.datetime | None:
@@ -1393,6 +2025,19 @@ def _parse_timestamp(value: str | None) -> dt.datetime:
     return parsed.astimezone(dt.UTC)
 
 
+def _parse_local_datetime(value: Any) -> dt.datetime | None:
+    if isinstance(value, dt.datetime):
+        return value
+
+    if isinstance(value, str) and value:
+        try:
+            return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    return None
+
+
 def _session_key(snapshot: dict[str, Any]) -> str:
     return "|".join(
         [
@@ -1417,12 +2062,24 @@ def _state_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_deltas(snapshot: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
+    active_delta = _delta(snapshot.get("activeSeconds"), previous.get("activeSeconds"))
+    idle_delta = _delta(snapshot.get("idleSeconds"), previous.get("idleSeconds"))
+    overtime_delta = _delta(snapshot.get("overtimeActiveSeconds"), previous.get("overtimeActiveSeconds"))
+    work_window_seconds = int(snapshot.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS)
+    consumed_normal_seconds = min(
+        work_window_seconds,
+        max(0, int(previous.get("activeSeconds", 0)) + int(previous.get("idleSeconds", 0))),
+    )
+    remaining_normal_seconds = max(0, work_window_seconds - consumed_normal_seconds)
+    normal_active_delta = min(active_delta, remaining_normal_seconds)
+    overtime_delta += max(0, active_delta - normal_active_delta)
+    remaining_normal_seconds = max(0, remaining_normal_seconds - normal_active_delta)
+    normal_idle_delta = min(idle_delta, remaining_normal_seconds)
+
     return {
-        "activeDeltaSeconds": _delta(snapshot.get("activeSeconds"), previous.get("activeSeconds")),
-        "idleDeltaSeconds": _delta(snapshot.get("idleSeconds"), previous.get("idleSeconds")),
-        "overtimeActiveDeltaSeconds": _delta(
-            snapshot.get("overtimeActiveSeconds"), previous.get("overtimeActiveSeconds")
-        ),
+        "activeDeltaSeconds": normal_active_delta,
+        "idleDeltaSeconds": normal_idle_delta,
+        "overtimeActiveDeltaSeconds": overtime_delta,
         "activityCountDeltas": _count_deltas(snapshot.get("activityCounts", []), previous.get("activityCounts", []), "type", "count"),
         "savedPrefabDeltas": _count_deltas(snapshot.get("savedPrefabs", []), previous.get("savedPrefabs", []), "path", "saveCount"),
         "hourlyActivityDelta": _hourly_deltas(snapshot.get("hourlyActivity", []), previous.get("hourlyActivity", [])),
@@ -1454,7 +2111,10 @@ def _count_deltas(current: list[dict[str, Any]], previous: list[dict[str, Any]],
 
 
 def _empty_hourly_activity() -> list[dict[str, int]]:
-    return [{"hour": hour, "activeSeconds": 0, "idleSeconds": 0, "breakSeconds": 0} for hour in range(24)]
+    return [
+        {"hour": hour, "activeSeconds": 0, "idleSeconds": 0, "breakSeconds": 0, "overtimeActiveSeconds": 0}
+        for hour in range(24)
+    ]
 
 
 def _hourly_deltas(current: list[dict[str, Any]], previous: list[dict[str, Any]]) -> list[dict[str, int]]:
@@ -1485,6 +2145,9 @@ def _merge_hourly_activity(target: list[dict[str, Any]], deltas: list[dict[str, 
         target_item["activeSeconds"] = int(target_item.get("activeSeconds", 0)) + int(delta_item.get("activeSeconds", 0))
         target_item["idleSeconds"] = int(target_item.get("idleSeconds", 0)) + int(delta_item.get("idleSeconds", 0))
         target_item["breakSeconds"] = int(target_item.get("breakSeconds", 0)) + int(delta_item.get("breakSeconds", 0))
+        target_item["overtimeActiveSeconds"] = int(target_item.get("overtimeActiveSeconds", 0)) + int(
+            delta_item.get("overtimeActiveSeconds", 0)
+        )
 
 
 def _apply_breaks_to_hourly_activity(
@@ -1498,17 +2161,19 @@ def _apply_breaks_to_hourly_activity(
         source_hour = source_by_hour.get(hour, {})
         break_hour = breaks_by_hour.get(hour, {})
         active_seconds = min(3600, max(0, int(source_hour.get("activeSeconds", 0))))
+        overtime_active_seconds = min(3600, max(0, int(source_hour.get("overtimeActiveSeconds", 0))))
         raw_idle_seconds = max(0, int(source_hour.get("idleSeconds", 0)))
         requested_break_seconds = max(0, int(break_hour.get("breakSeconds", 0)))
-        break_seconds = min(requested_break_seconds, max(0, 3600 - active_seconds))
+        break_seconds = min(requested_break_seconds, max(0, 3600 - active_seconds - overtime_active_seconds))
         idle_seconds = max(0, raw_idle_seconds - break_seconds)
-        idle_seconds = min(idle_seconds, max(0, 3600 - active_seconds - break_seconds))
+        idle_seconds = min(idle_seconds, max(0, 3600 - active_seconds - overtime_active_seconds - break_seconds))
         hourly_activity.append(
             {
                 "hour": hour,
                 "activeSeconds": active_seconds,
                 "idleSeconds": idle_seconds,
                 "breakSeconds": break_seconds,
+                "overtimeActiveSeconds": overtime_active_seconds,
             }
         )
 

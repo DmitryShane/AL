@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, BarChart3, Bell, Box, CalendarDays, RefreshCw, Search, Settings, UsersRound } from "lucide-react";
+import { Activity, BarChart3, Bell, Box, Boxes, CalendarDays, RefreshCw, Search, Settings, UsersRound } from "lucide-react";
 import { AuthorsTable } from "./components/AuthorsTable";
 import { HourlyActivityChart } from "./components/HourlyActivityChart";
 import "./styles.css";
@@ -10,7 +10,6 @@ const REFRESH_INTERVAL_MS = 10000;
 const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
 
 type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings";
-type AnalyticsPeriodKey = "day" | "week" | "month" | "year";
 
 type Health = {
   ok: boolean;
@@ -65,6 +64,11 @@ type AuthorAlert = {
   message: string;
   value?: number | null;
   threshold?: number | null;
+  source?: string;
+  pluginVersion?: string;
+  deviceId?: string;
+  challengeId?: string;
+  createdAt?: string;
 };
 
 type AlertStats = {
@@ -117,6 +121,7 @@ type HourlyActivity = {
   activeSeconds: number;
   idleSeconds: number;
   breakSeconds?: number;
+  overtimeActiveSeconds?: number;
 };
 
 type AuthorHourlyActivity = {
@@ -137,51 +142,15 @@ type Summary = {
   activitySummary: ActivitySummary;
 };
 
-type AnalyticsScoreSettings = {
-  activeTimeWeight: number;
-  productivityWeight: number;
-  breakPenaltyWeight: number;
-  alertsPenaltyWeight: number;
-  staleReportsPenaltyWeight: number;
-};
-
-type AnalyticsInsight = {
-  type: string;
-  direction: "up" | "down" | "neutral";
-  message: string;
-  value: number;
-  unit: "percent" | "seconds" | "none";
-};
-
-type AnalyticsPeriodStat = {
-  score: number;
+type AnalyticsTotals = {
+  daySeconds: number;
   activeSeconds: number;
   idleSeconds: number;
+  overtimeActiveSeconds: number;
   breakSeconds: number;
   pluginDaySeconds: number;
   telegramDaySeconds: number;
   productivity: number;
-  alerts: number;
-  staleReports: number;
-  previous: {
-    score: number;
-    activeSeconds: number;
-    idleSeconds: number;
-    breakSeconds: number;
-    pluginDaySeconds: number;
-    telegramDaySeconds: number;
-    productivity: number;
-  };
-  deltas: {
-    score: number;
-    productivity: number;
-    activeSeconds: number;
-    idleSeconds: number;
-    breakSeconds: number;
-    pluginDaySeconds: number;
-    telegramDaySeconds: number;
-  };
-  insights: AnalyticsInsight[];
 };
 
 type AnalyticsAuthorSummary = {
@@ -189,26 +158,49 @@ type AnalyticsAuthorSummary = {
   authorEmail?: string;
   displayName: string;
   team?: string;
-  periodStats: Record<AnalyticsPeriodKey, AnalyticsPeriodStat>;
-  status: "improving" | "regressing";
-  score: number;
-  scoreDelta: number;
-  yearScoreDelta: number;
+  months: AnalyticsMonth[];
 };
 
 type AnalyticsSummary = {
-  periods: Record<
-    AnalyticsPeriodKey,
-    {
-      label: string;
-    startDate: string;
-    endDate: string;
-    previousStartDate: string;
-    previousEndDate: string;
-    }
-  >;
-  scoreSettings: AnalyticsScoreSettings;
+  year: number;
   authors: AnalyticsAuthorSummary[];
+};
+
+type AnalyticsMonth = {
+  month: number;
+  label: string;
+  startDate: string;
+  endDate: string;
+  totals: AnalyticsTotals;
+  previousMonthDeltas: AnalyticsDelta;
+  weeks: AnalyticsWeek[];
+};
+
+type AnalyticsWeek = {
+  week: number;
+  label: string;
+  startDate: string;
+  endDate: string;
+  totals: AnalyticsTotals;
+  previousWeekDeltas: AnalyticsDelta;
+  days: AnalyticsDay[];
+};
+
+type AnalyticsDay = {
+  date: string;
+  label: string;
+  inMonth: boolean;
+  totals: AnalyticsTotals;
+};
+
+type AnalyticsDelta = {
+  activeSeconds: number;
+  idleSeconds: number;
+  overtimeActiveSeconds: number;
+  breakSeconds: number;
+  pluginDaySeconds: number;
+  telegramDaySeconds: number;
+  productivity: number;
 };
 
 type CalendarAuthor = {
@@ -271,14 +263,6 @@ const emptyActivitySummary: ActivitySummary = {
   activityMix: [],
   savedPrefabs: [],
   hourlyActivityByAuthor: []
-};
-
-const defaultAnalyticsScoreSettings: AnalyticsScoreSettings = {
-  activeTimeWeight: 0.35,
-  productivityWeight: 0.35,
-  breakPenaltyWeight: 0.15,
-  alertsPenaltyWeight: 0.10,
-  staleReportsPenaltyWeight: 0.05
 };
 
 function App() {
@@ -349,15 +333,17 @@ function App() {
     }
   }
 
+  const dashboardRefreshMs = dashboardRefreshIntervalMs(summary);
+
   useEffect(() => {
     const intervalId = window.setInterval(() => {
       void load(false);
-    }, REFRESH_INTERVAL_MS);
+    }, dashboardRefreshMs);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [dateRange.startDate, dateRange.endDate]);
+  }, [dateRange.startDate, dateRange.endDate, dashboardRefreshMs]);
 
   const activitySummary = summary?.activitySummary ?? emptyActivitySummary;
   const authors = useMemo(() => activitySummary.authors.filter((author) => matchesAuthorSearch(author, search)), [activitySummary, search]);
@@ -478,7 +464,7 @@ function AuthorsPage({
 
 function AnalyticsPage() {
   const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null);
-  const [selectedAuthor, setSelectedAuthor] = useState<string>("all");
+  const [selectedAuthor, setSelectedAuthor] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -494,7 +480,9 @@ function AnalyticsPage() {
         throw new Error("Analytics request failed");
       }
 
-      setAnalytics(await response.json());
+      const data: AnalyticsSummary = await response.json();
+      setAnalytics(data);
+      setSelectedAuthor((current) => current || (data.authors[0]?.rawAuthor ?? ""));
       setError(null);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Failed to load analytics.");
@@ -514,8 +502,7 @@ function AnalyticsPage() {
     };
   }, []);
 
-  const visibleAuthors =
-    selectedAuthor === "all" ? analytics?.authors ?? [] : analytics?.authors.filter((author) => author.rawAuthor === selectedAuthor) ?? [];
+  const selected = analytics?.authors.find((author) => author.rawAuthor === selectedAuthor) ?? analytics?.authors[0] ?? null;
 
   return (
     <section className="page-section analytics-page">
@@ -524,18 +511,6 @@ function AnalyticsPage() {
       {analytics ? (
         <>
           <div className="author-card-strip analytics-author-strip">
-            <button className={selectedAuthor === "all" ? "author-card active" : "author-card"} onClick={() => setSelectedAuthor("all")}>
-              <span className="avatar-stack" aria-hidden="true">
-                {analytics.authors.slice(0, 5).map((author) => (
-                  <span className="avatar mini-avatar" key={author.rawAuthor}>{initials(author.displayName)}</span>
-                ))}
-              </span>
-              <strong>All authors</strong>
-              <small>Compare everyone</small>
-              <div className="mini-metrics">
-                <span>{analytics.authors.length} authors</span>
-              </div>
-            </button>
             {analytics.authors.map((author) => (
               <button
                 className={selectedAuthor === author.rawAuthor ? "author-card active" : "author-card"}
@@ -546,18 +521,14 @@ function AnalyticsPage() {
                 <strong>{author.displayName}</strong>
                 <small>{author.team || "No team"}</small>
                 <div className="mini-metrics">
-                  <span>Score {author.score.toFixed(1)}</span>
-                  <span>{formatDelta(author.scoreDelta)} month</span>
+                  <span>{analytics.year}</span>
+                  <span>{author.months.length} months</span>
                 </div>
               </button>
             ))}
           </div>
 
-          <div className="analytics-author-grid">
-            {visibleAuthors.map((author) => (
-              <AnalyticsAuthorCard author={author} periods={analytics.periods} key={author.rawAuthor} />
-            ))}
-          </div>
+          {selected ? <AnalyticsHierarchy author={selected} year={analytics.year} /> : <p className="empty">No analytics authors yet.</p>}
         </>
       ) : loading ? (
         <p className="notice">Loading analytics...</p>
@@ -1112,65 +1083,148 @@ function CalendarClearEditor({
   );
 }
 
-function AnalyticsAuthorCard({ author, periods }: { author: AnalyticsAuthorSummary; periods: AnalyticsSummary["periods"] }) {
-  const periodOrder: AnalyticsPeriodKey[] = ["day", "week", "month", "year"];
+function AnalyticsHierarchy({ author, year }: { author: AnalyticsAuthorSummary; year: number }) {
+  const [expandedMonths, setExpandedMonths] = useState<Record<number, boolean>>({});
+  const [expandedWeeks, setExpandedWeeks] = useState<Record<string, boolean>>({});
+
+  function toggleMonth(month: number) {
+    setExpandedMonths((items) => ({ ...items, [month]: !items[month] }));
+  }
+
+  function toggleWeek(month: number, week: number) {
+    const key = `${month}-${week}`;
+    setExpandedWeeks((items) => ({ ...items, [key]: !items[key] }));
+  }
 
   return (
-    <article className="analytics-author-card">
-      <div className="analytics-author-header">
+    <section className="analytics-hierarchy">
+      <div className="analytics-selected-author">
         <span className="avatar">{initials(author.displayName)}</span>
         <div>
           <strong>{author.displayName}</strong>
           <small title={author.authorEmail || author.rawAuthor}>{author.authorEmail || author.rawAuthor}</small>
-          <small>{author.team || "No team"}</small>
+          <small>{author.team || "No team"} · {year}</small>
         </div>
-        <span className={author.status === "regressing" ? "delta-badge negative" : "delta-badge positive"}>{author.status}</span>
       </div>
 
-      <div className="analytics-period-grid">
-        {periodOrder.map((periodKey) => (
-          <AnalyticsPeriodCard stat={author.periodStats[periodKey]} label={periods[periodKey].label} key={periodKey} />
-        ))}
-      </div>
-    </article>
-  );
-}
+      <div className="analytics-tree">
+        {author.months.map((month) => {
+          const monthOpen = expandedMonths[month.month] ?? month.month === new Date().getMonth() + 1;
 
-function AnalyticsPeriodCard({ label, stat }: { label: string; stat: AnalyticsPeriodStat }) {
-  return (
-    <section className="analytics-period-card">
-      <div className="analytics-period-header">
-        <span>{label}</span>
-        <strong>{stat.score.toFixed(1)}</strong>
-        <small className={stat.deltas.score < 0 ? "negative" : "positive"}>{formatDelta(stat.deltas.score)}</small>
-      </div>
-      <div className="analytics-period-metrics">
-        <MetricDelta label="Productivity" value={`${stat.productivity.toFixed(1)}%`} delta={stat.deltas.productivity} />
-        <MetricDelta label="Active" value={formatDuration(stat.activeSeconds)} delta={stat.deltas.activeSeconds} isDuration />
-        <MetricDelta label="Break" value={formatDuration(stat.breakSeconds)} delta={stat.deltas.breakSeconds} isDuration inverse />
-        <MetricDelta label="Day Time" value={formatDuration(stat.pluginDaySeconds)} delta={stat.deltas.pluginDaySeconds} isDuration />
-      </div>
-      <div className="analytics-insights">
-        {stat.insights.map((insight) => (
-          <span className={insight.direction === "down" ? "insight-chip negative" : insight.direction === "up" ? "insight-chip positive" : "insight-chip"} key={`${insight.type}-${insight.message}`}>
-            {insight.message} {formatInsightValue(insight)}
-          </span>
-        ))}
+          return (
+            <section className="analytics-tree-card" key={month.month}>
+              <button className="analytics-tree-toggle month" onClick={() => toggleMonth(month.month)}>
+                <span>{monthOpen ? "−" : "+"}</span>
+                <div className="analytics-month-title">
+                  <strong>{month.label}</strong>
+                  <small>{year}</small>
+                </div>
+                <AnalyticsPeriodSummary totals={month.totals} />
+              </button>
+              <AnalyticsMetricsTable totals={month.totals} delta={month.previousMonthDeltas} deltaLabel="vs previous month" />
+
+              {monthOpen ? (
+                <div className="analytics-week-list">
+                  {month.weeks.map((week) => {
+                    const weekKey = `${month.month}-${week.week}`;
+                    const weekOpen = expandedWeeks[weekKey] ?? false;
+
+                    return (
+                      <section className="analytics-week-card" key={weekKey}>
+                        <button className="analytics-tree-toggle week" onClick={() => toggleWeek(month.month, week.week)}>
+                          <span>{weekOpen ? "−" : "+"}</span>
+                          <div>
+                            <strong>Week {week.week}</strong>
+                            <small>{week.label}</small>
+                          </div>
+                          <AnalyticsPeriodSummary totals={week.totals} compact />
+                        </button>
+                        <AnalyticsMetricsTable totals={week.totals} delta={week.previousWeekDeltas} deltaLabel="vs previous week" />
+
+                        {weekOpen ? (
+                          <div className="analytics-day-table">
+                            <div className="analytics-table-head">
+                              <span>Day</span>
+                              <span>Plugin Day</span>
+                              <span>Active</span>
+                              <span>Idle</span>
+                              <span>Overtime</span>
+                              <span>Break</span>
+                              <span>Productivity</span>
+                            </div>
+                            {week.days.map((day) => (
+                              <div className={day.inMonth ? "analytics-day-row" : "analytics-day-row muted"} key={day.date}>
+                                <span>{day.label}</span>
+                                <strong>{formatDuration(day.totals.pluginDaySeconds)}</strong>
+                                <strong>{formatDuration(day.totals.activeSeconds)}</strong>
+                                <span>{formatDuration(day.totals.idleSeconds)}</span>
+                                <strong>{formatDuration(day.totals.overtimeActiveSeconds)}</strong>
+                                <span className={breakClassName(day.totals.breakSeconds)}>{formatMinutes(day.totals.breakSeconds)}</span>
+                                <strong className={productivityClassName(day.totals.productivity)}>{day.totals.productivity.toFixed(2)}%</strong>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </section>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </section>
+          );
+        })}
       </div>
     </section>
   );
 }
 
-function MetricDelta({ label, value, delta, isDuration = false, inverse = false }: { label: string; value: string; delta: number; isDuration?: boolean; inverse?: boolean }) {
-  const isPositive = inverse ? delta <= 0 : delta >= 0;
-
+function AnalyticsMetricsTable({ totals, delta, deltaLabel }: { totals: AnalyticsTotals; delta: AnalyticsDelta; deltaLabel: string }) {
   return (
-    <div>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small className={isPositive ? "positive" : "negative"}>{isDuration ? formatDurationDelta(delta) : formatDelta(delta)}</small>
+    <div className="analytics-metrics-table">
+      <div className="analytics-table-head">
+        <span>Period</span>
+        <span>Plugin Day</span>
+        <span>Active</span>
+        <span>Idle</span>
+        <span>Overtime</span>
+        <span>Break</span>
+        <span>Productivity</span>
+      </div>
+      <div className="analytics-day-row">
+        <span>Total</span>
+        <strong>{formatDuration(totals.pluginDaySeconds)}</strong>
+        <strong>{formatDuration(totals.activeSeconds)}</strong>
+        <span>{formatDuration(totals.idleSeconds)}</span>
+        <strong>{formatDuration(totals.overtimeActiveSeconds)}</strong>
+        <span className={breakClassName(totals.breakSeconds)}>{formatMinutes(totals.breakSeconds)}</span>
+        <strong className={productivityClassName(totals.productivity)}>{totals.productivity.toFixed(2)}%</strong>
+      </div>
+      <div className="analytics-delta-row">
+        <span>{deltaLabel}</span>
+        <AnalyticsDeltaValue value={delta.pluginDaySeconds} />
+        <AnalyticsDeltaValue value={delta.activeSeconds} />
+        <AnalyticsDeltaValue value={delta.idleSeconds} inverse />
+        <AnalyticsDeltaValue value={delta.overtimeActiveSeconds} />
+        <AnalyticsDeltaValue value={delta.breakSeconds} inverse />
+        <AnalyticsDeltaValue value={delta.productivity} percent />
+      </div>
     </div>
   );
+}
+
+function AnalyticsPeriodSummary({ totals, compact = false }: { totals: AnalyticsTotals; compact?: boolean }) {
+  return (
+    <div className={compact ? "analytics-period-summary compact" : "analytics-period-summary"}>
+      <span>{formatDuration(totals.pluginDaySeconds)} day</span>
+      <span>{formatDuration(totals.overtimeActiveSeconds)} overtime</span>
+      <span className={productivityClassName(totals.productivity)}>{totals.productivity.toFixed(1)}%</span>
+    </div>
+  );
+}
+
+function AnalyticsDeltaValue({ value, percent = false, inverse = false }: { value: number; percent?: boolean; inverse?: boolean }) {
+  const isPositive = inverse ? value <= 0 : value >= 0;
+  return <span className={isPositive ? "positive" : "negative"}>{percent ? formatDelta(value) : formatDurationDelta(value)}</span>;
 }
 
 function AlertsPage({ authors }: { authors: AuthorRow[] }) {
@@ -1315,7 +1369,7 @@ function ActivityPage({
               }))}
             />
             <DonutPanel
-              title="Saved Prefabs"
+              title="Saved Files"
               items={summary.savedPrefabs.map((prefab, index) => ({
                 label: prefab.name || prefab.path,
                 value: prefab.saveCount,
@@ -1338,9 +1392,9 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
   const profiles = summary?.activitySummary.profiles ?? [];
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
-  const [scoreSettings, setScoreSettings] = useState<AnalyticsScoreSettings>(defaultAnalyticsScoreSettings);
   const [saving, setSaving] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
+  const [deleteTarget, setDeleteTarget] = useState<AuthorProfile | null>(null);
 
   useEffect(() => {
     const nextDrafts: Record<string, AuthorProfile> = {};
@@ -1352,24 +1406,6 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
     setDrafts(nextDrafts);
     setGlobalInterval(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
   }, [summary]);
-
-  useEffect(() => {
-    async function loadScoreSettings() {
-      try {
-        const response = await fetch(`${API_URL}/api/v1/settings/analytics-score`);
-
-        if (!response.ok) {
-          throw new Error("Analytics score settings request failed");
-        }
-
-        setScoreSettings(await response.json());
-      } catch {
-        setScoreSettings(defaultAnalyticsScoreSettings);
-      }
-    }
-
-    void loadScoreSettings();
-  }, []);
 
   async function saveProfile(rawAuthor: string) {
     const profile = drafts[rawAuthor];
@@ -1431,35 +1467,31 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
     }
   }
 
-  async function saveScoreSettings() {
-    setSaving("analyticsScore");
-    setSaveStatus((items) => ({ ...items, analyticsScore: undefined }));
+  async function deleteAuthorData(rawAuthor: string) {
+    const deleteKey = `delete:${rawAuthor}`;
+    setSaving(deleteKey);
+    setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/settings/analytics-score`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(scoreSettings)
+      const response = await fetch(`${API_URL}/api/v1/authors/${encodeURIComponent(rawAuthor)}/data`, {
+        method: "DELETE"
       });
 
       if (!response.ok) {
-        throw new Error("Analytics score settings save failed");
+        throw new Error("Author data delete failed");
       }
 
-      setScoreSettings(await response.json());
-      setSaveStatus((items) => ({ ...items, analyticsScore: "saved" }));
+      setDeleteTarget(null);
+      setSaveStatus((items) => ({ ...items, [deleteKey]: "saved" }));
+      onSaved();
     } catch {
-      setSaveStatus((items) => ({ ...items, analyticsScore: "error" }));
+      setSaveStatus((items) => ({ ...items, [deleteKey]: "error" }));
     } finally {
       setSaving(null);
       window.setTimeout(() => {
-        setSaveStatus((items) => ({ ...items, analyticsScore: undefined }));
+        setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
       }, 2500);
     }
-  }
-
-  function updateScoreSetting(key: keyof AnalyticsScoreSettings, value: string) {
-    setScoreSettings((items) => ({ ...items, [key]: Number(value) }));
   }
 
   function isProfileDirty(profile: AuthorProfile) {
@@ -1495,37 +1527,10 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
       </div>
 
       <div className="panel">
-        <h2>Analytics Score</h2>
-        <p className="settings-caption">Weights used to calculate the configurable Productivity Score on the Analytics page.</p>
-        <div className="score-settings-grid">
-          <label>
-            Active Time Weight
-            <input value={scoreSettings.activeTimeWeight} onChange={(event) => updateScoreSetting("activeTimeWeight", event.target.value)} type="number" min="0" step="0.01" />
-          </label>
-          <label>
-            Productivity Weight
-            <input value={scoreSettings.productivityWeight} onChange={(event) => updateScoreSetting("productivityWeight", event.target.value)} type="number" min="0" step="0.01" />
-          </label>
-          <label>
-            Break Penalty Weight
-            <input value={scoreSettings.breakPenaltyWeight} onChange={(event) => updateScoreSetting("breakPenaltyWeight", event.target.value)} type="number" min="0" step="0.01" />
-          </label>
-          <label>
-            Alerts Penalty Weight
-            <input value={scoreSettings.alertsPenaltyWeight} onChange={(event) => updateScoreSetting("alertsPenaltyWeight", event.target.value)} type="number" min="0" step="0.01" />
-          </label>
-          <label>
-            Stale Reports Penalty Weight
-            <input value={scoreSettings.staleReportsPenaltyWeight} onChange={(event) => updateScoreSetting("staleReportsPenaltyWeight", event.target.value)} type="number" min="0" step="0.01" />
-          </label>
-          <button className={settingsSaveButtonClassName(saveStatus.analyticsScore)} onClick={() => void saveScoreSettings()} disabled={saving === "analyticsScore"}>
-            {settingsSaveButtonLabel("analyticsScore", saving, saveStatus)}
-          </button>
-        </div>
-      </div>
-
-      <div className="panel">
         <h2>Author Profiles</h2>
+        <p className="settings-caption">
+          Telegram username links chat messages to the author. Use the same username from the work chat, with or without @.
+        </p>
         <div className="profile-table">
           <div className="profile-table-head">
             <span>Raw Author</span>
@@ -1534,11 +1539,12 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
             <span>Telegram</span>
             <span>Color</span>
             <span>Plugin</span>
-            <span />
+            <span>Actions</span>
           </div>
           {profiles.map((profile) => {
             const draft = drafts[profile.rawAuthor] ?? profile;
             const profileDirty = isProfileDirty(profile);
+            const deleteKey = `delete:${profile.rawAuthor}`;
             return (
               <div className="profile-row" key={profile.rawAuthor}>
                 <span className="profile-author-cell" title={profile.authorEmail || profile.rawAuthor}>
@@ -1575,19 +1581,66 @@ function SettingsPage({ summary, health, onSaved }: { summary: Summary | null; h
                   />
                   Enabled
                 </label>
-                <button
-                  className={settingsSaveButtonClassName(saveStatus[profile.rawAuthor], true)}
-                  onClick={() => void saveProfile(profile.rawAuthor)}
-                  disabled={saving === profile.rawAuthor || !profileDirty}
-                >
-                  {settingsSaveButtonLabel(profile.rawAuthor, saving, saveStatus)}
-                </button>
+                <div className="profile-actions">
+                  <button
+                    className={settingsSaveButtonClassName(saveStatus[profile.rawAuthor], true)}
+                    onClick={() => void saveProfile(profile.rawAuthor)}
+                    disabled={saving === profile.rawAuthor || !profileDirty}
+                  >
+                    {settingsSaveButtonLabel(profile.rawAuthor, saving, saveStatus)}
+                  </button>
+                  <button
+                    className={`${settingsSaveButtonClassName(saveStatus[deleteKey], true)} danger-button`}
+                    onClick={() => setDeleteTarget(profile)}
+                    disabled={saving === deleteKey}
+                  >
+                    {saving === deleteKey ? "Deleting..." : saveStatus[deleteKey] === "error" ? "Failed" : "Delete data"}
+                  </button>
+                </div>
               </div>
             );
           })}
         </div>
       </div>
+      {deleteTarget ? (
+        <AuthorDeleteConfirm
+          profile={deleteTarget}
+          saving={saving === `delete:${deleteTarget.rawAuthor}`}
+          onCancel={() => setDeleteTarget(null)}
+          onDelete={() => void deleteAuthorData(deleteTarget.rawAuthor)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function AuthorDeleteConfirm({
+  profile,
+  saving,
+  onCancel,
+  onDelete
+}: {
+  profile: AuthorProfile;
+  saving: boolean;
+  onCancel: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="modal-backdrop">
+      <div className="calendar-modal">
+        <h2>Delete all data for {profile.displayName}</h2>
+        <p className="calendar-helper">
+          This will remove reports, raw activity events, Telegram day/break data, alerts, and activity statistics for this
+          author. The author profile, display name, Telegram username, color, and plugin settings will stay unchanged. This action cannot be undone.
+        </p>
+        <div className="modal-actions">
+          <button className="primary-outline-button" onClick={onCancel} disabled={saving}>Cancel</button>
+          <button className="primary-button danger-solid-button" onClick={onDelete} disabled={saving}>
+            {saving ? "Deleting..." : "Delete all author data"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1673,6 +1726,11 @@ function settingsSaveButtonLabel(key: string, saving: string | null, statuses: R
   }
 
   return "Save";
+}
+
+function dashboardRefreshIntervalMs(summary: Summary | null) {
+  const seconds = summary?.intervalSettings.defaultSendIntervalSeconds ?? REFRESH_INTERVAL_MS / 1000;
+  return Math.max(1000, seconds * 1000);
 }
 
 function settingsSaveButtonClassName(status: "saved" | "error" | undefined, outline = false) {
@@ -1860,7 +1918,28 @@ function formatDuration(seconds: number) {
 }
 
 function formatReportMinutes(seconds: number) {
-  return `${Math.round(Math.max(0, seconds) / 60)}m`;
+  const rounded = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const remainingSeconds = rounded % 60;
+
+  if (hours > 0) {
+    if (remainingSeconds > 0) {
+      return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(remainingSeconds).padStart(2, "0")}s`;
+    }
+
+    return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+  }
+
+  if (minutes > 0) {
+    if (remainingSeconds > 0) {
+      return `${minutes}m ${String(remainingSeconds).padStart(2, "0")}s`;
+    }
+
+    return `${minutes}m`;
+  }
+
+  return `${remainingSeconds}s`;
 }
 
 function formatReportOvertime(seconds: number) {
@@ -1875,18 +1954,6 @@ function formatDurationDelta(seconds: number) {
 function formatDelta(value: number) {
   const prefix = value >= 0 ? "+" : "";
   return `${prefix}${value.toFixed(1)}`;
-}
-
-function formatInsightValue(insight: AnalyticsInsight) {
-  if (insight.unit === "seconds") {
-    return formatDurationDelta(insight.value);
-  }
-
-  if (insight.unit === "percent") {
-    return formatDelta(insight.value) + "%";
-  }
-
-  return "";
 }
 
 function monthIndexes() {
@@ -1959,12 +2026,20 @@ function formatSource(source?: string) {
     return "Unity";
   }
 
+  if (source === "bal") {
+    return "Blender";
+  }
+
   return source ?? "-";
 }
 
 function sourceIcon(source?: string) {
   if (source === "ual") {
     return <Box size={16} />;
+  }
+
+  if (source === "bal") {
+    return <Boxes size={16} />;
   }
 
   return <Activity size={16} />;
@@ -1991,6 +2066,9 @@ function formatActivityType(type: string) {
     external: "External",
     play_mode: "Play Mode",
     prefab_saved: "Prefab Save",
+    file_loaded: "File Load",
+    file_saved: "File Save",
+    scene_changed: "Scene Change",
     scene_saved: "Scene Save",
     select: "Select",
     undo_redo: "Undo/Redo"
@@ -2063,6 +2141,11 @@ function alertCardClassName(severity: AuthorAlert["severity"]) {
 }
 
 function formatAlertValue(alert: AuthorAlert) {
+  if (alert.type === "report_forgery_attempt") {
+    const parts = [alert.source, alert.pluginVersion, alert.deviceId ? `device ${alert.deviceId.slice(0, 8)}` : "", alert.createdAt ? formatTimestamp(alert.createdAt) : ""].filter(Boolean);
+    return parts.length ? parts.join(" · ") : "Suspicious report was rejected.";
+  }
+
   if (alert.value === null || alert.value === undefined) {
     return `Threshold: ${formatAlertThreshold(alert)}`;
   }

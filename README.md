@@ -7,6 +7,7 @@ AL is an Activity Logger monorepo. It contains the first Unity plugin (`UAL`), a
 - `packages/ual` - Unity Activity Logger package for Unity Package Manager.
 - `apps/backend` - FastAPI API server with MongoDB persistence and ALR1 decoding.
 - `apps/frontend` - React/Vite dashboard.
+- `packages/blender_al` - Blender Activity Logger add-on.
 - `docs/REMINDERS.md` - follow-up product and deployment reminders.
 
 ## Local Requirements
@@ -44,6 +45,29 @@ npm run dev
 
 The dashboard defaults to `http://127.0.0.1:8000` for API calls. Override with `VITE_API_URL`.
 
+## Telegram Bot
+
+The Telegram bot listens to the team chat and sends workday events to the backend:
+
+- `онлайн` / `online` starts the Telegram workday or closes the current AFK break.
+- `афк` / `afk` starts an AFK break.
+- `офлайн` / `оффлайн` / `offline` closes the Telegram workday.
+
+Create the bot with BotFather, add it to the work chat, and disable privacy mode if it needs to read ordinary chat messages. Do not commit the bot token.
+
+Local bot settings live in `.env.telegram-bot`:
+
+```bash
+cp .env.telegram-bot.example .env.telegram-bot
+```
+
+```bash
+scripts/start-bot-local.sh
+scripts/stop-bot-local.sh
+```
+
+If `TELEGRAM_ALLOWED_CHAT_ID` is omitted, the bot logs incoming chat ids so you can copy the correct one and restart it locked to that chat. The bot posts events to `AL_BACKEND_URL`, which defaults to `http://127.0.0.1:8000`. For production, use the same variables with the public backend URL.
+
 ## Unity Package
 
 Import `packages/ual` into Unity through Package Manager from a Git URL with a path:
@@ -53,3 +77,4 @@ https://github.com/DmitryShane/AL.git?path=/packages/ual
 ```
 
 For local testing, add the package from disk using Unity Package Manager and select `packages/ual`.
+
