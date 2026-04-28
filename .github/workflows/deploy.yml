@@ -19,10 +19,11 @@ jobs:
       - name: Configure SSH
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
           set -euo pipefail
+          DEPLOY_PORT="${DEPLOY_PORT:-22}"
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/al_deploy_key
@@ -32,10 +33,12 @@ jobs:
       - name: Deploy
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'root' }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           GITHUB_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          DEPLOY_PORT="${DEPLOY_PORT:-22}"
+          DEPLOY_USER="${DEPLOY_USER:-root}"
           ssh -i ~/.ssh/al_deploy_key -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "PUBLIC_HOST='$DEPLOY_HOST' /opt/al/current/scripts/deploy-server.sh '$GITHUB_SHA'"
