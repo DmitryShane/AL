@@ -6,6 +6,7 @@ from al_backend.repository import (
     _date_query,
     _empty_hourly_activity,
     _normalize_telegram_username,
+    _plugin_day_seconds,
     _with_productivity,
 )
 
@@ -59,6 +60,29 @@ def test_totals_should_use_report_aggregates_not_hourly_buckets():
 
     assert effective_active_seconds == report_active_seconds
     assert effective_idle_seconds == report_idle_seconds
+
+
+def test_plugin_day_time_is_capped_to_work_window():
+    item = {"activeSeconds": 8 * 3600, "idleSeconds": 2 * 3600, "workWindowSeconds": 9 * 3600}
+
+    assert _plugin_day_seconds(item) == 9 * 3600
+
+
+def test_plugin_day_time_uses_snapshot_work_window():
+    item = {"activeSeconds": 2 * 3600, "idleSeconds": 2 * 3600, "workWindowSeconds": 3 * 3600}
+
+    assert _plugin_day_seconds(item) == 3 * 3600
+
+
+def test_effective_idle_fits_inside_plugin_day_cap():
+    plugin_day_seconds = 9 * 3600
+    report_active_seconds = 30 * 60
+    report_idle_seconds = 9 * 3600
+    effective_active_seconds = min(report_active_seconds, plugin_day_seconds)
+    effective_idle_seconds = min(report_idle_seconds, max(0, plugin_day_seconds - effective_active_seconds))
+
+    assert effective_active_seconds == 30 * 60
+    assert effective_idle_seconds == (8 * 3600) + (30 * 60)
 
 
 def test_hourly_break_splits_across_hours():

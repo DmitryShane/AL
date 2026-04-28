@@ -10,6 +10,7 @@ from .settings import Settings
 
 LOW_PRODUCTIVITY_THRESHOLD = 50
 LONG_BREAK_THRESHOLD_SECONDS = 3600
+DEFAULT_PLUGIN_WORK_WINDOW_SECONDS = 32400
 SELECT_HEAVY_THRESHOLD_PERCENT = 90
 SELECT_HEAVY_MIN_EVENTS = 20
 ANALYTICS_PERIOD_DAYS = {
@@ -34,7 +35,7 @@ AUTHOR_COLORS = ["#13a37b", "#5b4dff", "#f59e0b", "#dc2626", "#0ea5e9", "#a855f7
 
 
 class Repository:
-    aggregates_version = 1
+    aggregates_version = 3
 
     def __init__(self, settings: Settings):
         self.client: MongoClient = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=1500)
@@ -282,10 +283,13 @@ class Repository:
             report_active_seconds = int(item.get("activeSeconds", 0))
             report_idle_seconds = int(item.get("idleSeconds", 0))
             effective_break_seconds = sum(int(hour.get("breakSeconds", 0)) for hour in hourly_activity)
-            effective_active_seconds = report_active_seconds
-            effective_idle_seconds = max(0, report_idle_seconds - effective_break_seconds)
             telegram_day_seconds = int(item.get("daySeconds", 0))
-            plugin_day_seconds = report_active_seconds + report_idle_seconds
+            plugin_day_seconds = _plugin_day_seconds(item, report_active_seconds, report_idle_seconds)
+            effective_active_seconds = min(report_active_seconds, plugin_day_seconds)
+            effective_idle_seconds = min(
+                max(0, report_idle_seconds - effective_break_seconds),
+                max(0, plugin_day_seconds - effective_active_seconds),
+            )
             totals["daySeconds"] += telegram_day_seconds
             totals["telegramDaySeconds"] += telegram_day_seconds
             totals["pluginDaySeconds"] += plugin_day_seconds
@@ -873,6 +877,7 @@ class Repository:
                     "pluginVersion": snapshot.get("pluginVersion"),
                     "timeZoneId": snapshot.get("timeZoneId"),
                     "timeZoneDisplayName": snapshot.get("timeZoneDisplayName"),
+                    "workWindowSeconds": snapshot.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
                     "lastRecordedAt": snapshot.get("recordedAt"),
                     "lastReceivedAt": snapshot.get("receivedAt"),
                     "activityCounts": activity_counts,
@@ -1241,8 +1246,9 @@ def _analytics_totals(docs: list[dict[str, Any]], score_settings: dict[str, floa
     active_seconds = sum(int(item.get("activeSeconds", 0)) for item in docs)
     idle_seconds = sum(int(item.get("idleSeconds", 0)) for item in docs)
     break_seconds = sum(int(item.get("breakSeconds", 0)) for item in docs)
+    overtime_active_seconds = sum(int(item.get("overtimeActiveSeconds", 0)) for item in docs)
     telegram_day_seconds = sum(int(item.get("daySeconds", 0)) for item in docs)
-    plugin_day_seconds = active_seconds + idle_seconds
+    plugin_day_seconds = sum(_plugin_day_seconds(item) for item in docs)
     productivity = _productivity(active_seconds, idle_seconds, break_seconds)
     alert_count = sum(_analytics_alert_count(item) for item in docs)
     stale_count = sum(1 for item in docs if not item.get("lastReceivedAt"))
@@ -1260,6 +1266,7 @@ def _analytics_totals(docs: list[dict[str, Any]], score_settings: dict[str, floa
         "activeSeconds": active_seconds,
         "idleSeconds": idle_seconds,
         "breakSeconds": break_seconds,
+        "overtimeActiveSeconds": overtime_active_seconds,
         "telegramDaySeconds": telegram_day_seconds,
         "pluginDaySeconds": plugin_day_seconds,
         "productivity": round(productivity, 2),
@@ -1272,6 +1279,13 @@ def _productivity(active_seconds: int, idle_seconds: int, break_seconds: int) ->
     penalized_break_seconds = max(0, break_seconds - LONG_BREAK_THRESHOLD_SECONDS)
     denominator = active_seconds + idle_seconds + penalized_break_seconds
     return (active_seconds / denominator) * 100 if denominator else 0
+
+
+def _plugin_day_seconds(item: dict[str, Any], active_seconds: int | None = None, idle_seconds: int | None = None) -> int:
+    active = int(item.get("activeSeconds", 0) if active_seconds is None else active_seconds)
+    idle = int(item.get("idleSeconds", 0) if idle_seconds is None else idle_seconds)
+    work_window_seconds = int(item.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS)
+    return min(max(0, work_window_seconds), max(0, active + idle))
 
 
 def _analytics_alert_count(item: dict[str, Any]) -> int:

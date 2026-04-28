@@ -1294,6 +1294,7 @@ function ActivityPage({
             <Duration label="Day Time (Plugin)" seconds={author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds} />
             <Duration label="Active" seconds={author.activeSeconds} />
             <Duration label="Idle" seconds={author.idleSeconds} />
+            <Duration label="Overtime" seconds={author.overtimeActiveSeconds} />
             <Duration label="Break" seconds={author.breakSeconds} valueClassName={breakClassName(author.breakSeconds)} />
             <div className="duration">
               <span>Productivity</span>
@@ -1304,8 +1305,24 @@ function ActivityPage({
           <HourlyActivityChart authors={hourly} />
 
           <div className="content-grid compact">
-            <PanelList title="Activity Mix" items={summary.activityMix.map((item) => [formatActivityType(item.type), `${item.percent}%`])} />
-            <PanelList title="Saved Prefabs" items={summary.savedPrefabs.map((prefab) => [prefab.name || prefab.path, String(prefab.saveCount)])} />
+            <DonutPanel
+              title="Activity Mix"
+              items={summary.activityMix.map((item) => ({
+                label: formatActivityType(item.type),
+                value: item.percent,
+                displayValue: `${item.percent}%`,
+                color: activityColor(item.type)
+              }))}
+            />
+            <DonutPanel
+              title="Saved Prefabs"
+              items={summary.savedPrefabs.map((prefab, index) => ({
+                label: prefab.name || prefab.path,
+                value: prefab.saveCount,
+                displayValue: String(prefab.saveCount),
+                color: paletteColor(index)
+              }))}
+            />
           </div>
 
           <ReportsTable reports={authorReports} />
@@ -1597,6 +1614,7 @@ function ReportsTable({ reports }: { reports: Report[] }) {
           <span>Date</span>
           <span>Active</span>
           <span>Idle</span>
+          <span>Overtime</span>
           <span>Recorded</span>
           <span>Type</span>
           <span>Timezone</span>
@@ -1606,8 +1624,9 @@ function ReportsTable({ reports }: { reports: Report[] }) {
             <span className="source-cell">{sourceIcon(report.source)}{formatSource(report.source)}</span>
             <span>{report.displayName ?? report.author ?? "Unknown User"}</span>
             <span>{report.date ?? "-"}</span>
-            <span>{formatDuration(report.activeDeltaSeconds ?? 0)}</span>
-            <span>{formatDuration(report.idleDeltaSeconds ?? 0)}</span>
+            <span>{formatReportMinutes(report.activeDeltaSeconds ?? 0)}</span>
+            <span>{formatReportMinutes(report.idleDeltaSeconds ?? 0)}</span>
+            <span>{formatReportOvertime(report.overtimeActiveDeltaSeconds ?? 0)}</span>
             <span>{formatAuthorTime(report)}</span>
             <span className={reportTypeBadgeClassName(report.reportType)}>{formatReportType(report.reportType)}</span>
             <span>{formatTimeZoneLabel(report) ?? "-"}</span>
@@ -1670,6 +1689,43 @@ function settingsSaveButtonClassName(status: "saved" | "error" | undefined, outl
   return baseClassName;
 }
 
+type DonutPanelItem = {
+  label: string;
+  value: number;
+  displayValue: string;
+  color: string;
+};
+
+function DonutPanel({ title, items }: { title: string; items: DonutPanelItem[] }) {
+  const total = items.reduce((sum, item) => sum + Math.max(0, item.value), 0);
+  const chartStyle = {
+    "--donut-gradient": donutGradient(items, total)
+  } as React.CSSProperties;
+
+  return (
+    <div className="panel donut-panel">
+      <div className="donut-panel-copy">
+        <h2>{title}</h2>
+        <div className="list">
+          {items.length ? (
+            items.map((item) => (
+              <div className="row" key={item.label}>
+                <span><i className="row-color" style={{ background: item.color }} />{item.label}</span>
+                <strong>{item.displayValue}</strong>
+              </div>
+            ))
+          ) : (
+            <p className="empty">No data yet.</p>
+          )}
+        </div>
+      </div>
+      <div className="donut-chart" style={chartStyle} aria-hidden="true">
+        <span>{total ? totalDisplayValue(items) : "-"}</span>
+      </div>
+    </div>
+  );
+}
+
 function PanelList({ title, items }: { title: string; items: Array<[string, string]> }) {
   return (
     <div className="panel">
@@ -1688,6 +1744,63 @@ function PanelList({ title, items }: { title: string; items: Array<[string, stri
       </div>
     </div>
   );
+}
+
+function donutGradient(items: DonutPanelItem[], total: number) {
+  if (!items.length || total <= 0) {
+    return "#edf2f7 0 100%";
+  }
+
+  let cursor = 0;
+  const segments = items.map((item) => {
+    const start = cursor;
+    const width = (Math.max(0, item.value) / total) * 100;
+    cursor += width;
+    return `${item.color} ${start}% ${cursor}%`;
+  });
+
+  return segments.join(", ");
+}
+
+function totalDisplayValue(items: DonutPanelItem[]) {
+  const percentItems = items.every((item) => item.displayValue.endsWith("%"));
+
+  if (percentItems) {
+    return "100%";
+  }
+
+  return String(items.reduce((sum, item) => sum + Math.max(0, item.value), 0));
+}
+
+function activityColor(type: string) {
+  const normalized = type.toLowerCase();
+
+  if (normalized === "select") {
+    return "#5b4dff";
+  }
+
+  if (normalized === "undo_redo") {
+    return "#f59e0b";
+  }
+
+  if (normalized === "prefab_saved") {
+    return "#13a37b";
+  }
+
+  if (normalized === "play_mode") {
+    return "#0ea5e9";
+  }
+
+  if (normalized === "scene_saved") {
+    return "#ef4444";
+  }
+
+  return paletteColor(normalized.length);
+}
+
+function paletteColor(index: number) {
+  const colors = ["#5b4dff", "#13a37b", "#f59e0b", "#0ea5e9", "#a855f7", "#ef4444", "#14b8a6"];
+  return colors[index % colors.length];
 }
 
 function DateRangePicker({ value, onChange }: { value: DateRange; onChange: (range: DateRange) => void }) {
@@ -1744,6 +1857,14 @@ function formatDuration(seconds: number) {
   const hours = Math.floor(rounded / 3600);
   const minutes = Math.floor((rounded % 3600) / 60);
   return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+}
+
+function formatReportMinutes(seconds: number) {
+  return `${Math.round(Math.max(0, seconds) / 60)}m`;
+}
+
+function formatReportOvertime(seconds: number) {
+  return seconds > 0 ? formatReportMinutes(seconds) : "-";
 }
 
 function formatDurationDelta(seconds: number) {

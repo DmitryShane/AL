@@ -4,7 +4,6 @@ export type AuthorsTableRow = {
   displayName: string;
   team?: string;
   source?: string;
-  pluginVersion?: string;
   lastRecordedAt?: string;
   lastReceivedAt?: string;
   daySeconds: number;
@@ -12,6 +11,7 @@ export type AuthorsTableRow = {
   pluginDaySeconds: number;
   activeSeconds: number;
   idleSeconds: number;
+  overtimeActiveSeconds: number;
   breakSeconds: number;
   productivity: number;
   status?: "online" | "stale";
@@ -37,11 +37,11 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
         <span>Day Time (Plugin)</span>
         <span>Active Time</span>
         <span>Idle Time</span>
+        <span>Overtime</span>
         <span>Break Time</span>
         <span>Productivity</span>
         <span>Status</span>
         <span>Plugin</span>
-        <span>Version</span>
         <span>Last Report</span>
       </div>
       {authors.map((author) => (
@@ -58,13 +58,13 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
           <strong>{formatDuration(author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds)}</strong>
           <strong>{formatDuration(author.activeSeconds)}</strong>
           <span>{formatDuration(author.idleSeconds)}</span>
+          <strong>{formatDuration(author.overtimeActiveSeconds)}</strong>
           <span className={breakClassName(author.breakSeconds)}>{formatMinutes(author.breakSeconds)}</span>
           <strong className={productivityClassName(author.productivity)}>{author.productivity.toFixed(2)}%</strong>
           <span className="author-status-stack">
             <span className={statusBadgeClassName(author.status)}>{formatStatus(author)}</span>
           </span>
           <span>{formatSource(author.source)}</span>
-          <span>{author.pluginVersion ?? "-"}</span>
           <span>{formatTimestamp(author.lastRecordedAt)}</span>
         </div>
       ))}
