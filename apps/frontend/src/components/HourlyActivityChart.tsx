@@ -2,6 +2,7 @@ type HourlyActivity = {
   hour: number;
   activeSeconds: number;
   idleSeconds: number;
+  breakSeconds?: number;
 };
 
 type AuthorHourlyActivity = {
@@ -17,6 +18,7 @@ type AuthorHourlyChart = {
   hours: Array<{
     hour: number;
     activeMinutes: number;
+    breakMinutes: number;
     idleMinutes: number;
   }>;
 };
@@ -35,15 +37,6 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
         <div className="hourly-chart-list">
           {authorCharts.map((author) => (
             <article className="hourly-chart-card" key={author.author}>
-              <div className="hourly-chart-header">
-                <div>
-                  <strong>{author.author}</strong>
-                  <span>
-                    Today
-                    {author.timeZoneLabel ? `, ${author.timeZoneLabel}` : ""}
-                  </span>
-                </div>
-              </div>
               <div className="hourly-chart-scroll">
                 <div className="hourly-chart">
                   <div className="hourly-chart-y-title">Per hour, min</div>
@@ -55,23 +48,31 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                     <span>0</span>
                   </div>
                   <div className="hourly-chart-bars">
-                    {author.hours.map((hour) => (
-                      <div className="hourly-chart-column" key={hour.hour}>
-                        <div
-                          className={`hourly-chart-bar${hasHourlyActivity(hour) ? " has-activity" : ""}`}
-                          title={formatHourTitle(hour)}
-                        >
+                    {author.hours.map((hour) => {
+                      const segments = toDisplaySegments(hour);
+
+                      return (
+                        <div className="hourly-chart-column" key={hour.hour}>
                           <div
-                            className="hourly-chart-segment active"
-                            style={{ height: `${toPercentOfHour(hour.activeMinutes)}%` }}
-                          />
-                          <div
-                            className="hourly-chart-segment idle"
-                            style={{ height: `${toPercentOfHour(hour.idleMinutes)}%` }}
-                          />
+                            className={`hourly-chart-bar${hasHourlyActivity(hour) ? " has-activity" : ""}`}
+                            title={formatHourTitle(hour)}
+                          >
+                            <div
+                              className="hourly-chart-segment active"
+                              style={{ height: `${segments.activePercent}%` }}
+                            />
+                            <div
+                              className="hourly-chart-segment break"
+                              style={{ height: `${segments.breakPercent}%` }}
+                            />
+                            <div
+                              className="hourly-chart-segment idle"
+                              style={{ height: `${segments.idlePercent}%` }}
+                            />
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   <div />
                   <div />
@@ -86,6 +87,7 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
               </div>
               <div className="hourly-chart-legend">
                 <span><i className="active" />Active</span>
+                <span><i className="break" />AFK</span>
                 <span><i className="idle" />Idle</span>
               </div>
             </article>
@@ -98,8 +100,8 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
   );
 }
 
-function createEmptyHourlyActivity() {
-  return Array.from({ length: 24 }, (_, hour) => ({ hour, activeSeconds: 0, idleSeconds: 0 }));
+function createEmptyHourlyActivity(): Required<HourlyActivity>[] {
+  return Array.from({ length: 24 }, (_, hour) => ({ hour, activeSeconds: 0, idleSeconds: 0, breakSeconds: 0 }));
 }
 
 function normalizeHourlyActivity(source: HourlyActivity[]) {
@@ -112,6 +114,7 @@ function normalizeHourlyActivity(source: HourlyActivity[]) {
 
     hourlyActivity[sourceHour.hour].activeSeconds = sourceHour.activeSeconds ?? 0;
     hourlyActivity[sourceHour.hour].idleSeconds = sourceHour.idleSeconds ?? 0;
+    hourlyActivity[sourceHour.hour].breakSeconds = sourceHour.breakSeconds ?? 0;
   }
 
   return hourlyActivity;
@@ -126,6 +129,7 @@ function toAuthorHourlyActivity(author: AuthorHourlyActivity): AuthorHourlyChart
     hours: hourlyActivity.map((hour) => ({
       hour: hour.hour,
       activeMinutes: Math.min(60, hour.activeSeconds / 60),
+      breakMinutes: Math.min(60, (hour.breakSeconds ?? 0) / 60),
       idleMinutes: Math.min(60, hour.idleSeconds / 60)
     }))
   };
@@ -135,18 +139,38 @@ function toPercentOfHour(minutes: number) {
   return Math.min(100, Math.max(0, (minutes / 60) * 100));
 }
 
-function hasHourlyActivity(hour: { activeMinutes: number; idleMinutes: number }) {
-  return hour.activeMinutes > 0 || hour.idleMinutes > 0;
+function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; idleMinutes: number }) {
+  const activeMinutes = Math.max(0, hour.activeMinutes);
+  const breakMinutes = Math.max(0, hour.breakMinutes);
+  const idleMinutes = Math.max(0, hour.idleMinutes);
+  const totalMinutes = activeMinutes + breakMinutes + idleMinutes;
+
+  if (totalMinutes <= 0) {
+    return { activePercent: 0, breakPercent: 0, idlePercent: 0 };
+  }
+
+  const normalizedTotal = totalMinutes >= 59 ? 60 : Math.min(60, totalMinutes);
+  const scale = normalizedTotal / totalMinutes;
+
+  return {
+    activePercent: toPercentOfHour(activeMinutes * scale),
+    breakPercent: toPercentOfHour(breakMinutes * scale),
+    idlePercent: toPercentOfHour(idleMinutes * scale)
+  };
+}
+
+function hasHourlyActivity(hour: { activeMinutes: number; breakMinutes: number; idleMinutes: number }) {
+  return hour.activeMinutes > 0 || hour.breakMinutes > 0 || hour.idleMinutes > 0;
 }
 
 function formatHour(hour: number) {
-  const displayHour = String(hour + 1).padStart(2, "0");
+  const displayHour = String(hour).padStart(2, "0");
 
   return `${displayHour}:00`;
 }
 
-function formatHourTitle(hour: { hour: number; activeMinutes: number; idleMinutes: number }) {
-  return `${formatHour(hour.hour)}: ${Math.round(hour.activeMinutes)}m active, ${Math.round(hour.idleMinutes)}m idle`;
+function formatHourTitle(hour: { hour: number; activeMinutes: number; breakMinutes: number; idleMinutes: number }) {
+  return `${formatHour(hour.hour)}: ${Math.round(hour.activeMinutes)}m active, ${Math.round(hour.breakMinutes)}m AFK, ${Math.round(hour.idleMinutes)}m idle`;
 }
 
 function formatTimeZoneLabel(author: AuthorHourlyActivity) {
