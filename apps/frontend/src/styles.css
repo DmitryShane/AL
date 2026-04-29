@@ -331,58 +331,12 @@ p {
   text-transform: uppercase;
 }
 
-.login-orbit {
-  position: relative;
-  width: 320px;
-  height: 170px;
+.login-logo {
+  display: block;
+  width: min(320px, 72vw);
+  height: auto;
   margin-bottom: 34px;
-}
-
-.bike-wheel {
-  position: absolute;
-  bottom: 0;
-  width: 112px;
-  height: 112px;
-  border: 10px solid rgb(255 255 255 / 92%);
-  border-radius: 999px;
-  box-shadow: inset 0 0 0 2px rgb(133 240 198 / 60%), 0 18px 40px rgb(0 0 0 / 24%);
-}
-
-.wheel-left {
-  left: 0;
-}
-
-.wheel-right {
-  right: 0;
-}
-
-.bike-frame-line {
-  position: absolute;
-  height: 9px;
-  border-radius: 999px;
-  background: #85f0c6;
-  transform-origin: left center;
-}
-
-.frame-top {
-  left: 86px;
-  top: 64px;
-  width: 142px;
-  transform: rotate(9deg);
-}
-
-.frame-down {
-  left: 70px;
-  top: 91px;
-  width: 120px;
-  transform: rotate(-28deg);
-}
-
-.frame-seat {
-  left: 149px;
-  top: 91px;
-  width: 88px;
-  transform: rotate(-58deg);
+  filter: drop-shadow(0 22px 44px rgb(0 0 0 / 28%));
 }
 
 .login-card {

@@ -535,14 +535,8 @@ function LoginPage({ loading = false, onLogin }: { loading?: boolean; onLogin: (
   return (
     <main className="login-shell">
       <section className="login-hero">
-        <div className="login-orbit">
-          <span className="bike-wheel wheel-left" />
-          <span className="bike-wheel wheel-right" />
-          <span className="bike-frame-line frame-top" />
-          <span className="bike-frame-line frame-down" />
-          <span className="bike-frame-line frame-seat" />
-        </div>
-        <p className="eyebrow">Activity Logger HQ</p>
+        <img className="login-logo" src="/logo.png" alt="Mempic Game Studio" />
+        <p className="eyebrow">Activity Logger</p>
         <h1>Welcome to the team ride control room.</h1>
         <p>
           Track Unity and Blender activity, spot stalled reports, and keep the production sprint moving from one focused dashboard.
