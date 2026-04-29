@@ -125,7 +125,9 @@ def handle_update(config: BotConfig, update: dict[str, Any]) -> None:
 
 def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> None:
     callback_id = str(callback_query.get("id") or "")
-    chat_id = ((callback_query.get("message") or {}).get("chat") or {}).get("id")
+    message = callback_query.get("message") or {}
+    chat_id = (message.get("chat") or {}).get("id")
+    message_id = message.get("message_id")
 
     if config.allowed_chat_id is not None and chat_id != config.allowed_chat_id:
         LOGGER.info("Ignoring callback from chat id %s. Allowed chat id is %s.", chat_id, config.allowed_chat_id)
@@ -143,6 +145,9 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
     reminder_id, action = parsed
     result = close_reminder(config.backend_url, config.bot_secret, reminder_id, action)
     LOGGER.info("Closed Telegram day reminder %s with %s: %s", reminder_id, action, result)
+
+    if chat_id and message_id:
+        edit_reminder_message(config.token, chat_id, message_id, action)
 
     if callback_id:
         answer_callback_query(config.token, callback_id, "Telegram day closed.")
@@ -277,6 +282,19 @@ def send_reminder_message(token: str, chat_id: int, text: str, reminder_id: str)
 
 def answer_callback_query(token: str, callback_query_id: str, text: str) -> dict[str, Any]:
     return telegram_request(token, "answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
+
+
+def edit_reminder_message(token: str, chat_id: int, message_id: int, action: str) -> dict[str, Any]:
+    label = "Overtime" if action == "overtime" else "Offline"
+    return telegram_request(
+        token,
+        "editMessageText",
+        {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": f"Done. Telegram day closed as {label}.",
+        },
+    )
 
 
 def telegram_request(token: str, method: str, params: dict[str, Any]) -> dict[str, Any]:

@@ -1425,10 +1425,7 @@ class Repository:
                 {"$set": {"lastOfflineAt": event_time, "daySeconds": day_seconds}},
                 upsert=True,
             )
-            self.db.daily_author_activity.update_many(
-                {"author": raw_author, "date": day_date},
-                {"$set": {"dayStartedAt": started_at, "dayEndedAt": event_time, "daySeconds": day_seconds}},
-            )
+            self._upsert_telegram_day_activity(raw_author, normalized_telegram, day_date, time_zone_id, started_at, event_time, received_at, day_seconds)
             self._insert_telegram_report_row(
                 raw_author,
                 normalized_telegram,
@@ -1547,6 +1544,13 @@ class Repository:
         if not reminder:
             return {"ok": False, "error": "Unknown reminder"}
 
+        if reminder.get("status") == "closed":
+            return {
+                "ok": True,
+                "status": f"reminder_{reminder.get('closeAction') or action}_already_closed",
+                "reminderAction": reminder.get("closeAction") or action,
+            }
+
         raw_author = str(reminder.get("rawAuthor") or "")
         telegram_username = _normalize_telegram_username(reminder.get("telegramUsername"))
         day_date = str(reminder.get("date") or "")
@@ -1594,13 +1598,10 @@ class Repository:
             metadata["daySeconds"] = day_seconds
             self.db.day_sessions.update_one(
                 {"rawAuthor": raw_author, "date": day_date},
-                {"$set": {"lastOfflineAt": event_time, "daySeconds": day_seconds, "reminderAction": action}},
+                {"$set": {"date": event_date, "lastOfflineAt": event_time, "daySeconds": day_seconds, "reminderAction": action}},
                 upsert=True,
             )
-            self.db.daily_author_activity.update_many(
-                {"author": raw_author, "date": day_date},
-                {"$set": {"dayStartedAt": started_at, "dayEndedAt": event_time, "daySeconds": day_seconds}},
-            )
+            self._upsert_telegram_day_activity(raw_author, telegram_username, event_date, time_zone_id, started_at, event_time, received_at, day_seconds)
             self._insert_telegram_report_row(
                 raw_author,
                 telegram_username,
@@ -1618,6 +1619,52 @@ class Repository:
             {"$set": {"status": "closed", "closedAt": received_at, "closeAction": action, "updatedAt": received_at}},
         )
         return {"ok": True, "status": f"reminder_{action}", **metadata}
+
+    def _upsert_telegram_day_activity(
+        self,
+        raw_author: str,
+        telegram_username: str,
+        event_date: str,
+        time_zone_id: str,
+        started_at: dt.datetime,
+        ended_at: dt.datetime,
+        received_at: dt.datetime,
+        day_seconds: int,
+    ) -> None:
+        key = {"source": "telegram", "author": raw_author, "projectId": "telegram", "date": event_date}
+        self.db.daily_author_activity.update_one(
+            key,
+            {
+                "$setOnInsert": {
+                    **key,
+                    "authorEmail": "",
+                    "pluginVersion": "telegram-bot",
+                    "workWindowSeconds": DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
+                    "activityCounts": [],
+                    "savedPrefabs": [],
+                    "overtimeActivityCounts": [],
+                    "overtimeSavedPrefabs": [],
+                    "hourlyActivity": _empty_hourly_activity(),
+                    "activeSeconds": 0,
+                    "activeMicroseconds": 0,
+                    "idleSeconds": 0,
+                    "idleMicroseconds": 0,
+                    "overtimeActiveSeconds": 0,
+                    "overtimeActiveMicroseconds": 0,
+                },
+                "$set": {
+                    "sessionId": telegram_username,
+                    "timeZoneId": time_zone_id,
+                    "timeZoneDisplayName": time_zone_id,
+                    "lastRecordedAt": ended_at.isoformat(),
+                    "lastReceivedAt": received_at,
+                    "dayStartedAt": started_at,
+                    "dayEndedAt": ended_at,
+                    "daySeconds": day_seconds,
+                },
+            },
+            upsert=True,
+        )
 
     def _insert_telegram_report_row(
         self,
