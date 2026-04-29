@@ -6,6 +6,8 @@ export type AuthorsTableRow = {
   source?: string;
   lastRecordedAt?: string;
   lastReceivedAt?: string;
+  timeZoneId?: string;
+  timeZoneDisplayName?: string;
   daySeconds: number;
   telegramDaySeconds: number;
   pluginDaySeconds: number;
@@ -55,18 +57,21 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
             </div>
           </div>
           <span>{author.team || "-"}</span>
-          <strong>{formatDuration(author.telegramDaySeconds ?? author.daySeconds)}</strong>
-          <strong>{formatDuration(author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds)}</strong>
-          <strong>{formatDuration(author.activeSeconds)}</strong>
+          <span>{formatDuration(author.telegramDaySeconds ?? author.daySeconds)}</span>
+          <span>{formatDuration(author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds)}</span>
+          <span>{formatDuration(author.activeSeconds)}</span>
           <span>{formatDuration(author.idleSeconds)}</span>
-          <strong>{formatDuration(author.overtimeActiveSeconds)}</strong>
+          <span>{formatDuration(author.overtimeActiveSeconds)}</span>
           <span className={breakClassName(author.breakSeconds)}>{formatMinutes(author.breakSeconds)}</span>
           <strong className={productivityClassName(author.productivity)}>{author.productivity.toFixed(2)}%</strong>
           <span className="author-status-stack">
             <span className={statusBadgeClassName(author.status)}>{formatStatus(author)}</span>
           </span>
           <span>{formatSource(author.source)}</span>
-          <span>{formatTimestamp(author.lastRecordedAt)}</span>
+          <span className="author-last-report" title={formatTimestamp(author.lastRecordedAt)}>
+            <span>{formatAuthorDate(author)}</span>
+            <span>{formatAuthorTime(author)}</span>
+          </span>
         </div>
       ))}
       {!authors.length ? <p className="empty-table">{emptyMessage}</p> : null}
@@ -103,6 +108,14 @@ function formatSource(source?: string) {
     return "Unity";
   }
 
+  if (source === "bal") {
+    return "Blender";
+  }
+
+  if (source === "telegram") {
+    return "Telegram";
+  }
+
   return source ?? "unknown";
 }
 
@@ -112,6 +125,70 @@ function formatTimestamp(value?: string) {
   }
 
   return new Date(value).toLocaleString();
+}
+
+function formatAuthorDate(author: AuthorsTableRow) {
+  if (!author.lastRecordedAt) {
+    return "-";
+  }
+
+  const recordedAt = new Date(author.lastRecordedAt);
+
+  if (!author.timeZoneId) {
+    return formatOffsetTimestampDate(author.lastRecordedAt);
+  }
+
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      timeZone: author.timeZoneId
+    }).format(recordedAt);
+  } catch {
+    return formatOffsetTimestampDate(author.lastRecordedAt);
+  }
+}
+
+function formatAuthorTime(author: AuthorsTableRow) {
+  if (!author.lastRecordedAt) {
+    return "-";
+  }
+
+  const recordedAt = new Date(author.lastRecordedAt);
+
+  if (!author.timeZoneId) {
+    return formatOffsetTimestampTime(author.lastRecordedAt);
+  }
+
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      timeStyle: "short",
+      timeZone: author.timeZoneId
+    }).format(recordedAt);
+  } catch {
+    return formatOffsetTimestampTime(author.lastRecordedAt);
+  }
+}
+
+function formatOffsetTimestampDate(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T/);
+
+  if (match) {
+    return `${match[3]}/${match[2]}/${match[1]}`;
+  }
+
+  return new Date(value).toLocaleDateString();
+}
+
+function formatOffsetTimestampTime(value: string) {
+  const match = value.match(/T(\d{2}):(\d{2})/);
+
+  if (match) {
+    return `${match[1]}:${match[2]}`;
+  }
+
+  return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(new Date(value));
 }
 
 function formatStatus(author: AuthorsTableRow) {

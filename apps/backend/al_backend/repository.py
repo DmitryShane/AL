@@ -637,6 +637,8 @@ class Repository:
                     "authorColor": profile.get("authorColor") or _author_color(raw_author),
                     "source": item.get("source"),
                     "pluginVersion": item.get("pluginVersion"),
+                    "timeZoneId": profile.get("timeZoneId") or item.get("timeZoneId"),
+                    "timeZoneDisplayName": profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName"),
                     "lastRecordedAt": item.get("lastRecordedAt"),
                     "lastReceivedAt": item.get("lastReceivedAt"),
                     "daySeconds": 0,
@@ -661,6 +663,10 @@ class Repository:
             author_row["authorEmail"] = profile.get("authorEmail") or item.get("authorEmail") or author_row.get("authorEmail", "")
             author_row["pluginVersion"] = item.get("pluginVersion") or author_row.get("pluginVersion")
             author_row["source"] = item.get("source") or author_row.get("source")
+            author_row["timeZoneId"] = profile.get("timeZoneId") or item.get("timeZoneId") or author_row.get("timeZoneId")
+            author_row["timeZoneDisplayName"] = (
+                profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName") or author_row.get("timeZoneDisplayName")
+            )
             author_row["activityCounts"] = _merge_count_list(
                 author_row.get("activityCounts", []), item.get("activityCounts", []), "type", "count"
             )

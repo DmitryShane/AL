@@ -524,6 +524,13 @@ p {
   max-width: 150px;
 }
 
+.author-last-report {
+  display: grid;
+  gap: 2px;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
 .author-status-stack {
   display: grid;
   gap: 4px;
