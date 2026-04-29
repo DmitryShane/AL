@@ -165,8 +165,7 @@ function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; 
     return { activePercent: 0, overtimePercent: 0, breakPercent: 0, idlePercent: 0 };
   }
 
-  const normalizedTotal = totalMinutes >= 59 ? 60 : Math.min(60, totalMinutes);
-  const scale = normalizedTotal / totalMinutes;
+  const scale = 60 / totalMinutes;
 
   return {
     activePercent: toPercentOfHour(activeMinutes * scale),

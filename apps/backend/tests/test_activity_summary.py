@@ -885,3 +885,17 @@ def test_hourly_break_uses_author_time_zone():
     assert buckets[("Dmitry", "2026-04-29")][10]["breakSeconds"] == 0
     assert buckets[("Dmitry", "2026-04-29")][11]["breakSeconds"] == 1401
     assert buckets[("Dmitry", "2026-04-29")][12]["breakSeconds"] == 1919
+
+
+def test_hourly_break_suppresses_small_idle_artifact():
+    source = _empty_hourly_activity()
+    break_buckets = _empty_hourly_activity()
+    source[15]["activeSeconds"] = 553
+    source[15]["idleSeconds"] = 2991
+    break_buckets[15]["breakSeconds"] = 2806
+
+    hourly = _apply_breaks_to_hourly_activity(source, break_buckets)
+
+    assert hourly[15]["activeSeconds"] == 553
+    assert hourly[15]["breakSeconds"] == 2806
+    assert hourly[15]["idleSeconds"] == 0

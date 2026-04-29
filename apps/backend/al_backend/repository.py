@@ -20,6 +20,7 @@ DEFAULT_PLUGIN_WORK_WINDOW_SECONDS = 32400
 MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS = 10
 SELECT_HEAVY_THRESHOLD_PERCENT = 90
 SELECT_HEAVY_MIN_EVENTS = 20
+AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS = 300
 REPORT_CHALLENGE_TTL_SECONDS = 120
 RAW_ACTIVITY_EVENT_TYPES = {
     "selection",
@@ -2767,6 +2768,10 @@ def _apply_breaks_to_hourly_activity(
         break_seconds = min(requested_break_seconds, max(0, 3600 - active_seconds - overtime_active_seconds))
         idle_seconds = max(0, raw_idle_seconds - break_seconds)
         idle_seconds = min(idle_seconds, max(0, 3600 - active_seconds - overtime_active_seconds - break_seconds))
+
+        if break_seconds and idle_seconds < AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS:
+            idle_seconds = 0
+
         hourly_activity.append(
             {
                 "hour": hour,
