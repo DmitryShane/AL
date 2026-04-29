@@ -42,6 +42,11 @@ class FakeCollection:
     def insert_one(self, item):
         self.items.append(item.copy())
 
+        class Result:
+            inserted_id = item.get("_id")
+
+        return Result()
+
     def update_one(self, query, operation, upsert=False):
         for item in self.items:
             if self._matches(item, query):
@@ -60,6 +65,13 @@ class FakeCollection:
 
     def delete_one(self, query):
         self.items = [item for item in self.items if not self._matches(item, query)]
+
+    def find_one_and_delete(self, query):
+        for index, item in enumerate(self.items):
+            if self._matches(item, query):
+                return self.items.pop(index).copy()
+
+        return None
 
     def delete_many(self, query):
         matching = [item for item in self.items if self._matches(item, query)]
@@ -339,6 +351,13 @@ def test_configured_author_time_zone_normalizes_saved_report_row():
                 "occurredAtUtc": "2026-04-29T15:58:07Z",
                 "occurredAtLocal": "2026-04-29T18:58:07+03:00",
                 "metadata": {"inputType": "LEFTMOUSE"},
+                },
+                {
+                    "eventId": "event-2",
+                    "eventType": "scene_changed",
+                    "occurredAtUtc": "2026-04-29T15:59:07Z",
+                    "occurredAtLocal": "2026-04-29T18:59:07+03:00",
+                    "metadata": {"inputType": "LEFTMOUSE"},
             }
         ],
     }
@@ -955,5 +974,49 @@ def test_hourly_break_suppresses_small_idle_artifact():
     hourly = _apply_breaks_to_hourly_activity(source, break_buckets)
 
     assert hourly[15]["activeSeconds"] == 553
-    assert hourly[15]["breakSeconds"] == 2806
+    assert hourly[15]["breakSeconds"] == 3047
     assert hourly[15]["idleSeconds"] == 0
+
+
+def test_hourly_activity_fills_small_report_gap_as_idle():
+    source = _empty_hourly_activity()
+    source[14]["activeSeconds"] = 3379
+
+    hourly = _apply_breaks_to_hourly_activity(source, _empty_hourly_activity())
+
+    assert hourly[14]["activeSeconds"] == 3379
+    assert hourly[14]["idleSeconds"] == 221
+
+
+def test_hourly_activity_fills_past_hour_gap_as_idle():
+    source = _empty_hourly_activity()
+    source[10]["activeSeconds"] = 1743
+    source[10]["idleSeconds"] = 1143
+
+    hourly = _apply_breaks_to_hourly_activity(
+        source,
+        _empty_hourly_activity(),
+        "2026-04-29",
+        "Europe/Madrid",
+        dt.datetime(2026, 4, 29, 18, 44, tzinfo=dt.UTC),
+    )
+
+    assert hourly[10]["activeSeconds"] == 1743
+    assert hourly[10]["idleSeconds"] == 1857
+
+
+def test_hourly_activity_only_fills_current_hour_to_elapsed_time():
+    source = _empty_hourly_activity()
+    source[18]["activeSeconds"] = 1800
+
+    hourly = _apply_breaks_to_hourly_activity(
+        source,
+        _empty_hourly_activity(),
+        "2026-04-29",
+        "Europe/Madrid",
+        dt.datetime(2026, 4, 29, 16, 44, 30, tzinfo=dt.UTC),
+    )
+
+    assert hourly[18]["activeSeconds"] == 1800
+    assert hourly[18]["idleSeconds"] == 870
+    assert hourly[19]["idleSeconds"] == 0

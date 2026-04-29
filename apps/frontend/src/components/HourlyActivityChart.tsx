@@ -165,13 +165,11 @@ function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; 
     return { activePercent: 0, overtimePercent: 0, breakPercent: 0, idlePercent: 0 };
   }
 
-  const scale = 60 / totalMinutes;
-
   return {
-    activePercent: toPercentOfHour(activeMinutes * scale),
-    overtimePercent: toPercentOfHour(overtimeMinutes * scale),
-    breakPercent: toPercentOfHour(breakMinutes * scale),
-    idlePercent: toPercentOfHour(idleMinutes * scale)
+    activePercent: toPercentOfHour(activeMinutes),
+    overtimePercent: toPercentOfHour(overtimeMinutes),
+    breakPercent: toPercentOfHour(breakMinutes),
+    idlePercent: toPercentOfHour(idleMinutes)
   };
 }
 

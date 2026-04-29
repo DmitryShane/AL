@@ -580,7 +580,11 @@ class Repository:
             profile = profiles.get(raw_author, {})
             display_name = _display_name(raw_author, profile)
             hourly_activity = _apply_breaks_to_hourly_activity(
-                item.get("hourlyActivity", []), break_buckets.get(author_date_key, [])
+                item.get("hourlyActivity", []),
+                break_buckets.get(author_date_key, []),
+                item_date,
+                profile.get("timeZoneId") or item.get("timeZoneId"),
+                now,
             )
             report_active_seconds = int(item.get("activeSeconds", 0))
             report_idle_seconds = int(item.get("idleSeconds", 0))
@@ -2766,7 +2770,11 @@ def _merge_hourly_activity(target: list[dict[str, Any]], deltas: list[dict[str, 
 
 
 def _apply_breaks_to_hourly_activity(
-    source: list[dict[str, Any]], break_buckets: list[dict[str, Any]]
+    source: list[dict[str, Any]],
+    break_buckets: list[dict[str, Any]],
+    item_date: str | None = None,
+    time_zone_id: str | None = None,
+    now: dt.datetime | None = None,
 ) -> list[dict[str, int]]:
     source_by_hour = {int(item.get("hour", 0)): item for item in source}
     breaks_by_hour = {int(item.get("hour", 0)): item for item in break_buckets}
@@ -2784,7 +2792,21 @@ def _apply_breaks_to_hourly_activity(
         idle_seconds = min(idle_seconds, max(0, 3600 - active_seconds - overtime_active_seconds - break_seconds))
 
         if break_seconds and idle_seconds < AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS:
+            break_seconds = min(
+                break_seconds + idle_seconds,
+                max(0, 3600 - active_seconds - overtime_active_seconds),
+            )
             idle_seconds = 0
+
+        expected_seconds = _expected_hour_seconds(hour, item_date, time_zone_id, now)
+        total_seconds = active_seconds + overtime_active_seconds + break_seconds + idle_seconds
+        missing_seconds = max(0, expected_seconds - total_seconds)
+
+        if total_seconds and missing_seconds:
+            if break_seconds:
+                break_seconds += missing_seconds
+            else:
+                idle_seconds += missing_seconds
 
         hourly_activity.append(
             {
@@ -2797,6 +2819,45 @@ def _apply_breaks_to_hourly_activity(
         )
 
     return hourly_activity
+
+
+def _expected_hour_seconds(
+    hour: int,
+    item_date: str | None,
+    time_zone_id: str | None,
+    now: dt.datetime | None,
+) -> int:
+    if not item_date or now is None:
+        return 3600
+
+    normalized_time_zone = _valid_time_zone_id(time_zone_id)
+
+    try:
+        zone = ZoneInfo(normalized_time_zone) if normalized_time_zone else dt.UTC
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
+
+    try:
+        activity_date = _parse_date(item_date)
+    except ValueError:
+        return 3600
+
+    local_now = now.astimezone(zone)
+    local_today = local_now.date()
+
+    if activity_date < local_today:
+        return 3600
+
+    if activity_date > local_today:
+        return 0
+
+    if hour < local_now.hour:
+        return 3600
+
+    if hour > local_now.hour:
+        return 0
+
+    return min(3600, max(0, local_now.minute * 60 + local_now.second))
 
 
 def _add_break_interval_to_buckets(
