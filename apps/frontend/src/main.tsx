@@ -65,6 +65,8 @@ type AuthorRow = {
   productivity: number;
   activityMix?: ActivityCount[];
   savedPrefabs?: SavedPrefab[];
+  overtimeActivityMix?: ActivityCount[];
+  overtimeSavedPrefabs?: SavedPrefab[];
   status?: "online" | "stale";
   alerts?: AuthorAlert[];
   alertStats?: AlertStats;
@@ -104,6 +106,8 @@ type ActivitySummary = {
   profiles: AuthorProfile[];
   activityMix: ActivityCount[];
   savedPrefabs: SavedPrefab[];
+  overtimeActivityMix?: ActivityCount[];
+  overtimeSavedPrefabs?: SavedPrefab[];
   hourlyActivityByAuthor: AuthorHourlyActivity[];
 };
 
@@ -287,6 +291,8 @@ const emptyActivitySummary: ActivitySummary = {
   profiles: [],
   activityMix: [],
   savedPrefabs: [],
+  overtimeActivityMix: [],
+  overtimeSavedPrefabs: [],
   hourlyActivityByAuthor: []
 };
 
@@ -1528,6 +1534,8 @@ function ActivityPage({
   const authorReports = reports.filter((report) => report.author === author?.rawAuthor);
   const activityMix = author?.activityMix ?? [];
   const savedPrefabs = author?.savedPrefabs ?? [];
+  const overtimeActivityMix = author?.overtimeActivityMix ?? [];
+  const overtimeSavedPrefabs = author?.overtimeSavedPrefabs ?? [];
   const cardAuthors = [...summary.authors].sort(compareAuthorCardStatus);
 
   return (
@@ -1603,6 +1611,23 @@ function ActivityPage({
               key={`${author.rawAuthor}-saved-files`}
               title="Saved Files"
               items={savedPrefabs.map((prefab, index) => ({
+                id: prefab.path || `${prefab.name}-${index}`,
+                label: prefab.name || prefab.path,
+                value: prefab.saveCount,
+                displayValue: String(prefab.saveCount),
+                color: paletteColor(index)
+              }))}
+            />
+            <OvertimeBreakdownPanel
+              key={`${author.rawAuthor}-overtime`}
+              activityItems={overtimeActivityMix.map((item) => ({
+                id: item.type,
+                label: formatActivityType(item.type),
+                value: item.percent,
+                displayValue: `${item.percent}%`,
+                color: activityColor(item.type)
+              }))}
+              savedItems={overtimeSavedPrefabs.map((prefab, index) => ({
                 id: prefab.path || `${prefab.name}-${index}`,
                 label: prefab.name || prefab.path,
                 value: prefab.saveCount,
@@ -2473,6 +2498,50 @@ function BreakdownPanel({ title, items }: { title: string; items: BreakdownPanel
       <div className="breakdown-bar-row">
         <div className="breakdown-bar" style={barStyle} aria-hidden="true" />
         <strong>{total ? totalDisplayValue(items) : "-"}</strong>
+      </div>
+    </div>
+  );
+}
+
+function OvertimeBreakdownPanel({
+  activityItems,
+  savedItems
+}: {
+  activityItems: BreakdownPanelItem[];
+  savedItems: BreakdownPanelItem[];
+}) {
+  return (
+    <div className="panel breakdown-panel overtime-breakdown-panel">
+      <h2>Overtime</h2>
+      <MiniBreakdownList title="Activity Mix" items={activityItems} emptyMessage="No overtime activity yet." />
+      <MiniBreakdownList title="Saved Files" items={savedItems} emptyMessage="No overtime saves yet." />
+    </div>
+  );
+}
+
+function MiniBreakdownList({
+  title,
+  items,
+  emptyMessage
+}: {
+  title: string;
+  items: BreakdownPanelItem[];
+  emptyMessage: string;
+}) {
+  return (
+    <div className="mini-breakdown-list">
+      <h3>{title}</h3>
+      <div className="list">
+        {items.length ? (
+          items.map((item) => (
+            <div className="row" key={item.id}>
+              <span><i className="row-color" style={{ background: item.color }} />{item.label}</span>
+              <strong>{item.displayValue}</strong>
+            </div>
+          ))
+        ) : (
+          <p className="empty">{emptyMessage}</p>
+        )}
       </div>
     </div>
   );

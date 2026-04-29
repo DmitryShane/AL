@@ -488,6 +488,83 @@ def test_activity_summary_keeps_mix_and_saved_files_per_author():
     assert authors["Igor Mats"]["savedPrefabs"] == [{"path": "Assets/Igor.prefab", "name": "Igor", "saveCount": 4}]
 
 
+def test_overtime_activity_summary_splits_mix_and_saved_files():
+    repo = fake_repository()
+    base_event = {
+        "source": "ual",
+        "author": "Dmitry Shane",
+        "authorEmail": "dmitry@example.com",
+        "projectId": "unity",
+        "sessionId": "unity-session",
+        "date": "2026-04-29",
+        "receivedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+    }
+    normal_activity = {
+        **base_event,
+        "eventType": "selection",
+        "occurredAtUtc": "2026-04-29T10:00:00Z",
+        "occurredAtLocal": "2026-04-29T10:00:00+00:00",
+    }
+    normal_save = {
+        **base_event,
+        "eventType": "prefab_saved",
+        "occurredAtUtc": "2026-04-29T10:00:10Z",
+        "occurredAtLocal": "2026-04-29T10:00:10+00:00",
+        "metadata": {"path": "Assets/Normal.prefab", "name": "Normal"},
+    }
+
+    repo._apply_raw_event_to_aggregates(normal_activity)
+    repo._apply_raw_event_to_aggregates(normal_save)
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "seed",
+            "projectId": "seed",
+            "author": "Dmitry Shane",
+            "date": "2026-04-29",
+            "activeSeconds": 9 * 3600,
+            "idleSeconds": 0,
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    overtime_activity = {
+        **base_event,
+        "eventType": "play_mode",
+        "occurredAtUtc": "2026-04-29T19:00:00Z",
+        "occurredAtLocal": "2026-04-29T19:00:00+00:00",
+        "receivedAt": dt.datetime(2026, 4, 29, 19, 0, tzinfo=dt.UTC),
+    }
+    overtime_save = {
+        **base_event,
+        "eventType": "prefab_saved",
+        "occurredAtUtc": "2026-04-29T19:00:10Z",
+        "occurredAtLocal": "2026-04-29T19:00:10+00:00",
+        "receivedAt": dt.datetime(2026, 4, 29, 19, 0, 10, tzinfo=dt.UTC),
+        "metadata": {"path": "Assets/Overtime.prefab", "name": "Overtime"},
+    }
+
+    repo._apply_raw_event_to_aggregates(overtime_activity)
+    repo._apply_raw_event_to_aggregates(overtime_save)
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry Shane")
+
+    assert author["activityMix"] == [
+        {"type": "select", "count": 1, "percent": 50},
+        {"type": "prefab_saved", "count": 1, "percent": 50},
+    ]
+    assert author["savedPrefabs"] == [{"path": "Assets/Normal.prefab", "name": "Normal", "saveCount": 1}]
+    assert author["overtimeActivityMix"] == [
+        {"type": "play_mode", "count": 1, "percent": 50},
+        {"type": "prefab_saved", "count": 1, "percent": 50},
+    ]
+    assert author["overtimeSavedPrefabs"] == [{"path": "Assets/Overtime.prefab", "name": "Overtime", "saveCount": 1}]
+    assert summary["overtimeActivityMix"] == [
+        {"type": "play_mode", "count": 1, "percent": 50},
+        {"type": "prefab_saved", "count": 1, "percent": 50},
+    ]
+
+
 def test_activity_summary_returns_empty_hourly_activity_for_telegram_only_author():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "telegramUsername": "igormats", "timeZoneId": "UTC"})

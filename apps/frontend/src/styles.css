@@ -551,8 +551,9 @@ p {
 .author-cell small {
   display: block;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 24px), transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 24px), transparent 100%);
 }
 
 .author-cell small {
@@ -923,7 +924,7 @@ p {
 
 .dashboard-insights-row {
   display: grid;
-  grid-template-columns: minmax(520px, 1.45fr) repeat(2, minmax(240px, 0.8fr));
+  grid-template-columns: minmax(520px, 1.45fr) repeat(3, minmax(190px, 0.8fr));
   gap: 14px;
   align-items: start;
 }
@@ -939,6 +940,9 @@ p {
 }
 
 .dashboard-insights-row .breakdown-panel .row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 8px;
   padding: 4px 0;
   font-size: 12px;
@@ -954,9 +958,52 @@ p {
 }
 
 .dashboard-insights-row .breakdown-panel .row span:first-child {
+  display: flex;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 22px), transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 22px), transparent 100%);
+}
+
+.overtime-breakdown-panel {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 8px;
+}
+
+.dashboard-insights-row .overtime-breakdown-panel {
+  row-gap: 4px;
+}
+
+.overtime-breakdown-panel h2 {
+  display: block;
+  grid-column: 1 / -1;
+  margin-bottom: 8px;
+}
+
+.mini-breakdown-list {
+  min-width: 0;
+  padding-top: 0;
+}
+
+.mini-breakdown-list + .mini-breakdown-list {
+  border-left: 1px solid #e5ebf2;
+  padding-left: 12px;
+}
+
+.mini-breakdown-list h3 {
+  margin: 0 0 6px;
+  color: #6b7785;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mini-breakdown-list .empty {
+  font-size: 11px;
+  line-height: 1.25;
 }
 
 .list {
@@ -1033,6 +1080,10 @@ p {
   min-width: 0;
   align-items: center;
   gap: 8px;
+}
+
+.breakdown-panel .row strong {
+  min-width: max-content;
 }
 
 .row-color {
@@ -2168,9 +2219,9 @@ p {
 
 .hourly-chart {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-columns: 16px minmax(0, 1fr);
   grid-template-rows: 150px 58px;
-  column-gap: 12px;
+  column-gap: 6px;
   row-gap: 0;
 }
 

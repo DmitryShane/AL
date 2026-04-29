@@ -55,7 +55,7 @@ WINDOWS_TIME_ZONE_IDS = {
 
 
 class Repository:
-    aggregates_version = 16
+    aggregates_version = 17
 
     def __init__(self, settings: Settings):
         self.client: MongoClient = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=1500)
@@ -489,9 +489,13 @@ class Repository:
             "encryptedPacket": 0,
             "activityCounts": 0,
             "savedPrefabs": 0,
+            "overtimeActivityCounts": 0,
+            "overtimeSavedPrefabs": 0,
             "hourlyActivity": 0,
             "activityCountDeltas": 0,
             "savedPrefabDeltas": 0,
+            "overtimeActivityCountDeltas": 0,
+            "overtimeSavedPrefabDeltas": 0,
             "hourlyActivityDelta": 0,
             "activeSeconds": 0,
             "idleSeconds": 0,
@@ -550,7 +554,9 @@ class Repository:
             "breakSeconds": 0,
         }
         activity_counts: dict[str, int] = {}
+        overtime_activity_counts: dict[str, int] = {}
         saved_prefabs: dict[str, dict[str, Any]] = {}
+        overtime_saved_prefabs: dict[str, dict[str, Any]] = {}
         hourly_by_author: dict[str, dict[str, Any]] = {}
         authors_by_raw: dict[str, dict[str, Any]] = {}
         normal_consumed_by_author_date: dict[tuple[str, str], int] = {}
@@ -620,6 +626,12 @@ class Repository:
                 if activity_type:
                     activity_counts[activity_type] = activity_counts.get(activity_type, 0) + int(count.get("count", 0))
 
+            for count in item.get("overtimeActivityCounts", []):
+                activity_type = count.get("type")
+
+                if activity_type:
+                    overtime_activity_counts[activity_type] = overtime_activity_counts.get(activity_type, 0) + int(count.get("count", 0))
+
             for prefab in item.get("savedPrefabs", []):
                 path = prefab.get("path")
 
@@ -632,6 +644,19 @@ class Repository:
                     existing["saveCount"] += int(prefab.get("saveCount", 0))
                 else:
                     saved_prefabs[path] = dict(prefab)
+
+            for prefab in item.get("overtimeSavedPrefabs", []):
+                path = prefab.get("path")
+
+                if not path:
+                    continue
+
+                existing = overtime_saved_prefabs.get(path)
+
+                if existing:
+                    existing["saveCount"] += int(prefab.get("saveCount", 0))
+                else:
+                    overtime_saved_prefabs[path] = dict(prefab)
 
             author_row = authors_by_raw.get(raw_author)
 
@@ -658,6 +683,8 @@ class Repository:
                     "overtimeActiveSeconds": 0,
                     "activityCounts": [],
                     "savedPrefabs": [],
+                    "overtimeActivityCounts": [],
+                    "overtimeSavedPrefabs": [],
                 }
                 authors_by_raw[raw_author] = author_row
 
@@ -680,6 +707,12 @@ class Repository:
             )
             author_row["savedPrefabs"] = _merge_count_list(
                 author_row.get("savedPrefabs", []), item.get("savedPrefabs", []), "path", "saveCount"
+            )
+            author_row["overtimeActivityCounts"] = _merge_count_list(
+                author_row.get("overtimeActivityCounts", []), item.get("overtimeActivityCounts", []), "type", "count"
+            )
+            author_row["overtimeSavedPrefabs"] = _merge_count_list(
+                author_row.get("overtimeSavedPrefabs", []), item.get("overtimeSavedPrefabs", []), "path", "saveCount"
             )
 
             if str(item.get("lastRecordedAt") or "") > str(author_row.get("lastRecordedAt") or ""):
@@ -709,15 +742,8 @@ class Repository:
 
             _merge_hourly_activity(current_author["hourlyActivity"], hourly_activity)
 
-        total_activities = sum(activity_counts.values())
-        activity_mix = [
-            {
-                "type": activity_type,
-                "count": count,
-                "percent": round((count / total_activities) * 100) if total_activities else 0,
-            }
-            for activity_type, count in activity_counts.items()
-        ]
+        activity_mix = _activity_mix_from_counts(activity_counts)
+        overtime_activity_mix = _activity_mix_from_counts(overtime_activity_counts)
 
         self._apply_live_telegram_summary(
             authors_by_raw,
@@ -757,6 +783,8 @@ class Repository:
                     "overtimeActiveSeconds": 0,
                     "activityCounts": [],
                     "savedPrefabs": [],
+                    "overtimeActivityCounts": [],
+                    "overtimeSavedPrefabs": [],
                 }
                 authors_by_raw[raw_author] = author_row
 
@@ -787,6 +815,8 @@ class Repository:
             "totals": totals,
             "activityMix": sorted(activity_mix, key=lambda item: item["count"], reverse=True),
             "savedPrefabs": sorted(saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True),
+            "overtimeActivityMix": sorted(overtime_activity_mix, key=lambda item: item["count"], reverse=True),
+            "overtimeSavedPrefabs": sorted(overtime_saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True),
             "authors": sorted(author_rows, key=lambda item: item["displayName"].lower()),
             "profiles": self.author_profiles(),
             "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]),
@@ -1857,12 +1887,22 @@ class Repository:
 
         if is_activity:
             activity_type = _activity_count_type(event_type)
-            deltas["activityCountDeltas"].append({"type": activity_type, "count": 1})
+            activity_delta_key = "activityCountDeltas"
+
+            if _is_overtime_event_delta(consumed_normal_microseconds, deltas):
+                activity_delta_key = "overtimeActivityCountDeltas"
+
+            deltas[activity_delta_key].append({"type": activity_type, "count": 1})
 
         saved_prefab = _saved_prefab_delta(event)
 
         if saved_prefab:
-            deltas["savedPrefabDeltas"].append(saved_prefab)
+            saved_prefab_delta_key = "savedPrefabDeltas"
+
+            if _is_overtime_event_delta(consumed_normal_microseconds, deltas):
+                saved_prefab_delta_key = "overtimeSavedPrefabDeltas"
+
+            deltas[saved_prefab_delta_key].append(saved_prefab)
 
         snapshot = {
             "source": event.get("source"),
@@ -1927,6 +1967,12 @@ class Repository:
         _merge_hourly_activity(hourly_activity, deltas.get("hourlyActivityDelta", []))
         activity_counts = _merge_count_list(current.get("activityCounts", []), deltas.get("activityCountDeltas", []), "type", "count")
         saved_prefabs = _merge_count_list(current.get("savedPrefabs", []), deltas.get("savedPrefabDeltas", []), "path", "saveCount")
+        overtime_activity_counts = _merge_count_list(
+            current.get("overtimeActivityCounts", []), deltas.get("overtimeActivityCountDeltas", []), "type", "count"
+        )
+        overtime_saved_prefabs = _merge_count_list(
+            current.get("overtimeSavedPrefabs", []), deltas.get("overtimeSavedPrefabDeltas", []), "path", "saveCount"
+        )
         active_microseconds = _time_microseconds(current, "activeSeconds", "activeMicroseconds") + _time_microseconds(
             deltas, "activeDeltaSeconds", "activeDeltaMicroseconds"
         )
@@ -1951,6 +1997,8 @@ class Repository:
                     "lastReceivedAt": snapshot.get("receivedAt"),
                     "activityCounts": activity_counts,
                     "savedPrefabs": saved_prefabs,
+                    "overtimeActivityCounts": overtime_activity_counts,
+                    "overtimeSavedPrefabs": overtime_saved_prefabs,
                     "hourlyActivity": hourly_activity,
                     "activeMicroseconds": active_microseconds,
                     "idleMicroseconds": idle_microseconds,
@@ -1978,6 +2026,8 @@ def _empty_event_deltas() -> dict[str, Any]:
         "overtimeActiveDeltaMicroseconds": 0,
         "activityCountDeltas": [],
         "savedPrefabDeltas": [],
+        "overtimeActivityCountDeltas": [],
+        "overtimeSavedPrefabDeltas": [],
         "hourlyActivityDelta": _empty_hourly_activity(),
     }
 
@@ -2008,6 +2058,12 @@ def _merge_batch_deltas(target: dict[str, Any], source: dict[str, Any]) -> None:
     )
     target["savedPrefabDeltas"] = _merge_count_list(
         target.get("savedPrefabDeltas", []), source.get("savedPrefabDeltas", []), "path", "saveCount"
+    )
+    target["overtimeActivityCountDeltas"] = _merge_count_list(
+        target.get("overtimeActivityCountDeltas", []), source.get("overtimeActivityCountDeltas", []), "type", "count"
+    )
+    target["overtimeSavedPrefabDeltas"] = _merge_count_list(
+        target.get("overtimeSavedPrefabDeltas", []), source.get("overtimeSavedPrefabDeltas", []), "path", "saveCount"
     )
 
 
@@ -2123,6 +2179,14 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
 
     name = str(metadata.get("name") or path.rsplit("/", 1)[-1])
     return {"path": path, "name": name, "saveCount": 1}
+
+
+def _is_overtime_event_delta(consumed_normal_microseconds: int, deltas: dict[str, Any]) -> bool:
+    work_window_microseconds = DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
+    return (
+        consumed_normal_microseconds >= work_window_microseconds
+        or _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") > 0
+    )
 
 
 def _interval_deltas(
@@ -2336,17 +2400,28 @@ def _with_productivity(author: dict[str, Any]) -> dict[str, Any]:
 
 def _with_activity_mix(author: dict[str, Any]) -> dict[str, Any]:
     item = dict(author)
-    total_activities = sum(int(count.get("count", 0)) for count in item.get("activityCounts", []))
-    item["activityMix"] = [
+    item["activityMix"] = _activity_mix_from_list(item.get("activityCounts", []))
+    item["overtimeActivityMix"] = _activity_mix_from_list(item.get("overtimeActivityCounts", []))
+    return item
+
+
+def _activity_mix_from_counts(activity_counts: dict[str, int]) -> list[dict[str, Any]]:
+    return _activity_mix_from_list(
+        [{"type": activity_type, "count": count} for activity_type, count in activity_counts.items()]
+    )
+
+
+def _activity_mix_from_list(activity_counts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    total_activities = sum(int(count.get("count", 0)) for count in activity_counts)
+    return [
         {
             "type": count.get("type"),
             "count": int(count.get("count", 0)),
             "percent": round((int(count.get("count", 0)) / total_activities) * 100) if total_activities else 0,
         }
-        for count in item.get("activityCounts", [])
+        for count in activity_counts
         if count.get("type")
     ]
-    return item
 
 
 def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.datetime) -> dict[str, Any]:
