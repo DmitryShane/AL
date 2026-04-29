@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Guard against data artifacts
-        run: ./scripts/check-no-data-artifacts.sh
+        run: bash ./scripts/check-no-data-artifacts.sh
 
       - name: Configure SSH
         env:
