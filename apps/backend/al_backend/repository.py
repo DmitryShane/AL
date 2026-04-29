@@ -122,13 +122,13 @@ class Repository:
             "role": "admin",
             "active": True,
             "updatedAt": now,
-            "passwordHash": hash_password(password),
         }
 
         if existing:
             self.db.site_users.update_one({"email": normalized_email}, {"$set": update})
             return
 
+        update["passwordHash"] = hash_password(password)
         update["createdAt"] = now
         self.db.site_users.update_one({"email": normalized_email}, {"$set": update}, upsert=True)
 

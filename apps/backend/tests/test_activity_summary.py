@@ -154,6 +154,7 @@ class FakeDb:
         self.report_refresh_requests = FakeCollection()
         self.report_rows = FakeCollection()
         self.report_security_events = FakeCollection()
+        self.site_users = FakeCollection()
 
 
 def fake_repository():
@@ -236,6 +237,16 @@ def test_cyrillic_author_names_are_unicode_normalized_for_profile_matching():
     assert repo.list_authors() == [composed_author]
     assert repo.author_profiles()[0]["rawAuthor"] == composed_author
     assert repo.author_profiles()[0]["authorEmail"] == "alena@example.com"
+
+
+def test_bootstrap_admin_does_not_reset_existing_password():
+    repo = fake_repository()
+
+    repo.ensure_bootstrap_site_admin("admin@example.com", "first-password")
+    repo.ensure_bootstrap_site_admin("admin@example.com", "second-password")
+
+    assert repo.authenticate_site_user("admin@example.com", "first-password")
+    assert repo.authenticate_site_user("admin@example.com", "second-password") is None
 
 
 def test_telegram_online_creates_visible_report_row_and_live_day_time():
