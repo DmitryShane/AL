@@ -107,6 +107,7 @@ class TelegramReminderCloseIn(ApiModel):
     reminder_id: str = Field(alias="reminderId", min_length=1)
     action: str = Field(pattern="^(offline|overtime)$")
     timestamp: str | None = None
+    actor_telegram_username: str | None = Field(default=None, alias="actorTelegramUsername")
 
 
 class SubmitReportResponse(ApiModel):

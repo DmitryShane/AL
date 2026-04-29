@@ -128,6 +128,7 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
     message = callback_query.get("message") or {}
     chat_id = (message.get("chat") or {}).get("id")
     message_id = message.get("message_id")
+    actor_username = telegram_username(callback_query.get("from") or {})
 
     if config.allowed_chat_id is not None and chat_id != config.allowed_chat_id:
         LOGGER.info("Ignoring callback from chat id %s. Allowed chat id is %s.", chat_id, config.allowed_chat_id)
@@ -143,7 +144,21 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
         return
 
     reminder_id, action = parsed
-    result = close_reminder(config.backend_url, config.bot_secret, reminder_id, action)
+    reminder_username = reminder_username_from_message(message)
+
+    if reminder_username and actor_username and actor_username != reminder_username:
+        LOGGER.info("Ignoring reminder callback %s from @%s. Reminder belongs to @%s.", reminder_id, actor_username, reminder_username)
+        if callback_id:
+            answer_callback_query(config.token, callback_id, "Sorry, this reminder was not sent to you.")
+        return
+
+    result = close_reminder(config.backend_url, config.bot_secret, reminder_id, action, actor_username)
+
+    if result.get("status") == "wrong_user":
+        if callback_id:
+            answer_callback_query(config.token, callback_id, "Sorry, this reminder was not sent to you.")
+        return
+
     LOGGER.info("Closed Telegram day reminder %s with %s: %s", reminder_id, action, result)
 
     if chat_id and message_id:
@@ -160,6 +175,12 @@ def parse_event_type(text: str) -> str | None:
 
 def telegram_username(sender: dict[str, Any]) -> str:
     return str(sender.get("username") or "").strip().lstrip("@").lower()
+
+
+def reminder_username_from_message(message: dict[str, Any]) -> str:
+    text = str(message.get("text") or "")
+    match = re.search(r"Hi\s+@([A-Za-z0-9_]{5,32})\b", text)
+    return telegram_username({"username": match.group(1)}) if match else ""
 
 
 def parse_reminder_callback(data: str) -> tuple[str, str] | None:
@@ -236,13 +257,18 @@ def mark_reminder_sent(backend_url: str, bot_secret: str, reminder_id: str, mess
     )
 
 
-def close_reminder(backend_url: str, bot_secret: str, reminder_id: str, action: str) -> dict[str, Any]:
+def close_reminder(backend_url: str, bot_secret: str, reminder_id: str, action: str, actor_telegram_username: str = "") -> dict[str, Any]:
     return backend_request(
         backend_url,
         "/api/v1/telegram/reminders/close",
         bot_secret,
         method="POST",
-        payload={"reminderId": reminder_id, "action": action, "timestamp": datetime.now().astimezone().isoformat()},
+        payload={
+            "reminderId": reminder_id,
+            "action": action,
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "actorTelegramUsername": actor_telegram_username,
+        },
     )
 
 

@@ -264,8 +264,8 @@ def test_telegram_bot_callback_edits_message_after_close(monkeypatch):
         bot_secret="secret",
     )
 
-    def fake_close_reminder(backend_url, bot_secret, reminder_id, action):
-        calls.append(("close", backend_url, bot_secret, reminder_id, action))
+    def fake_close_reminder(backend_url, bot_secret, reminder_id, action, actor_telegram_username=""):
+        calls.append(("close", backend_url, bot_secret, reminder_id, action, actor_telegram_username))
         return {"ok": True}
 
     def fake_edit_reminder_message(token, chat_id, message_id, action):
@@ -285,13 +285,60 @@ def test_telegram_bot_callback_edits_message_after_close(monkeypatch):
         {
             "id": "callback-1",
             "data": "altd:reminder-1:overtime",
-            "message": {"message_id": 42, "chat": {"id": 123}},
+            "from": {"username": "dmitryshane"},
+            "message": {
+                "message_id": 42,
+                "chat": {"id": 123},
+                "text": "Hi @dmitryshane. Did you forget to go offline, or are you working overtime?",
+            },
         },
     )
 
-    assert ("close", "https://activity.mempic.com", "secret", "reminder-1", "overtime") in calls
+    assert ("close", "https://activity.mempic.com", "secret", "reminder-1", "overtime", "dmitryshane") in calls
     assert ("edit", "token", 123, 42, "overtime") in calls
     assert ("answer", "token", "callback-1", "Telegram day closed.") in calls
+
+
+def test_telegram_bot_callback_rejects_wrong_user(monkeypatch):
+    calls = []
+    config = BotConfig(
+        token="token",
+        backend_url="https://activity.mempic.com",
+        allowed_chat_id=123,
+        bot_secret="secret",
+    )
+
+    def fake_close_reminder(*args):
+        calls.append(("close", *args))
+        return {"ok": True}
+
+    def fake_edit_reminder_message(*args):
+        calls.append(("edit", *args))
+        return {"ok": True}
+
+    def fake_answer_callback_query(token, callback_query_id, text):
+        calls.append(("answer", token, callback_query_id, text))
+        return {"ok": True}
+
+    monkeypatch.setattr("al_backend.telegram_bot.close_reminder", fake_close_reminder)
+    monkeypatch.setattr("al_backend.telegram_bot.edit_reminder_message", fake_edit_reminder_message)
+    monkeypatch.setattr("al_backend.telegram_bot.answer_callback_query", fake_answer_callback_query)
+
+    handle_callback_query(
+        config,
+        {
+            "id": "callback-1",
+            "data": "altd:reminder-1:offline",
+            "from": {"username": "someone_else"},
+            "message": {
+                "message_id": 42,
+                "chat": {"id": 123},
+                "text": "Hi @dmitryshane. Did you forget to go offline, or are you working overtime?",
+            },
+        },
+    )
+
+    assert calls == [("answer", "token", "callback-1", "Sorry, this reminder was not sent to you.")]
 
 
 def test_manual_profile_is_listed_before_activity_and_can_receive_email():
@@ -466,6 +513,20 @@ def test_telegram_reminder_close_is_idempotent():
     assert second["status"] == "reminder_offline_already_closed"
     assert len(reminder_reports) == 1
     assert repo.db.day_sessions.items[0]["daySeconds"] == 10 * 3600 + 15 * 60
+
+
+def test_telegram_reminder_close_rejects_wrong_actor():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC))[0]
+
+    result = repo.close_telegram_day_from_reminder(reminder["reminderId"], "offline", "2026-04-28T19:15:00Z", "other_person")
+
+    reminder_reports = [row for row in repo.db.report_rows.items if row.get("telegramStatus", "").startswith("reminder_")]
+    assert result["status"] == "wrong_user"
+    assert "lastOfflineAt" not in repo.db.day_sessions.items[0]
+    assert reminder_reports == []
 
 
 def test_telegram_reminder_close_keeps_day_visible_on_close_date():

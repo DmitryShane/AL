@@ -398,7 +398,7 @@ def telegram_reminder_sent(sent: TelegramReminderSentIn, request: Request) -> di
 @app.post("/api/v1/telegram/reminders/close")
 def telegram_reminder_close(close: TelegramReminderCloseIn, request: Request) -> dict:
     require_telegram_bot_secret(request)
-    return app.state.repo.close_telegram_day_from_reminder(close.reminder_id, close.action, close.timestamp)
+    return app.state.repo.close_telegram_day_from_reminder(close.reminder_id, close.action, close.timestamp, close.actor_telegram_username)
 
 
 @app.get("/api/v1/analytics/summary")

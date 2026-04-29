@@ -1537,7 +1537,13 @@ class Repository:
         )
         return {"ok": True}
 
-    def close_telegram_day_from_reminder(self, reminder_id: str, action: str, timestamp: str | None = None) -> dict[str, Any]:
+    def close_telegram_day_from_reminder(
+        self,
+        reminder_id: str,
+        action: str,
+        timestamp: str | None = None,
+        actor_telegram_username: str | None = None,
+    ) -> dict[str, Any]:
         action = action if action in {"offline", "overtime"} else "offline"
         reminder = self.db.telegram_day_reminders.find_one({"reminderId": reminder_id}, {"_id": 0})
 
@@ -1553,6 +1559,11 @@ class Repository:
 
         raw_author = str(reminder.get("rawAuthor") or "")
         telegram_username = _normalize_telegram_username(reminder.get("telegramUsername"))
+        actor_telegram_username = _normalize_telegram_username(actor_telegram_username)
+
+        if actor_telegram_username and telegram_username and actor_telegram_username != telegram_username:
+            return {"ok": False, "error": "Reminder belongs to another Telegram user", "status": "wrong_user"}
+
         day_date = str(reminder.get("date") or "")
         event_time = _parse_timestamp(timestamp)
         received_at = dt.datetime.now(dt.UTC)
