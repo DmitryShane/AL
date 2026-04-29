@@ -37,10 +37,16 @@ is_loaded() {
 
 write_bot_plist() {
   local allowed_chat_xml=""
+  local bot_secret_xml=""
 
   if [ -n "${TELEGRAM_ALLOWED_CHAT_ID:-}" ]; then
     allowed_chat_xml="    <key>TELEGRAM_ALLOWED_CHAT_ID</key>
     <string>$TELEGRAM_ALLOWED_CHAT_ID</string>"
+  fi
+
+  if [ -n "${AL_TELEGRAM_BOT_SECRET:-}" ]; then
+    bot_secret_xml="    <key>AL_TELEGRAM_BOT_SECRET</key>
+    <string>$AL_TELEGRAM_BOT_SECRET</string>"
   fi
 
   cat >"$BOT_PLIST" <<XML
@@ -63,6 +69,7 @@ write_bot_plist() {
     <key>AL_BACKEND_URL</key>
     <string>$AL_BACKEND_URL_VALUE</string>
 $allowed_chat_xml
+$bot_secret_xml
   </dict>
   <key>RunAtLoad</key>
   <true/>

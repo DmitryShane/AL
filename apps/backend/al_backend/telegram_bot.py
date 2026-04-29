@@ -33,6 +33,7 @@ class BotConfig:
     token: str
     backend_url: str
     allowed_chat_id: int | None
+    bot_secret: str
 
 
 def main() -> None:
@@ -49,7 +50,8 @@ def load_config() -> BotConfig:
 
     backend_url = os.getenv("AL_BACKEND_URL", "https://activity.mempic.com").strip().rstrip("/")
     allowed_chat_id = _parse_chat_id(os.getenv("TELEGRAM_ALLOWED_CHAT_ID"))
-    return BotConfig(token=token, backend_url=backend_url, allowed_chat_id=allowed_chat_id)
+    bot_secret = os.getenv("AL_TELEGRAM_BOT_SECRET", "").strip()
+    return BotConfig(token=token, backend_url=backend_url, allowed_chat_id=allowed_chat_id, bot_secret=bot_secret)
 
 
 def run_bot(config: BotConfig) -> None:
@@ -67,6 +69,8 @@ def run_bot(config: BotConfig) -> None:
                     offset = update_id + 1
 
                 handle_update(config, update)
+
+            send_due_reminders(config)
         except KeyboardInterrupt:
             LOGGER.info("Telegram bot stopped.")
             return
@@ -78,7 +82,7 @@ def run_bot(config: BotConfig) -> None:
 def get_updates(token: str, offset: int | None) -> list[dict[str, Any]]:
     params: dict[str, Any] = {
         "timeout": POLL_TIMEOUT_SECONDS,
-        "allowed_updates": json.dumps(["message"]),
+        "allowed_updates": json.dumps(["message", "callback_query"]),
     }
 
     if offset is not None:
@@ -89,6 +93,10 @@ def get_updates(token: str, offset: int | None) -> list[dict[str, Any]]:
 
 
 def handle_update(config: BotConfig, update: dict[str, Any]) -> None:
+    if update.get("callback_query"):
+        handle_callback_query(config, update["callback_query"])
+        return
+
     message = update.get("message") or {}
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
@@ -115,6 +123,31 @@ def handle_update(config: BotConfig, update: dict[str, Any]) -> None:
     LOGGER.info("Recorded %s for @%s: %s", event_type, username, result)
 
 
+def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> None:
+    callback_id = str(callback_query.get("id") or "")
+    chat_id = ((callback_query.get("message") or {}).get("chat") or {}).get("id")
+
+    if config.allowed_chat_id is not None and chat_id != config.allowed_chat_id:
+        LOGGER.info("Ignoring callback from chat id %s. Allowed chat id is %s.", chat_id, config.allowed_chat_id)
+        if callback_id:
+            answer_callback_query(config.token, callback_id, "This action is not available in this chat.")
+        return
+
+    parsed = parse_reminder_callback(str(callback_query.get("data") or ""))
+
+    if not parsed:
+        if callback_id:
+            answer_callback_query(config.token, callback_id, "Unknown action.")
+        return
+
+    reminder_id, action = parsed
+    result = close_reminder(config.backend_url, config.bot_secret, reminder_id, action)
+    LOGGER.info("Closed Telegram day reminder %s with %s: %s", reminder_id, action, result)
+
+    if callback_id:
+        answer_callback_query(config.token, callback_id, "Telegram day closed.")
+
+
 def parse_event_type(text: str) -> str | None:
     normalized = re.sub(r"^[^\wа-яА-ЯёЁ]+|[^\wа-яА-ЯёЁ]+$", "", text.strip().lower())
     return COMMANDS.get(normalized)
@@ -122,6 +155,43 @@ def parse_event_type(text: str) -> str | None:
 
 def telegram_username(sender: dict[str, Any]) -> str:
     return str(sender.get("username") or "").strip().lstrip("@").lower()
+
+
+def parse_reminder_callback(data: str) -> tuple[str, str] | None:
+    parts = data.split(":")
+
+    if len(parts) != 3 or parts[0] != "altd":
+        return None
+
+    reminder_id = parts[1].strip()
+    action = parts[2].strip()
+
+    if not reminder_id or action not in {"offline", "overtime"}:
+        return None
+
+    return reminder_id, action
+
+
+def send_due_reminders(config: BotConfig) -> None:
+    if config.allowed_chat_id is None:
+        LOGGER.warning("Telegram reminders require TELEGRAM_ALLOWED_CHAT_ID.")
+        return
+
+    if not config.bot_secret:
+        LOGGER.warning("Telegram reminders require AL_TELEGRAM_BOT_SECRET.")
+        return
+
+    for reminder in due_reminders(config.backend_url, config.bot_secret):
+        reminder_id = str(reminder.get("reminderId") or "")
+        telegram_name = str(reminder.get("telegramUsername") or "").strip().lstrip("@")
+
+        if not reminder_id or not telegram_name:
+            continue
+
+        text = f"Hi @{telegram_name}. Did you forget to go offline, or are you working overtime?"
+        result = send_reminder_message(config.token, config.allowed_chat_id, text, reminder_id)
+        message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
+        mark_reminder_sent(config.backend_url, config.bot_secret, reminder_id, message_id)
 
 
 def submit_break_event(backend_url: str, telegram_username_value: str, event_type: str, telegram_timestamp: Any) -> dict[str, Any]:
@@ -144,6 +214,69 @@ def submit_break_event(backend_url: str, telegram_username_value: str, event_typ
 
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def due_reminders(backend_url: str, bot_secret: str) -> list[dict[str, Any]]:
+    result = backend_request(backend_url, "/api/v1/telegram/reminders/due", bot_secret, method="GET")
+    return result.get("reminders", [])
+
+
+def mark_reminder_sent(backend_url: str, bot_secret: str, reminder_id: str, message_id: int | None) -> dict[str, Any]:
+    return backend_request(
+        backend_url,
+        "/api/v1/telegram/reminders/sent",
+        bot_secret,
+        method="POST",
+        payload={"reminderId": reminder_id, "messageId": message_id},
+    )
+
+
+def close_reminder(backend_url: str, bot_secret: str, reminder_id: str, action: str) -> dict[str, Any]:
+    return backend_request(
+        backend_url,
+        "/api/v1/telegram/reminders/close",
+        bot_secret,
+        method="POST",
+        payload={"reminderId": reminder_id, "action": action, "timestamp": datetime.now().astimezone().isoformat()},
+    )
+
+
+def backend_request(backend_url: str, path: str, bot_secret: str, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    data = None
+    headers = {"Accept": "application/json", "X-AL-Telegram-Bot-Secret": bot_secret}
+
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    request = urllib.request.Request(f"{backend_url.rstrip('/')}{path}", data=data, headers=headers, method=method)
+
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def send_reminder_message(token: str, chat_id: int, text: str, reminder_id: str) -> dict[str, Any]:
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "Offline", "callback_data": f"altd:{reminder_id}:offline"},
+                {"text": "Overtime", "callback_data": f"altd:{reminder_id}:overtime"},
+            ]
+        ]
+    }
+    return telegram_request(
+        token,
+        "sendMessage",
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": json.dumps(reply_markup),
+        },
+    )
+
+
+def answer_callback_query(token: str, callback_query_id: str, text: str) -> dict[str, Any]:
+    return telegram_request(token, "answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
 
 
 def telegram_request(token: str, method: str, params: dict[str, Any]) -> dict[str, Any]:

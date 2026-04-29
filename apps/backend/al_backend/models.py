@@ -98,6 +98,17 @@ class BreakEventIn(ApiModel):
     timestamp: str | None = None
 
 
+class TelegramReminderSentIn(ApiModel):
+    reminder_id: str = Field(alias="reminderId", min_length=1)
+    message_id: int | None = Field(default=None, alias="messageId")
+
+
+class TelegramReminderCloseIn(ApiModel):
+    reminder_id: str = Field(alias="reminderId", min_length=1)
+    action: str = Field(pattern="^(offline|overtime)$")
+    timestamp: str | None = None
+
+
 class SubmitReportResponse(ApiModel):
     ok: bool
     report_id: str = Field(alias="reportId")

@@ -11,6 +11,7 @@ class Settings:
     mongo_database: str
     private_key_path: Path
     default_send_interval_seconds: int
+    telegram_bot_secret: str
     cors_origins: list[str]
     admin_email: str
     admin_password: str
@@ -25,6 +26,7 @@ def load_settings() -> Settings:
         mongo_database=os.getenv("AL_MONGO_DATABASE", "al"),
         private_key_path=Path(os.getenv("AL_PRIVATE_KEY_PATH", base_dir / "UnityActivityLoggerKey.json")),
         default_send_interval_seconds=int(os.getenv("AL_DEFAULT_SEND_INTERVAL_SECONDS", "300")),
+        telegram_bot_secret=os.getenv("AL_TELEGRAM_BOT_SECRET", "").strip(),
         cors_origins=[origin.strip() for origin in raw_origins.split(",") if origin.strip()],
         admin_email=os.getenv("AL_ADMIN_EMAIL", "").strip(),
         admin_password=os.getenv("AL_ADMIN_PASSWORD", ""),

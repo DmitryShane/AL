@@ -16,7 +16,7 @@ from al_backend.repository import (
     _saved_prefab_delta,
     _with_productivity,
 )
-from al_backend.telegram_bot import parse_event_type, telegram_username
+from al_backend.telegram_bot import get_updates, parse_event_type, parse_reminder_callback, send_reminder_message, telegram_username
 
 
 class FakeCursor(list):
@@ -150,6 +150,7 @@ class FakeDb:
         self.break_events = FakeCollection()
         self.break_sessions = FakeCollection()
         self.day_sessions = FakeCollection()
+        self.telegram_day_reminders = FakeCollection()
         self.break_intervals = FakeCollection()
         self.calendar_marks = FakeCollection()
         self.daily_author_activity = FakeCollection()
@@ -204,6 +205,46 @@ def test_telegram_bot_parses_team_commands():
 
 def test_telegram_bot_uses_sender_username():
     assert telegram_username({"username": "@Dmitry_Shane"}) == "dmitry_shane"
+
+
+def test_telegram_bot_parses_reminder_callbacks():
+    assert parse_reminder_callback("altd:abc123:offline") == ("abc123", "offline")
+    assert parse_reminder_callback("altd:abc123:overtime") == ("abc123", "overtime")
+    assert parse_reminder_callback("altd:abc123:afk") is None
+    assert parse_reminder_callback("hello") is None
+
+
+def test_telegram_bot_update_polling_includes_callbacks(monkeypatch):
+    captured = {}
+
+    def fake_request(token, method, params):
+        captured.update({"token": token, "method": method, "params": params})
+        return {"result": []}
+
+    monkeypatch.setattr("al_backend.telegram_bot.telegram_request", fake_request)
+
+    assert get_updates("token", None) == []
+    assert captured["method"] == "getUpdates"
+    assert "callback_query" in captured["params"]["allowed_updates"]
+
+
+def test_telegram_bot_reminder_message_mentions_author_and_has_buttons(monkeypatch):
+    captured = {}
+
+    def fake_request(token, method, params):
+        captured.update({"token": token, "method": method, "params": params})
+        return {"result": {"message_id": 42}}
+
+    monkeypatch.setattr("al_backend.telegram_bot.telegram_request", fake_request)
+    result = send_reminder_message("token", 123, "Hi @dmitryshane. Did you forget to go offline, or are you working overtime?", "reminder-1")
+
+    assert result["result"]["message_id"] == 42
+    assert captured["method"] == "sendMessage"
+    assert "@dmitryshane" in captured["params"]["text"]
+    assert '"Offline"' in captured["params"]["reply_markup"]
+    assert '"Overtime"' in captured["params"]["reply_markup"]
+    assert "altd:reminder-1:offline" in captured["params"]["reply_markup"]
+    assert "altd:reminder-1:overtime" in captured["params"]["reply_markup"]
 
 
 def test_manual_profile_is_listed_before_activity_and_can_receive_email():
@@ -283,6 +324,83 @@ def test_telegram_online_creates_visible_report_row_and_live_day_time():
     assert repo.db.report_rows.items[0]["telegramEventType"] == "online"
     assert authors["Future Artist"]["telegramDaySeconds"] == 10 * 60
     assert totals["telegramDaySeconds"] == 10 * 60
+
+
+def test_open_telegram_day_is_capped_at_ten_hours_and_alerted():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    summary = repo.activity_summary(
+        start_date="2026-04-28",
+        end_date="2026-04-28",
+        now=dt.datetime(2026, 4, 28, 19, 30, tzinfo=dt.UTC),
+    )
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+    assert author["telegramDaySeconds"] == 10 * 3600
+    assert summary["totals"]["telegramDaySeconds"] == 10 * 3600
+    assert any(alert["type"] == "telegram_day_open" for alert in author["alerts"])
+
+
+def test_due_telegram_reminder_includes_profile_username_and_deduplicates_after_sent():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+
+    reminders = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC))
+
+    assert len(reminders) == 1
+    assert reminders[0]["telegramUsername"] == "future_artist"
+    assert reminders[0]["rawAuthor"] == "Future Artist"
+
+    repo.mark_telegram_day_reminder_sent(reminders[0]["reminderId"], 42)
+
+    assert repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 5, tzinfo=dt.UTC)) == []
+
+
+def test_telegram_reminder_offline_closes_day_at_click_time():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC))[0]
+
+    result = repo.close_telegram_day_from_reminder(reminder["reminderId"], "offline", "2026-04-28T19:15:00Z")
+
+    assert result["status"] == "reminder_offline"
+    assert result["daySeconds"] == 10 * 3600 + 15 * 60
+    assert repo.db.day_sessions.items[0]["lastOfflineAt"] == dt.datetime(2026, 4, 28, 19, 15, tzinfo=dt.UTC)
+    assert repo.db.report_rows.items[-1]["telegramEventType"] == "offline"
+    assert repo.db.report_rows.items[-1]["telegramStatus"] == "reminder_offline"
+    assert repo.db.report_rows.items[-1]["metadata"]["reminderAction"] == "offline"
+
+
+def test_telegram_reminder_overtime_closes_day_with_overtime_metadata():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC))[0]
+
+    result = repo.close_telegram_day_from_reminder(reminder["reminderId"], "overtime", "2026-04-28T19:30:00Z")
+
+    assert result["status"] == "reminder_overtime"
+    assert result["daySeconds"] == 10 * 3600 + 30 * 60
+    assert repo.db.report_rows.items[-1]["telegramStatus"] == "reminder_overtime"
+    assert repo.db.report_rows.items[-1]["metadata"]["reminderAction"] == "overtime"
+
+
+def test_telegram_reminder_close_closes_open_break_session():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "afk", "2026-04-28T18:45:00Z")
+    reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC))[0]
+
+    result = repo.close_telegram_day_from_reminder(reminder["reminderId"], "offline", "2026-04-28T19:15:00Z")
+
+    assert result["breakSeconds"] == 30 * 60
+    assert repo.db.break_sessions.items == []
+    assert repo.db.break_intervals.items[0]["breakSeconds"] == 30 * 60
 
 
 def test_telegram_online_uses_author_time_zone_for_date():

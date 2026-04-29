@@ -16,6 +16,7 @@ from .auth import hash_password, new_session_token, session_token_hash, verify_p
 
 LOW_PRODUCTIVITY_THRESHOLD = 50
 LONG_BREAK_THRESHOLD_SECONDS = 3600
+TELEGRAM_DAY_REMINDER_SECONDS = 10 * 3600
 DEFAULT_PLUGIN_WORK_WINDOW_SECONDS = 32400
 MICROSECONDS_PER_SECOND = 1_000_000
 MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS = 10
@@ -93,6 +94,8 @@ class Repository:
         self.db.author_profiles.create_index("telegramUsername", unique=True, sparse=True)
         self.db.break_events.create_index([("telegramUsername", ASCENDING), ("timestamp", DESCENDING)])
         self.db.break_sessions.create_index("telegramUsername", unique=True)
+        self.db.telegram_day_reminders.create_index("reminderId", unique=True)
+        self.db.telegram_day_reminders.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
         self.db.interval_settings.create_index("kind", unique=True)
         self.db.interval_settings.create_index("author", unique=True, sparse=True)
         self.db.report_refresh_requests.create_index("author", unique=True)
@@ -1465,6 +1468,157 @@ class Repository:
         self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "break_closed", break_result)
         return {"ok": True, "status": "break_closed", **break_result}
 
+    def claim_due_telegram_day_reminders(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
+        now = now or dt.datetime.now(dt.UTC)
+        reminders: list[dict[str, Any]] = []
+        profiles = self._profiles_by_raw_author()
+
+        for session in self.db.day_sessions.find({}, {"_id": 0}):
+            if session.get("lastOfflineAt"):
+                continue
+
+            raw_author = str(session.get("rawAuthor") or "")
+            telegram_username = _normalize_telegram_username(session.get("telegramUsername") or profiles.get(raw_author, {}).get("telegramUsername"))
+            day_date = str(session.get("date") or "")
+            started_at = _coerce_datetime(session.get("startedAt"))
+
+            if not raw_author or not telegram_username or not day_date or not started_at:
+                continue
+
+            elapsed_seconds = max(0, int((now - started_at).total_seconds()))
+
+            if elapsed_seconds < TELEGRAM_DAY_REMINDER_SECONDS:
+                continue
+
+            reminder_key = {"rawAuthor": raw_author, "date": day_date}
+            current = self.db.telegram_day_reminders.find_one(reminder_key, {"_id": 0}) or {}
+
+            if current.get("status") in {"sent", "closed"}:
+                continue
+
+            reminder_id = str(current.get("reminderId") or _new_id())
+            self.db.telegram_day_reminders.update_one(
+                reminder_key,
+                {
+                    "$set": {
+                        **reminder_key,
+                        "reminderId": reminder_id,
+                        "telegramUsername": telegram_username,
+                        "startedAt": started_at,
+                        "elapsedSeconds": elapsed_seconds,
+                        "status": "claimed",
+                        "lastClaimedAt": now,
+                    }
+                },
+                upsert=True,
+            )
+            reminders.append(
+                {
+                    "reminderId": reminder_id,
+                    "rawAuthor": raw_author,
+                    "telegramUsername": telegram_username,
+                    "date": day_date,
+                    "startedAt": started_at.isoformat(),
+                    "elapsedSeconds": elapsed_seconds,
+                }
+            )
+
+        return reminders
+
+    def mark_telegram_day_reminder_sent(self, reminder_id: str, message_id: int | None = None) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_day_reminders.update_one(
+            {"reminderId": reminder_id},
+            {
+                "$set": {
+                    "status": "sent",
+                    "messageId": message_id,
+                    "sentAt": now,
+                    "updatedAt": now,
+                }
+            },
+        )
+        return {"ok": True}
+
+    def close_telegram_day_from_reminder(self, reminder_id: str, action: str, timestamp: str | None = None) -> dict[str, Any]:
+        action = action if action in {"offline", "overtime"} else "offline"
+        reminder = self.db.telegram_day_reminders.find_one({"reminderId": reminder_id}, {"_id": 0})
+
+        if not reminder:
+            return {"ok": False, "error": "Unknown reminder"}
+
+        raw_author = str(reminder.get("rawAuthor") or "")
+        telegram_username = _normalize_telegram_username(reminder.get("telegramUsername"))
+        day_date = str(reminder.get("date") or "")
+        event_time = _parse_timestamp(timestamp)
+        received_at = dt.datetime.now(dt.UTC)
+        profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0}) or {}
+        time_zone_id = _valid_time_zone_id(profile.get("timeZoneId")) or _valid_time_zone_id(reminder.get("timeZoneId")) or "UTC"
+        event_date = _telegram_event_date(event_time, time_zone_id)
+
+        if not raw_author or not telegram_username or not day_date:
+            return {"ok": False, "error": "Reminder is missing author data"}
+
+        self.db.break_events.insert_one(
+            {
+                "telegramUsername": telegram_username,
+                "rawAuthor": raw_author,
+                "eventType": "offline",
+                "timestamp": event_time,
+                "date": event_date,
+                "timeZoneId": time_zone_id,
+                "createdAt": received_at,
+                "source": "telegram_reminder",
+                "reminderAction": action,
+            }
+        )
+        break_result = self._close_break_session(telegram_username, raw_author, event_time)
+        day_state = self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": day_date})
+        metadata: dict[str, Any] = {"reminderAction": action, **break_result}
+
+        if not day_state:
+            self._insert_telegram_report_row(
+                raw_author,
+                telegram_username,
+                "offline",
+                event_time,
+                event_date,
+                time_zone_id,
+                received_at,
+                f"reminder_{action}_without_online",
+                metadata,
+            )
+        else:
+            started_at = _coerce_datetime(day_state.get("startedAt")) or event_time
+            day_seconds = max(0, int((event_time - started_at).total_seconds()))
+            metadata["daySeconds"] = day_seconds
+            self.db.day_sessions.update_one(
+                {"rawAuthor": raw_author, "date": day_date},
+                {"$set": {"lastOfflineAt": event_time, "daySeconds": day_seconds, "reminderAction": action}},
+                upsert=True,
+            )
+            self.db.daily_author_activity.update_many(
+                {"author": raw_author, "date": day_date},
+                {"$set": {"dayStartedAt": started_at, "dayEndedAt": event_time, "daySeconds": day_seconds}},
+            )
+            self._insert_telegram_report_row(
+                raw_author,
+                telegram_username,
+                "offline",
+                event_time,
+                event_date,
+                time_zone_id,
+                received_at,
+                f"reminder_{action}",
+                metadata,
+            )
+
+        self.db.telegram_day_reminders.update_one(
+            {"reminderId": reminder_id},
+            {"$set": {"status": "closed", "closedAt": received_at, "closeAction": action, "updatedAt": received_at}},
+        )
+        return {"ok": True, "status": f"reminder_{action}", **metadata}
+
     def _insert_telegram_report_row(
         self,
         raw_author: str,
@@ -1609,8 +1763,12 @@ class Repository:
 
             live_day_seconds = int(session.get("daySeconds", 0))
 
+            is_open_day_over_cap = False
+
             if not ended_at:
-                live_day_seconds = max(0, int((now - started_at).total_seconds()))
+                uncapped_live_day_seconds = max(0, int((now - started_at).total_seconds()))
+                is_open_day_over_cap = uncapped_live_day_seconds > TELEGRAM_DAY_REMINDER_SECONDS
+                live_day_seconds = min(uncapped_live_day_seconds, TELEGRAM_DAY_REMINDER_SECONDS)
             elif live_day_seconds <= 0:
                 live_day_seconds = max(0, int((ended_at - started_at).total_seconds()))
 
@@ -1623,6 +1781,19 @@ class Repository:
                 author_row["telegramDaySeconds"] += day_delta_seconds
                 totals["daySeconds"] += day_delta_seconds
                 totals["telegramDaySeconds"] += day_delta_seconds
+
+            if is_open_day_over_cap:
+                author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
+                author_row.setdefault("telegramAlerts", []).append(
+                    {
+                        "type": "telegram_day_open",
+                        "severity": "warning",
+                        "title": "Telegram day still open",
+                        "message": "Telegram day was not closed after 10 hours and is capped on the dashboard.",
+                        "value": uncapped_live_day_seconds,
+                        "threshold": TELEGRAM_DAY_REMINDER_SECONDS,
+                    }
+                )
 
         for interval in self.db.break_intervals.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0}):
             raw_author = interval.get("rawAuthor") or "Unknown User"
@@ -1692,6 +1863,7 @@ class Repository:
             "activityCounts": [],
             "activityMix": [],
             "savedPrefabs": [],
+            "telegramAlerts": [],
         }
         authors_by_raw[raw_author] = author_row
         return author_row
@@ -2527,6 +2699,7 @@ def _activity_mix_from_list(activity_counts: list[dict[str, Any]]) -> list[dict[
 def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.datetime) -> dict[str, Any]:
     item = dict(author)
     alerts = list(item.get("securityAlerts") or [])
+    alerts.extend(item.get("telegramAlerts") or [])
     last_received_at = _coerce_datetime(item.get("lastReceivedAt"))
     stale_threshold_seconds = max(0, send_interval_seconds * 2)
 

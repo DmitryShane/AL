@@ -3235,6 +3235,10 @@ function formatAlertValue(alert: AuthorAlert) {
     return `Break: ${formatDuration(alert.value)}. Threshold: ${formatAlertThreshold(alert)}`;
   }
 
+  if (alert.type === "telegram_day_open") {
+    return `Open for ${formatDuration(alert.value)}. Capped at ${formatAlertThreshold(alert)}`;
+  }
+
   if (alert.type === "low_productivity" || alert.type === "select_heavy_activity") {
     return `Value: ${alert.value}%. Threshold: ${formatAlertThreshold(alert)}`;
   }
@@ -3247,7 +3251,7 @@ function formatAlertThreshold(alert: AuthorAlert) {
     return "-";
   }
 
-  if (alert.type === "reports_stopped" || alert.type === "long_break") {
+  if (alert.type === "reports_stopped" || alert.type === "long_break" || alert.type === "telegram_day_open") {
     return formatDuration(alert.threshold);
   }
 

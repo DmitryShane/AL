@@ -23,6 +23,8 @@ from .models import (
     SiteUserIn,
     SubmitReportResponse,
     SummaryResponse,
+    TelegramReminderCloseIn,
+    TelegramReminderSentIn,
 )
 from .protocol import decode_alr1, generate_report_challenge_keys
 from .repository import Repository
@@ -67,6 +69,9 @@ PUBLIC_API_PATHS = {
     "/api/v1/reports",
     "/api/v1/reports/challenge",
     "/api/v1/break-events",
+    "/api/v1/telegram/reminders/due",
+    "/api/v1/telegram/reminders/sent",
+    "/api/v1/telegram/reminders/close",
     "/api/v1/auth/login",
     "/api/v1/auth/me",
     "/api/v1/auth/dev-login",
@@ -124,6 +129,14 @@ def require_permission(permission: str):
         return user
 
     return dependency
+
+
+def require_telegram_bot_secret(request: Request) -> None:
+    if not settings.telegram_bot_secret:
+        raise HTTPException(status_code=503, detail="Telegram bot secret is not configured")
+
+    if request.headers.get("x-al-telegram-bot-secret") != settings.telegram_bot_secret:
+        raise HTTPException(status_code=403, detail="Invalid Telegram bot secret")
 
 
 @app.post("/api/v1/auth/login")
@@ -368,6 +381,24 @@ def record_break_event(event: BreakEventIn) -> dict:
         event_type=event.event_type,
         timestamp=event.timestamp,
     )
+
+
+@app.get("/api/v1/telegram/reminders/due")
+def telegram_due_reminders(request: Request) -> dict:
+    require_telegram_bot_secret(request)
+    return {"reminders": app.state.repo.claim_due_telegram_day_reminders()}
+
+
+@app.post("/api/v1/telegram/reminders/sent")
+def telegram_reminder_sent(sent: TelegramReminderSentIn, request: Request) -> dict:
+    require_telegram_bot_secret(request)
+    return app.state.repo.mark_telegram_day_reminder_sent(sent.reminder_id, sent.message_id)
+
+
+@app.post("/api/v1/telegram/reminders/close")
+def telegram_reminder_close(close: TelegramReminderCloseIn, request: Request) -> dict:
+    require_telegram_bot_secret(request)
+    return app.state.repo.close_telegram_day_from_reminder(close.reminder_id, close.action, close.timestamp)
 
 
 @app.get("/api/v1/analytics/summary")
