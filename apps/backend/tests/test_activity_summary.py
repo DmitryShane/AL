@@ -1020,6 +1020,22 @@ def test_figma_file_saved_is_counted_as_saved_file():
     assert saved == {"path": "https://www.figma.com/design/abc123/Game-HUD", "name": "Game HUD", "saveCount": 1}
 
 
+def test_vscode_file_saved_is_counted_as_saved_file():
+    saved = _saved_prefab_delta(
+        {
+            "source": "vsc",
+            "eventType": "file_saved",
+            "metadata": {
+                "path": "/projects/game/Assets/Scripts/PlayerController.cs",
+                "name": "PlayerController.cs",
+                "languageId": "csharp",
+            },
+        }
+    )
+
+    assert saved == {"path": "/projects/game/Assets/Scripts/PlayerController.cs", "name": "PlayerController.cs", "saveCount": 1}
+
+
 def test_author_alias_rebuilds_raw_events_into_target_author():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})

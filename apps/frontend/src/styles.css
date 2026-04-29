@@ -1053,6 +1053,56 @@ p {
   gap: 7px;
 }
 
+.source-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.unity-icon {
+  fill: #111827;
+}
+
+.blender-icon-mark {
+  fill: #f5792a;
+}
+
+.blender-icon-eye {
+  fill: #ffffff;
+}
+
+.blender-icon-pupil {
+  fill: #265787;
+}
+
+.figma-red {
+  fill: #f24e1e;
+}
+
+.figma-orange {
+  fill: #ff7262;
+}
+
+.figma-purple {
+  fill: #a259ff;
+}
+
+.figma-blue {
+  fill: #1abcfe;
+}
+
+.figma-green {
+  fill: #0acf83;
+}
+
+.vscode-icon {
+  fill: #007acc;
+}
+
+.telegram-icon {
+  fill: #26a5e4;
+}
+
 .report-type-badge {
   display: inline-flex;
   width: fit-content;

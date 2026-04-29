@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, BarChart3, Bell, Box, Boxes, CalendarDays, Figma, LogOut, RefreshCw, Search, Settings, ShieldCheck, UsersRound } from "lucide-react";
+import { Activity, BarChart3, Bell, CalendarDays, LogOut, RefreshCw, Search, Settings, ShieldCheck, UsersRound } from "lucide-react";
 import { AuthorsTable } from "./components/AuthorsTable";
 import { HourlyActivityChart } from "./components/HourlyActivityChart";
 import "./styles.css";
@@ -2972,6 +2972,10 @@ function formatSource(source?: string) {
     return "Figma";
   }
 
+  if (source === "vsc") {
+    return "VS Code";
+  }
+
   if (source === "telegram") {
     return "Telegram";
   }
@@ -2981,18 +2985,72 @@ function formatSource(source?: string) {
 
 function sourceIcon(source?: string) {
   if (source === "ual") {
-    return <Box size={16} />;
+    return <UnityIcon />;
   }
 
   if (source === "bal") {
-    return <Boxes size={16} />;
+    return <BlenderIcon />;
   }
 
   if (source === "fch") {
-    return <Figma size={16} />;
+    return <FigmaIcon />;
+  }
+
+  if (source === "vsc") {
+    return <VSCodeIcon />;
+  }
+
+  if (source === "telegram") {
+    return <TelegramIcon />;
   }
 
   return <Activity size={16} />;
+}
+
+function UnityIcon() {
+  return (
+    <svg className="source-icon unity-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="m18.1 2.4-9.5 2.5-1.4 2.5-3.1-.1-3.3 8 6.5 6.3 3.1-1.7 2.8 1.6 8.7-4.1 1.3-10.6-5.1-4.4Zm-1.2 2.7 3.3 2.8-6.1 1.8-3.2-2.5 6-2.1ZM6.3 10l3.3 2.7-.4 5.6-4.9-4.5 2-3.8Zm5.7 3.2 6.5-2-.8 5.2-5.1 2.4-.6-5.6Z" />
+    </svg>
+  );
+}
+
+function BlenderIcon() {
+  return (
+    <svg className="source-icon blender-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path className="blender-icon-mark" d="M9.1 3.1c-.5-.5-.5-1.2 0-1.7.5-.5 1.2-.5 1.7 0l4.6 4.4h3.5c.7 0 1.2.5 1.2 1.2s-.5 1.2-1.2 1.2h-1.1l1.9 1.8c1 .9 1.5 2.1 1.5 3.5 0 4-4.3 7.2-9.5 7.2-4.8 0-8.7-2.6-8.7-5.9 0-2.7 2.6-5 6.1-5.7H2.5c-.7 0-1.2-.5-1.2-1.2s.5-1.2 1.2-1.2h8.3L9.1 5.2H5.6c-.7 0-1.2-.5-1.2-1.2s.5-1.2 1.2-1.2h3.1l.4.3Z" />
+      <path className="blender-icon-eye" d="M12.1 11.2c2.5 0 4.5 1.4 4.5 3.1s-2 3.1-4.5 3.1-4.5-1.4-4.5-3.1 2-3.1 4.5-3.1Z" />
+      <path className="blender-icon-pupil" d="M12.1 12.8c1.2 0 2.1.7 2.1 1.5s-.9 1.5-2.1 1.5-2.1-.7-2.1-1.5.9-1.5 2.1-1.5Z" />
+    </svg>
+  );
+}
+
+function FigmaIcon() {
+  return (
+    <svg className="source-icon figma-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path className="figma-red" d="M12 2H8.4a3.4 3.4 0 1 0 0 6.8H12V2Z" />
+      <path className="figma-purple" d="M12 8.8H8.4a3.4 3.4 0 1 0 0 6.8H12V8.8Z" />
+      <path className="figma-blue" d="M15.6 8.8H12v6.8h3.6a3.4 3.4 0 1 0 0-6.8Z" />
+      <path className="figma-green" d="M8.4 15.6H12V19a3.4 3.4 0 1 1-3.6-3.4Z" />
+      <path className="figma-orange" d="M12 2h3.6a3.4 3.4 0 1 1 0 6.8H12V2Z" />
+    </svg>
+  );
+}
+
+function VSCodeIcon() {
+  return (
+    <svg className="source-icon vscode-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M17.9 2.4 7.6 11.8 3.2 8.4 1.8 9.2v5.6l1.4.8 4.4-3.4 10.3 9.4 4.3-1.7V4.1l-4.3-1.7Zm-.4 5.7v7.8l-5.8-3.9 5.8-3.9Z" />
+    </svg>
+  );
+}
+
+function TelegramIcon() {
+  return (
+    <svg className="source-icon telegram-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M21.8 4.1 18.6 20c-.2 1.1-.9 1.4-1.8.9l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.3-8.4c.4-.4-.1-.6-.6-.2L6 13.5 1.1 12c-1.1-.3-1.1-1.1.2-1.6L20.4 3c.9-.3 1.7.2 1.4 1.1Z" />
+    </svg>
+  );
 }
 
 function formatReportType(report: Report) {

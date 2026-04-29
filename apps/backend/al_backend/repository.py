@@ -2272,6 +2272,8 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
     if event_type == "file_saved" and event.get("source") == "fch":
         if "figma.com/" not in lower_path and not metadata.get("fileKey"):
             return None
+    elif event_type == "file_saved" and event.get("source") == "vsc":
+        pass
     elif event_type == "file_saved" and not lower_path.endswith(".blend"):
         return None
 

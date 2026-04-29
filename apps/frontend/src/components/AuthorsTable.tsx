@@ -118,6 +118,14 @@ function formatSource(source?: string) {
     return "Blender";
   }
 
+  if (source === "fch") {
+    return "Figma";
+  }
+
+  if (source === "vsc") {
+    return "VS Code";
+  }
+
   if (source === "telegram") {
     return "Telegram";
   }
