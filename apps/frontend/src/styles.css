@@ -881,7 +881,7 @@ p {
   right: 0;
   left: 0;
   height: 3px;
-  background: linear-gradient(90deg, #5b4dff, #66c98f);
+  background: #d8e0e8;
   content: "";
 }
 

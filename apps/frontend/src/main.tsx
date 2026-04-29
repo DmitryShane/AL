@@ -627,6 +627,8 @@ function AuthorsPage({
   refreshing: boolean;
   onRefresh: () => void;
 }) {
+  const sortedAuthors = [...authors].sort(compareAuthorCardStatus);
+
   return (
     <section className="page-section">
       <div className="toolbar">
@@ -641,7 +643,7 @@ function AuthorsPage({
         </button>
       </div>
 
-      <AuthorsTable authors={authors} emptyMessage="No authors match this search." />
+      <AuthorsTable authors={sortedAuthors} emptyMessage="No authors match this search." />
     </section>
   );
 }
@@ -1517,18 +1519,21 @@ function ActivityPage({
   onRefreshAuthor: (author: string) => void;
 }) {
   const author = summary.authors.find((item) => item.rawAuthor === selectedAuthor) ?? summary.authors[0];
-  const hourly = summary.hourlyActivityByAuthor.filter((item) => item.rawAuthor === author?.rawAuthor);
+  const hourly = summary.hourlyActivityByAuthor
+    .filter((item) => item.rawAuthor === author?.rawAuthor)
+    .map((item) => ({ ...item, status: author?.status }));
   const authorHourly = hourly.length || !author
     ? hourly
-    : [{ author: author.displayName, rawAuthor: author.rawAuthor, hourlyActivity: [] }];
+    : [{ author: author.displayName, rawAuthor: author.rawAuthor, status: author.status, hourlyActivity: [] }];
   const authorReports = reports.filter((report) => report.author === author?.rawAuthor);
   const activityMix = author?.activityMix ?? [];
   const savedPrefabs = author?.savedPrefabs ?? [];
+  const cardAuthors = [...summary.authors].sort(compareAuthorCardStatus);
 
   return (
     <section className="page-section">
       <div className="author-card-strip">
-        {summary.authors.map((item) => (
+        {cardAuthors.map((item) => (
           <button
             className={authorCardClassName(item, item.rawAuthor === author?.rawAuthor)}
             key={item.rawAuthor}
@@ -2896,6 +2901,14 @@ function authorStatusBadgeClassName(status?: "online" | "stale") {
 
 function authorCardClassName(author: AuthorRow, active: boolean) {
   return `author-card ${active ? "active " : ""}${author.status === "stale" ? "is-offline" : "is-online"}`.trim();
+}
+
+function compareAuthorCardStatus(left: AuthorRow, right: AuthorRow) {
+  if (left.status === right.status) {
+    return left.displayName.localeCompare(right.displayName);
+  }
+
+  return left.status === "stale" ? 1 : -1;
 }
 
 function alertCardClassName(severity: AuthorAlert["severity"]) {

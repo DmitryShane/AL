@@ -8,6 +8,7 @@ type HourlyActivity = {
 
 type AuthorHourlyActivity = {
   author: string;
+  status?: "online" | "stale";
   timeZoneId?: string;
   timeZoneDisplayName?: string;
   hourlyActivity: HourlyActivity[];
@@ -140,7 +141,7 @@ function normalizeHourlyActivity(source: HourlyActivity[]) {
 
 function toAuthorHourlyActivity(author: AuthorHourlyActivity): AuthorHourlyChart {
   const hourlyActivity = normalizeHourlyActivity(author.hourlyActivity?.length ? author.hourlyActivity : createEmptyHourlyActivity());
-  const inProgressHour = findInProgressHour(hourlyActivity);
+  const inProgressHour = author.status === "stale" ? null : findInProgressHour(hourlyActivity);
 
   return {
     author: author.author,
