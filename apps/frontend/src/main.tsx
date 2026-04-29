@@ -2513,8 +2513,8 @@ function ReportsTable({ reports }: { reports: Report[] }) {
             <span className="source-cell">{sourceIcon(report.source)}{formatSource(report.source)}</span>
             <span>{report.displayName ?? report.author ?? "Unknown User"}</span>
             <span>{report.date ?? "-"}</span>
-            <span>{formatReportMinutes(report.activeDeltaSeconds ?? 0)}</span>
-            <span>{formatReportMinutes(report.idleDeltaSeconds ?? 0)}</span>
+            <span>{formatReportActive(report)}</span>
+            <span>{formatReportIdle(report)}</span>
             <span>{formatReportOvertime(report.overtimeActiveDeltaSeconds ?? 0)}</span>
             <span>{formatAuthorTime(report)}</span>
             <span className={reportTypeBadgeClassName(report.reportType)}>{formatReportType(report)}</span>
@@ -2870,6 +2870,18 @@ function formatReportMinutes(seconds: number) {
 
 function formatReportOvertime(seconds: number) {
   return seconds > 0 ? formatReportMinutes(seconds) : "-";
+}
+
+function formatReportActive(report: Report) {
+  return isTelegramReport(report) ? "-" : formatReportMinutes(report.activeDeltaSeconds ?? 0);
+}
+
+function formatReportIdle(report: Report) {
+  return isTelegramReport(report) ? "-" : formatReportMinutes(report.idleDeltaSeconds ?? 0);
+}
+
+function isTelegramReport(report: Report) {
+  return report.source === "telegram" || report.reportType === "telegram";
 }
 
 function formatDurationDelta(seconds: number) {
