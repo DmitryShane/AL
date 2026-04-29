@@ -2802,7 +2802,7 @@ def _apply_breaks_to_hourly_activity(
         total_seconds = active_seconds + overtime_active_seconds + break_seconds + idle_seconds
         missing_seconds = max(0, expected_seconds - total_seconds)
 
-        if total_seconds and missing_seconds:
+        if total_seconds and expected_seconds == 3600 and missing_seconds:
             if break_seconds:
                 break_seconds += missing_seconds
             else:

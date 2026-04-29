@@ -1005,7 +1005,7 @@ def test_hourly_activity_fills_past_hour_gap_as_idle():
     assert hourly[10]["idleSeconds"] == 1857
 
 
-def test_hourly_activity_only_fills_current_hour_to_elapsed_time():
+def test_hourly_activity_does_not_infer_current_hour_idle():
     source = _empty_hourly_activity()
     source[18]["activeSeconds"] = 1800
 
@@ -1018,5 +1018,5 @@ def test_hourly_activity_only_fills_current_hour_to_elapsed_time():
     )
 
     assert hourly[18]["activeSeconds"] == 1800
-    assert hourly[18]["idleSeconds"] == 870
+    assert hourly[18]["idleSeconds"] == 0
     assert hourly[19]["idleSeconds"] == 0

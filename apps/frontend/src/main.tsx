@@ -1550,10 +1550,9 @@ function ActivityPage({
             </div>
           </div>
 
-          <HourlyActivityChart authors={authorHourly} />
-
-          <div className="content-grid compact">
-            <DonutPanel
+          <div className="dashboard-insights-row">
+            <HourlyActivityChart authors={authorHourly} />
+            <BreakdownPanel
               title="Activity Mix"
               items={activityMix.map((item) => ({
                 label: formatActivityType(item.type),
@@ -1562,7 +1561,7 @@ function ActivityPage({
                 color: activityColor(item.type)
               }))}
             />
-            <DonutPanel
+            <BreakdownPanel
               title="Saved Files"
               items={savedPrefabs.map((prefab, index) => ({
                 label: prefab.name || prefab.path,
@@ -2394,22 +2393,22 @@ function normalizeAuthorInput(value: string) {
   return value.trim().normalize("NFC");
 }
 
-type DonutPanelItem = {
+type BreakdownPanelItem = {
   label: string;
   value: number;
   displayValue: string;
   color: string;
 };
 
-function DonutPanel({ title, items }: { title: string; items: DonutPanelItem[] }) {
+function BreakdownPanel({ title, items }: { title: string; items: BreakdownPanelItem[] }) {
   const total = items.reduce((sum, item) => sum + Math.max(0, item.value), 0);
-  const chartStyle = {
-    "--donut-gradient": donutGradient(items, total)
+  const barStyle = {
+    "--bar-gradient": segmentedBarGradient(items, total)
   } as React.CSSProperties;
 
   return (
-    <div className="panel donut-panel">
-      <div className="donut-panel-copy">
+    <div className="panel breakdown-panel">
+      <div className="breakdown-panel-copy">
         <h2>{title}</h2>
         <div className="list">
           {items.length ? (
@@ -2424,8 +2423,9 @@ function DonutPanel({ title, items }: { title: string; items: DonutPanelItem[] }
           )}
         </div>
       </div>
-      <div className="donut-chart" style={chartStyle} aria-hidden="true">
-        <span>{total ? totalDisplayValue(items) : "-"}</span>
+      <div className="breakdown-bar-row">
+        <div className="breakdown-bar" style={barStyle} aria-hidden="true" />
+        <strong>{total ? totalDisplayValue(items) : "-"}</strong>
       </div>
     </div>
   );
@@ -2451,9 +2451,9 @@ function PanelList({ title, items }: { title: string; items: Array<[string, stri
   );
 }
 
-function donutGradient(items: DonutPanelItem[], total: number) {
+function segmentedBarGradient(items: BreakdownPanelItem[], total: number) {
   if (!items.length || total <= 0) {
-    return "#edf2f7 0 100%";
+    return "#edf2f7 0% 100%";
   }
 
   let cursor = 0;
@@ -2464,10 +2464,10 @@ function donutGradient(items: DonutPanelItem[], total: number) {
     return `${item.color} ${start}% ${cursor}%`;
   });
 
-  return segments.join(", ");
+  return `linear-gradient(to right, ${segments.join(", ")})`;
 }
 
-function totalDisplayValue(items: DonutPanelItem[]) {
+function totalDisplayValue(items: BreakdownPanelItem[]) {
   const percentItems = items.every((item) => item.displayValue.endsWith("%"));
 
   if (percentItems) {

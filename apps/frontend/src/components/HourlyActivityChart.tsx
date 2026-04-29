@@ -41,7 +41,6 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
             <article className="hourly-chart-card" key={author.author}>
               <div className="hourly-chart-scroll">
                 <div className="hourly-chart">
-                  <div className="hourly-chart-y-title">Per hour, min</div>
                   <div className="hourly-chart-y-axis">
                     <span>60</span>
                     <span>45</span>
@@ -80,7 +79,6 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                       );
                     })}
                   </div>
-                  <div />
                   <div />
                   <div className="hourly-chart-x-axis">
                     {author.hours.map((hour) => (
