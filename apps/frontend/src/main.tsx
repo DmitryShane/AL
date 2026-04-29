@@ -1270,6 +1270,17 @@ function CalendarClearEditor({
 function AnalyticsHierarchy({ author, year }: { author: AnalyticsAuthorSummary; year: number }) {
   const [expandedMonths, setExpandedMonths] = useState<Record<number, boolean>>({});
   const [expandedWeeks, setExpandedWeeks] = useState<Record<string, boolean>>({});
+  const monthsWithData = author.months
+    .map((month) => ({
+      ...month,
+      weeks: month.weeks
+        .map((week) => ({
+          ...week,
+          days: week.days.filter(hasAnalyticsDayData)
+        }))
+        .filter((week) => hasAnalyticsTotalsData(week.totals) || week.days.length > 0)
+    }))
+    .filter((month) => hasAnalyticsTotalsData(month.totals) || month.weeks.length > 0);
 
   function toggleMonth(month: number) {
     setExpandedMonths((items) => ({ ...items, [month]: !items[month] }));
@@ -1292,7 +1303,7 @@ function AnalyticsHierarchy({ author, year }: { author: AnalyticsAuthorSummary; 
       </div>
 
       <div className="analytics-tree">
-        {author.months.map((month) => {
+        {monthsWithData.map((month) => {
           const monthOpen = expandedMonths[month.month] ?? month.month === new Date().getMonth() + 1;
 
           return (
@@ -1336,17 +1347,21 @@ function AnalyticsHierarchy({ author, year }: { author: AnalyticsAuthorSummary; 
                               <span>Break</span>
                               <span>Productivity</span>
                             </div>
-                            {week.days.map((day) => (
-                              <div className={day.inMonth ? "analytics-day-row" : "analytics-day-row muted"} key={day.date}>
-                                <span>{day.label}</span>
-                                <strong>{formatDuration(day.totals.pluginDaySeconds)}</strong>
-                                <strong>{formatDuration(day.totals.activeSeconds)}</strong>
-                                <span>{formatDuration(day.totals.idleSeconds)}</span>
-                                <strong>{formatDuration(day.totals.overtimeActiveSeconds)}</strong>
-                                <span className={breakClassName(day.totals.breakSeconds)}>{formatMinutes(day.totals.breakSeconds)}</span>
-                                <strong className={productivityClassName(day.totals.productivity)}>{day.totals.productivity.toFixed(2)}%</strong>
-                              </div>
-                            ))}
+                            {week.days.length ? (
+                              week.days.map((day) => (
+                                <div className="analytics-day-row" key={day.date}>
+                                  <span>{day.label}</span>
+                                  <strong>{formatDuration(day.totals.pluginDaySeconds)}</strong>
+                                  <strong>{formatDuration(day.totals.activeSeconds)}</strong>
+                                  <span>{formatDuration(day.totals.idleSeconds)}</span>
+                                  <strong>{formatDuration(day.totals.overtimeActiveSeconds)}</strong>
+                                  <span className={breakClassName(day.totals.breakSeconds)}>{formatMinutes(day.totals.breakSeconds)}</span>
+                                  <strong className={productivityClassName(day.totals.productivity)}>{day.totals.productivity.toFixed(2)}%</strong>
+                                </div>
+                              ))
+                            ) : (
+                              <p className="analytics-empty-days">No activity data for this week.</p>
+                            )}
                           </div>
                         ) : null}
                       </section>
@@ -1403,6 +1418,21 @@ function AnalyticsPeriodSummary({ totals, compact = false }: { totals: Analytics
       <span>{formatDuration(totals.overtimeActiveSeconds)} overtime</span>
       <span className={productivityClassName(totals.productivity)}>{totals.productivity.toFixed(1)}%</span>
     </div>
+  );
+}
+
+function hasAnalyticsDayData(day: AnalyticsDay) {
+  return hasAnalyticsTotalsData(day.totals);
+}
+
+function hasAnalyticsTotalsData(totals: AnalyticsTotals) {
+  return (
+    totals.pluginDaySeconds > 0
+    || totals.telegramDaySeconds > 0
+    || totals.activeSeconds > 0
+    || totals.idleSeconds > 0
+    || totals.overtimeActiveSeconds > 0
+    || totals.breakSeconds > 0
   );
 }
 
@@ -1500,10 +1530,11 @@ function ActivityPage({
       <div className="author-card-strip">
         {summary.authors.map((item) => (
           <button
-            className={item.rawAuthor === author?.rawAuthor ? "author-card active" : "author-card"}
+            className={authorCardClassName(item, item.rawAuthor === author?.rawAuthor)}
             key={item.rawAuthor}
             onClick={() => setSelectedAuthor(item.rawAuthor)}
           >
+            <span className="author-card-status" aria-hidden="true" />
             <span className="avatar" style={avatarStyle(item.authorColor)}>{initials(item.displayName)}</span>
             <strong>{item.displayName}</strong>
             <small>{item.team || "No team"}</small>
@@ -2311,12 +2342,18 @@ function ReportsTable({ reports }: { reports: Report[] }) {
           </select>
         </label>
         <div className="pagination-buttons">
+          <button className="primary-outline-button" onClick={() => setPage(1)} disabled={currentPage === 1}>
+            First
+          </button>
           <button className="primary-outline-button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>
             Prev
           </button>
           <span>{currentPage} / {totalPages}</span>
           <button className="primary-outline-button" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={currentPage === totalPages}>
             Next
+          </button>
+          <button className="primary-outline-button" onClick={() => setPage(totalPages)} disabled={currentPage === totalPages}>
+            Last
           </button>
         </div>
       </div>
@@ -2855,6 +2892,10 @@ function formatAuthorStatus(author: AuthorRow) {
 
 function authorStatusBadgeClassName(status?: "online" | "stale") {
   return status === "stale" ? "status-badge stale" : "status-badge online";
+}
+
+function authorCardClassName(author: AuthorRow, active: boolean) {
+  return `author-card ${active ? "active " : ""}${author.status === "stale" ? "is-offline" : "is-online"}`.trim();
 }
 
 function alertCardClassName(severity: AuthorAlert["severity"]) {

@@ -100,7 +100,13 @@ function formatDuration(seconds: number) {
 }
 
 function formatMinutes(seconds: number) {
-  return `${Math.round(seconds / 60)}m`;
+  const rounded = Math.max(0, Math.round(seconds));
+
+  if (rounded < 3600) {
+    return `${Math.round(rounded / 60)}m`;
+  }
+
+  return formatDuration(rounded);
 }
 
 function formatSource(source?: string) {

@@ -22,6 +22,7 @@ type AuthorHourlyChart = {
     breakMinutes: number;
     idleMinutes: number;
     overtimeMinutes: number;
+    isInProgress: boolean;
   }>;
 };
 
@@ -51,11 +52,16 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                   <div className="hourly-chart-bars">
                     {author.hours.map((hour) => {
                       const segments = toDisplaySegments(hour);
+                      const barClassName = [
+                        "hourly-chart-bar",
+                        hasHourlyActivity(hour) ? "has-activity" : "",
+                        hour.isInProgress ? "is-current-hour" : ""
+                      ].filter(Boolean).join(" ");
 
                       return (
                         <div className="hourly-chart-column" key={hour.hour}>
                           <div
-                            className={`hourly-chart-bar${hasHourlyActivity(hour) ? " has-activity" : ""}`}
+                            className={barClassName}
                             title={formatHourTitle(hour)}
                           >
                             <div
@@ -82,7 +88,7 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                   <div />
                   <div className="hourly-chart-x-axis">
                     {author.hours.map((hour) => (
-                      <span key={hour.hour}>
+                      <span className={hasHourlyActivity(hour) ? "has-activity" : undefined} key={hour.hour}>
                         <span>{formatHour(hour.hour)}</span>
                       </span>
                     ))}
@@ -134,6 +140,7 @@ function normalizeHourlyActivity(source: HourlyActivity[]) {
 
 function toAuthorHourlyActivity(author: AuthorHourlyActivity): AuthorHourlyChart {
   const hourlyActivity = normalizeHourlyActivity(author.hourlyActivity?.length ? author.hourlyActivity : createEmptyHourlyActivity());
+  const inProgressHour = findInProgressHour(hourlyActivity);
 
   return {
     author: author.author,
@@ -143,7 +150,8 @@ function toAuthorHourlyActivity(author: AuthorHourlyActivity): AuthorHourlyChart
       activeMinutes: Math.min(60, hour.activeSeconds / 60),
       breakMinutes: Math.min(60, (hour.breakSeconds ?? 0) / 60),
       idleMinutes: Math.min(60, hour.idleSeconds / 60),
-      overtimeMinutes: Math.min(60, (hour.overtimeActiveSeconds ?? 0) / 60)
+      overtimeMinutes: Math.min(60, (hour.overtimeActiveSeconds ?? 0) / 60),
+      isInProgress: hour.hour === inProgressHour
     }))
   };
 }
@@ -173,6 +181,19 @@ function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; 
 
 function hasHourlyActivity(hour: { activeMinutes: number; breakMinutes: number; idleMinutes: number; overtimeMinutes: number }) {
   return hour.activeMinutes > 0 || hour.overtimeMinutes > 0 || hour.breakMinutes > 0 || hour.idleMinutes > 0;
+}
+
+function findInProgressHour(hours: Required<HourlyActivity>[]) {
+  for (let index = hours.length - 1; index >= 0; index -= 1) {
+    const hour = hours[index];
+    const totalSeconds = hour.activeSeconds + hour.overtimeActiveSeconds + hour.breakSeconds + hour.idleSeconds;
+
+    if (totalSeconds > 0 && totalSeconds < 3600) {
+      return hour.hour;
+    }
+  }
+
+  return null;
 }
 
 function formatHour(hour: number) {
