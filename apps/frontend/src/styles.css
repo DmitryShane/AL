@@ -2058,6 +2058,33 @@ p {
   align-self: end;
 }
 
+.author-alias-card {
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+}
+
+.alias-list {
+  display: grid;
+  gap: 8px;
+}
+
+.alias-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border-top: 1px solid #e7edf4;
+  padding-top: 10px;
+}
+
+.alias-row span {
+  min-width: 0;
+  overflow: hidden;
+  color: #405064;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .site-user-create-card {
   display: grid;
   grid-template-columns: repeat(4, minmax(150px, 1fr)) auto;

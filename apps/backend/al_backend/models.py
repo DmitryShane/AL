@@ -75,6 +75,11 @@ class AuthorProfileIn(ApiModel):
     author_color: str | None = Field(default=None, alias="authorColor")
 
 
+class AuthorAliasIn(ApiModel):
+    source_raw_author: str = Field(alias="sourceRawAuthor", min_length=1)
+    target_raw_author: str = Field(alias="targetRawAuthor", min_length=1)
+
+
 class CalendarMarkIn(ApiModel):
     authors: list[str] = Field(min_length=1)
     dates: list[str] = Field(min_length=1)

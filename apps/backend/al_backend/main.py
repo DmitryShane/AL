@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .models import (
+    AuthorAliasIn,
     AuthorProfileIn,
     BreakEventIn,
     CalendarMarkIn,
@@ -325,6 +326,29 @@ def upsert_author_profile(profile: AuthorProfileIn, _: dict = Depends(require_pe
         plugin_enabled=profile.plugin_enabled,
         author_color=profile.author_color,
     )
+
+
+@app.get("/api/v1/authors/aliases")
+def author_aliases(_: dict = Depends(require_permission("manageSettings"))) -> dict:
+    return {"aliases": app.state.repo.author_aliases()}
+
+
+@app.put("/api/v1/authors/aliases")
+def upsert_author_alias(alias: AuthorAliasIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
+    result = app.state.repo.upsert_author_alias(
+        source_raw_author=alias.source_raw_author,
+        target_raw_author=alias.target_raw_author,
+    )
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Alias save failed"))
+
+    return result
+
+
+@app.delete("/api/v1/authors/aliases/{source_raw_author}")
+def delete_author_alias(source_raw_author: str, _: dict = Depends(require_permission("manageSettings"))) -> dict:
+    return app.state.repo.delete_author_alias(source_raw_author=source_raw_author)
 
 
 @app.delete("/api/v1/authors/{raw_author}/data")

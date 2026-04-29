@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, BarChart3, Bell, Box, Boxes, CalendarDays, LogOut, RefreshCw, Search, Settings, ShieldCheck, UsersRound } from "lucide-react";
+import { Activity, BarChart3, Bell, Box, Boxes, CalendarDays, Figma, LogOut, RefreshCw, Search, Settings, ShieldCheck, UsersRound } from "lucide-react";
 import { AuthorsTable } from "./components/AuthorsTable";
 import { HourlyActivityChart } from "./components/HourlyActivityChart";
 import "./styles.css";
@@ -104,11 +104,17 @@ type ActivitySummary = {
   };
   authors: AuthorRow[];
   profiles: AuthorProfile[];
+  authorAliases?: AuthorAlias[];
   activityMix: ActivityCount[];
   savedPrefabs: SavedPrefab[];
   overtimeActivityMix?: ActivityCount[];
   overtimeSavedPrefabs?: SavedPrefab[];
   hourlyActivityByAuthor: AuthorHourlyActivity[];
+};
+
+type AuthorAlias = {
+  sourceRawAuthor: string;
+  targetRawAuthor: string;
 };
 
 type AuthorProfile = {
@@ -289,6 +295,7 @@ const emptyActivitySummary: ActivitySummary = {
   },
   authors: [],
   profiles: [],
+  authorAliases: [],
   activityMix: [],
   savedPrefabs: [],
   overtimeActivityMix: [],
@@ -559,13 +566,17 @@ function LoginPage({ checkingSession = false, onLogin }: { checkingSession?: boo
       });
 
       if (!response.ok) {
-        throw new Error("Invalid email or password");
+        throw new Error(loginErrorMessage(response.status));
       }
 
       const payload = await response.json();
       onLogin(payload.user);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Login failed");
+      if (requestError instanceof Error && !isNetworkLoginError(requestError)) {
+        setError(requestError.message);
+      } else {
+        setError(BACKEND_OFFLINE_MESSAGE);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -609,6 +620,24 @@ function LoginPage({ checkingSession = false, onLogin }: { checkingSession?: boo
       </form>
     </main>
   );
+}
+
+const BACKEND_OFFLINE_MESSAGE = "Backend is still offline after deploy. Please wait a moment and reload the page.";
+
+function loginErrorMessage(status: number) {
+  if (status === 401 || status === 403) {
+    return "Invalid email or password";
+  }
+
+  if (status >= 500 || status === 0) {
+    return BACKEND_OFFLINE_MESSAGE;
+  }
+
+  return "Login failed. Please try again.";
+}
+
+function isNetworkLoginError(error: Error) {
+  return error instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(error.message);
 }
 
 function NavButton({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
@@ -1658,14 +1687,18 @@ function SettingsPage({
   onSaved: () => void;
 }) {
   const profiles = summary?.activitySummary.profiles ?? [];
+  const aliases = summary?.activitySummary.authorAliases ?? [];
   const [settingsTab, setSettingsTab] = useState<"authors" | "users">("authors");
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
   const [saving, setSaving] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
+  const [aliasError, setAliasError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<AuthorProfile | null>(null);
   const [deleteProfileTarget, setDeleteProfileTarget] = useState<AuthorProfile | null>(null);
   const [newProfile, setNewProfile] = useState<AuthorProfile>(() => emptyAuthorProfile());
+  const [aliasSource, setAliasSource] = useState("");
+  const [aliasTarget, setAliasTarget] = useState("");
 
   useEffect(() => {
     const nextDrafts: Record<string, AuthorProfile> = {};
@@ -1677,6 +1710,12 @@ function SettingsPage({
     setDrafts(nextDrafts);
     setGlobalInterval(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
   }, [summary]);
+
+  useEffect(() => {
+    if (!aliasTarget && profiles.length) {
+      setAliasTarget(profiles[0].rawAuthor);
+    }
+  }, [aliasTarget, profiles]);
 
   async function saveProfile(rawAuthor: string) {
     const profile = drafts[rawAuthor];
@@ -1833,6 +1872,69 @@ function SettingsPage({
     }
   }
 
+  async function saveAuthorAlias() {
+    const sourceRawAuthor = normalizeAuthorInput(aliasSource);
+    const targetRawAuthor = normalizeAuthorInput(aliasTarget);
+
+    if (!sourceRawAuthor || !targetRawAuthor || sourceRawAuthor === targetRawAuthor) {
+      setSaveStatus((items) => ({ ...items, authorAlias: "error" }));
+      return;
+    }
+
+    setSaving("authorAlias");
+    setAliasError("");
+    setSaveStatus((items) => ({ ...items, authorAlias: undefined }));
+
+    try {
+      const response = await apiFetch("/api/v1/authors/aliases", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceRawAuthor, targetRawAuthor })
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(String(payload.detail || "Alias save failed"));
+      }
+
+      setAliasSource("");
+      setSaveStatus((items) => ({ ...items, authorAlias: "saved" }));
+      onSaved();
+    } catch (error) {
+      setAliasError(error instanceof Error ? error.message : "Alias save failed");
+      setSaveStatus((items) => ({ ...items, authorAlias: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, authorAlias: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function deleteAuthorAlias(sourceRawAuthor: string) {
+    const deleteKey = `alias-delete:${sourceRawAuthor}`;
+    setSaving(deleteKey);
+    setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
+
+    try {
+      const response = await apiFetch(`/api/v1/authors/aliases/${encodeURIComponent(sourceRawAuthor)}`, { method: "DELETE" });
+
+      if (!response.ok) {
+        throw new Error("Alias delete failed");
+      }
+
+      setSaveStatus((items) => ({ ...items, [deleteKey]: "saved" }));
+      onSaved();
+    } catch {
+      setSaveStatus((items) => ({ ...items, [deleteKey]: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
+      }, 2500);
+    }
+  }
+
   function isProfileDirty(profile: AuthorProfile) {
     const draft = drafts[profile.rawAuthor] ?? profile;
 
@@ -1868,6 +1970,67 @@ function SettingsPage({
           <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval"}>
             {settingsSaveButtonLabel("interval", saving, saveStatus)}
           </button>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h2>Author Redirects</h2>
+        <p className="settings-caption">
+          Redirect a trash raw author from plugin reports to the correct author profile. The source profile is removed and future reports aggregate into the target profile.
+        </p>
+        <div className="profile-create-card author-alias-card">
+          <label>
+            Source raw author
+            <input
+              value={aliasSource}
+              onChange={(event) => setAliasSource(event.target.value)}
+              list="author-alias-source-list"
+              placeholder="Unknown User"
+            />
+            <datalist id="author-alias-source-list">
+              {profiles.map((profile) => (
+                <option value={profile.rawAuthor} key={profile.rawAuthor} />
+              ))}
+            </datalist>
+          </label>
+          <label>
+            Target profile
+            <select value={aliasTarget} onChange={(event) => setAliasTarget(event.target.value)}>
+              {profiles.map((profile) => (
+                <option value={profile.rawAuthor} key={profile.rawAuthor}>{profile.displayName || profile.rawAuthor}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            className={settingsSaveButtonClassName(saveStatus.authorAlias)}
+            onClick={() => void saveAuthorAlias()}
+            disabled={saving === "authorAlias" || !aliasSource.trim() || !aliasTarget.trim()}
+          >
+            {saving === "authorAlias" ? "Assigning..." : saveStatus.authorAlias === "saved" ? "Assigned" : saveStatus.authorAlias === "error" ? "Failed" : "Assign"}
+          </button>
+        </div>
+        {aliasError ? <p className="notice error">{aliasError}</p> : null}
+        <div className="alias-list">
+          {aliases.length ? (
+            aliases.map((alias) => {
+              const target = profiles.find((profile) => profile.rawAuthor === alias.targetRawAuthor);
+              const deleteKey = `alias-delete:${alias.sourceRawAuthor}`;
+              return (
+                <div className="alias-row" key={alias.sourceRawAuthor}>
+                  <span><strong>{alias.sourceRawAuthor}</strong> redirects to <strong>{target?.displayName || alias.targetRawAuthor}</strong></span>
+                  <button
+                    className={`${settingsSaveButtonClassName(saveStatus[deleteKey], true)} danger-button`}
+                    onClick={() => void deleteAuthorAlias(alias.sourceRawAuthor)}
+                    disabled={saving === deleteKey}
+                  >
+                    {saving === deleteKey ? "Deleting..." : saveStatus[deleteKey] === "error" ? "Failed" : "Delete"}
+                  </button>
+                </div>
+              );
+            })
+          ) : (
+            <p className="empty">No redirects yet.</p>
+          )}
         </div>
       </div>
 
@@ -2805,6 +2968,10 @@ function formatSource(source?: string) {
     return "Blender";
   }
 
+  if (source === "fch") {
+    return "Figma";
+  }
+
   if (source === "telegram") {
     return "Telegram";
   }
@@ -2819,6 +2986,10 @@ function sourceIcon(source?: string) {
 
   if (source === "bal") {
     return <Boxes size={16} />;
+  }
+
+  if (source === "fch") {
+    return <Figma size={16} />;
   }
 
   return <Activity size={16} />;

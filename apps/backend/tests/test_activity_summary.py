@@ -67,7 +67,14 @@ class FakeCollection:
                 self._apply_operation(item, operation, inserting=False)
 
     def delete_one(self, query):
+        before = len(self.items)
         self.items = [item for item in self.items if not self._matches(item, query)]
+
+        class Result:
+            def __init__(self, deleted_count):
+                self.deleted_count = deleted_count
+
+        return Result(before - len(self.items))
 
     def find_one_and_delete(self, query):
         for index, item in enumerate(self.items):
@@ -137,7 +144,9 @@ class FakeCollection:
 class FakeDb:
     def __init__(self):
         self.author_profiles = FakeCollection()
+        self.author_aliases = FakeCollection()
         self.activity_snapshots = FakeCollection()
+        self.aggregate_metadata = FakeCollection()
         self.break_events = FakeCollection()
         self.break_sessions = FakeCollection()
         self.day_sessions = FakeCollection()
@@ -671,6 +680,25 @@ def test_author_day_consumption_spans_plugin_sources():
     assert consumed == ((8 * 3600) + 1800) * 1_000_000
 
 
+def test_author_day_consumption_includes_figma_source():
+    repo = fake_repository()
+    repo.db.daily_author_activity.insert_one(
+        {"source": "ual", "projectId": "unity", "author": "Dmitry Shane", "date": "2026-04-28", "activeSeconds": 4 * 3600, "idleSeconds": 0}
+    )
+    repo.db.daily_author_activity.insert_one(
+        {"source": "bal", "projectId": "blender", "author": "Dmitry Shane", "date": "2026-04-28", "activeSeconds": 3 * 3600, "idleSeconds": 0}
+    )
+    repo.db.daily_author_activity.insert_one(
+        {"source": "fch", "projectId": "figma", "author": "Dmitry Shane", "date": "2026-04-28", "activeSeconds": 2 * 3600, "idleSeconds": 0}
+    )
+
+    consumed = repo._normal_microseconds_consumed_for_event(
+        {"author": "Dmitry Shane", "date": "2026-04-28", "source": "fch", "projectId": "figma"}
+    )
+
+    assert consumed == 9 * 3600 * 1_000_000
+
+
 def test_raw_event_state_spans_unity_and_blender_sources():
     repo = fake_repository()
     unity_event = {
@@ -715,6 +743,68 @@ def test_raw_event_state_spans_unity_and_blender_sources():
     assert blender_deltas["activeDeltaSeconds"] == 30
     assert heartbeat_deltas["idleDeltaSeconds"] == 0
     assert heartbeat_deltas["activeDeltaSeconds"] == 0
+
+
+def test_raw_event_state_spans_unity_blender_and_figma_sources():
+    repo = fake_repository()
+    unity_event = {
+        "source": "ual",
+        "author": "Dmitry Shane",
+        "projectId": "unity",
+        "sessionId": "unity-session",
+        "date": "2026-04-28",
+        "eventType": "selection",
+        "occurredAtUtc": "2026-04-28T10:00:00Z",
+        "occurredAtLocal": "2026-04-28T10:00:00+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 0, tzinfo=dt.UTC),
+    }
+    blender_event = {
+        **unity_event,
+        "source": "bal",
+        "projectId": "blender",
+        "sessionId": "blender-session",
+        "eventType": "scene_changed",
+        "occurredAtUtc": "2026-04-28T10:00:30Z",
+        "occurredAtLocal": "2026-04-28T10:00:30+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 0, 30, tzinfo=dt.UTC),
+        "metadata": {"inputType": "MOUSEMOVE"},
+    }
+    figma_event = {
+        **unity_event,
+        "source": "fch",
+        "projectId": "figma",
+        "sessionId": "figma-session",
+        "eventType": "selection",
+        "occurredAtUtc": "2026-04-28T10:01:00Z",
+        "occurredAtLocal": "2026-04-28T10:01:00+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 1, tzinfo=dt.UTC),
+    }
+    figma_heartbeat = {
+        **figma_event,
+        "eventType": "heartbeat",
+        "occurredAtUtc": "2026-04-28T10:02:20Z",
+        "occurredAtLocal": "2026-04-28T10:02:20+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 2, 20, tzinfo=dt.UTC),
+    }
+    unity_heartbeat = {
+        **unity_event,
+        "eventType": "heartbeat",
+        "occurredAtUtc": "2026-04-28T10:02:24Z",
+        "occurredAtLocal": "2026-04-28T10:02:24+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 2, 24, tzinfo=dt.UTC),
+    }
+
+    repo._apply_raw_event_to_aggregates(unity_event)
+    blender_deltas = repo._apply_raw_event_to_aggregates(blender_event)
+    figma_deltas = repo._apply_raw_event_to_aggregates(figma_event)
+    figma_heartbeat_deltas = repo._apply_raw_event_to_aggregates(figma_heartbeat)
+    unity_heartbeat_deltas = repo._apply_raw_event_to_aggregates(unity_heartbeat)
+
+    assert blender_deltas["activeDeltaSeconds"] == 30
+    assert figma_deltas["activeDeltaSeconds"] == 30
+    assert figma_heartbeat_deltas["idleDeltaSeconds"] == 80
+    assert unity_heartbeat_deltas["idleDeltaSeconds"] == 0
+    assert unity_heartbeat_deltas["activeDeltaSeconds"] == 0
 
 
 def test_second_plugin_heartbeat_does_not_create_tiny_duplicate_idle_row():
@@ -902,6 +992,7 @@ def test_heartbeat_idle_threshold_uses_plugin_interval():
 def test_blender_file_saved_is_counted_as_saved_file():
     saved = _saved_prefab_delta(
         {
+            "source": "bal",
             "eventType": "file_saved",
             "metadata": {
                 "path": "/projects/scene/Shot01.blend",
@@ -911,6 +1002,150 @@ def test_blender_file_saved_is_counted_as_saved_file():
     )
 
     assert saved == {"path": "/projects/scene/Shot01.blend", "name": "Shot01.blend", "saveCount": 1}
+
+
+def test_figma_file_saved_is_counted_as_saved_file():
+    saved = _saved_prefab_delta(
+        {
+            "source": "fch",
+            "eventType": "file_saved",
+            "metadata": {
+                "path": "https://www.figma.com/design/abc123/Game-HUD",
+                "name": "Game HUD",
+                "fileKey": "abc123",
+            },
+        }
+    )
+
+    assert saved == {"path": "https://www.figma.com/design/abc123/Game-HUD", "name": "Game HUD", "saveCount": 1}
+
+
+def test_author_alias_rebuilds_raw_events_into_target_author():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Unknown User", "displayName": "Unknown User"})
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "figma-1",
+            "source": "fch",
+            "pluginVersion": "0.1.0",
+            "author": "Unknown User",
+            "authorEmail": "",
+            "projectId": "figma",
+            "sessionId": "figma-session",
+            "deviceId": "figma-device",
+            "batchId": "batch-1",
+            "rawReportId": "raw-1",
+            "reportType": "auto",
+            "date": "2026-04-29",
+            "eventType": "selection",
+            "occurredAtUtc": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-29T10:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "metadata": {},
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "figma-2",
+            "source": "fch",
+            "pluginVersion": "0.1.0",
+            "author": "Unknown User",
+            "authorEmail": "",
+            "projectId": "figma",
+            "sessionId": "figma-session",
+            "deviceId": "figma-device",
+            "batchId": "batch-1",
+            "rawReportId": "raw-1",
+            "reportType": "auto",
+            "date": "2026-04-29",
+            "eventType": "selection",
+            "occurredAtUtc": dt.datetime(2026, 4, 29, 10, 1, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-29T10:01:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 1, tzinfo=dt.UTC),
+            "metadata": {},
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "figma-3",
+            "source": "fch",
+            "pluginVersion": "0.1.0",
+            "author": "Unknown User",
+            "authorEmail": "",
+            "projectId": "figma",
+            "sessionId": "figma-session",
+            "deviceId": "figma-device",
+            "batchId": "batch-1",
+            "rawReportId": "raw-1",
+            "reportType": "auto",
+            "date": "2026-04-29",
+            "eventType": "file_saved",
+            "occurredAtUtc": dt.datetime(2026, 4, 29, 10, 1, 1, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-29T10:01:01+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 1, 1, tzinfo=dt.UTC),
+            "metadata": {
+                "path": "https://www.figma.com/design/abc123/Game-HUD",
+                "name": "Game HUD",
+                "fileKey": "abc123",
+            },
+        }
+    )
+
+    result = repo.upsert_author_alias("Unknown User", "Dmitry Shane")
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    authors = {author["rawAuthor"]: author for author in summary["authors"]}
+    profiles = {profile["rawAuthor"]: profile for profile in summary["profiles"]}
+
+    assert result["ok"] is True
+    assert "Unknown User" not in authors
+    assert "Unknown User" not in profiles
+    assert authors["Dmitry Shane"]["activeSeconds"] > 0
+    assert authors["Dmitry Shane"]["savedPrefabs"] == [
+        {"path": "https://www.figma.com/design/abc123/Game-HUD", "name": "Game HUD", "saveCount": 1}
+    ]
+
+
+def test_author_alias_delete_restores_source_author_listing():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "figma-1",
+            "source": "fch",
+            "pluginVersion": "0.1.0",
+            "author": "Unknown User",
+            "projectId": "figma",
+            "sessionId": "figma-session",
+            "date": "2026-04-29",
+            "eventType": "selection",
+            "occurredAtUtc": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-29T10:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "metadata": {},
+        }
+    )
+
+    repo.upsert_author_alias("Unknown User", "Dmitry Shane")
+    repo.delete_author_alias("Unknown User")
+
+    assert "Unknown User" in {profile["rawAuthor"] for profile in repo.author_profiles()}
+
+
+def test_non_figma_file_saved_still_requires_blend_file():
+    saved = _saved_prefab_delta(
+        {
+            "source": "bal",
+            "eventType": "file_saved",
+            "metadata": {
+                "path": "https://www.figma.com/design/abc123/Game-HUD",
+                "name": "Game HUD",
+                "fileKey": "abc123",
+            },
+        }
+    )
+
+    assert saved is None
 
 
 def test_live_telegram_summary_adds_open_day_and_break():

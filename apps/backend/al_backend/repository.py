@@ -88,6 +88,8 @@ class Repository:
             unique=True,
         )
         self.db.author_profiles.create_index("rawAuthor", unique=True)
+        self.db.author_aliases.create_index("sourceRawAuthor", unique=True)
+        self.db.author_aliases.create_index("targetRawAuthor")
         self.db.author_profiles.create_index("telegramUsername", unique=True, sparse=True)
         self.db.break_events.create_index([("telegramUsername", ASCENDING), ("timestamp", DESCENDING)])
         self.db.break_sessions.create_index("telegramUsername", unique=True)
@@ -246,13 +248,84 @@ class Repository:
         return self.default_send_interval_seconds
 
     def is_plugin_enabled_for_author(self, author: str) -> bool:
-        author = _normalize_author(author)
+        author = self.resolve_author_alias(_normalize_author(author))
         profile = self.db.author_profiles.find_one({"rawAuthor": author}, {"pluginEnabled": 1})
 
         if profile and profile.get("pluginEnabled") is False:
             return False
 
         return True
+
+    def resolve_author_alias(self, raw_author: str | None) -> str:
+        normalized_author = _normalize_author(raw_author or "Unknown User")
+        alias = self.db.author_aliases.find_one({"sourceRawAuthor": normalized_author}, {"_id": 0, "targetRawAuthor": 1})
+
+        if alias and alias.get("targetRawAuthor"):
+            return _normalize_author(alias.get("targetRawAuthor"))
+
+        return normalized_author
+
+    def author_aliases(self) -> list[dict[str, Any]]:
+        return list(self.db.author_aliases.find({}, {"_id": 0}).sort("sourceRawAuthor", ASCENDING))
+
+    def upsert_author_alias(self, source_raw_author: str, target_raw_author: str) -> dict[str, Any]:
+        source = _normalize_author(source_raw_author)
+        target = _normalize_author(target_raw_author)
+
+        if not source or not target:
+            return {"ok": False, "error": "Source and target authors are required"}
+
+        if source == target:
+            return {"ok": False, "error": "Source and target authors must be different"}
+
+        if target not in self.list_authors():
+            return {"ok": False, "error": "Target profile does not exist"}
+
+        now = dt.datetime.now(dt.UTC)
+        self.db.author_profiles.update_one(
+            {"rawAuthor": target},
+            {
+                "$setOnInsert": {
+                    "rawAuthor": target,
+                    "displayName": target,
+                    "team": "",
+                    "pluginEnabled": True,
+                    "authorColor": _author_color(target),
+                    "createdAt": now,
+                },
+                "$set": {
+                    "updatedAt": now,
+                },
+            },
+            upsert=True,
+        )
+        self.db.author_aliases.update_one(
+            {"sourceRawAuthor": source},
+            {
+                "$set": {
+                    "sourceRawAuthor": source,
+                    "targetRawAuthor": target,
+                    "updatedAt": now,
+                },
+                "$setOnInsert": {
+                    "createdAt": now,
+                },
+            },
+            upsert=True,
+        )
+        self.db.author_profiles.delete_many({"rawAuthor": source})
+        self.rebuild_aggregates_if_needed(force=True)
+        return {"ok": True, "alias": {"sourceRawAuthor": source, "targetRawAuthor": target}}
+
+    def delete_author_alias(self, source_raw_author: str) -> dict[str, Any]:
+        source = _normalize_author(source_raw_author)
+
+        if not source:
+            return {"ok": False, "error": "Source author is required"}
+
+        result = self.db.author_aliases.delete_one({"sourceRawAuthor": source})
+        self.rebuild_aggregates_if_needed(force=True)
+        return {"ok": True, "deleted": getattr(result, "deleted_count", 0)}
 
     def upsert_interval_settings(
         self,
@@ -379,7 +452,8 @@ class Repository:
     ) -> str:
         now = dt.datetime.now(dt.UTC)
         payload = dict(payload)
-        payload["author"] = _normalize_author(payload.get("author") or "Unknown User")
+        original_author = _normalize_author(payload.get("author") or "Unknown User")
+        payload["author"] = self.resolve_author_alias(original_author)
         normalized_time_zone = _author_configured_time_zone_id(payload["author"]) or _valid_time_zone_id(payload.get("timeZoneId"))
 
         if normalized_time_zone:
@@ -431,10 +505,25 @@ class Repository:
         return str(raw_result.inserted_id)
 
     def list_authors(self) -> list[str]:
-        authors = set(author for author in self.db.activity_snapshots.distinct("author") if author)
-        authors.update(author for author in self.db.daily_author_activity.distinct("author") if author)
-        authors.update(author for author in self.db.raw_activity_events.distinct("author") if author)
-        authors.update(author for author in self.db.author_profiles.distinct("rawAuthor") if author)
+        alias_sources = {item.get("sourceRawAuthor") for item in self.author_aliases()}
+        authors = set()
+
+        for author in self.db.activity_snapshots.distinct("author"):
+            if author:
+                authors.add(self.resolve_author_alias(author))
+
+        for author in self.db.daily_author_activity.distinct("author"):
+            if author:
+                authors.add(self.resolve_author_alias(author))
+
+        for author in self.db.raw_activity_events.distinct("author"):
+            if author:
+                authors.add(self.resolve_author_alias(author))
+
+        for author in self.db.author_profiles.distinct("rawAuthor"):
+            if author and author not in alias_sources:
+                authors.add(author)
+
         return sorted(authors)
 
     def request_report_refresh(self, author: str | None = None) -> dict[str, Any]:
@@ -819,6 +908,7 @@ class Repository:
             "overtimeSavedPrefabs": sorted(overtime_saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True),
             "authors": sorted(author_rows, key=lambda item: item["displayName"].lower()),
             "profiles": self.author_profiles(),
+            "authorAliases": self.author_aliases(),
             "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]),
         }
 
@@ -1613,10 +1703,10 @@ class Repository:
             if item.get("rawAuthor")
         }
 
-    def rebuild_aggregates_if_needed(self) -> None:
+    def rebuild_aggregates_if_needed(self, force: bool = False) -> None:
         metadata = self.db.aggregate_metadata.find_one({"kind": "activity"})
 
-        if metadata and metadata.get("version") == self.aggregates_version:
+        if not force and metadata and metadata.get("version") == self.aggregates_version:
             return
 
         self.db.report_rows.delete_many({})
@@ -1634,12 +1724,13 @@ class Repository:
             deltas = self._apply_raw_event_to_aggregates(event)
             if not _has_time_delta(deltas):
                 continue
+            resolved_author = self.resolve_author_alias(event.get("author") or "Unknown User")
 
             self.db.report_rows.insert_one(
                 {
                     "source": event.get("source"),
                     "pluginVersion": event.get("pluginVersion"),
-                    "author": event.get("author") or "Unknown User",
+                    "author": resolved_author,
                     "authorEmail": event.get("authorEmail", ""),
                     "projectId": event.get("projectId") or "",
                     "sessionId": event.get("sessionId") or "",
@@ -1684,6 +1775,8 @@ class Repository:
         )
 
     def _apply_snapshot_to_aggregates(self, snapshot: dict[str, Any]) -> None:
+        snapshot = dict(snapshot)
+        snapshot["author"] = self.resolve_author_alias(snapshot.get("author") or "Unknown User")
         self.update_author_time_zone(snapshot.get("author") or "Unknown User", snapshot.get("timeZoneId"), snapshot.get("timeZoneDisplayName"))
         session_key = _session_key(snapshot)
         previous = self.db.aggregate_session_state.find_one({"_id": session_key}) or {}
@@ -1710,7 +1803,7 @@ class Repository:
         challenge_id: str,
         device_id: str | None,
     ) -> None:
-        author = str(payload.get("author") or "Unknown User")
+        author = self.resolve_author_alias(str(payload.get("author") or "Unknown User"))
         author_email = str(payload.get("authorEmail") or "")
         project_id = str(payload.get("projectId") or "")
         session_id = str(payload.get("sessionId") or "")
@@ -1813,6 +1906,8 @@ class Repository:
         self.db.report_rows.insert_one(row)
 
     def _apply_raw_event_to_aggregates(self, event: dict[str, Any]) -> dict[str, Any]:
+        event = dict(event)
+        event["author"] = self.resolve_author_alias(event.get("author") or "Unknown User")
         self.update_author_time_zone(event.get("author") or "Unknown User", event.get("timeZoneId"), event.get("timeZoneDisplayName"))
         state_key = _raw_event_session_key(event)
         previous = self.db.aggregate_session_state.find_one({"_id": state_key}) or {}
@@ -2174,7 +2269,10 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
     if event_type in {"prefab_saved", "asset_saved"} and not lower_path.endswith(".prefab"):
         return None
 
-    if event_type == "file_saved" and not lower_path.endswith(".blend"):
+    if event_type == "file_saved" and event.get("source") == "fch":
+        if "figma.com/" not in lower_path and not metadata.get("fileKey"):
+            return None
+    elif event_type == "file_saved" and not lower_path.endswith(".blend"):
         return None
 
     name = str(metadata.get("name") or path.rsplit("/", 1)[-1])

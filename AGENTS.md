@@ -20,6 +20,8 @@ When working on Unity or Blender Activity Logger plugin code, edit the linked pa
 
 Treat `com.al.ual` as the active plugin source for Unity and Blender work.
 
+When creating new Activity Logger plugins, keep them minimal and purpose-built for logging only. Do not create README files, standalone documentation, extra settings pages, sample apps, or other nonessential scaffolding unless the user explicitly asks for them.
+
 The Blender add-on source lives in:
 
 ```text
