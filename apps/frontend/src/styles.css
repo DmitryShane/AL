@@ -614,6 +614,56 @@ p {
   font-size: 12px;
 }
 
+.author-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.productivity-badge {
+  display: grid;
+  min-width: 66px;
+  justify-items: center;
+  gap: 1px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  padding: 5px 8px;
+  text-align: center;
+}
+
+.productivity-badge strong {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.productivity-badge span {
+  color: #718093;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.productivity-badge.good {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #16834a;
+}
+
+.productivity-badge.warning {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #d97706;
+}
+
+.productivity-badge.bad {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #dc2626;
+}
+
 .activity-grid,
 .totals {
   display: grid;

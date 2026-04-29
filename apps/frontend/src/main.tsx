@@ -5,7 +5,9 @@ import { AuthorsTable } from "./components/AuthorsTable";
 import { HourlyActivityChart } from "./components/HourlyActivityChart";
 import "./styles.css";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "https://activity.mempic.com";
+const LOCAL_HOSTNAMES = new Set(["127.0.0.1", "localhost"]);
+const IS_LOCAL_DASHBOARD = LOCAL_HOSTNAMES.has(window.location.hostname);
+const API_URL = import.meta.env.VITE_API_URL ?? (IS_LOCAL_DASHBOARD ? "http://127.0.0.1:8000" : "https://activity.mempic.com");
 const REFRESH_INTERVAL_MS = 10000;
 const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
 const ACTIVITY_AUTHOR_STORAGE_KEY = "AL.Dashboard.ActivityAuthor";
@@ -180,6 +182,7 @@ type AnalyticsAuthorSummary = {
   authorEmail?: string;
   displayName: string;
   team?: string;
+  authorColor?: string;
   months: AnalyticsMonth[];
 };
 
@@ -304,7 +307,11 @@ function App() {
   useEffect(() => {
     async function loadAuth() {
       try {
-        const response = await apiFetch("/api/v1/auth/me");
+        let response = await apiFetch("/api/v1/auth/me");
+
+        if (!response.ok && IS_LOCAL_DASHBOARD) {
+          response = await apiFetch("/api/v1/auth/dev-login", { method: "POST" });
+        }
 
         if (response.ok) {
           const payload = await response.json();
@@ -694,7 +701,7 @@ function AnalyticsPage() {
                 key={author.rawAuthor}
                 onClick={() => setSelectedAuthor(author.rawAuthor)}
               >
-                <span className="avatar">{initials(author.displayName)}</span>
+                <span className="avatar" style={avatarStyle(author.authorColor)}>{initials(author.displayName)}</span>
                 <strong>{author.displayName}</strong>
                 <small>{author.team || "No team"}</small>
                 <div className="mini-metrics">
@@ -1276,7 +1283,7 @@ function AnalyticsHierarchy({ author, year }: { author: AnalyticsAuthorSummary; 
   return (
     <section className="analytics-hierarchy">
       <div className="analytics-selected-author">
-        <span className="avatar">{initials(author.displayName)}</span>
+        <span className="avatar" style={avatarStyle(author.authorColor)}>{initials(author.displayName)}</span>
         <div>
           <strong>{author.displayName}</strong>
           <small title={author.authorEmail || author.rawAuthor}>{author.authorEmail || author.rawAuthor}</small>
@@ -1415,7 +1422,7 @@ function AlertsPage({ authors }: { authors: AuthorRow[] }) {
           return (
             <article className="alert-author-card" key={author.rawAuthor}>
               <div className="alert-author-header">
-                <span className="avatar">{initials(author.displayName)}</span>
+                <span className="avatar" style={avatarStyle(author.authorColor)}>{initials(author.displayName)}</span>
                 <div>
                   <strong>{author.displayName}</strong>
                   <small>{author.authorEmail || author.rawAuthor}</small>
@@ -1497,13 +1504,18 @@ function ActivityPage({
             key={item.rawAuthor}
             onClick={() => setSelectedAuthor(item.rawAuthor)}
           >
-            <span className="avatar">{initials(item.displayName)}</span>
+            <span className="avatar" style={avatarStyle(item.authorColor)}>{initials(item.displayName)}</span>
             <strong>{item.displayName}</strong>
             <small>{item.team || "No team"}</small>
-            <div className="mini-metrics">
-              <span>{formatDuration(item.activeSeconds)} active</span>
-              <span>{formatDuration(item.idleSeconds)} idle</span>
-              <span>{formatDuration(item.breakSeconds)} break</span>
+            <div className="author-card-footer">
+              <div className="mini-metrics">
+                <span>{formatDuration(item.activeSeconds)} active</span>
+                <span>{formatDuration(item.idleSeconds)} idle</span>
+                <span>{formatDuration(item.breakSeconds)} break</span>
+              </div>
+              <div className={`productivity-badge ${productivityTone(item.productivity)}`}>
+                <strong>{item.productivity.toFixed(0)}%</strong>
+              </div>
             </div>
           </button>
         ))}
@@ -2652,6 +2664,18 @@ function productivityClassName(productivity: number) {
   return "metric-value bad";
 }
 
+function productivityTone(productivity: number) {
+  if (productivity > 80) {
+    return "good";
+  }
+
+  if (productivity >= 50) {
+    return "warning";
+  }
+
+  return "bad";
+}
+
 function breakClassName(seconds: number) {
   return seconds > 3600 ? "metric-value bad" : "metric-value";
 }
@@ -2742,14 +2766,26 @@ function formatAuthorTime(report: Report) {
     return "-";
   }
 
+  const recordedAt = new Date(report.recordedAt);
+
   try {
     return new Intl.DateTimeFormat(undefined, {
       timeStyle: "short",
       timeZone: report.timeZoneId
-    }).format(new Date(report.recordedAt));
+    }).format(recordedAt);
   } catch {
-    return formatTimestamp(report.recordedAt);
+    return formatOffsetTimestampTime(report.recordedAt);
   }
+}
+
+function formatOffsetTimestampTime(value: string) {
+  const match = value.match(/T(\d{2}):(\d{2})/);
+
+  if (match) {
+    return `${match[1]}:${match[2]}`;
+  }
+
+  return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(new Date(value));
 }
 
 function formatTimeZoneLabel(report: Report) {
@@ -2870,6 +2906,10 @@ function initials(value: string) {
     .join("");
 }
 
+function avatarStyle(authorColor?: string) {
+  return authorColor ? { backgroundColor: authorColor } : undefined;
+}
+
 function pageTitle(page: Page) {
   if (page === "activity") {
     return "Activity";
@@ -2951,12 +2991,9 @@ function todayRange(): DateRange {
 }
 
 function currentWeekRange(): DateRange {
-  const now = new Date();
-  const day = now.getDay() || 7;
-  const start = new Date(now);
-  start.setDate(now.getDate() - day + 1);
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
+  const end = new Date();
+  const start = new Date(end);
+  start.setDate(end.getDate() - 7);
   return { startDate: toDateInputValue(start), endDate: toDateInputValue(end) };
 }
 

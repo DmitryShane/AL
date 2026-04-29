@@ -16,6 +16,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Guard against data artifacts
+        run: ./scripts/check-no-data-artifacts.sh
+
       - name: Configure SSH
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}

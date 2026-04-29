@@ -288,6 +288,29 @@ def test_author_time_zone_update_rebuckets_existing_telegram_rows():
     assert repo.db.day_sessions.items[0]["date"] == "2026-04-29"
     assert repo.db.report_rows.items[0]["date"] == "2026-04-29"
     assert repo.db.report_rows.items[0]["timeZoneId"] == "Europe/Madrid"
+    assert repo.db.report_rows.items[0]["timeZoneDisplayName"] == "CEST"
+
+
+def test_windows_time_zone_update_rebuckets_existing_telegram_rows():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Evgeniy Dotsenko", "displayName": "Evgeniy Dotsenko", "telegramUsername": "ama_deus"})
+
+    repo.record_break_event("ama_deus", "online", "2026-04-29T21:30:00Z")
+
+    assert repo.db.day_sessions.items[0]["date"] == "2026-04-29"
+    assert repo.db.report_rows.items[0]["date"] == "2026-04-29"
+    assert repo.db.report_rows.items[0]["timeZoneId"] == "UTC"
+
+    repo.update_author_time_zone("Evgeniy Dotsenko", "FLE Standard Time", "(UTC+02:00) Sofia")
+
+    assert repo.db.author_profiles.items[0]["timeZoneId"] == "Europe/Sofia"
+    assert repo.db.author_profiles.items[0]["timeZoneDisplayName"] == "(UTC+02:00) Sofia"
+    assert repo.db.break_events.items[0]["date"] == "2026-04-30"
+    assert repo.db.break_events.items[0]["timeZoneId"] == "Europe/Sofia"
+    assert repo.db.day_sessions.items[0]["date"] == "2026-04-30"
+    assert repo.db.report_rows.items[0]["date"] == "2026-04-30"
+    assert repo.db.report_rows.items[0]["timeZoneId"] == "Europe/Sofia"
+    assert repo.db.report_rows.items[0]["timeZoneDisplayName"] == "(UTC+02:00) Sofia"
 
 
 def test_author_local_today_summary_includes_authors_on_different_local_dates():
@@ -822,6 +845,7 @@ def test_hourly_break_splits_across_hours():
         "Dmitry Shane",
         dt.datetime(2026, 4, 28, 16, 50, tzinfo=dt.UTC),
         dt.datetime(2026, 4, 28, 17, 20, tzinfo=dt.UTC),
+        "UTC",
     )
 
     assert buckets[("Dmitry Shane", "2026-04-28")][16]["breakSeconds"] == 10 * 60
@@ -839,7 +863,25 @@ def test_hourly_break_splits_across_midnight():
         "Dmitry Shane",
         dt.datetime(2026, 4, 28, 23, 50, tzinfo=dt.UTC),
         dt.datetime(2026, 4, 29, 0, 20, tzinfo=dt.UTC),
+        "UTC",
     )
 
     assert buckets[("Dmitry Shane", "2026-04-28")][23]["breakSeconds"] == 10 * 60
     assert buckets[("Dmitry Shane", "2026-04-29")][0]["breakSeconds"] == 20 * 60
+
+
+def test_hourly_break_uses_author_time_zone():
+    buckets = {("Dmitry", "2026-04-29"): _empty_hourly_activity()}
+
+    _add_break_interval_to_buckets(
+        buckets,
+        "Dmitry",
+        dt.datetime(2026, 4, 29, 9, 36, 39, tzinfo=dt.UTC),
+        dt.datetime(2026, 4, 29, 10, 31, 59, tzinfo=dt.UTC),
+        "Europe/Madrid",
+    )
+
+    assert buckets[("Dmitry", "2026-04-29")][9]["breakSeconds"] == 0
+    assert buckets[("Dmitry", "2026-04-29")][10]["breakSeconds"] == 0
+    assert buckets[("Dmitry", "2026-04-29")][11]["breakSeconds"] == 1401
+    assert buckets[("Dmitry", "2026-04-29")][12]["breakSeconds"] == 1919

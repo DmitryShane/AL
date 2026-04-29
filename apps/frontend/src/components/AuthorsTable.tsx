@@ -14,6 +14,7 @@ export type AuthorsTableRow = {
   overtimeActiveSeconds: number;
   breakSeconds: number;
   productivity: number;
+  authorColor?: string;
   status?: "online" | "stale";
   alertStats?: {
     total: number;
@@ -47,7 +48,7 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
       {authors.map((author) => (
         <div className="authors-row" key={author.rawAuthor}>
           <div className="author-cell" title={author.authorEmail || author.rawAuthor}>
-            <span className="avatar">{initials(author.displayName)}</span>
+            <span className="avatar" style={avatarStyle(author.authorColor)}>{initials(author.displayName)}</span>
             <div>
               <strong>{author.displayName}</strong>
               <small className="author-email" title={author.authorEmail || author.rawAuthor}>{author.authorEmail || author.rawAuthor}</small>
@@ -80,6 +81,10 @@ function initials(value: string) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("");
+}
+
+function avatarStyle(authorColor?: string) {
+  return authorColor ? { backgroundColor: authorColor } : undefined;
 }
 
 function formatDuration(seconds: number) {

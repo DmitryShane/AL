@@ -43,6 +43,9 @@ DEFAULT_CALENDAR_REASONS = [
     {"id": "absence", "label": "Absence"},
 ]
 AUTHOR_COLORS = ["#13a37b", "#5b4dff", "#f59e0b", "#dc2626", "#0ea5e9", "#a855f7", "#14b8a6", "#ef4444"]
+WINDOWS_TIME_ZONE_IDS = {
+    "FLE Standard Time": "Europe/Sofia",
+}
 
 
 class Repository:
@@ -371,6 +374,12 @@ class Repository:
         now = dt.datetime.now(dt.UTC)
         payload = dict(payload)
         payload["author"] = _normalize_author(payload.get("author") or "Unknown User")
+        normalized_time_zone = _valid_time_zone_id(payload.get("timeZoneId"))
+
+        if normalized_time_zone:
+            payload["timeZoneId"] = normalized_time_zone
+            payload["timeZoneDisplayName"] = str(payload.get("timeZoneDisplayName") or "").strip() or normalized_time_zone
+
         self.update_author_time_zone(payload.get("author"), payload.get("timeZoneId"), payload.get("timeZoneDisplayName"))
         report_type = self.consume_expected_report_type(payload.get("author"))
         raw_result = self.db.raw_reports.insert_one(
@@ -462,7 +471,7 @@ class Repository:
 
     def latest_reports(
         self,
-        limit: int = 100,
+        limit: int | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
         date_mode: str | None = None,
@@ -507,7 +516,7 @@ class Repository:
             item["receivedAt"] = _iso(item.get("receivedAt"))
             reports.append(item)
 
-            if len(reports) >= limit:
+            if limit is not None and len(reports) >= limit:
                 break
 
         return reports
@@ -783,6 +792,7 @@ class Repository:
                     "authorEmail": profile.get("authorEmail", ""),
                     "displayName": _display_name(raw_author, profile),
                     "team": profile.get("team", ""),
+                    "authorColor": profile.get("authorColor") or _author_color(raw_author),
                     "months": _analytics_year_months(author_docs, year),
                 }
             )
@@ -1031,8 +1041,11 @@ class Repository:
             return
 
         display_name = str(time_zone_display_name or "").strip() or normalized_time_zone
-        current = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0, "timeZoneId": 1}) or {}
+        current = self.db.author_profiles.find_one(
+            {"rawAuthor": raw_author}, {"_id": 0, "timeZoneId": 1, "timeZoneDisplayName": 1}
+        ) or {}
         previous_time_zone = _valid_time_zone_id(current.get("timeZoneId"))
+        previous_display_name = str(current.get("timeZoneDisplayName") or "").strip()
         self.db.author_profiles.update_one(
             {"rawAuthor": raw_author},
             {
@@ -1051,17 +1064,23 @@ class Repository:
             upsert=True,
         )
 
-        if previous_time_zone != normalized_time_zone:
-            self._rebucket_author_telegram_time_zone(raw_author, normalized_time_zone)
+        if previous_time_zone != normalized_time_zone or previous_display_name != display_name:
+            self._rebucket_author_telegram_time_zone(raw_author, normalized_time_zone, display_name)
 
-    def _rebucket_author_telegram_time_zone(self, raw_author: str, time_zone_id: str) -> None:
+    def _rebucket_author_telegram_time_zone(self, raw_author: str, time_zone_id: str, time_zone_display_name: str) -> None:
         for event in self.db.break_events.find({"rawAuthor": raw_author}, {"_id": 1, "timestamp": 1}):
             event_time = _coerce_datetime(event.get("timestamp"))
 
             if event_time:
                 self.db.break_events.update_one(
                     _document_identity_query(event),
-                    {"$set": {"date": _telegram_event_date(event_time, time_zone_id), "timeZoneId": time_zone_id}},
+                    {
+                        "$set": {
+                            "date": _telegram_event_date(event_time, time_zone_id),
+                            "timeZoneId": time_zone_id,
+                            "timeZoneDisplayName": time_zone_display_name,
+                        }
+                    },
                 )
 
         for collection_name, time_field in (
@@ -1077,7 +1096,13 @@ class Repository:
                 if event_time:
                     collection.update_one(
                         _document_identity_query(item),
-                        {"$set": {"date": _telegram_event_date(event_time, time_zone_id), "timeZoneId": time_zone_id}},
+                        {
+                            "$set": {
+                                "date": _telegram_event_date(event_time, time_zone_id),
+                                "timeZoneId": time_zone_id,
+                                "timeZoneDisplayName": time_zone_display_name,
+                            }
+                        },
                     )
 
         for row in self.db.report_rows.find({"source": "telegram", "author": raw_author}, {"_id": 1, "recordedAt": 1}):
@@ -1090,7 +1115,7 @@ class Repository:
                         "$set": {
                             "date": _telegram_event_date(event_time, time_zone_id),
                             "timeZoneId": time_zone_id,
-                            "timeZoneDisplayName": time_zone_id,
+                            "timeZoneDisplayName": time_zone_display_name,
                         }
                     },
                 )
@@ -1344,7 +1369,8 @@ class Repository:
 
         started_at = _coerce_datetime(session["startedAt"]) or event_time
         break_seconds = max(0, int((event_time - started_at).total_seconds()))
-        break_date = str(session.get("date") or _telegram_event_date(started_at, _valid_time_zone_id(session.get("timeZoneId")) or "UTC"))
+        time_zone_id = _valid_time_zone_id(session.get("timeZoneId")) or "UTC"
+        break_date = str(session.get("date") or _telegram_event_date(started_at, time_zone_id))
         self.db.break_sessions.delete_one({"telegramUsername": normalized_telegram})
         self.db.break_intervals.insert_one(
             {
@@ -1353,6 +1379,7 @@ class Repository:
                 "startedAt": started_at,
                 "endedAt": event_time,
                 "date": break_date,
+                "timeZoneId": time_zone_id,
                 "breakSeconds": break_seconds,
             }
         )
@@ -1374,8 +1401,9 @@ class Repository:
 
         authors = sorted({author for author, _date in author_dates})
         dates = sorted({_date for _author, _date in author_dates})
-        min_start = _date_start(dates[0])
-        max_end = _date_start(dates[-1]) + dt.timedelta(days=1)
+        profiles = self._profiles_by_raw_author()
+        min_start = _date_start(dates[0]) - dt.timedelta(days=1)
+        max_end = _date_start(dates[-1]) + dt.timedelta(days=2)
         buckets = {key: _empty_hourly_activity() for key in author_dates}
 
         interval_query = {
@@ -1390,6 +1418,7 @@ class Repository:
                 interval.get("rawAuthor"),
                 _coerce_datetime(interval.get("startedAt")),
                 _coerce_datetime(interval.get("endedAt")),
+                _author_time_zone_id(interval.get("rawAuthor"), profiles, interval.get("timeZoneId")),
             )
 
         now = dt.datetime.now(dt.UTC)
@@ -1400,7 +1429,13 @@ class Repository:
             if not started_at:
                 continue
 
-            _add_break_interval_to_buckets(buckets, session.get("rawAuthor"), started_at, now)
+            _add_break_interval_to_buckets(
+                buckets,
+                session.get("rawAuthor"),
+                started_at,
+                now,
+                _author_time_zone_id(session.get("rawAuthor"), profiles, session.get("timeZoneId")),
+            )
 
         return buckets
 
@@ -2005,7 +2040,7 @@ def _is_activity_event(event: dict[str, Any] | str) -> bool:
 
         if event.get("source") == "bal" and event_type == "scene_changed":
             metadata = event.get("metadata") or {}
-            return bool(metadata.get("inputType"))
+            return bool(metadata.get("inputType") or metadata.get("changeType") == "object_update")
     else:
         event_type = event
 
@@ -2361,6 +2396,8 @@ def _valid_time_zone_id(value: Any) -> str | None:
 
     if not normalized:
         return None
+
+    normalized = WINDOWS_TIME_ZONE_IDS.get(normalized, normalized)
 
     try:
         ZoneInfo(normalized)
@@ -2748,15 +2785,22 @@ def _add_break_interval_to_buckets(
     raw_author: Any,
     started_at: dt.datetime | None,
     ended_at: dt.datetime | None,
+    time_zone_id: str,
 ) -> None:
     if not raw_author or not started_at or not ended_at or ended_at <= started_at:
         return
 
-    current = started_at
+    try:
+        zone = ZoneInfo(time_zone_id)
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
 
-    while current < ended_at:
+    current = started_at.astimezone(zone)
+    local_end = ended_at.astimezone(zone)
+
+    while current < local_end:
         hour_end = current.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
-        segment_end = min(hour_end, ended_at)
+        segment_end = min(hour_end, local_end)
         date = current.date().isoformat()
         key = (str(raw_author), date)
         target = buckets.get(key)

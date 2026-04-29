@@ -19,3 +19,19 @@ Build/
 Builds/
 Logs/
 UserSettings/
+
+# Database dumps, backups, and local production snapshots
+*.archive.gz
+*.bson
+*.dump
+*.sql
+*.sqlite
+*.sqlite3
+dump/
+dumps/
+backups/
+mongo-dump/
+mongo-backup/
+al-prod-sync/
+backend.env
+telegram-bot.env

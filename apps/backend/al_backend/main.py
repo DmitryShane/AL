@@ -68,7 +68,23 @@ PUBLIC_API_PATHS = {
     "/api/v1/break-events",
     "/api/v1/auth/login",
     "/api/v1/auth/me",
+    "/api/v1/auth/dev-login",
 }
+
+
+def is_local_dev_request(request: Request) -> bool:
+    return request.url.hostname in {"127.0.0.1", "localhost"}
+
+
+def set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
 
 
 @app.middleware("http")
@@ -117,14 +133,23 @@ def login(credentials: LoginIn, response: Response) -> dict:
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     token = app.state.repo.create_site_session(user["email"])
-    response.set_cookie(
-        SESSION_COOKIE_NAME,
-        token,
-        max_age=SESSION_MAX_AGE_SECONDS,
-        httponly=True,
-        samesite="lax",
-        path="/",
-    )
+    set_session_cookie(response, token)
+    return {"ok": True, "user": user}
+
+
+@app.post("/api/v1/auth/dev-login")
+def dev_login(request: Request, response: Response) -> dict:
+    if not is_local_dev_request(request):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    users = [user for user in app.state.repo.site_users() if user.get("active")]
+    user = next((item for item in users if item.get("role") == "admin"), users[0] if users else None)
+
+    if not user:
+        raise HTTPException(status_code=404, detail="No active local site user")
+
+    token = app.state.repo.create_site_session(user["email"])
+    set_session_cookie(response, token)
     return {"ok": True, "user": user}
 
 
