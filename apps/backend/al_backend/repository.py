@@ -44,8 +44,13 @@ DEFAULT_CALENDAR_REASONS = [
     {"id": "absence", "label": "Absence"},
 ]
 AUTHOR_COLORS = ["#13a37b", "#5b4dff", "#f59e0b", "#dc2626", "#0ea5e9", "#a855f7", "#14b8a6", "#ef4444"]
+AUTHOR_TIME_ZONE_IDS = {
+    "Denis Ostrovskiy": "Europe/Kyiv",
+    "Евгений Доценко": "Europe/Sofia",
+}
 WINDOWS_TIME_ZONE_IDS = {
     "FLE Standard Time": "Europe/Sofia",
+    "FLE Daylight Time": "Europe/Sofia",
 }
 
 
@@ -1036,7 +1041,7 @@ class Repository:
         self, raw_author: str, time_zone_id: Any, time_zone_display_name: Any | None = None
     ) -> None:
         raw_author = _normalize_author(raw_author)
-        normalized_time_zone = _valid_time_zone_id(time_zone_id)
+        normalized_time_zone = _author_configured_time_zone_id(raw_author) or _valid_time_zone_id(time_zone_id)
 
         if not raw_author or not normalized_time_zone:
             return
@@ -2390,6 +2395,10 @@ def _author_color(raw_author: Any) -> str:
 def _normalize_author(value: Any) -> str:
     normalized = unicodedata.normalize("NFC", str(value or "")).strip()
     return normalized or "Unknown User"
+
+
+def _author_configured_time_zone_id(raw_author: str) -> str | None:
+    return _valid_time_zone_id(AUTHOR_TIME_ZONE_IDS.get(raw_author))
 
 
 def _valid_time_zone_id(value: Any) -> str | None:

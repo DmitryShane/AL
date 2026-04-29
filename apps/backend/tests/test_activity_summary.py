@@ -313,6 +313,15 @@ def test_windows_time_zone_update_rebuckets_existing_telegram_rows():
     assert repo.db.report_rows.items[0]["timeZoneDisplayName"] == "(UTC+02:00) Sofia"
 
 
+def test_configured_author_time_zone_overrides_windows_time_zone():
+    repo = fake_repository()
+
+    repo.update_author_time_zone("Denis Ostrovskiy", "FLE Daylight Time", "FLE Daylight Time")
+
+    assert repo.db.author_profiles.items[0]["timeZoneId"] == "Europe/Kyiv"
+    assert repo.db.author_profiles.items[0]["timeZoneDisplayName"] == "FLE Daylight Time"
+
+
 def test_author_local_today_summary_includes_authors_on_different_local_dates():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Madrid Author", "displayName": "Madrid Author", "timeZoneId": "Europe/Madrid"})

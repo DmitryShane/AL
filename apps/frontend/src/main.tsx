@@ -2268,7 +2268,7 @@ function ReportsTable({ reports }: { reports: Report[] }) {
 
   return (
     <section className="panel table-panel">
-      <h2>Report Rows</h2>
+      <h2>Plugin Reports</h2>
       <div className="table">
         <div className="table-head">
           <span>Source</span>
