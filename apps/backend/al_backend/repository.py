@@ -380,7 +380,7 @@ class Repository:
         now = dt.datetime.now(dt.UTC)
         payload = dict(payload)
         payload["author"] = _normalize_author(payload.get("author") or "Unknown User")
-        normalized_time_zone = _valid_time_zone_id(payload.get("timeZoneId"))
+        normalized_time_zone = _author_configured_time_zone_id(payload["author"]) or _valid_time_zone_id(payload.get("timeZoneId"))
 
         if normalized_time_zone:
             payload["timeZoneId"] = normalized_time_zone

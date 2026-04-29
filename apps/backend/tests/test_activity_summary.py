@@ -322,6 +322,33 @@ def test_configured_author_time_zone_overrides_windows_time_zone():
     assert repo.db.author_profiles.items[0]["timeZoneDisplayName"] == "FLE Daylight Time"
 
 
+def test_configured_author_time_zone_normalizes_saved_report_row():
+    repo = fake_repository()
+    payload = {
+        "author": "Denis Ostrovskiy",
+        "authorEmail": "denis@example.com",
+        "projectId": "project",
+        "sessionId": "session",
+        "deviceId": "device",
+        "timeZoneId": "FLE Daylight Time",
+        "timeZoneDisplayName": "FLE Daylight Time",
+        "events": [
+            {
+                "eventId": "event-1",
+                "eventType": "scene_changed",
+                "occurredAtUtc": "2026-04-29T15:58:07Z",
+                "occurredAtLocal": "2026-04-29T18:58:07+03:00",
+                "metadata": {"inputType": "LEFTMOUSE"},
+            }
+        ],
+    }
+
+    repo.save_report("bal", "0.1.0", "packet", payload, "challenge")
+
+    assert repo.db.author_profiles.items[0]["timeZoneId"] == "Europe/Kyiv"
+    assert repo.db.report_rows.items[0]["timeZoneId"] == "Europe/Kyiv"
+
+
 def test_author_local_today_summary_includes_authors_on_different_local_dates():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Madrid Author", "displayName": "Madrid Author", "timeZoneId": "Europe/Madrid"})
