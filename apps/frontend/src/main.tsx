@@ -8,6 +8,7 @@ import "./styles.css";
 const API_URL = import.meta.env.VITE_API_URL ?? "https://activity.mempic.com";
 const REFRESH_INTERVAL_MS = 10000;
 const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
+const AUTH_HINT_STORAGE_KEY = "AL.Dashboard.Authenticated";
 
 function apiFetch(path: string, init: RequestInit = {}) {
   return fetch(`${API_URL}${path}`, { ...init, credentials: "include" });
@@ -287,6 +288,7 @@ function App() {
   const [page, setPage] = useState<Page>(() => loadSavedPage());
   const [authUser, setAuthUser] = useState<SiteUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [hasAuthHint, setHasAuthHint] = useState(() => localStorage.getItem(AUTH_HINT_STORAGE_KEY) === "true");
   const [health, setHealth] = useState<Health | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>(() => todayRange());
@@ -304,9 +306,16 @@ function App() {
         if (response.ok) {
           const payload = await response.json();
           setAuthUser(payload.user);
+          setHasAuthHint(true);
+          localStorage.setItem(AUTH_HINT_STORAGE_KEY, "true");
+        } else {
+          setHasAuthHint(false);
+          localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
         }
       } catch {
         setAuthUser(null);
+        setHasAuthHint(false);
+        localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
       } finally {
         setAuthLoading(false);
       }
@@ -344,6 +353,8 @@ function App() {
 
       if (summaryResponse.status === 401) {
         setAuthUser(null);
+        setHasAuthHint(false);
+        localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
         return;
       }
 
@@ -421,17 +432,21 @@ function App() {
   async function handleLogout() {
     await apiFetch("/api/v1/auth/logout", { method: "POST" });
     setAuthUser(null);
+    setHasAuthHint(false);
+    localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
     setSummary(null);
     setHealth(null);
   }
 
-  if (authLoading) {
-    return <LoginPage loading onLogin={setAuthUser} />;
+  if (authLoading && !hasAuthHint) {
+    return <LoginPage checkingSession onLogin={setAuthUser} />;
   }
 
-  if (!authUser) {
+  if (!authLoading && !authUser) {
     return <LoginPage onLogin={setAuthUser} />;
   }
+
+  const sessionUser = authUser ?? { email: "", displayName: "Activity Logger", role: "viewer" as const, active: true };
 
   return (
     <div className="app-frame">
@@ -462,15 +477,16 @@ function App() {
             </div>
           ) : null}
           <div className="session-card">
-            <span>{authUser.displayName}</span>
-            <small>{formatSiteRole(authUser.role)}</small>
+            <span>{sessionUser.displayName}</span>
+            <small>{formatSiteRole(sessionUser.role)}</small>
             <button className="icon-button" onClick={() => void handleLogout()} title="Log out">
               <LogOut size={16} />
             </button>
           </div>
         </header>
 
-        {loading ? <p className="notice">Loading dashboard data...</p> : null}
+        {authLoading ? <p className="notice">Restoring dashboard session...</p> : null}
+        {!authLoading && loading ? <p className="notice">Loading dashboard data...</p> : null}
         {error ? <p className="notice error">{error}</p> : null}
 
         {page === "authors" ? (
@@ -495,13 +511,13 @@ function App() {
         {page === "analytics" ? <AnalyticsPage /> : null}
         {page === "calendar" ? <CalendarPage /> : null}
         {page === "alerts" ? <AlertsPage authors={activitySummary.authors} /> : null}
-        {page === "settings" ? <SettingsPage summary={summary} health={health} currentUser={authUser} onSaved={() => void load(false)} /> : null}
+        {page === "settings" ? <SettingsPage summary={summary} health={health} currentUser={sessionUser} onSaved={() => void load(false)} /> : null}
       </main>
     </div>
   );
 }
 
-function LoginPage({ loading = false, onLogin }: { loading?: boolean; onLogin: (user: SiteUser) => void }) {
+function LoginPage({ checkingSession = false, onLogin }: { checkingSession?: boolean; onLogin: (user: SiteUser) => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -562,10 +578,10 @@ function LoginPage({ loading = false, onLogin }: { loading?: boolean; onLogin: (
             required
           />
         </label>
+        {checkingSession ? <p className="notice">Checking session...</p> : null}
         {error ? <p className="notice error">{error}</p> : null}
-        {loading ? <p className="notice">Checking session...</p> : null}
-        <button className="primary-button" type="submit" disabled={loading || submitting}>
-          {submitting ? "Signing in..." : "Enter dashboard"}
+        <button className="primary-button" type="submit" disabled={checkingSession || submitting}>
+          {checkingSession ? "Checking..." : submitting ? "Signing in..." : "Enter dashboard"}
         </button>
       </form>
     </main>
