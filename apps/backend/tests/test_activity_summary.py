@@ -7,7 +7,10 @@ from al_backend.repository import (
     _add_break_interval_to_buckets,
     _apply_breaks_to_hourly_activity,
     _date_query,
+    _empty_event_deltas,
     _empty_hourly_activity,
+    _interval_deltas,
+    _merge_batch_deltas,
     _normalize_telegram_username,
     _plugin_day_seconds,
     _saved_prefab_delta,
@@ -573,9 +576,11 @@ def test_author_day_consumption_spans_plugin_sources():
         {"source": "bal", "projectId": "blender", "author": "Dmitry Shane", "date": "2026-04-28", "activeSeconds": 1800, "idleSeconds": 0}
     )
 
-    consumed = repo._normal_seconds_consumed_for_event({"author": "Dmitry Shane", "date": "2026-04-28", "source": "bal", "projectId": "blender"})
+    consumed = repo._normal_microseconds_consumed_for_event(
+        {"author": "Dmitry Shane", "date": "2026-04-28", "source": "bal", "projectId": "blender"}
+    )
 
-    assert consumed == (8 * 3600) + 1800
+    assert consumed == ((8 * 3600) + 1800) * 1_000_000
 
 
 def test_raw_event_state_spans_unity_and_blender_sources():
@@ -974,48 +979,69 @@ def test_hourly_break_suppresses_small_idle_artifact():
     hourly = _apply_breaks_to_hourly_activity(source, break_buckets)
 
     assert hourly[15]["activeSeconds"] == 553
-    assert hourly[15]["breakSeconds"] == 3047
+    assert hourly[15]["breakSeconds"] == 2991
     assert hourly[15]["idleSeconds"] == 0
 
 
-def test_hourly_activity_fills_small_report_gap_as_idle():
+def test_hourly_activity_does_not_infer_small_report_gap_as_idle():
     source = _empty_hourly_activity()
     source[14]["activeSeconds"] = 3379
 
     hourly = _apply_breaks_to_hourly_activity(source, _empty_hourly_activity())
 
     assert hourly[14]["activeSeconds"] == 3379
-    assert hourly[14]["idleSeconds"] == 221
+    assert hourly[14]["idleSeconds"] == 0
 
 
-def test_hourly_activity_fills_past_hour_gap_as_idle():
+def test_hourly_activity_does_not_infer_past_hour_gap_as_idle():
     source = _empty_hourly_activity()
     source[10]["activeSeconds"] = 1743
     source[10]["idleSeconds"] = 1143
 
-    hourly = _apply_breaks_to_hourly_activity(
-        source,
-        _empty_hourly_activity(),
-        "2026-04-29",
-        "Europe/Madrid",
-        dt.datetime(2026, 4, 29, 18, 44, tzinfo=dt.UTC),
-    )
+    hourly = _apply_breaks_to_hourly_activity(source, _empty_hourly_activity())
 
     assert hourly[10]["activeSeconds"] == 1743
-    assert hourly[10]["idleSeconds"] == 1857
+    assert hourly[10]["idleSeconds"] == 1143
+
+
+def test_hourly_activity_keeps_dmitriy_zero_idle_gap_zero():
+    source = _empty_hourly_activity()
+    source[18]["activeSeconds"] = 3446
+
+    hourly = _apply_breaks_to_hourly_activity(source, _empty_hourly_activity())
+
+    assert hourly[18]["activeSeconds"] == 3446
+    assert hourly[18]["idleSeconds"] == 0
+    assert hourly[18]["breakSeconds"] == 0
+
+
+def test_hourly_activity_preserves_fractional_active_segments():
+    batch = _empty_event_deltas()
+    local_start = dt.datetime(2026, 4, 29, 18, 0, 0, tzinfo=dt.UTC)
+    segment_microseconds = [899_600_000, 900_400_000, 899_600_000, 900_400_000]
+    cursor = local_start
+
+    for microseconds in segment_microseconds:
+        segment_end = cursor + dt.timedelta(microseconds=microseconds)
+        deltas = _interval_deltas(cursor, segment_end, cursor, segment_end, True, 0)
+        _merge_batch_deltas(batch, deltas)
+        cursor = segment_end
+
+    assert batch["activeDeltaSeconds"] == 3600
+    assert batch["hourlyActivityDelta"][18]["activeSeconds"] == 3600
+    assert batch["hourlyActivityDelta"][18]["idleSeconds"] == 0
+
+    hourly = _apply_breaks_to_hourly_activity(batch["hourlyActivityDelta"], _empty_hourly_activity())
+
+    assert hourly[18]["activeSeconds"] == 3600
+    assert hourly[18]["idleSeconds"] == 0
 
 
 def test_hourly_activity_does_not_infer_current_hour_idle():
     source = _empty_hourly_activity()
     source[18]["activeSeconds"] = 1800
 
-    hourly = _apply_breaks_to_hourly_activity(
-        source,
-        _empty_hourly_activity(),
-        "2026-04-29",
-        "Europe/Madrid",
-        dt.datetime(2026, 4, 29, 16, 44, 30, tzinfo=dt.UTC),
-    )
+    hourly = _apply_breaks_to_hourly_activity(source, _empty_hourly_activity())
 
     assert hourly[18]["activeSeconds"] == 1800
     assert hourly[18]["idleSeconds"] == 0

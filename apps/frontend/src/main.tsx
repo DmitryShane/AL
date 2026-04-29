@@ -469,7 +469,7 @@ function App() {
     <div className="app-frame">
       <aside className="sidebar">
         <div className="brand-mark">
-          <span>AL</span>
+          <img src="/favicon.svg" alt="" aria-hidden="true" />
           <strong>Activity Logger</strong>
         </div>
         <nav className="side-nav">
@@ -1553,8 +1553,10 @@ function ActivityPage({
           <div className="dashboard-insights-row">
             <HourlyActivityChart authors={authorHourly} />
             <BreakdownPanel
+              key={`${author.rawAuthor}-activity-mix`}
               title="Activity Mix"
               items={activityMix.map((item) => ({
+                id: item.type,
                 label: formatActivityType(item.type),
                 value: item.percent,
                 displayValue: `${item.percent}%`,
@@ -1562,8 +1564,10 @@ function ActivityPage({
               }))}
             />
             <BreakdownPanel
+              key={`${author.rawAuthor}-saved-files`}
               title="Saved Files"
               items={savedPrefabs.map((prefab, index) => ({
+                id: prefab.path || `${prefab.name}-${index}`,
                 label: prefab.name || prefab.path,
                 value: prefab.saveCount,
                 displayValue: String(prefab.saveCount),
@@ -2394,6 +2398,7 @@ function normalizeAuthorInput(value: string) {
 }
 
 type BreakdownPanelItem = {
+  id: string;
   label: string;
   value: number;
   displayValue: string;
@@ -2413,7 +2418,7 @@ function BreakdownPanel({ title, items }: { title: string; items: BreakdownPanel
         <div className="list">
           {items.length ? (
             items.map((item) => (
-              <div className="row" key={item.label}>
+              <div className="row" key={item.id}>
                 <span><i className="row-color" style={{ background: item.color }} />{item.label}</span>
                 <strong>{item.displayValue}</strong>
               </div>
