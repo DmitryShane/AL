@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, BarChart3, Bell, CalendarDays, LogOut, RefreshCw, Search, Settings, ShieldCheck, UsersRound } from "lucide-react";
+import { Activity, BarChart3, Bell, Box, CalendarDays, LogOut, RefreshCw, Search, Settings, ShieldCheck, UsersRound } from "lucide-react";
 import { AuthorsTable } from "./components/AuthorsTable";
 import { HourlyActivityChart } from "./components/HourlyActivityChart";
 import "./styles.css";
@@ -2985,7 +2985,7 @@ function formatSource(source?: string) {
 
 function sourceIcon(source?: string) {
   if (source === "ual") {
-    return <UnityIcon />;
+    return <Box size={16} />;
   }
 
   if (source === "bal") {
@@ -3005,14 +3005,6 @@ function sourceIcon(source?: string) {
   }
 
   return <Activity size={16} />;
-}
-
-function UnityIcon() {
-  return (
-    <svg className="source-icon unity-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="m18.1 2.4-9.5 2.5-1.4 2.5-3.1-.1-3.3 8 6.5 6.3 3.1-1.7 2.8 1.6 8.7-4.1 1.3-10.6-5.1-4.4Zm-1.2 2.7 3.3 2.8-6.1 1.8-3.2-2.5 6-2.1ZM6.3 10l3.3 2.7-.4 5.6-4.9-4.5 2-3.8Zm5.7 3.2 6.5-2-.8 5.2-5.1 2.4-.6-5.6Z" />
-    </svg>
-  );
 }
 
 function BlenderIcon() {
