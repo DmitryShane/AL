@@ -34,7 +34,6 @@ RAW_ACTIVITY_EVENT_TYPES = {
     "scene_changed",
     "file_saved",
     "file_loaded",
-    "manual_report_requested",
     "external",
 }
 NON_ACTIVITY_EVENT_TYPES = {"heartbeat", "blur"}

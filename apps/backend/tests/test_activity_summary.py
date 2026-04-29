@@ -737,6 +737,28 @@ def test_blender_scene_changed_without_input_metadata_is_not_activity():
     assert heartbeat_deltas["activeDeltaSeconds"] == 0
 
 
+def test_manual_report_requested_is_not_author_activity():
+    repo = fake_repository()
+    event = {
+        "source": "ual",
+        "author": "Dmitry Shane",
+        "projectId": "unity",
+        "sessionId": "unity-session",
+        "date": "2026-04-28",
+        "eventType": "manual_report_requested",
+        "occurredAtUtc": "2026-04-28T10:00:00Z",
+        "occurredAtLocal": "2026-04-28T10:00:00+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 0, tzinfo=dt.UTC),
+        "metadata": {"reason": "server_request"},
+    }
+
+    deltas = repo._apply_raw_event_to_aggregates(event)
+
+    assert deltas["activeDeltaSeconds"] == 0
+    assert deltas["idleDeltaSeconds"] == 0
+    assert deltas["activityCountDeltas"] == []
+
+
 def test_heartbeat_idle_threshold_uses_plugin_interval():
     repo = fake_repository()
     activity = {
