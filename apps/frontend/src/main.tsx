@@ -8,6 +8,7 @@ import "./styles.css";
 const API_URL = import.meta.env.VITE_API_URL ?? "https://activity.mempic.com";
 const REFRESH_INTERVAL_MS = 10000;
 const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
+const ACTIVITY_AUTHOR_STORAGE_KEY = "AL.Dashboard.ActivityAuthor";
 const AUTH_HINT_STORAGE_KEY = "AL.Dashboard.Authenticated";
 
 function apiFetch(path: string, init: RequestInit = {}) {
@@ -60,6 +61,8 @@ type AuthorRow = {
   breakSeconds: number;
   overtimeActiveSeconds: number;
   productivity: number;
+  activityMix?: ActivityCount[];
+  savedPrefabs?: SavedPrefab[];
   status?: "online" | "stale";
   alerts?: AuthorAlert[];
   alertStats?: AlertStats;
@@ -293,7 +296,7 @@ function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>(() => todayRange());
   const [search, setSearch] = useState("");
-  const [selectedAuthor, setSelectedAuthor] = useState<string | null>(null);
+  const [selectedAuthor, setSelectedAuthorState] = useState<string | null>(() => loadSavedActivityAuthor());
   const [loading, setLoading] = useState(true);
   const [refreshingReports, setRefreshingReports] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -416,13 +419,20 @@ function App() {
 
   const activitySummary = summary?.activitySummary ?? emptyActivitySummary;
   const authors = useMemo(() => activitySummary.authors.filter((author) => matchesAuthorSearch(author, search)), [activitySummary, search]);
-  const activeAuthor = selectedAuthor ?? authors[0]?.rawAuthor ?? activitySummary.authors[0]?.rawAuthor ?? null;
+  const activeAuthor = activitySummary.authors.some((author) => author.rawAuthor === selectedAuthor)
+    ? selectedAuthor
+    : authors[0]?.rawAuthor ?? activitySummary.authors[0]?.rawAuthor ?? null;
 
   useEffect(() => {
     if (!activeAuthor && activitySummary.authors.length) {
       setSelectedAuthor(activitySummary.authors[0].rawAuthor);
     }
   }, [activeAuthor, activitySummary.authors]);
+
+  function setSelectedAuthor(value: string) {
+    setSelectedAuthorState(value);
+    localStorage.setItem(ACTIVITY_AUTHOR_STORAGE_KEY, value);
+  }
 
   function selectPage(nextPage: Page) {
     setPage(nextPage);
@@ -1471,7 +1481,12 @@ function ActivityPage({
 }) {
   const author = summary.authors.find((item) => item.rawAuthor === selectedAuthor) ?? summary.authors[0];
   const hourly = summary.hourlyActivityByAuthor.filter((item) => item.rawAuthor === author?.rawAuthor);
+  const authorHourly = hourly.length || !author
+    ? hourly
+    : [{ author: author.displayName, rawAuthor: author.rawAuthor, hourlyActivity: [] }];
   const authorReports = reports.filter((report) => report.author === author?.rawAuthor);
+  const activityMix = author?.activityMix ?? [];
+  const savedPrefabs = author?.savedPrefabs ?? [];
 
   return (
     <section className="page-section">
@@ -1523,12 +1538,12 @@ function ActivityPage({
             </div>
           </div>
 
-          <HourlyActivityChart authors={hourly} />
+          <HourlyActivityChart authors={authorHourly} />
 
           <div className="content-grid compact">
             <DonutPanel
               title="Activity Mix"
-              items={summary.activityMix.map((item) => ({
+              items={activityMix.map((item) => ({
                 label: formatActivityType(item.type),
                 value: item.percent,
                 displayValue: `${item.percent}%`,
@@ -1537,7 +1552,7 @@ function ActivityPage({
             />
             <DonutPanel
               title="Saved Files"
-              items={summary.savedPrefabs.map((prefab, index) => ({
+              items={savedPrefabs.map((prefab, index) => ({
                 label: prefab.name || prefab.path,
                 value: prefab.saveCount,
                 displayValue: String(prefab.saveCount),
@@ -2918,6 +2933,16 @@ function loadSavedPage(): Page {
   }
 
   return "authors";
+}
+
+function loadSavedActivityAuthor() {
+  const savedAuthor = localStorage.getItem(ACTIVITY_AUTHOR_STORAGE_KEY);
+
+  if (savedAuthor && savedAuthor.trim()) {
+    return savedAuthor;
+  }
+
+  return null;
 }
 
 function todayRange(): DateRange {

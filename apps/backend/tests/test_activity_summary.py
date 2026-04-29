@@ -362,6 +362,64 @@ def test_live_telegram_summary_includes_open_session_outside_selected_date_range
     assert totals["telegramDaySeconds"] == 10 * 60
 
 
+def test_activity_summary_keeps_mix_and_saved_files_per_author():
+    repo = fake_repository()
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Dmitry Shane",
+            "date": "2026-04-29",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "activityCounts": [{"type": "selection", "count": 3}],
+            "savedPrefabs": [{"path": "Assets/Dmitry.prefab", "name": "Dmitry", "saveCount": 2}],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Igor Mats",
+            "date": "2026-04-29",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "activityCounts": [{"type": "play_mode", "count": 5}],
+            "savedPrefabs": [{"path": "Assets/Igor.prefab", "name": "Igor", "saveCount": 4}],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    authors = {author["rawAuthor"]: author for author in summary["authors"]}
+
+    assert authors["Dmitry Shane"]["activityMix"] == [{"type": "selection", "count": 3, "percent": 100}]
+    assert authors["Dmitry Shane"]["savedPrefabs"] == [{"path": "Assets/Dmitry.prefab", "name": "Dmitry", "saveCount": 2}]
+    assert authors["Igor Mats"]["activityMix"] == [{"type": "play_mode", "count": 5, "percent": 100}]
+    assert authors["Igor Mats"]["savedPrefabs"] == [{"path": "Assets/Igor.prefab", "name": "Igor", "saveCount": 4}]
+
+
+def test_activity_summary_returns_empty_hourly_activity_for_telegram_only_author():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "telegramUsername": "igormats", "timeZoneId": "UTC"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "telegramUsername": "igormats",
+            "date": "2026-04-29",
+            "startedAt": dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+            "daySeconds": 0,
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        now=dt.datetime(2026, 4, 29, 9, 10, tzinfo=dt.UTC),
+    )
+
+    hourly_by_author = {author["rawAuthor"]: author for author in summary["hourlyActivityByAuthor"]}
+    assert len(hourly_by_author["Igor Mats"]["hourlyActivity"]) == 24
+    assert hourly_by_author["Igor Mats"]["hourlyActivity"] == _empty_hourly_activity()
+
+
 def test_delete_author_data_preserves_profile_but_delete_profile_removes_it():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "telegramUsername": "future_artist"})

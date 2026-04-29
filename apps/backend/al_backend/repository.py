@@ -633,6 +633,7 @@ class Repository:
                     "breakSeconds": 0,
                     "overtimeActiveSeconds": 0,
                     "activityCounts": [],
+                    "savedPrefabs": [],
                 }
                 authors_by_raw[raw_author] = author_row
 
@@ -648,6 +649,9 @@ class Repository:
             author_row["source"] = item.get("source") or author_row.get("source")
             author_row["activityCounts"] = _merge_count_list(
                 author_row.get("activityCounts", []), item.get("activityCounts", []), "type", "count"
+            )
+            author_row["savedPrefabs"] = _merge_count_list(
+                author_row.get("savedPrefabs", []), item.get("savedPrefabs", []), "path", "saveCount"
             )
 
             if str(item.get("lastRecordedAt") or "") > str(author_row.get("lastRecordedAt") or ""):
@@ -724,13 +728,26 @@ class Repository:
                     "breakSeconds": 0,
                     "overtimeActiveSeconds": 0,
                     "activityCounts": [],
+                    "savedPrefabs": [],
                 }
                 authors_by_raw[raw_author] = author_row
 
             author_row["securityAlerts"] = alerts
 
+        for raw_author, author_row in authors_by_raw.items():
+            if raw_author in hourly_by_author:
+                continue
+
+            hourly_by_author[raw_author] = {
+                "author": author_row["displayName"],
+                "rawAuthor": raw_author,
+                "timeZoneId": profiles.get(raw_author, {}).get("timeZoneId"),
+                "timeZoneDisplayName": profiles.get(raw_author, {}).get("timeZoneDisplayName"),
+                "hourlyActivity": _empty_hourly_activity(),
+            }
+
         author_rows = [
-            _with_alerts(_with_productivity(author), self.get_interval_for_author(author["rawAuthor"]), now)
+            _with_alerts(_with_activity_mix(_with_productivity(author)), self.get_interval_for_author(author["rawAuthor"]), now)
             for author in authors_by_raw.values()
         ]
 
@@ -1495,6 +1512,8 @@ class Repository:
             "breakSeconds": 0,
             "overtimeActiveSeconds": 0,
             "activityCounts": [],
+            "activityMix": [],
+            "savedPrefabs": [],
         }
         authors_by_raw[raw_author] = author_row
         return author_row
@@ -2216,6 +2235,21 @@ def _with_productivity(author: dict[str, Any]) -> dict[str, Any]:
     penalized_break_seconds = max(0, break_seconds - 3600)
     denominator = active_seconds + idle_seconds + penalized_break_seconds
     item["productivity"] = round((active_seconds / denominator) * 100, 2) if denominator else 0
+    return item
+
+
+def _with_activity_mix(author: dict[str, Any]) -> dict[str, Any]:
+    item = dict(author)
+    total_activities = sum(int(count.get("count", 0)) for count in item.get("activityCounts", []))
+    item["activityMix"] = [
+        {
+            "type": count.get("type"),
+            "count": int(count.get("count", 0)),
+            "percent": round((int(count.get("count", 0)) / total_activities) * 100) if total_activities else 0,
+        }
+        for count in item.get("activityCounts", [])
+        if count.get("type")
+    ]
     return item
 
 
