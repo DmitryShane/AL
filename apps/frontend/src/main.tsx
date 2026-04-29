@@ -473,6 +473,13 @@ function App() {
           <NavButton icon={<Bell size={20} />} label="Alerts" active={page === "alerts"} onClick={() => selectPage("alerts")} />
           <NavButton icon={<Settings size={20} />} label="Settings" active={page === "settings"} onClick={() => selectPage("settings")} />
         </nav>
+        <div className="session-card sidebar-session-card">
+          <span>{sessionUser.displayName}</span>
+          <small>{formatSiteRole(sessionUser.role)}</small>
+          <button className="icon-button" onClick={() => void handleLogout()} title="Log out">
+            <LogOut size={16} />
+          </button>
+        </div>
       </aside>
 
       <main className="workspace">
@@ -486,13 +493,6 @@ function App() {
               <DateRangePicker value={dateRange} onChange={setDateRange} />
             </div>
           ) : null}
-          <div className="session-card">
-            <span>{sessionUser.displayName}</span>
-            <small>{formatSiteRole(sessionUser.role)}</small>
-            <button className="icon-button" onClick={() => void handleLogout()} title="Log out">
-              <LogOut size={16} />
-            </button>
-          </div>
         </header>
 
         {authLoading ? <p className="notice">Restoring dashboard session...</p> : null}
