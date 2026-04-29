@@ -20,7 +20,7 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
-AL_BACKEND_URL_VALUE="${AL_BACKEND_URL:-http://64.225.108.88:8000}"
+AL_BACKEND_URL_VALUE="${AL_BACKEND_URL:-https://activity.mempic.com}"
 
 if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
   echo "TELEGRAM_BOT_TOKEN is required."

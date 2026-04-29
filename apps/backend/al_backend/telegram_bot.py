@@ -47,7 +47,7 @@ def load_config() -> BotConfig:
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
 
-    backend_url = os.getenv("AL_BACKEND_URL", "http://64.225.108.88:8000").strip().rstrip("/")
+    backend_url = os.getenv("AL_BACKEND_URL", "https://activity.mempic.com").strip().rstrip("/")
     allowed_chat_id = _parse_chat_id(os.getenv("TELEGRAM_ALLOWED_CHAT_ID"))
     return BotConfig(token=token, backend_url=backend_url, allowed_chat_id=allowed_chat_id)
 

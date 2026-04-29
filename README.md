@@ -28,7 +28,7 @@ uv run fastapi dev al_backend/main.py
 
 The backend defaults to:
 
-- API: `http://64.225.108.88:8000`
+- API: `https://activity.mempic.com`
 - Mongo URI: `mongodb://127.0.0.1:27017`
 - Mongo database: `al`
 
@@ -42,7 +42,7 @@ npm install
 npm run dev
 ```
 
-The dashboard defaults to `http://64.225.108.88:8000` for API calls. Production builds override `VITE_API_URL` to the public site origin so browser requests use nginx's same-origin `/api/` proxy.
+The dashboard defaults to `https://activity.mempic.com` for API calls. Production builds override `VITE_API_URL` to the public site origin so browser requests use nginx's same-origin `/api/` proxy.
 
 ## Telegram Bot
 
@@ -65,7 +65,7 @@ scripts/start-bot-local.sh
 scripts/stop-bot-local.sh
 ```
 
-If `TELEGRAM_ALLOWED_CHAT_ID` is omitted, the bot logs incoming chat ids so you can copy the correct one and restart it locked to that chat. The bot posts events to `AL_BACKEND_URL`, which defaults to `http://64.225.108.88:8000`. For production, use the same variables with the public backend URL.
+If `TELEGRAM_ALLOWED_CHAT_ID` is omitted, the bot logs incoming chat ids so you can copy the correct one and restart it locked to that chat. The bot posts events to `AL_BACKEND_URL`, which defaults to `https://activity.mempic.com`. For production, use the same variables with the public backend URL.
 
 ## Unity And Blender Package
 

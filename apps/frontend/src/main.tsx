@@ -5,7 +5,7 @@ import { AuthorsTable } from "./components/AuthorsTable";
 import { HourlyActivityChart } from "./components/HourlyActivityChart";
 import "./styles.css";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://64.225.108.88:8000";
+const API_URL = import.meta.env.VITE_API_URL ?? "https://activity.mempic.com";
 const REFRESH_INTERVAL_MS = 10000;
 const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
 

@@ -1,13 +1,13 @@
 # Production Deployment
 
-Production runs on `64.225.108.88` with nginx, systemd, MongoDB, `uv`, and Node.js.
+Production runs on `activity.mempic.com` with nginx, systemd, MongoDB, `uv`, and Node.js.
 
 ## First-Time Server Setup
 
 SSH as root:
 
 ```bash
-ssh root@64.225.108.88
+ssh root@activity.mempic.com
 ```
 
 Bootstrap the host:
@@ -29,8 +29,8 @@ AL_MONGO_URI=mongodb://127.0.0.1:27017
 AL_MONGO_DATABASE=al
 AL_PRIVATE_KEY_PATH=/opt/al/current/apps/backend/al_backend/UnityActivityLoggerKey.json
 AL_DEFAULT_SEND_INTERVAL_SECONDS=300
-AL_CORS_ORIGINS=http://64.225.108.88,http://64.225.108.88:8000
-AL_ADMIN_EMAIL=admin@example.com
+AL_CORS_ORIGINS=https://activity.mempic.com,http://activity.mempic.com
+AL_ADMIN_EMAIL=dmitry.shane@gmail.com
 AL_ADMIN_PASSWORD=replace-with-initial-admin-password
 ```
 
@@ -41,7 +41,7 @@ Create `/etc/al/telegram-bot.env`:
 ```bash
 TELEGRAM_BOT_TOKEN=replace-with-botfather-token
 TELEGRAM_ALLOWED_CHAT_ID=replace-with-chat-id
-AL_BACKEND_URL=http://64.225.108.88:8000
+AL_BACKEND_URL=https://activity.mempic.com
 AL_TELEGRAM_LOG_LEVEL=INFO
 ```
 
@@ -51,12 +51,19 @@ Deploy the current `main`:
 /opt/al/current/scripts/deploy-server.sh origin/main
 ```
 
+Issue or renew HTTPS after DNS points to the server:
+
+```bash
+certbot --nginx -d activity.mempic.com --non-interactive --agree-tos -m dmitry.shane@gmail.com
+ufw delete allow 8000/tcp || true
+```
+
 ## GitHub Actions Secrets
 
 Add these repository secrets:
 
 ```text
-DEPLOY_HOST=64.225.108.88
+DEPLOY_HOST=activity.mempic.com
 DEPLOY_USER=root
 DEPLOY_PORT=22
 DEPLOY_SSH_KEY=<private SSH key that can log in as root on the droplet>
@@ -73,11 +80,11 @@ The workflow in `.github/workflows/deploy.yml` runs on every push to `main` and 
 ```bash
 systemctl status mongod nginx al-backend al-telegram-bot
 curl http://127.0.0.1:8000/api/v1/health
-curl http://64.225.108.88:8000/api/v1/health
+curl https://activity.mempic.com/api/v1/health
 ```
 
 The dashboard is served from:
 
 ```text
-http://64.225.108.88/
+https://activity.mempic.com/
 ```

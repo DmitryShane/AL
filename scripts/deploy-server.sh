@@ -6,9 +6,9 @@ APP_ROOT="${APP_ROOT:-/opt/al}"
 APP_DIR="${APP_DIR:-${APP_ROOT}/current}"
 REPO_URL="${REPO_URL:-https://github.com/DmitryShane/AL.git}"
 DEPLOY_REF="${1:-origin/main}"
-PUBLIC_HOST="${PUBLIC_HOST:-64.225.108.88}"
-PUBLIC_API_URL="${PUBLIC_API_URL:-http://${PUBLIC_HOST}}"
-PUBLIC_SITE_ORIGIN="${PUBLIC_SITE_ORIGIN:-http://${PUBLIC_HOST}}"
+PUBLIC_HOST="${PUBLIC_HOST:-activity.mempic.com}"
+PUBLIC_API_URL="${PUBLIC_API_URL:-https://${PUBLIC_HOST}}"
+PUBLIC_SITE_ORIGIN="${PUBLIC_SITE_ORIGIN:-https://${PUBLIC_HOST}}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.14}"
 
 BACKEND_ENV="/etc/al/backend.env"
@@ -71,12 +71,51 @@ sed \
   -e "s#__APP_ROOT__#${APP_ROOT}#g" \
   "${APP_DIR}/deploy/systemd/al-telegram-bot.service" > /etc/systemd/system/al-telegram-bot.service
 
+SSL_SERVER_BLOCK=""
+
+if [[ -f "/etc/letsencrypt/live/${PUBLIC_HOST}/fullchain.pem" && -f "/etc/letsencrypt/live/${PUBLIC_HOST}/privkey.pem" ]]; then
+  SSL_SERVER_BLOCK="$(cat <<EOF
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${PUBLIC_HOST};
+
+    ssl_certificate /etc/letsencrypt/live/${PUBLIC_HOST}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${PUBLIC_HOST}/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    root ${APP_DIR}/apps/frontend/dist;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+)"
+fi
+
 sed \
   -e "s#__APP_DIR__#${APP_DIR}#g" \
   -e "s#__APP_USER__#${APP_USER}#g" \
   -e "s#__APP_ROOT__#${APP_ROOT}#g" \
   -e "s#__PUBLIC_HOST__#${PUBLIC_HOST}#g" \
   "${APP_DIR}/deploy/nginx/al.conf" > /etc/nginx/sites-available/al.conf
+
+if [[ -n "${SSL_SERVER_BLOCK}" ]]; then
+  printf '%s\n' "${SSL_SERVER_BLOCK}" >> /etc/nginx/sites-available/al.conf
+fi
 
 ln -sf /etc/nginx/sites-available/al.conf /etc/nginx/sites-enabled/al.conf
 rm -f /etc/nginx/sites-enabled/default

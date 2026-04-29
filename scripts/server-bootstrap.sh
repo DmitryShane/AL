@@ -16,7 +16,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
-apt-get install -y ca-certificates curl gnupg git nginx ufw
+apt-get install -y ca-certificates certbot curl gnupg git nginx python3-certbot-nginx ufw
 
 if ! swapon --show | grep -q .; then
   fallocate -l "${SWAP_SIZE}" /swapfile
@@ -67,7 +67,8 @@ systemctl enable --now nginx
 
 ufw allow OpenSSH
 ufw allow 80/tcp
-ufw allow 8000/tcp
+ufw allow 443/tcp
+ufw delete allow 8000/tcp >/dev/null 2>&1 || true
 ufw --force enable
 
 ssh-keyscan github.com >> "${APP_ROOT}/.ssh/known_hosts" 2>/dev/null || true
