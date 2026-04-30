@@ -218,6 +218,10 @@ function statusBadgeClassName(status?: "online" | "stale") {
 }
 
 function productivityClassName(value: number) {
+  if (value > 100) {
+    return "metric-value overdrive";
+  }
+
   if (value > 80) {
     return "metric-value good";
   }

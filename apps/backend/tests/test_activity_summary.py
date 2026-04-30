@@ -195,6 +195,19 @@ def test_productivity_penalizes_break_time_after_first_hour():
     assert author["productivity"] == 60
 
 
+def test_productivity_exceeds_one_hundred_with_overtime():
+    author = _with_productivity(
+        {
+            "activeSeconds": 8 * 3600,
+            "idleSeconds": 0,
+            "breakSeconds": 0,
+            "overtimeActiveSeconds": 2 * 3600,
+        }
+    )
+
+    assert author["productivity"] == 125.0
+
+
 def test_date_query_uses_inclusive_range():
     assert _date_query("2026-04-01", "2026-04-30") == {"date": {"$gte": "2026-04-01", "$lte": "2026-04-30"}}
 

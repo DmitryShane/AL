@@ -2727,9 +2727,8 @@ def _with_productivity(author: dict[str, Any]) -> dict[str, Any]:
     active_seconds = int(item.get("activeSeconds", 0))
     idle_seconds = int(item.get("idleSeconds", 0))
     break_seconds = int(item.get("breakSeconds", 0))
-    penalized_break_seconds = max(0, break_seconds - 3600)
-    denominator = active_seconds + idle_seconds + penalized_break_seconds
-    item["productivity"] = round((active_seconds / denominator) * 100, 2) if denominator else 0
+    overtime_seconds = int(item.get("overtimeActiveSeconds", 0))
+    item["productivity"] = round(_productivity(active_seconds, idle_seconds, break_seconds, overtime_seconds), 2)
     return item
 
 
@@ -3021,7 +3020,7 @@ def _analytics_totals(docs: list[dict[str, Any]]) -> dict[str, Any]:
     overtime_active_seconds = sum(int(item.get("overtimeActiveSeconds", 0)) for item in docs)
     telegram_day_seconds = sum(int(item.get("daySeconds", 0)) for item in docs)
     plugin_day_seconds = sum(_plugin_day_seconds(item) for item in docs)
-    productivity = _productivity(active_seconds, idle_seconds, break_seconds)
+    productivity = _productivity(active_seconds, idle_seconds, break_seconds, overtime_active_seconds)
     return {
         "daySeconds": telegram_day_seconds,
         "activeSeconds": active_seconds,
@@ -3046,10 +3045,13 @@ def _analytics_deltas(current: dict[str, Any], previous: dict[str, Any]) -> dict
     }
 
 
-def _productivity(active_seconds: int, idle_seconds: int, break_seconds: int) -> float:
+def _productivity(
+    active_seconds: int, idle_seconds: int, break_seconds: int, overtime_seconds: int = 0
+) -> float:
     penalized_break_seconds = max(0, break_seconds - LONG_BREAK_THRESHOLD_SECONDS)
     denominator = active_seconds + idle_seconds + penalized_break_seconds
-    return (active_seconds / denominator) * 100 if denominator else 0
+    numerator = active_seconds + overtime_seconds
+    return (numerator / denominator) * 100 if denominator else 0
 
 
 def _plugin_day_seconds(item: dict[str, Any], active_seconds: int | None = None, idle_seconds: int | None = None) -> int:

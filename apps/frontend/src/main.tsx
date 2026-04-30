@@ -2969,6 +2969,10 @@ function formatMinutes(seconds: number) {
 }
 
 function productivityClassName(productivity: number) {
+  if (productivity > 100) {
+    return "metric-value overdrive";
+  }
+
   if (productivity > 80) {
     return "metric-value good";
   }
@@ -2981,6 +2985,10 @@ function productivityClassName(productivity: number) {
 }
 
 function productivityTone(productivity: number) {
+  if (productivity > 100) {
+    return "overdrive";
+  }
+
   if (productivity > 80) {
     return "good";
   }

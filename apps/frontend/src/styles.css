@@ -464,6 +464,11 @@ p {
   color: #dc2626;
 }
 
+.metric-value.overdrive {
+  color: #8b5cf6;
+  animation: productivity-overdrive-text 2.4s ease-in-out infinite;
+}
+
 .authors-table {
   overflow-x: auto;
   border-radius: 14px;
@@ -850,6 +855,39 @@ p {
   border-color: #fecaca;
   background: #fff1f2;
   color: #dc2626;
+}
+
+.productivity-badge.overdrive {
+  border-color: rgb(139 92 246 / 45%);
+  background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 55%, #ede9fe 100%);
+  color: #6d28d9;
+}
+
+.productivity-badge.overdrive strong {
+  color: #8b5cf6;
+  animation: productivity-overdrive-text 2.4s ease-in-out infinite;
+}
+
+@keyframes productivity-overdrive-text {
+  0%,
+  100% {
+    filter: brightness(1);
+    text-shadow: 0 0 0 transparent;
+  }
+
+  50% {
+    filter: brightness(1.06);
+    text-shadow:
+      0 0 10px rgb(139 92 246 / 40%),
+      0 0 18px rgb(167 139 250 / 25%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .metric-value.overdrive,
+  .productivity-badge.overdrive strong {
+    animation: none;
+  }
 }
 
 .activity-grid,
