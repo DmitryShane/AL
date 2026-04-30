@@ -2009,77 +2009,79 @@ function SettingsPage({
         <span className={health?.ok ? "status-pill online" : "status-pill"}>{health?.ok ? "Backend online" : "Backend offline"}</span>
       </div>
 
-      <div className="panel">
-        <h2>Send Interval</h2>
-        <div className="settings-row">
-          <label>
-            Global interval, sec
-            <input value={globalInterval} onChange={(event) => setGlobalInterval(event.target.value)} type="number" min="30" />
-          </label>
-          <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval"}>
-            {settingsSaveButtonLabel("interval", saving, saveStatus)}
-          </button>
+      <div className="settings-card-row">
+        <div className="panel">
+          <h2>Send Interval</h2>
+          <div className="settings-row">
+            <label>
+              Global interval, sec
+              <input value={globalInterval} onChange={(event) => setGlobalInterval(event.target.value)} type="number" min="30" />
+            </label>
+            <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval"}>
+              {settingsSaveButtonLabel("interval", saving, saveStatus)}
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div className="panel">
-        <h2>Author Redirects</h2>
-        <p className="settings-caption">
-          Redirect a trash raw author from plugin reports to the correct author profile. The source profile is removed and future reports aggregate into the target profile.
-        </p>
-        <div className="profile-create-card author-alias-card">
-          <label>
-            Source raw author
-            <input
-              value={aliasSource}
-              onChange={(event) => setAliasSource(event.target.value)}
-              list="author-alias-source-list"
-              placeholder="Unknown User"
-            />
-            <datalist id="author-alias-source-list">
-              {profiles.map((profile) => (
-                <option value={profile.rawAuthor} key={profile.rawAuthor} />
-              ))}
-            </datalist>
-          </label>
-          <label>
-            Target profile
-            <select value={aliasTarget} onChange={(event) => setAliasTarget(event.target.value)}>
-              {profiles.map((profile) => (
-                <option value={profile.rawAuthor} key={profile.rawAuthor}>{profile.displayName || profile.rawAuthor}</option>
-              ))}
-            </select>
-          </label>
-          <button
-            className={settingsSaveButtonClassName(saveStatus.authorAlias)}
-            onClick={() => void saveAuthorAlias()}
-            disabled={saving === "authorAlias" || !aliasSource.trim() || !aliasTarget.trim()}
-          >
-            {saving === "authorAlias" ? "Assigning..." : saveStatus.authorAlias === "saved" ? "Assigned" : saveStatus.authorAlias === "error" ? "Failed" : "Assign"}
-          </button>
-        </div>
-        {aliasError ? <p className="notice error">{aliasError}</p> : null}
-        <div className="alias-list">
-          {aliases.length ? (
-            aliases.map((alias) => {
-              const target = profiles.find((profile) => profile.rawAuthor === alias.targetRawAuthor);
-              const deleteKey = `alias-delete:${alias.sourceRawAuthor}`;
-              return (
-                <div className="alias-row" key={alias.sourceRawAuthor}>
-                  <span><strong>{alias.sourceRawAuthor}</strong> redirects to <strong>{target?.displayName || alias.targetRawAuthor}</strong></span>
-                  <button
-                    className={`${settingsSaveButtonClassName(saveStatus[deleteKey], true)} danger-button`}
-                    onClick={() => void deleteAuthorAlias(alias.sourceRawAuthor)}
-                    disabled={saving === deleteKey}
-                  >
-                    {saving === deleteKey ? "Deleting..." : saveStatus[deleteKey] === "error" ? "Failed" : "Delete"}
-                  </button>
-                </div>
-              );
-            })
-          ) : (
-            <p className="empty">No redirects yet.</p>
-          )}
+        <div className="panel">
+          <h2>Author Redirects</h2>
+          <p className="settings-caption">
+            Redirect a trash raw author from plugin reports to the correct author profile. The source profile is removed and future reports aggregate into the target profile.
+          </p>
+          <div className="profile-create-card author-alias-card">
+            <label>
+              Source raw author
+              <input
+                value={aliasSource}
+                onChange={(event) => setAliasSource(event.target.value)}
+                list="author-alias-source-list"
+                placeholder="Unknown User"
+              />
+              <datalist id="author-alias-source-list">
+                {profiles.map((profile) => (
+                  <option value={profile.rawAuthor} key={profile.rawAuthor} />
+                ))}
+              </datalist>
+            </label>
+            <label>
+              Target profile
+              <select value={aliasTarget} onChange={(event) => setAliasTarget(event.target.value)}>
+                {profiles.map((profile) => (
+                  <option value={profile.rawAuthor} key={profile.rawAuthor}>{profile.displayName || profile.rawAuthor}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              className={settingsSaveButtonClassName(saveStatus.authorAlias)}
+              onClick={() => void saveAuthorAlias()}
+              disabled={saving === "authorAlias" || !aliasSource.trim() || !aliasTarget.trim()}
+            >
+              {saving === "authorAlias" ? "Assigning..." : saveStatus.authorAlias === "saved" ? "Assigned" : saveStatus.authorAlias === "error" ? "Failed" : "Assign"}
+            </button>
+          </div>
+          {aliasError ? <p className="notice error">{aliasError}</p> : null}
+          <div className="alias-list">
+            {aliases.length ? (
+              aliases.map((alias) => {
+                const target = profiles.find((profile) => profile.rawAuthor === alias.targetRawAuthor);
+                const deleteKey = `alias-delete:${alias.sourceRawAuthor}`;
+                return (
+                  <div className="alias-row" key={alias.sourceRawAuthor}>
+                    <span><strong>{alias.sourceRawAuthor}</strong> redirects to <strong>{target?.displayName || alias.targetRawAuthor}</strong></span>
+                    <button
+                      className={`${settingsSaveButtonClassName(saveStatus[deleteKey], true)} danger-button`}
+                      onClick={() => void deleteAuthorAlias(alias.sourceRawAuthor)}
+                      disabled={saving === deleteKey}
+                    >
+                      {saving === deleteKey ? "Deleting..." : saveStatus[deleteKey] === "error" ? "Failed" : "Delete"}
+                    </button>
+                  </div>
+                );
+              })
+            ) : (
+              <p className="empty">No redirects yet.</p>
+            )}
+          </div>
         </div>
       </div>
 

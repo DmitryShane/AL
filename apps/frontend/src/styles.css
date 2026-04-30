@@ -1952,6 +1952,17 @@ p {
   gap: 18px;
 }
 
+.settings-card-row {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.75fr) minmax(560px, 1.25fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.settings-card-row > .panel {
+  min-width: 0;
+}
+
 .settings-tabs {
   display: inline-flex;
   width: fit-content;
@@ -2364,7 +2375,17 @@ p {
 
 .profile-create-card {
   display: grid;
-  grid-template-columns: repeat(4, minmax(130px, 1fr)) 86px 120px auto;
+  overflow-x: auto;
+  grid-template-columns:
+    minmax(180px, 1.1fr)
+    minmax(180px, 1.1fr)
+    minmax(150px, 0.9fr)
+    minmax(180px, 1fr)
+    minmax(170px, 0.95fr)
+    minmax(170px, 0.95fr)
+    minmax(86px, 0.45fr)
+    minmax(120px, 0.6fr)
+    minmax(160px, 0.8fr);
   gap: 12px;
   align-items: start;
   border: 1px solid #e5eaf0;
@@ -2379,7 +2400,7 @@ p {
 }
 
 .author-alias-card {
-  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(100px, auto);
 }
 
 .alias-list {
@@ -2781,6 +2802,10 @@ p {
   }
 
   .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-card-row {
     grid-template-columns: 1fr;
   }
 

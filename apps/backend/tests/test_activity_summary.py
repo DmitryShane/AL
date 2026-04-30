@@ -632,13 +632,16 @@ def test_activity_summary_exposes_telegram_to_first_activity_time():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
     repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
-    repo.db.raw_activity_events.insert_one(
+    repo.db.report_rows.insert_one(
         {
             "source": "ual",
             "author": "Future Artist",
             "date": "2026-04-28",
-            "eventType": "selection",
-            "occurredAtUtc": "2026-04-28T09:17:30Z",
+            "recordedAt": "2026-04-28T09:17:30Z",
+            "receivedAt": dt.datetime(2026, 4, 28, 9, 17, 31, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
         }
     )
     repo.db.daily_author_activity.insert_one(
@@ -658,6 +661,71 @@ def test_activity_summary_exposes_telegram_to_first_activity_time():
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
 
     assert author["telegramToFirstActivitySeconds"] == 17 * 60 + 30
+
+
+def test_telegram_to_first_activity_uses_first_positive_report_row_not_raw_event():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry",
+            "displayName": "Dmitriy Zhdamarov",
+            "telegramUsername": "zhdamarovich",
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    repo.record_break_event("zhdamarovich", "online", "2026-04-30T07:35:42Z")
+    repo.db.raw_activity_events.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry",
+            "date": "2026-04-30",
+            "eventType": "focus",
+            "occurredAtUtc": "2026-04-30T07:36:12Z",
+            "occurredAtLocal": "2026-04-30T09:36:12+02:00",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry",
+            "date": "2026-04-30",
+            "recordedAt": "2026-04-30T09:43:12+02:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 7, 46, 15, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+            "savedPrefabDeltas": [{"path": "Assets/Level.prefab", "name": "Level", "saveCount": 1}],
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry",
+            "date": "2026-04-30",
+            "recordedAt": "2026-04-30T09:45:13+02:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 7, 46, 15, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 120,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry",
+            "projectId": "unity",
+            "date": "2026-04-30",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-30", end_date="2026-04-30")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry")
+
+    assert author["telegramToFirstActivitySeconds"] == 9 * 60 + 31
 
 
 def _insert_presence_daily_activity(repo, received_at):
@@ -755,6 +823,145 @@ def test_overtime_report_after_telegram_offline_expires_with_stale_threshold():
     )
 
     assert _author_status(repo, dt.datetime(2026, 4, 28, 18, 13, 1, tzinfo=dt.UTC)) == "stale"
+
+
+def test_heartbeat_idle_after_telegram_offline_is_suppressed_from_aggregates():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-04-28T18:00:00Z",
+            "occurredAtLocal": "2026-04-28T18:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.record_break_event("future_artist", "offline", "2026-04-28T18:05:00Z")
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-04-28T18:10:00Z",
+            "occurredAtLocal": "2026-04-28T18:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC),
+        }
+    )
+
+    assert deltas["idleDeltaSeconds"] == 0
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-28", "source": "ual"})
+    assert daily["idleSeconds"] == 0
+
+
+def test_rebuild_suppresses_stored_heartbeat_idle_after_telegram_offline():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-04-28T18:05:00Z")
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "activity-1",
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": dt.datetime(2026, 4, 28, 18, 0, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-28T18:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "heartbeat-1",
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "heartbeat",
+            "occurredAtUtc": dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-28T18:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC),
+        }
+    )
+
+    repo.rebuild_aggregates_if_needed(force=True)
+
+    assert not [
+        row
+        for row in repo.db.report_rows.items
+        if row.get("source") == "ual" and row.get("idleDeltaSeconds", 0) > 0
+    ]
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-28", "source": "ual"})
+    assert daily["idleSeconds"] == 0
+
+
+def test_overtime_activity_after_telegram_offline_is_allowed():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "activeSeconds": 32400,
+            "activeMicroseconds": 32400 * 1_000_000,
+            "idleSeconds": 0,
+            "idleMicroseconds": 0,
+            "workWindowSeconds": 32400,
+            "activityCounts": [],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-04-28T18:00:00Z",
+            "occurredAtLocal": "2026-04-28T18:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.record_break_event("future_artist", "offline", "2026-04-28T18:00:15Z")
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-04-28T18:00:30Z",
+            "occurredAtLocal": "2026-04-28T18:00:30+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 0, 30, tzinfo=dt.UTC),
+        }
+    )
+
+    assert deltas["overtimeActiveDeltaSeconds"] == 30
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-28", "source": "ual"})
+    assert daily["overtimeActiveSeconds"] == 30
 
 
 def test_telegram_online_after_offline_restores_normal_presence():

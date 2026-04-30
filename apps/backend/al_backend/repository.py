@@ -625,7 +625,7 @@ class Repository:
             ):
                 continue
 
-            if self._is_idle_report_during_meeting(item):
+            if self._is_empty_plugin_report_without_signal(item) or self._is_idle_report_during_meeting(item):
                 continue
 
             profile = profiles.get(item.get("author") or "Unknown User", {})
@@ -667,6 +667,20 @@ class Repository:
                 {"rawAuthor": raw_author, "startedAt": {"$lte": recorded_at}},
                 {"_id": 1},
             )
+        )
+
+    def _is_empty_plugin_report_without_signal(self, report_row: dict[str, Any]) -> bool:
+        if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
+            return False
+
+        if _has_time_delta(report_row):
+            return False
+
+        return not (
+            report_row.get("activityCountDeltas")
+            or report_row.get("savedPrefabDeltas")
+            or report_row.get("overtimeActivityCountDeltas")
+            or report_row.get("overtimeSavedPrefabDeltas")
         )
 
     def activity_summary(
@@ -2412,16 +2426,41 @@ class Repository:
             if timestamp and (key not in first_online_by_key or timestamp < first_online_by_key[key]):
                 first_online_by_key[key] = timestamp
 
-        for event in self.db.raw_activity_events.find(
+        for row in self.db.report_rows.find(
             {"author": {"$in": authors}, "date": {"$in": dates}},
-            {"_id": 0, "author": 1, "date": 1, "source": 1, "eventType": 1, "occurredAtUtc": 1, "occurredAtLocal": 1, "metadata": 1},
+            {
+                "_id": 0,
+                "author": 1,
+                "date": 1,
+                "source": 1,
+                "reportType": 1,
+                "recordedAt": 1,
+                "lastRecordedAt": 1,
+                "receivedAt": 1,
+                "activeDeltaSeconds": 1,
+                "idleDeltaSeconds": 1,
+                "overtimeActiveDeltaSeconds": 1,
+                "activeDeltaMicroseconds": 1,
+                "idleDeltaMicroseconds": 1,
+                "overtimeActiveDeltaMicroseconds": 1,
+            },
         ):
-            key = (str(event.get("author") or "Unknown User"), str(event.get("date") or ""))
-
-            if key not in author_dates or not _is_activity_event(event):
+            if row.get("source") in {"telegram", "discord"} or row.get("reportType") in {"telegram", "meeting"}:
                 continue
 
-            occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or _coerce_datetime(event.get("occurredAtLocal"))
+            if not _has_time_delta(row):
+                continue
+
+            key = (str(row.get("author") or "Unknown User"), str(row.get("date") or ""))
+
+            if key not in author_dates:
+                continue
+
+            occurred_at = (
+                _coerce_datetime(row.get("recordedAt"))
+                or _coerce_datetime(row.get("lastRecordedAt"))
+                or _coerce_datetime(row.get("receivedAt"))
+            )
 
             if occurred_at and (key not in first_activity_by_key or occurred_at < first_activity_by_key[key]):
                 first_activity_by_key[key] = occurred_at
@@ -2731,6 +2770,14 @@ class Repository:
         session_key = _session_key(snapshot)
         previous = self.db.aggregate_session_state.find_one({"_id": session_key}) or {}
         deltas = _build_deltas(snapshot, previous.get("snapshot", {}))
+        if self._should_suppress_post_offline_plugin_deltas(snapshot, deltas):
+            self.db.aggregate_session_state.update_one(
+                {"_id": session_key},
+                {"$set": {"snapshot": _state_snapshot(snapshot), "updatedAt": snapshot.get("receivedAt", dt.datetime.now(dt.UTC))}},
+                upsert=True,
+            )
+            return
+
         row = dict(snapshot)
         row.update(deltas)
         row["snapshotKey"] = session_key
@@ -2749,6 +2796,46 @@ class Repository:
             {"$set": {"snapshot": _state_snapshot(snapshot), "updatedAt": snapshot.get("receivedAt", dt.datetime.now(dt.UTC))}},
             upsert=True,
         )
+
+    def _should_suppress_post_offline_plugin_deltas(self, item: dict[str, Any], deltas: dict[str, Any]) -> bool:
+        if item.get("source") in {"telegram", "discord"} or item.get("reportType") in {"telegram", "meeting"}:
+            return False
+
+        if not _has_time_delta(deltas):
+            return False
+
+        if _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") > 0:
+            return False
+
+        received_at = _coerce_datetime(item.get("receivedAt") or item.get("lastReceivedAt"))
+
+        if not received_at:
+            return False
+
+        return self._is_author_offline_after_latest_telegram_state(
+            str(item.get("author") or "Unknown User"),
+            str(item.get("date") or ""),
+            received_at,
+        )
+
+    def _is_author_offline_after_latest_telegram_state(self, raw_author: str, day_date: str, at: dt.datetime) -> bool:
+        latest_event_type = ""
+        latest_timestamp: dt.datetime | None = None
+
+        for event in self.db.break_events.find(
+            {"rawAuthor": raw_author, "date": day_date, "eventType": {"$in": ["online", "offline"]}},
+            {"_id": 0, "eventType": 1, "timestamp": 1},
+        ):
+            timestamp = _coerce_datetime(event.get("timestamp"))
+
+            if not timestamp or timestamp > at:
+                continue
+
+            if not latest_timestamp or timestamp > latest_timestamp:
+                latest_timestamp = timestamp
+                latest_event_type = str(event.get("eventType") or "")
+
+        return latest_event_type == "offline"
 
     def _save_event_batch(
         self,
@@ -2973,7 +3060,11 @@ class Repository:
             "timeZoneDisplayName": event.get("timeZoneDisplayName"),
             "workWindowSeconds": DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
         }
-        self._update_daily_author_activity(snapshot, deltas)
+        suppress_deltas = self._should_suppress_post_offline_plugin_deltas(event, deltas)
+
+        if not suppress_deltas:
+            self._update_daily_author_activity(snapshot, deltas)
+
         self.db.aggregate_session_state.update_one(
             {"_id": state_key},
             {
@@ -2992,7 +3083,7 @@ class Repository:
             },
             upsert=True,
         )
-        return deltas
+        return _empty_event_deltas() if suppress_deltas else deltas
 
     def _normal_microseconds_consumed_for_event(self, event: dict[str, Any]) -> int:
         consumed_microseconds = 0
