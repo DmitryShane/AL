@@ -1620,7 +1620,10 @@ function ActivityPage({
             onClick={() => setSelectedAuthor(item.rawAuthor)}
           >
             <span className="author-card-status" aria-hidden="true" />
-            <span className="avatar" style={avatarStyle(item.authorColor)}>{initials(item.displayName)}</span>
+            <span className="author-card-identity">
+              <span className="avatar" style={avatarStyle(item.authorColor)}>{initials(item.displayName)}</span>
+              {productivityTone(item.productivity) === "overdrive" ? <span className="overdrive-author-text">Are you human?</span> : null}
+            </span>
             <strong>{item.displayName}</strong>
             <small>{item.team || "No team"}</small>
             <div className="author-card-footer">
@@ -3372,7 +3375,7 @@ function authorStatusBadgeClassName(status?: "online" | "stale") {
 }
 
 function authorCardClassName(author: AuthorRow, active: boolean) {
-  return `author-card ${active ? "active " : ""}${author.status === "stale" ? "is-offline" : "is-online"}`.trim();
+  return `author-card ${active ? "active " : ""}${author.status === "stale" ? "is-offline" : "is-online"} ${productivityTone(author.productivity)}`.trim();
 }
 
 function compareAuthorCardStatus(left: AuthorRow, right: AuthorRow) {

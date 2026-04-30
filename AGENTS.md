@@ -45,6 +45,8 @@ Continue working on the server and website in this AL repository:
 - FastAPI backend: `apps/backend`
 - React/Vite frontend: `apps/frontend`
 
+All user-facing website text and code literals must be in English. Do not add Russian text to the website UI, source code, comments, constants, fixtures, or generated artifacts unless the user explicitly asks for a Russian-language deliverable. Russian is only used in chat with the user.
+
 Use these commands for local development:
 
 ```bash
