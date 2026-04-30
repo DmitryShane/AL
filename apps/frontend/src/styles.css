@@ -897,7 +897,9 @@ p {
 }
 
 .activity-grid {
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  overflow-x: auto;
+  grid-template-columns: repeat(8, minmax(150px, 1fr));
+  padding-bottom: 2px;
 }
 
 .totals {
@@ -1059,6 +1061,38 @@ p {
 
 .table-panel {
   margin-top: 0;
+}
+
+.table-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.table-panel-header h2 {
+  margin: 0;
+}
+
+.table-panel-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #718093;
+}
+
+.table-panel-filter select {
+  min-width: 168px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #dfe6ee;
+  background: #fff;
+  font-size: 13px;
+  color: #2f3640;
 }
 
 .table {
@@ -2653,7 +2687,6 @@ p {
     border-radius: 8px;
   }
 
-  .activity-grid,
   .content-grid {
     grid-template-columns: 1fr;
   }

@@ -62,11 +62,13 @@ type AuthorRow = {
   daySeconds: number;
   telegramDaySeconds: number;
   pluginDaySeconds: number;
+  telegramToFirstActivitySeconds?: number;
   activeSeconds: number;
   idleSeconds: number;
   meetingSeconds: number;
   breakSeconds: number;
   overtimeActiveSeconds: number;
+  rawPluginDaySeconds?: number;
   productivity: number;
   activityMix?: ActivityCount[];
   savedPrefabs?: SavedPrefab[];
@@ -103,6 +105,8 @@ type ActivitySummary = {
     daySeconds: number;
     telegramDaySeconds: number;
     pluginDaySeconds: number;
+    rawPluginDaySeconds?: number;
+    telegramToFirstActivitySeconds?: number;
     activeSeconds: number;
     idleSeconds: number;
     meetingSeconds: number;
@@ -300,6 +304,8 @@ const emptyActivitySummary: ActivitySummary = {
     daySeconds: 0,
     telegramDaySeconds: 0,
     pluginDaySeconds: 0,
+    rawPluginDaySeconds: 0,
+    telegramToFirstActivitySeconds: 0,
     activeSeconds: 0,
     idleSeconds: 0,
     meetingSeconds: 0,
@@ -1649,7 +1655,8 @@ function ActivityPage({
 
           <div className="activity-grid">
             <Duration label="Day Time (Telegram)" seconds={author.telegramDaySeconds ?? author.daySeconds} />
-            <Duration label="Day Time (Plugin)" seconds={author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds} />
+            <Duration label="Telegram vs FirstActivity" seconds={author.telegramToFirstActivitySeconds ?? 0} />
+            <Duration label="Day Time (Plugin)" seconds={author.rawPluginDaySeconds ?? author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds} />
             <Duration label="Active" seconds={author.activeSeconds} />
             <Duration label="Idle" seconds={author.idleSeconds} />
             <Duration label="Overtime" seconds={author.overtimeActiveSeconds} />
@@ -2555,18 +2562,63 @@ function ReportsTable({ reports }: { reports: Report[] }) {
   const pageSizeOptions = [10, 25, 50];
   const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
-  const totalPages = Math.max(1, Math.ceil(reports.length / pageSize));
+  const [sourceFilter, setSourceFilter] = useState("");
+
+  const sourceOptions = useMemo(() => {
+    const keys = new Set<string>();
+
+    for (const report of reports) {
+      keys.add(report.source ?? "");
+    }
+
+    return [...keys].sort((left, right) => formatSource(left || undefined).localeCompare(formatSource(right || undefined)));
+  }, [reports]);
+
+  const filteredReports = useMemo(() => {
+    if (!sourceFilter) {
+      return reports;
+    }
+
+    return reports.filter((report) => (report.source ?? "") === sourceFilter);
+  }, [reports, sourceFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredReports.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * pageSize;
-  const pageReports = reports.slice(pageStart, pageStart + pageSize);
+  const pageReports = filteredReports.slice(pageStart, pageStart + pageSize);
+
+  useEffect(() => {
+    if (!sourceFilter) {
+      return;
+    }
+
+    const available = new Set(reports.map((item) => item.source ?? ""));
+
+    if (!available.has(sourceFilter)) {
+      setSourceFilter("");
+    }
+  }, [reports, sourceFilter]);
 
   useEffect(() => {
     setPage(1);
-  }, [pageSize, reports.length]);
+  }, [pageSize, reports, sourceFilter]);
 
   return (
     <section className="panel table-panel">
-      <h2>Plugin Reports</h2>
+      <div className="table-panel-header">
+        <h2>Plugin Reports</h2>
+        <label className="table-panel-filter">
+          <span>Source</span>
+          <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+            <option value="">All sources</option>
+            {sourceOptions.map((key) => (
+              <option key={key || "__none__"} value={key}>
+                {key ? formatSource(key) : "Unknown"}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       <div className="table">
         <div className="table-head">
           <span>Source</span>
@@ -2595,7 +2647,9 @@ function ReportsTable({ reports }: { reports: Report[] }) {
       </div>
       <div className="table-pagination">
         <span>
-          Rows {reports.length ? pageStart + 1 : 0}-{Math.min(pageStart + pageSize, reports.length)} of {reports.length}
+          Rows {filteredReports.length ? pageStart + 1 : 0}-{Math.min(pageStart + pageSize, filteredReports.length)} of{" "}
+          {filteredReports.length}
+          {sourceFilter ? ` (filtered from ${reports.length})` : ""}
         </span>
         <label>
           Rows per page
@@ -3322,11 +3376,19 @@ function authorCardClassName(author: AuthorRow, active: boolean) {
 }
 
 function compareAuthorCardStatus(left: AuthorRow, right: AuthorRow) {
-  if (left.status === right.status) {
-    return left.displayName.localeCompare(right.displayName);
+  if (left.status !== right.status) {
+    return left.status === "stale" ? 1 : -1;
   }
 
-  return left.status === "stale" ? 1 : -1;
+  const leftProd = Number.isFinite(left.productivity) ? left.productivity : 0;
+  const rightProd = Number.isFinite(right.productivity) ? right.productivity : 0;
+  const byProductivity = rightProd - leftProd;
+
+  if (byProductivity !== 0) {
+    return byProductivity;
+  }
+
+  return left.displayName.localeCompare(right.displayName);
 }
 
 function alertCardClassName(severity: AuthorAlert["severity"]) {

@@ -680,6 +680,8 @@ class Repository:
             "daySeconds": 0,
             "telegramDaySeconds": 0,
             "pluginDaySeconds": 0,
+            "rawPluginDaySeconds": 0,
+            "telegramToFirstActivitySeconds": 0,
             "activeSeconds": 0,
             "idleSeconds": 0,
             "meetingSeconds": 0,
@@ -721,6 +723,8 @@ class Repository:
             ]
         break_buckets = self._break_buckets_for_daily_items(daily_items)
         meeting_buckets = self._meeting_buckets_for_daily_items(daily_items, now)
+        telegram_to_first_activity = self._telegram_to_first_activity_for_daily_items(daily_items)
+        telegram_first_activity_counted: set[tuple[str, str]] = set()
 
         for item in daily_items:
             raw_author = item.get("author") or "Unknown User"
@@ -739,9 +743,16 @@ class Repository:
             )
             report_active_seconds = int(item.get("activeSeconds", 0))
             report_idle_seconds = sum(int(hour.get("idleSeconds", 0)) for hour in hourly_activity)
+            raw_plugin_day_seconds = max(0, int(item.get("activeSeconds", 0)) + int(item.get("idleSeconds", 0)))
             effective_break_seconds = sum(int(hour.get("breakSeconds", 0)) for hour in hourly_activity)
             effective_meeting_seconds = sum(int(hour.get("meetingSeconds", 0)) for hour in hourly_activity)
             telegram_day_seconds = int(item.get("daySeconds", 0))
+            telegram_to_first_activity_seconds = (
+                telegram_to_first_activity.get(author_date_key, 0)
+                if author_date_key not in telegram_first_activity_counted
+                else 0
+            )
+            telegram_first_activity_counted.add(author_date_key)
             work_window_seconds = int(item.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS)
             normal_consumed = normal_consumed_by_author_date.get(author_date_key, 0)
             normal_available = max(0, work_window_seconds - normal_consumed)
@@ -758,6 +769,8 @@ class Repository:
             totals["daySeconds"] += telegram_day_seconds
             totals["telegramDaySeconds"] += telegram_day_seconds
             totals["pluginDaySeconds"] += plugin_day_seconds
+            totals["rawPluginDaySeconds"] += raw_plugin_day_seconds
+            totals["telegramToFirstActivitySeconds"] += telegram_to_first_activity_seconds
             totals["activeSeconds"] += effective_active_seconds
             totals["idleSeconds"] += effective_idle_seconds
             totals["meetingSeconds"] += effective_meeting_seconds
@@ -823,6 +836,8 @@ class Repository:
                     "daySeconds": 0,
                     "telegramDaySeconds": 0,
                     "pluginDaySeconds": 0,
+                    "rawPluginDaySeconds": 0,
+                    "telegramToFirstActivitySeconds": 0,
                     "activeSeconds": 0,
                     "idleSeconds": 0,
                     "meetingSeconds": 0,
@@ -838,6 +853,8 @@ class Repository:
             author_row["daySeconds"] += telegram_day_seconds
             author_row["telegramDaySeconds"] += telegram_day_seconds
             author_row["pluginDaySeconds"] += plugin_day_seconds
+            author_row["rawPluginDaySeconds"] += raw_plugin_day_seconds
+            author_row["telegramToFirstActivitySeconds"] += telegram_to_first_activity_seconds
             author_row["activeSeconds"] += effective_active_seconds
             author_row["idleSeconds"] += effective_idle_seconds
             author_row["meetingSeconds"] += effective_meeting_seconds
@@ -930,6 +947,8 @@ class Repository:
                     "daySeconds": 0,
                     "telegramDaySeconds": 0,
                     "pluginDaySeconds": 0,
+                    "rawPluginDaySeconds": 0,
+                    "telegramToFirstActivitySeconds": 0,
                     "activeSeconds": 0,
                     "idleSeconds": 0,
                     "meetingSeconds": 0,
@@ -956,8 +975,14 @@ class Repository:
                 "hourlyActivity": _empty_hourly_activity(),
             }
 
+        presence_overrides = self._author_presence_overrides(authors_by_raw.keys())
         author_rows = [
-            _with_alerts(_with_activity_mix(_with_productivity(author)), self.get_interval_for_author(author["rawAuthor"]), now)
+            _with_alerts(
+                _with_activity_mix(_with_productivity(author)),
+                self.get_interval_for_author(author["rawAuthor"]),
+                now,
+                presence_overrides.get(author["rawAuthor"]),
+            )
             for author in authors_by_raw.values()
         ]
         hourly_author_rows = [
@@ -976,6 +1001,51 @@ class Repository:
             "authorAliases": self.author_aliases(),
             "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]),
         }
+
+    def _author_presence_overrides(self, raw_authors: Any) -> dict[str, dict[str, Any]]:
+        authors = [str(author or "") for author in raw_authors if str(author or "")]
+
+        if not authors:
+            return {}
+
+        latest_break_by_author: dict[str, dict[str, Any]] = {}
+
+        for event in self.db.break_events.find({"rawAuthor": {"$in": authors}, "eventType": {"$in": ["online", "offline"]}}, {"_id": 0}):
+            raw_author = str(event.get("rawAuthor") or "")
+            timestamp = _coerce_datetime(event.get("timestamp"))
+
+            if not raw_author or not timestamp:
+                continue
+
+            current = latest_break_by_author.get(raw_author)
+
+            if not current or timestamp > current["timestamp"]:
+                latest_break_by_author[raw_author] = {"eventType": str(event.get("eventType") or ""), "timestamp": timestamp}
+
+        overrides: dict[str, dict[str, Any]] = {}
+
+        for raw_author, event in latest_break_by_author.items():
+            if event.get("eventType") != "offline":
+                continue
+
+            offline_at = event["timestamp"]
+            latest_overtime_at: dt.datetime | None = None
+
+            for report in self.db.report_rows.find({"author": raw_author, "receivedAt": {"$gt": offline_at}}, {"_id": 0}):
+                if _time_microseconds(report, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") <= 0:
+                    continue
+
+                received_at = _coerce_datetime(report.get("receivedAt") or report.get("lastReceivedAt"))
+
+                if received_at and (not latest_overtime_at or received_at > latest_overtime_at):
+                    latest_overtime_at = received_at
+
+            overrides[raw_author] = {
+                "offlineAt": offline_at,
+                "overtimeReceivedAt": latest_overtime_at,
+            }
+
+        return overrides
 
     def analytics_summary(self, period: str = "7d") -> dict[str, Any]:
         year = dt.date.today().year
@@ -2313,6 +2383,55 @@ class Repository:
 
         return buckets
 
+    def _telegram_to_first_activity_for_daily_items(self, daily_items: list[dict[str, Any]]) -> dict[tuple[str, str], int]:
+        author_dates = {
+            (str(item.get("author") or "Unknown User"), str(item.get("date") or ""))
+            for item in daily_items
+            if item.get("date")
+        }
+
+        if not author_dates:
+            return {}
+
+        authors = sorted({author for author, _date in author_dates})
+        dates = sorted({_date for _author, _date in author_dates})
+        first_online_by_key: dict[tuple[str, str], dt.datetime] = {}
+        first_activity_by_key: dict[tuple[str, str], dt.datetime] = {}
+
+        for event in self.db.break_events.find(
+            {"rawAuthor": {"$in": authors}, "date": {"$in": dates}, "eventType": "online"},
+            {"_id": 0},
+        ):
+            key = (str(event.get("rawAuthor") or "Unknown User"), str(event.get("date") or ""))
+
+            if key not in author_dates:
+                continue
+
+            timestamp = _coerce_datetime(event.get("timestamp"))
+
+            if timestamp and (key not in first_online_by_key or timestamp < first_online_by_key[key]):
+                first_online_by_key[key] = timestamp
+
+        for event in self.db.raw_activity_events.find(
+            {"author": {"$in": authors}, "date": {"$in": dates}},
+            {"_id": 0, "author": 1, "date": 1, "source": 1, "eventType": 1, "occurredAtUtc": 1, "occurredAtLocal": 1, "metadata": 1},
+        ):
+            key = (str(event.get("author") or "Unknown User"), str(event.get("date") or ""))
+
+            if key not in author_dates or not _is_activity_event(event):
+                continue
+
+            occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or _coerce_datetime(event.get("occurredAtLocal"))
+
+            if occurred_at and (key not in first_activity_by_key or occurred_at < first_activity_by_key[key]):
+                first_activity_by_key[key] = occurred_at
+
+        return {
+            key: max(0, int((first_activity_at - first_online_by_key[key]).total_seconds()))
+            for key, first_activity_at in first_activity_by_key.items()
+            if key in first_online_by_key
+        }
+
     def _apply_live_telegram_summary(
         self,
         authors_by_raw: dict[str, dict[str, Any]],
@@ -3363,12 +3482,18 @@ def _activity_mix_from_list(activity_counts: list[dict[str, Any]]) -> list[dict[
     ]
 
 
-def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.datetime) -> dict[str, Any]:
+def _with_alerts(
+    author: dict[str, Any],
+    send_interval_seconds: int,
+    now: dt.datetime,
+    presence_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     item = dict(author)
     alerts = list(item.get("securityAlerts") or [])
     alerts.extend(item.get("telegramAlerts") or [])
     last_received_at = _coerce_datetime(item.get("lastReceivedAt"))
     stale_threshold_seconds = max(0, send_interval_seconds * 2)
+    forced_offline = False
 
     if last_received_at:
         seconds_since_report = max(0, int((now - last_received_at).total_seconds()))
@@ -3397,6 +3522,14 @@ def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.dat
                 "threshold": stale_threshold_seconds,
             }
         )
+
+    if presence_override and presence_override.get("offlineAt"):
+        overtime_received_at = _coerce_datetime(presence_override.get("overtimeReceivedAt"))
+        forced_offline = True
+
+        if overtime_received_at:
+            seconds_since_overtime = max(0, int((now - overtime_received_at).total_seconds()))
+            forced_offline = seconds_since_overtime > stale_threshold_seconds
 
     productivity = float(item.get("productivity", 0))
     plugin_day_seconds = int(item.get("pluginDaySeconds", 0))
@@ -3449,7 +3582,7 @@ def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.dat
 
     critical_count = sum(1 for alert in alerts if alert["severity"] == "critical")
     warning_count = sum(1 for alert in alerts if alert["severity"] == "warning")
-    item["status"] = "stale" if any(alert["type"] == "reports_stopped" for alert in alerts) else "online"
+    item["status"] = "stale" if forced_offline or any(alert["type"] == "reports_stopped" for alert in alerts) else "online"
     item["alerts"] = alerts
     item["alertStats"] = {
         "total": len(alerts),
