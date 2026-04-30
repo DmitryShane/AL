@@ -4,13 +4,13 @@ One-off maintenance: delete raw_activity_events (source=ual) for each author's
 local calendar day that occurred strictly before their first "online" break_event
 today. Then rebuild aggregates (report_rows, daily_author_activity, etc.).
 
-Run on the server as user `al` with env from /etc/al/backend.env, e.g.:
+Run on the server (Mongo settings are root-only in /etc/al/backend.env; do not `source` that file in shell if passwords contain metacharacters):
 
-  set -a; source /etc/al/backend.env; set +a
-  cd /opt/al/current/apps/backend && uv run python /opt/al/current/scripts/prod_strip_ual_before_online_today.py
+  cd /opt/al/current/apps/backend && ./.venv/bin/python ../../scripts/prod_strip_ual_before_online_today.py --env-file /etc/al/backend.env
 """
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import os
 import sys
@@ -23,6 +23,24 @@ if os.path.isdir(_BACKEND):
 
 from al_backend.repository import Repository
 from al_backend.settings import load_settings
+
+
+def _apply_env_file(path: str, keys: frozenset[str]) -> None:
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+
+            if not line or line.startswith("#"):
+                continue
+
+            if "=" not in line:
+                continue
+
+            key, _, value = line.partition("=")
+            key = key.strip()
+
+            if key in keys:
+                os.environ[key] = value
 
 
 def _zone(tz_id: str | None) -> ZoneInfo:
@@ -41,6 +59,17 @@ def _ensure_utc_aware(ts: dt.datetime) -> dt.datetime:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Strip pre-online UAL raw events for local today and rebuild aggregates")
+    parser.add_argument(
+        "--env-file",
+        metavar="PATH",
+        help="Parse KEY=value lines for AL_MONGO_URI and AL_MONGO_DATABASE only (safe for passwords with shell metacharacters)",
+    )
+    args = parser.parse_args()
+
+    if args.env_file:
+        _apply_env_file(args.env_file, frozenset({"AL_MONGO_URI", "AL_MONGO_DATABASE"}))
+
     settings = load_settings()
     repo = Repository(settings)
     now_utc = dt.datetime.now(dt.UTC)
