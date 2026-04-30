@@ -162,7 +162,7 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
     LOGGER.info("Closed Telegram day reminder %s with %s: %s", reminder_id, action, result)
 
     if chat_id and message_id:
-        edit_reminder_message(config.token, chat_id, message_id, action)
+        edit_reminder_message(config.token, chat_id, message_id, action, reminder_username or actor_username)
 
     if callback_id:
         answer_callback_query(config.token, callback_id, "Telegram day closed.")
@@ -310,15 +310,16 @@ def answer_callback_query(token: str, callback_query_id: str, text: str) -> dict
     return telegram_request(token, "answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
 
 
-def edit_reminder_message(token: str, chat_id: int, message_id: int, action: str) -> dict[str, Any]:
+def edit_reminder_message(token: str, chat_id: int, message_id: int, action: str, telegram_username: str = "") -> dict[str, Any]:
     label = "Overtime" if action == "overtime" else "Offline"
+    author = f" @{telegram_username}" if telegram_username else ""
     return telegram_request(
         token,
         "editMessageText",
         {
             "chat_id": chat_id,
             "message_id": message_id,
-            "text": f"Done. Telegram day closed as {label}.",
+            "text": f"Done.{author} Telegram day closed as {label}.",
         },
     )
 

@@ -73,6 +73,7 @@ type AuthorRow = {
 };
 
 type AuthorAlert = {
+  id?: string;
   type: string;
   severity: "critical" | "warning";
   title: string;
@@ -1479,15 +1480,39 @@ function AnalyticsDeltaValue({ value, percent = false, inverse = false }: { valu
 }
 
 function AlertsPage({ authors }: { authors: AuthorRow[] }) {
+  const sortedAuthors = [...authors].sort(compareAlertAuthors);
+  const totals = sortedAuthors.reduce(
+    (acc, author) => {
+      const stats = author.alertStats ?? { total: 0, critical: 0, warning: 0 };
+      acc.total += stats.total;
+      acc.critical += stats.critical;
+      acc.warning += stats.warning;
+
+      if (!stats.total) {
+        acc.healthy += 1;
+      }
+
+      return acc;
+    },
+    { total: 0, critical: 0, warning: 0, healthy: 0 }
+  );
+
   return (
-    <section className="page-section">
-      <div className="alerts-grid">
-        {authors.map((author) => {
+    <section className="page-section alerts-page">
+      <div className="alerts-summary-strip">
+        <AlertSummaryMetric label="Total alerts" value={totals.total} tone={totals.total ? "warning" : "healthy"} />
+        <AlertSummaryMetric label="Critical" value={totals.critical} tone={totals.critical ? "critical" : "neutral"} />
+        <AlertSummaryMetric label="Warning" value={totals.warning} tone={totals.warning ? "warning" : "neutral"} />
+        <AlertSummaryMetric label="Healthy authors" value={totals.healthy} tone="healthy" />
+      </div>
+
+      <div className="alerts-card-grid">
+        {sortedAuthors.map((author) => {
           const alerts = author.alerts ?? [];
           const stats = author.alertStats ?? { total: 0, critical: 0, warning: 0 };
 
           return (
-            <article className="alert-author-card" key={author.rawAuthor}>
+            <article className={alertAuthorCardClassName(stats)} key={author.rawAuthor}>
               <div className="alert-author-header">
                 <span className="avatar" style={avatarStyle(author.authorColor)}>{initials(author.displayName)}</span>
                 <div>
@@ -1498,28 +1523,19 @@ function AlertsPage({ authors }: { authors: AuthorRow[] }) {
                 <span className={authorStatusBadgeClassName(author.status)}>{formatAuthorStatus(author)}</span>
               </div>
 
-              <div className="alert-stat-row">
-                <div>
-                  <span>Total</span>
-                  <strong>{stats.total}</strong>
-                </div>
-                <div>
-                  <span>Critical</span>
-                  <strong>{stats.critical}</strong>
-                </div>
-                <div>
-                  <span>Warning</span>
-                  <strong>{stats.warning}</strong>
-                </div>
+              <div className="alert-count-stack">
+                <span className={alertCountBadgeClassName(stats.total ? "total" : "healthy")}>{stats.total ? `${stats.total} total` : "Healthy"}</span>
+                <span className={alertCountBadgeClassName(stats.critical ? "critical" : "muted")}>{stats.critical} critical</span>
+                <span className={alertCountBadgeClassName(stats.warning ? "warning" : "muted")}>{stats.warning} warning</span>
               </div>
 
               <div className="alert-stack">
                 {alerts.length ? (
-                  alerts.map((alert) => (
-                    <div className={alertCardClassName(alert.severity)} key={alert.type}>
+                  alerts.map((alert, index) => (
+                    <div className={alertCardClassName(alert.severity)} key={alertKey(alert, author.rawAuthor, index)}>
                       <div>
                         <strong>{alert.title}</strong>
-                        <span>{alert.severity}</span>
+                        <span className={alertSeverityBadgeClassName(alert.severity)}>{alert.severity}</span>
                       </div>
                       <p>{alert.message}</p>
                       <small>{formatAlertValue(alert)}</small>
@@ -1533,8 +1549,17 @@ function AlertsPage({ authors }: { authors: AuthorRow[] }) {
           );
         })}
       </div>
-      {!authors.length ? <p className="empty">No authors for the selected period.</p> : null}
+      {!sortedAuthors.length ? <p className="empty">No authors for the selected period.</p> : null}
     </section>
+  );
+}
+
+function AlertSummaryMetric({ label, value, tone }: { label: string; value: number; tone: "critical" | "warning" | "healthy" | "neutral" }) {
+  return (
+    <div className={`alert-summary-metric ${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -3215,6 +3240,42 @@ function compareAuthorCardStatus(left: AuthorRow, right: AuthorRow) {
 
 function alertCardClassName(severity: AuthorAlert["severity"]) {
   return `alert-card ${severity}`;
+}
+
+function alertAuthorCardClassName(stats: AlertStats) {
+  if (stats.critical) {
+    return "alert-author-card critical";
+  }
+
+  if (stats.warning) {
+    return "alert-author-card warning";
+  }
+
+  return "alert-author-card healthy";
+}
+
+function alertCountBadgeClassName(tone: "total" | "critical" | "warning" | "healthy" | "muted") {
+  return `alert-count-badge ${tone}`;
+}
+
+function alertSeverityBadgeClassName(severity: AuthorAlert["severity"]) {
+  return `alert-severity-badge ${severity}`;
+}
+
+function alertKey(alert: AuthorAlert, rawAuthor: string, index: number) {
+  return alert.id ?? `${rawAuthor}:${alert.type}:${alert.createdAt ?? ""}:${alert.source ?? ""}:${alert.deviceId ?? ""}:${index}`;
+}
+
+function compareAlertAuthors(left: AuthorRow, right: AuthorRow) {
+  const leftStats = left.alertStats ?? { total: 0, critical: 0, warning: 0 };
+  const rightStats = right.alertStats ?? { total: 0, critical: 0, warning: 0 };
+
+  return (
+    rightStats.critical - leftStats.critical
+    || rightStats.warning - leftStats.warning
+    || rightStats.total - leftStats.total
+    || left.displayName.localeCompare(right.displayName)
+  );
 }
 
 function formatAlertValue(alert: AuthorAlert) {

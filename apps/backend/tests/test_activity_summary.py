@@ -18,6 +18,7 @@ from al_backend.repository import (
 )
 from al_backend.telegram_bot import (
     BotConfig,
+    edit_reminder_message,
     get_updates,
     handle_callback_query,
     parse_event_type,
@@ -255,6 +256,21 @@ def test_telegram_bot_reminder_message_mentions_author_and_has_buttons(monkeypat
     assert "altd:reminder-1:overtime" in captured["params"]["reply_markup"]
 
 
+def test_telegram_bot_edit_message_names_author(monkeypatch):
+    captured = {}
+
+    def fake_request(token, method, params):
+        captured.update({"token": token, "method": method, "params": params})
+        return {"ok": True}
+
+    monkeypatch.setattr("al_backend.telegram_bot.telegram_request", fake_request)
+
+    edit_reminder_message("token", 123, 42, "overtime", "dmitryshane")
+
+    assert captured["method"] == "editMessageText"
+    assert captured["params"]["text"] == "Done. @dmitryshane Telegram day closed as Overtime."
+
+
 def test_telegram_bot_callback_edits_message_after_close(monkeypatch):
     calls = []
     config = BotConfig(
@@ -268,8 +284,8 @@ def test_telegram_bot_callback_edits_message_after_close(monkeypatch):
         calls.append(("close", backend_url, bot_secret, reminder_id, action, actor_telegram_username))
         return {"ok": True}
 
-    def fake_edit_reminder_message(token, chat_id, message_id, action):
-        calls.append(("edit", token, chat_id, message_id, action))
+    def fake_edit_reminder_message(token, chat_id, message_id, action, telegram_username=""):
+        calls.append(("edit", token, chat_id, message_id, action, telegram_username))
         return {"ok": True}
 
     def fake_answer_callback_query(token, callback_query_id, text):
@@ -295,7 +311,7 @@ def test_telegram_bot_callback_edits_message_after_close(monkeypatch):
     )
 
     assert ("close", "https://activity.mempic.com", "secret", "reminder-1", "overtime", "dmitryshane") in calls
-    assert ("edit", "token", 123, 42, "overtime") in calls
+    assert ("edit", "token", 123, 42, "overtime", "dmitryshane") in calls
     assert ("answer", "token", "callback-1", "Telegram day closed.") in calls
 
 
@@ -339,6 +355,72 @@ def test_telegram_bot_callback_rejects_wrong_user(monkeypatch):
     )
 
     assert calls == [("answer", "token", "callback-1", "Sorry, this reminder was not sent to you.")]
+
+
+def test_security_alerts_are_scoped_to_resolved_authors():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats"})
+    repo.upsert_author_alias("D Shane", "Dmitry Shane")
+    repo.db.daily_author_activity.insert_one({"source": "ual", "author": "Dmitry Shane", "projectId": "unity", "date": "2026-04-29"})
+    repo.db.daily_author_activity.insert_one({"source": "ual", "author": "Igor Mats", "projectId": "unity", "date": "2026-04-29"})
+    repo.log_report_security_event(
+        "report_forgery_attempt",
+        "ual",
+        author="D Shane",
+        device_id="device-dmitry",
+        challenge_id="challenge-dmitry",
+        message="Dmitry alert",
+    )
+    repo.log_report_security_event(
+        "report_forgery_attempt",
+        "ual",
+        author="Igor Mats",
+        device_id="device-igor",
+        challenge_id="challenge-igor",
+        message="Igor alert",
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    authors = {author["rawAuthor"]: author for author in summary["authors"]}
+
+    assert [alert["message"] for alert in authors["Dmitry Shane"]["alerts"] if alert["type"] == "report_forgery_attempt"] == ["Dmitry alert"]
+    assert [alert["message"] for alert in authors["Igor Mats"]["alerts"] if alert["type"] == "report_forgery_attempt"] == ["Igor alert"]
+
+
+def test_repeated_security_alerts_keep_distinct_ids():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
+    repo.db.daily_author_activity.insert_one({"source": "ual", "author": "Dmitry Shane", "projectId": "unity", "date": "2026-04-29"})
+    repo.log_report_security_event("report_forgery_attempt", "ual", author="Dmitry Shane", device_id="device-a", challenge_id="challenge-a")
+    repo.log_report_security_event("report_forgery_attempt", "ual", author="Dmitry Shane", device_id="device-b", challenge_id="challenge-b")
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry Shane")
+    security_alerts = [alert for alert in author["alerts"] if alert["type"] == "report_forgery_attempt"]
+
+    assert len(security_alerts) == 2
+    assert len({alert["id"] for alert in security_alerts}) == 2
+
+
+def test_authors_without_alerts_have_zero_alert_stats():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Healthy Author", "displayName": "Healthy Author"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Healthy Author",
+            "projectId": "unity",
+            "date": "2026-04-29",
+            "lastReceivedAt": dt.datetime.now(dt.UTC),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Healthy Author")
+
+    assert author["alertStats"]["total"] == 0
+    assert author["alerts"] == []
 
 
 def test_manual_profile_is_listed_before_activity_and_can_receive_email():

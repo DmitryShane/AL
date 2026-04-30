@@ -963,9 +963,13 @@ class Repository:
 
         by_author: dict[str, list[dict[str, Any]]] = {}
 
-        for event in self.db.report_security_events.find(query, {"_id": 0}).sort("createdAt", DESCENDING).limit(100):
-            raw_author = event.get("author") or "Unknown User"
+        for index, event in enumerate(self.db.report_security_events.find(query, {"_id": 0}).sort("createdAt", DESCENDING).limit(100)):
+            raw_author = self.resolve_author_alias(event.get("author") or "Unknown User")
+            created_at = _iso(event.get("createdAt"))
+            challenge_id = event.get("challengeId")
+            device_id = event.get("deviceId")
             alert = {
+                "id": f"security:{raw_author}:{challenge_id or device_id or created_at or index}",
                 "type": "report_forgery_attempt",
                 "severity": "critical",
                 "title": "Report forgery attempt",
@@ -975,9 +979,9 @@ class Repository:
                 "source": event.get("source"),
                 "pluginVersion": event.get("pluginVersion"),
                 "authorEmail": event.get("authorEmail"),
-                "deviceId": event.get("deviceId"),
-                "challengeId": event.get("challengeId"),
-                "createdAt": _iso(event.get("createdAt")),
+                "deviceId": device_id,
+                "challengeId": challenge_id,
+                "createdAt": created_at,
             }
             by_author.setdefault(raw_author, []).append(alert)
 
@@ -1844,6 +1848,7 @@ class Repository:
                 author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
                 author_row.setdefault("telegramAlerts", []).append(
                     {
+                        "id": f"telegram_day_open:{raw_author}:{day_date}",
                         "type": "telegram_day_open",
                         "severity": "warning",
                         "title": "Telegram day still open",
@@ -2767,6 +2772,7 @@ def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.dat
         if seconds_since_report > stale_threshold_seconds:
             alerts.append(
                 {
+                    "id": f"reports_stopped:{item.get('rawAuthor') or item.get('displayName') or 'unknown'}",
                     "type": "reports_stopped",
                     "severity": "critical",
                     "title": "Reports stopped",
@@ -2778,6 +2784,7 @@ def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.dat
     else:
         alerts.append(
             {
+                "id": f"reports_stopped:{item.get('rawAuthor') or item.get('displayName') or 'unknown'}",
                 "type": "reports_stopped",
                 "severity": "critical",
                 "title": "Reports stopped",
@@ -2793,6 +2800,7 @@ def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.dat
     if plugin_day_seconds > 0 and productivity < LOW_PRODUCTIVITY_THRESHOLD:
         alerts.append(
             {
+                "id": f"low_productivity:{item.get('rawAuthor') or item.get('displayName') or 'unknown'}",
                 "type": "low_productivity",
                 "severity": "warning",
                 "title": "Low productivity",
@@ -2807,6 +2815,7 @@ def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.dat
     if break_seconds > LONG_BREAK_THRESHOLD_SECONDS:
         alerts.append(
             {
+                "id": f"long_break:{item.get('rawAuthor') or item.get('displayName') or 'unknown'}",
                 "type": "long_break",
                 "severity": "warning",
                 "title": "Long break",
@@ -2824,6 +2833,7 @@ def _with_alerts(author: dict[str, Any], send_interval_seconds: int, now: dt.dat
     if total_activity_events >= SELECT_HEAVY_MIN_EVENTS and select_percent >= SELECT_HEAVY_THRESHOLD_PERCENT:
         alerts.append(
             {
+                "id": f"select_heavy_activity:{item.get('rawAuthor') or item.get('displayName') or 'unknown'}",
                 "type": "select_heavy_activity",
                 "severity": "warning",
                 "title": "Select-heavy activity",
