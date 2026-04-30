@@ -153,11 +153,25 @@ systemctl daemon-reload
 systemctl enable mongod nginx al-backend al-telegram-bot al-discord-bot
 systemctl restart mongod
 systemctl restart al-backend
-set -a
-# shellcheck disable=SC1090
-source "${BACKEND_ENV}"
-set +a
-bash -lc "cd '${APP_DIR}/apps/backend' && .venv/bin/python -m al_backend.discord_author_mappings"
+cd "${APP_DIR}/apps/backend"
+.venv/bin/python - "${BACKEND_ENV}" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+for line in Path(sys.argv[1]).read_text().splitlines():
+    stripped = line.strip()
+
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        continue
+
+    key, value = stripped.split("=", 1)
+    os.environ[key.strip()] = value.strip().strip("'\"")
+
+from al_backend.discord_author_mappings import main
+
+main()
+PY
 systemctl restart al-telegram-bot
 systemctl restart al-discord-bot
 nginx -t
