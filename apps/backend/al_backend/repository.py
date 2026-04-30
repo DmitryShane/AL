@@ -737,8 +737,8 @@ class Repository:
             ]
         break_buckets = self._break_buckets_for_daily_items(daily_items)
         meeting_buckets = self._meeting_buckets_for_daily_items(daily_items, now)
-        telegram_to_first_activity = self._telegram_to_first_activity_for_daily_items(daily_items)
-        telegram_first_activity_counted: set[tuple[str, str]] = set()
+        telegram_gaps = self._telegram_gaps_for_daily_items(daily_items)
+        telegram_gap_counted: set[tuple[str, str]] = set()
 
         for item in daily_items:
             raw_author = item.get("author") or "Unknown User"
@@ -755,18 +755,26 @@ class Repository:
                 meeting_buckets.get(author_date_key, []),
                 meeting_consumed_by_author_date_hour.setdefault(author_date_key, _empty_hourly_activity()),
             )
+            telegram_gap = telegram_gaps.get(author_date_key, {})
+            telegram_gap_hours = telegram_gap.get("hourlyActivity", [])
+            can_apply_telegram_gap = item.get("source") not in {"telegram", "discord"}
+            telegram_gap_seconds = (
+                int(telegram_gap.get("seconds", 0))
+                if can_apply_telegram_gap and author_date_key not in telegram_gap_counted
+                else 0
+            )
+
+            if telegram_gap_seconds:
+                _merge_hourly_activity(hourly_activity, telegram_gap_hours)
+                telegram_gap_counted.add(author_date_key)
+
             report_active_seconds = int(item.get("activeSeconds", 0))
             report_idle_seconds = sum(int(hour.get("idleSeconds", 0)) for hour in hourly_activity)
-            raw_plugin_day_seconds = max(0, int(item.get("activeSeconds", 0)) + int(item.get("idleSeconds", 0)))
+            raw_plugin_day_seconds = max(0, int(item.get("activeSeconds", 0)) + int(item.get("idleSeconds", 0)) + telegram_gap_seconds)
             effective_break_seconds = sum(int(hour.get("breakSeconds", 0)) for hour in hourly_activity)
             effective_meeting_seconds = sum(int(hour.get("meetingSeconds", 0)) for hour in hourly_activity)
             telegram_day_seconds = int(item.get("daySeconds", 0))
-            telegram_to_first_activity_seconds = (
-                telegram_to_first_activity.get(author_date_key, 0)
-                if author_date_key not in telegram_first_activity_counted
-                else 0
-            )
-            telegram_first_activity_counted.add(author_date_key)
+            telegram_to_first_activity_seconds = telegram_gap_seconds
             work_window_seconds = int(item.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS)
             normal_consumed = normal_consumed_by_author_date.get(author_date_key, 0)
             normal_available = max(0, work_window_seconds - normal_consumed)
@@ -2397,7 +2405,7 @@ class Repository:
 
         return buckets
 
-    def _telegram_to_first_activity_for_daily_items(self, daily_items: list[dict[str, Any]]) -> dict[tuple[str, str], int]:
+    def _telegram_gaps_for_daily_items(self, daily_items: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
         author_dates = {
             (str(item.get("author") or "Unknown User"), str(item.get("date") or ""))
             for item in daily_items
@@ -2409,7 +2417,7 @@ class Repository:
 
         authors = sorted({author for author, _date in author_dates})
         dates = sorted({_date for _author, _date in author_dates})
-        first_online_by_key: dict[tuple[str, str], dt.datetime] = {}
+        first_online_by_key: dict[tuple[str, str], dict[str, Any]] = {}
         first_activity_by_key: dict[tuple[str, str], dt.datetime] = {}
 
         for event in self.db.break_events.find(
@@ -2423,8 +2431,11 @@ class Repository:
 
             timestamp = _coerce_datetime(event.get("timestamp"))
 
-            if timestamp and (key not in first_online_by_key or timestamp < first_online_by_key[key]):
-                first_online_by_key[key] = timestamp
+            if timestamp and (key not in first_online_by_key or timestamp < first_online_by_key[key]["timestamp"]):
+                first_online_by_key[key] = {
+                    "timestamp": timestamp,
+                    "timeZoneId": str(event.get("timeZoneId") or "UTC"),
+                }
 
         for row in self.db.report_rows.find(
             {"author": {"$in": authors}, "date": {"$in": dates}},
@@ -2465,11 +2476,33 @@ class Repository:
             if occurred_at and (key not in first_activity_by_key or occurred_at < first_activity_by_key[key]):
                 first_activity_by_key[key] = occurred_at
 
-        return {
-            key: max(0, int((first_activity_at - first_online_by_key[key]).total_seconds()))
-            for key, first_activity_at in first_activity_by_key.items()
-            if key in first_online_by_key
-        }
+        gaps: dict[tuple[str, str], dict[str, Any]] = {}
+
+        for key, first_activity_at in first_activity_by_key.items():
+            first_online = first_online_by_key.get(key)
+
+            if not first_online:
+                continue
+
+            first_online_at = first_online["timestamp"]
+            gap_seconds = max(0, int((first_activity_at - first_online_at).total_seconds()))
+
+            if gap_seconds <= 0:
+                continue
+
+            hourly_activity = _empty_hourly_activity()
+            _add_idle_interval_to_buckets(
+                hourly_activity,
+                first_online_at,
+                first_activity_at,
+                str(first_online.get("timeZoneId") or "UTC"),
+            )
+            gaps[key] = {
+                "seconds": gap_seconds,
+                "hourlyActivity": hourly_activity,
+            }
+
+        return gaps
 
     def _apply_live_telegram_summary(
         self,
@@ -4273,6 +4306,34 @@ def _add_break_interval_to_buckets(
         if target:
             seconds = max(0, int((segment_end - current).total_seconds()))
             target[current.hour]["breakSeconds"] = int(target[current.hour].get("breakSeconds", 0)) + seconds
+
+        current = segment_end
+
+
+def _add_idle_interval_to_buckets(
+    buckets: list[dict[str, int]],
+    started_at: dt.datetime | None,
+    ended_at: dt.datetime | None,
+    time_zone_id: str,
+) -> None:
+    if not started_at or not ended_at or ended_at <= started_at:
+        return
+
+    try:
+        zone = ZoneInfo(time_zone_id)
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
+
+    current = started_at.astimezone(zone)
+    local_end = ended_at.astimezone(zone)
+
+    while current < local_end:
+        hour_end = current.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+        segment_end = min(hour_end, local_end)
+        seconds = max(0, int((segment_end - current).total_seconds()))
+
+        if 0 <= current.hour < len(buckets):
+            buckets[current.hour]["idleSeconds"] = int(buckets[current.hour].get("idleSeconds", 0)) + seconds
 
         current = segment_end
 
