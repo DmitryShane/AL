@@ -1097,6 +1097,10 @@ p {
   flex: 0 0 16px;
 }
 
+.discord-icon {
+  fill: #5865f2;
+}
+
 .blender-icon-mark {
   fill: #f5792a;
 }

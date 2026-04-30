@@ -1621,7 +1621,6 @@ function ActivityPage({
               <div className="mini-metrics">
                 <span>{formatDuration(item.activeSeconds)} active</span>
                 <span>{formatDuration(item.idleSeconds)} idle</span>
-                <span>{formatDuration(item.meetingSeconds ?? 0)} meeting</span>
                 <span>{formatDuration(item.breakSeconds)} break</span>
               </div>
               <div className={`productivity-badge ${productivityTone(item.productivity)}`}>
@@ -1653,7 +1652,6 @@ function ActivityPage({
             <Duration label="Day Time (Plugin)" seconds={author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds} />
             <Duration label="Active" seconds={author.activeSeconds} />
             <Duration label="Idle" seconds={author.idleSeconds} />
-            <Duration label="Meeting" seconds={author.meetingSeconds ?? 0} />
             <Duration label="Overtime" seconds={author.overtimeActiveSeconds} />
             <Duration label="Break" seconds={author.breakSeconds} valueClassName={breakClassName(author.breakSeconds)} />
             <div className="duration">
@@ -3106,7 +3104,7 @@ function sourceIcon(source?: string) {
   }
 
   if (source === "discord") {
-    return <Activity size={16} />;
+    return <DiscordIcon />;
   }
 
   return <Activity size={16} />;
@@ -3146,6 +3144,14 @@ function TelegramIcon() {
   return (
     <svg className="source-icon telegram-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <path d="M21.8 4.1 18.6 20c-.2 1.1-.9 1.4-1.8.9l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.3-8.4c.4-.4-.1-.6-.6-.2L6 13.5 1.1 12c-1.1-.3-1.1-1.1.2-1.6L20.4 3c.9-.3 1.7.2 1.4 1.1Z" />
+    </svg>
+  );
+}
+
+function DiscordIcon() {
+  return (
+    <svg className="source-icon discord-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M19.5 5.4A16 16 0 0 0 15.5 4l-.2.4c1.5.4 2.7 1 3.8 1.8a12.9 12.9 0 0 0-4.7-1.5 13.8 13.8 0 0 0-4.8 0 12.9 12.9 0 0 0-4.7 1.5A11.8 11.8 0 0 1 8.7 4.4L8.5 4a16 16 0 0 0-4 1.4C2 9.1 1.4 12.7 1.7 16.2A16.1 16.1 0 0 0 6.6 18.7l.6-.8a10.4 10.4 0 0 1-1.6-.8l.4-.3c3.1 1.4 6.5 1.4 9.6 0l.4.3c-.5.3-1 .6-1.6.8l.6.8a16.1 16.1 0 0 0 4.9-2.5c.4-4-.7-7.6-2.4-10.8ZM8.5 14.2c-.9 0-1.6-.8-1.6-1.8s.7-1.8 1.6-1.8 1.7.8 1.6 1.8c0 1-.7 1.8-1.6 1.8Zm7 0c-.9 0-1.6-.8-1.6-1.8s.7-1.8 1.6-1.8 1.7.8 1.6 1.8c0 1-.7 1.8-1.6 1.8Z" />
     </svg>
   );
 }
