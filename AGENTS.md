@@ -30,6 +30,14 @@ The Blender add-on source lives in:
 
 After every code change in `com.al.ual/blender_al`, rebuild the installable add-on archive at `com.al.ual/blender_al.zip`.
 
+The VS Code Activity Logger extension source lives in:
+
+```text
+/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual/vscode_al
+```
+
+After any change under `vscode_al` (TypeScript in `src/`, `package.json`, or `tsconfig`), the agent must **finish the full workflow in the same session** without asking the user to run commands locally: `cd` into `vscode_al`, run `npm install` when dependencies or the lockfile changed (or when `node_modules` is missing), then always run `npm run compile` so `out/` matches `src/`. If you cut a distributable build, run `npm run package` as well. Do not stop after editing only `src/` and leave `out/` stale.
+
 ## Backend And Frontend
 
 Continue working on the server and website in this AL repository:
