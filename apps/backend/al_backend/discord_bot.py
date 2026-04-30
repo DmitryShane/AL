@@ -152,3 +152,7 @@ def _parse_required_int(name: str) -> int:
         raise RuntimeError(f"{name} is required")
 
     return int(value)
+
+
+if __name__ == "__main__":
+    main()
