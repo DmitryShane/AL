@@ -2779,7 +2779,7 @@ function BreakdownPanel({ title, items }: { title: string; items: BreakdownPanel
     <div className="panel breakdown-panel">
       <div className="breakdown-panel-copy">
         <h2>{title}</h2>
-        <div className="list">
+        <div className="list breakdown-scroll-list breakdown-scroll-list--compact-rows">
           {items.length ? (
             items.map((item) => (
               <div className="row" key={item.id}>
@@ -2828,7 +2828,7 @@ function MiniBreakdownList({
   return (
     <div className="mini-breakdown-list">
       <h3>{title}</h3>
-      <div className="list">
+      <div className="list breakdown-scroll-list breakdown-scroll-list--standard-rows">
         {items.length ? (
           items.map((item) => (
             <div className="row" key={item.id}>
