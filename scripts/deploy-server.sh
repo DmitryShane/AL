@@ -152,6 +152,18 @@ rm -f /etc/nginx/sites-enabled/default
 systemctl daemon-reload
 systemctl enable mongod nginx al-backend al-telegram-bot al-discord-bot
 systemctl restart mongod
+for attempt in {1..30}; do
+  if mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' >/dev/null 2>&1; then
+    break
+  fi
+
+  if [[ "${attempt}" -eq 30 ]]; then
+    echo "MongoDB did not become ready after restart." >&2
+    exit 1
+  fi
+
+  sleep 1
+done
 systemctl restart al-backend
 cd "${APP_DIR}/apps/backend"
 .venv/bin/python - "${BACKEND_ENV}" <<'PY'
