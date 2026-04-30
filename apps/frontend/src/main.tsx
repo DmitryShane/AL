@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Activity, BarChart3, Bell, Box, CalendarDays, LogOut, RefreshCw, Search, Settings, ShieldCheck, UsersRound } from "lucide-react";
 import { AuthorsTable } from "./components/AuthorsTable";
+import { AnalyticsActivityOverview } from "./components/AnalyticsActivityOverview";
 import { HourlyActivityChart } from "./components/HourlyActivityChart";
 import "./styles.css";
 
@@ -242,6 +243,7 @@ type AnalyticsDay = {
   label: string;
   inMonth: boolean;
   totals: AnalyticsTotals;
+  hourlyActivity: HourlyActivity[];
 };
 
 type AnalyticsDelta = {
@@ -769,7 +771,15 @@ function AnalyticsPage() {
             ))}
           </div>
 
-          {selected ? <AnalyticsHierarchy author={selected} year={analytics.year} /> : <p className="empty">No analytics authors yet.</p>}
+          {selected ? (
+            <AnalyticsActivityOverview
+              author={selected}
+              year={analytics.year}
+              avatar={<span className="avatar" style={avatarStyle(selected.authorColor)}>{initials(selected.displayName)}</span>}
+            />
+          ) : (
+            <p className="empty">No analytics authors yet.</p>
+          )}
         </>
       ) : loading ? (
         <p className="notice">Loading analytics...</p>
@@ -1322,180 +1332,6 @@ function CalendarClearEditor({
       </div>
     </div>
   );
-}
-
-function AnalyticsHierarchy({ author, year }: { author: AnalyticsAuthorSummary; year: number }) {
-  const [expandedMonths, setExpandedMonths] = useState<Record<number, boolean>>({});
-  const [expandedWeeks, setExpandedWeeks] = useState<Record<string, boolean>>({});
-  const monthsWithData = author.months
-    .map((month) => ({
-      ...month,
-      weeks: month.weeks
-        .map((week) => ({
-          ...week,
-          days: week.days.filter(hasAnalyticsDayData)
-        }))
-        .filter((week) => hasAnalyticsTotalsData(week.totals) || week.days.length > 0)
-    }))
-    .filter((month) => hasAnalyticsTotalsData(month.totals) || month.weeks.length > 0);
-
-  function toggleMonth(month: number) {
-    setExpandedMonths((items) => ({ ...items, [month]: !items[month] }));
-  }
-
-  function toggleWeek(month: number, week: number) {
-    const key = `${month}-${week}`;
-    setExpandedWeeks((items) => ({ ...items, [key]: !items[key] }));
-  }
-
-  return (
-    <section className="analytics-hierarchy">
-      <div className="analytics-selected-author">
-        <span className="avatar" style={avatarStyle(author.authorColor)}>{initials(author.displayName)}</span>
-        <div>
-          <strong>{author.displayName}</strong>
-          <small title={author.authorEmail || author.rawAuthor}>{author.authorEmail || author.rawAuthor}</small>
-          <small>{author.team || "No team"} · {year}</small>
-        </div>
-      </div>
-
-      <div className="analytics-tree">
-        {monthsWithData.map((month) => {
-          const monthOpen = expandedMonths[month.month] ?? month.month === new Date().getMonth() + 1;
-
-          return (
-            <section className="analytics-tree-card" key={month.month}>
-              <button className="analytics-tree-toggle month" onClick={() => toggleMonth(month.month)}>
-                <span>{monthOpen ? "−" : "+"}</span>
-                <div className="analytics-month-title">
-                  <strong>{month.label}</strong>
-                  <small>{year}</small>
-                </div>
-                <AnalyticsPeriodSummary totals={month.totals} />
-              </button>
-              <AnalyticsMetricsTable totals={month.totals} delta={month.previousMonthDeltas} deltaLabel="vs previous month" />
-
-              {monthOpen ? (
-                <div className="analytics-week-list">
-                  {month.weeks.map((week) => {
-                    const weekKey = `${month.month}-${week.week}`;
-                    const weekOpen = expandedWeeks[weekKey] ?? false;
-
-                    return (
-                      <section className="analytics-week-card" key={weekKey}>
-                        <button className="analytics-tree-toggle week" onClick={() => toggleWeek(month.month, week.week)}>
-                          <span>{weekOpen ? "−" : "+"}</span>
-                          <div>
-                            <strong>Week {week.week}</strong>
-                            <small>{week.label}</small>
-                          </div>
-                          <AnalyticsPeriodSummary totals={week.totals} compact />
-                        </button>
-                        <AnalyticsMetricsTable totals={week.totals} delta={week.previousWeekDeltas} deltaLabel="vs previous week" />
-
-                        {weekOpen ? (
-                          <div className="analytics-day-table">
-                            <div className="analytics-table-head">
-                              <span>Day</span>
-                              <span>Plugin Day</span>
-                              <span>Active</span>
-                              <span>Idle</span>
-                              <span>Overtime</span>
-                              <span>Break</span>
-                              <span>Productivity</span>
-                            </div>
-                            {week.days.length ? (
-                              week.days.map((day) => (
-                                <div className="analytics-day-row" key={day.date}>
-                                  <span>{day.label}</span>
-                                  <strong>{formatDuration(day.totals.pluginDaySeconds)}</strong>
-                                  <strong>{formatDuration(day.totals.activeSeconds)}</strong>
-                                  <span>{formatDuration(day.totals.idleSeconds)}</span>
-                                  <strong>{formatDuration(day.totals.overtimeActiveSeconds)}</strong>
-                                  <span className={breakClassName(day.totals.breakSeconds)}>{formatMinutes(day.totals.breakSeconds)}</span>
-                                  <strong className={productivityClassName(day.totals.productivity)}>{day.totals.productivity.toFixed(2)}%</strong>
-                                </div>
-                              ))
-                            ) : (
-                              <p className="analytics-empty-days">No activity data for this week.</p>
-                            )}
-                          </div>
-                        ) : null}
-                      </section>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </section>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function AnalyticsMetricsTable({ totals, delta, deltaLabel }: { totals: AnalyticsTotals; delta: AnalyticsDelta; deltaLabel: string }) {
-  return (
-    <div className="analytics-metrics-table">
-      <div className="analytics-table-head">
-        <span>Period</span>
-        <span>Plugin Day</span>
-        <span>Active</span>
-        <span>Idle</span>
-        <span>Overtime</span>
-        <span>Break</span>
-        <span>Productivity</span>
-      </div>
-      <div className="analytics-day-row">
-        <span>Total</span>
-        <strong>{formatDuration(totals.pluginDaySeconds)}</strong>
-        <strong>{formatDuration(totals.activeSeconds)}</strong>
-        <span>{formatDuration(totals.idleSeconds)}</span>
-        <strong>{formatDuration(totals.overtimeActiveSeconds)}</strong>
-        <span className={breakClassName(totals.breakSeconds)}>{formatMinutes(totals.breakSeconds)}</span>
-        <strong className={productivityClassName(totals.productivity)}>{totals.productivity.toFixed(2)}%</strong>
-      </div>
-      <div className="analytics-delta-row">
-        <span>{deltaLabel}</span>
-        <AnalyticsDeltaValue value={delta.pluginDaySeconds} />
-        <AnalyticsDeltaValue value={delta.activeSeconds} />
-        <AnalyticsDeltaValue value={delta.idleSeconds} inverse />
-        <AnalyticsDeltaValue value={delta.overtimeActiveSeconds} />
-        <AnalyticsDeltaValue value={delta.breakSeconds} inverse />
-        <AnalyticsDeltaValue value={delta.productivity} percent />
-      </div>
-    </div>
-  );
-}
-
-function AnalyticsPeriodSummary({ totals, compact = false }: { totals: AnalyticsTotals; compact?: boolean }) {
-  return (
-    <div className={compact ? "analytics-period-summary compact" : "analytics-period-summary"}>
-      <span>{formatDuration(totals.pluginDaySeconds)} day</span>
-      <span>{formatDuration(totals.overtimeActiveSeconds)} overtime</span>
-      <span className={productivityClassName(totals.productivity)}>{totals.productivity.toFixed(1)}%</span>
-    </div>
-  );
-}
-
-function hasAnalyticsDayData(day: AnalyticsDay) {
-  return hasAnalyticsTotalsData(day.totals);
-}
-
-function hasAnalyticsTotalsData(totals: AnalyticsTotals) {
-  return (
-    totals.pluginDaySeconds > 0
-    || totals.telegramDaySeconds > 0
-    || totals.activeSeconds > 0
-    || totals.idleSeconds > 0
-    || totals.overtimeActiveSeconds > 0
-    || totals.breakSeconds > 0
-  );
-}
-
-function AnalyticsDeltaValue({ value, percent = false, inverse = false }: { value: number; percent?: boolean; inverse?: boolean }) {
-  const isPositive = inverse ? value <= 0 : value >= 0;
-  return <span className={isPositive ? "positive" : "negative"}>{percent ? formatDelta(value) : formatDurationDelta(value)}</span>;
 }
 
 function AlertsPage({ authors }: { authors: AuthorRow[] }) {
@@ -2972,6 +2808,7 @@ function DateRangePicker({ value, onChange }: { value: DateRange; onChange: (ran
     <div className="date-range-group">
       <div className="date-presets" aria-label="Date presets">
         <button className={activePreset === "today" ? "active" : undefined} onClick={() => onChange(todayRange())}>Today</button>
+        <button className={activePreset === "yesterday" ? "active" : undefined} onClick={() => onChange(yesterdayRange())}>Yesterday</button>
         <button className={activePreset === "week" ? "active" : undefined} onClick={() => onChange(currentWeekRange())}>Week</button>
         <button className={activePreset === "month" ? "active" : undefined} onClick={() => onChange(currentMonthRange())}>Month</button>
       </div>
@@ -2988,6 +2825,10 @@ function DateRangePicker({ value, onChange }: { value: DateRange; onChange: (ran
 function dateRangePreset(value: DateRange) {
   if (sameDateRange(value, todayRange())) {
     return "today";
+  }
+
+  if (sameDateRange(value, yesterdayRange())) {
+    return "yesterday";
   }
 
   if (sameDateRange(value, currentWeekRange())) {
@@ -3638,6 +3479,13 @@ function loadSavedActivityAuthor() {
 function todayRange(): DateRange {
   const today = toDateInputValue(new Date());
   return { startDate: today, endDate: today };
+}
+
+function yesterdayRange(): DateRange {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const date = toDateInputValue(yesterday);
+  return { startDate: date, endDate: date };
 }
 
 function currentWeekRange(): DateRange {

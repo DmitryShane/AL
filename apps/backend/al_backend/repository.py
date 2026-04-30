@@ -3844,6 +3844,7 @@ def _analytics_month_weeks(
                     "label": day.strftime("%a %d"),
                     "inMonth": month_start <= day <= month_end,
                     "totals": day_totals,
+                    "hourlyActivity": _public_hourly_activity(doc.get("hourlyActivity", [])) if doc else _empty_hourly_activity(),
                 }
             )
 

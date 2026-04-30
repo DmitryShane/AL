@@ -1733,6 +1733,43 @@ def test_activity_summary_keeps_mix_and_saved_files_per_author():
     assert authors["Igor Mats"]["savedPrefabs"] == [{"path": "Assets/Igor.prefab", "name": "Igor", "saveCount": 4}]
 
 
+def test_analytics_summary_includes_day_hourly_activity():
+    repo = fake_repository()
+    today = dt.date.today()
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[10]["activeSeconds"] = 1800
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Dmitry Shane",
+            "date": today.isoformat(),
+            "activeSeconds": 1800,
+            "idleSeconds": 900,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+
+    summary = repo.analytics_summary()
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Dmitry Shane")
+    month = next(item for item in author["months"] if item["month"] == today.month)
+    day = next(
+        item
+        for week in month["weeks"]
+        for item in week["days"]
+        if item["date"] == today.isoformat()
+    )
+    empty_day = next(
+        item
+        for week in month["weeks"]
+        for item in week["days"]
+        if item["date"] != today.isoformat()
+    )
+
+    assert len(day["hourlyActivity"]) == 24
+    assert day["hourlyActivity"][10]["activeSeconds"] == 1800
+    assert len(empty_day["hourlyActivity"]) == 24
+    assert empty_day["hourlyActivity"] == _empty_hourly_activity()
+
+
 def test_overtime_activity_summary_splits_mix_and_saved_files():
     repo = fake_repository()
     base_event = {
