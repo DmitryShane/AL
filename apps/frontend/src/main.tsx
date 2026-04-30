@@ -3410,7 +3410,7 @@ function matchesAuthorSearch(author: AuthorRow, search: string) {
 
 function formatAuthorStatus(author: AuthorRow) {
   if (author.status === "stale") {
-    if (author.stalePresence === "telegram") {
+    if (isTelegramSignedOff(author.stalePresence)) {
       return "Signed off";
     }
 
@@ -3422,7 +3422,7 @@ function formatAuthorStatus(author: AuthorRow) {
 
 function authorStatusBadgeClassName(status?: "online" | "stale", stalePresence?: AuthorRow["stalePresence"]) {
   if (status === "stale") {
-    if (stalePresence === "telegram") {
+    if (isTelegramSignedOff(stalePresence)) {
       return "status-badge telegram-signed-off";
     }
 
@@ -3436,10 +3436,14 @@ function authorCardClassName(author: AuthorRow, active: boolean) {
   let presenceClass = "is-online";
 
   if (author.status === "stale") {
-    presenceClass = author.stalePresence === "telegram" ? "is-telegram-offline" : "is-offline";
+    presenceClass = isTelegramSignedOff(author.stalePresence) ? "is-telegram-offline" : "is-offline";
   }
 
   return `author-card ${active ? "active " : ""}${presenceClass} ${productivityTone(author.productivity)}`.trim();
+}
+
+function isTelegramSignedOff(stalePresence?: AuthorRow["stalePresence"]) {
+  return stalePresence === "telegram" || stalePresence === "both";
 }
 
 function compareAuthorCardStatus(left: AuthorRow, right: AuthorRow) {

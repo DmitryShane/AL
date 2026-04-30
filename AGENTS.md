@@ -65,6 +65,7 @@ stop
 
 - Default to **short, direct answers** unless the user asks for depth, a tutorial, or a formal write-up. Skip long preamble and filler.
 - The owner may write in Russian in chat; **repository and product text stay English** per the rule above.
+- Write implementation plans for the owner in Russian, because plans are part of chat communication. Keep repository and product text in English unless explicitly asked otherwise.
 
 ## MongoDB Data Layout (backend)
 

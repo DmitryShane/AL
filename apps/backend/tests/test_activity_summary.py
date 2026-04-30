@@ -892,7 +892,9 @@ def test_overtime_report_after_telegram_offline_expires_with_stale_threshold():
         }
     )
 
-    assert _author_status(repo, dt.datetime(2026, 4, 28, 18, 13, 1, tzinfo=dt.UTC)) == "stale"
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 13, 1, tzinfo=dt.UTC))
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "telegram"
 
 
 def test_heartbeat_idle_after_telegram_offline_is_suppressed_from_aggregates():
