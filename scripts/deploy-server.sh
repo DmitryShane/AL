@@ -165,25 +165,6 @@ for attempt in {1..30}; do
   sleep 1
 done
 systemctl restart al-backend
-cd "${APP_DIR}/apps/backend"
-.venv/bin/python - "${BACKEND_ENV}" <<'PY'
-import os
-import sys
-from pathlib import Path
-
-for line in Path(sys.argv[1]).read_text().splitlines():
-    stripped = line.strip()
-
-    if not stripped or stripped.startswith("#") or "=" not in stripped:
-        continue
-
-    key, value = stripped.split("=", 1)
-    os.environ[key.strip()] = value.strip().strip("'\"")
-
-from al_backend.discord_author_mappings import main
-
-main()
-PY
 systemctl restart al-telegram-bot
 systemctl restart al-discord-bot
 nginx -t
