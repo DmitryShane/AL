@@ -22,8 +22,10 @@ from al_backend.telegram_bot import (
     edit_reminder_message,
     get_updates,
     handle_callback_query,
+    parse_callback_data,
     parse_event_type,
     parse_reminder_callback,
+    send_online_prompt_message,
     send_reminder_message,
     telegram_username,
 )
@@ -164,6 +166,7 @@ class FakeDb:
         self.break_sessions = FakeCollection()
         self.day_sessions = FakeCollection()
         self.telegram_day_reminders = FakeCollection()
+        self.telegram_online_prompts = FakeCollection()
         self.break_intervals = FakeCollection()
         self.meeting_events = FakeCollection()
         self.meeting_sessions = FakeCollection()
@@ -240,7 +243,15 @@ def test_telegram_bot_parses_reminder_callbacks():
     assert parse_reminder_callback("altd:abc123:offline") == ("abc123", "offline")
     assert parse_reminder_callback("altd:abc123:overtime") == ("abc123", "overtime")
     assert parse_reminder_callback("altd:abc123:afk") is None
+    assert parse_reminder_callback("altm:abc:confirm_online") is None
     assert parse_reminder_callback("hello") is None
+
+
+def test_telegram_bot_parses_online_prompt_callbacks():
+    assert parse_callback_data("altm:abc123:confirm_online") == ("altm", "abc123", "confirm_online")
+    assert parse_callback_data("altm:abc123:dismiss") == ("altm", "abc123", "dismiss")
+    assert parse_callback_data("altm:abc:offline") is None
+    assert parse_callback_data("altd:x:offline") == ("altd", "x", "offline")
 
 
 def test_telegram_bot_update_polling_includes_callbacks(monkeypatch):
@@ -289,6 +300,67 @@ def test_telegram_bot_edit_message_names_author(monkeypatch):
 
     assert captured["method"] == "editMessageText"
     assert captured["params"]["text"] == "Done. @dmitryshane Telegram day closed as Overtime."
+    assert '"inline_keyboard": []' in captured["params"]["reply_markup"]
+
+
+def test_telegram_bot_online_prompt_message_has_buttons(monkeypatch):
+    captured = {}
+
+    def fake_request(token, method, params):
+        captured.update({"token": token, "method": method, "params": params})
+        return {"result": {"message_id": 99}}
+
+    monkeypatch.setattr("al_backend.telegram_bot.telegram_request", fake_request)
+    send_online_prompt_message("token", 123, "Hi @user. Test?", "prompt-1")
+
+    assert captured["method"] == "sendMessage"
+    assert "altm:prompt-1:confirm_online" in captured["params"]["reply_markup"]
+    assert "altm:prompt-1:dismiss" in captured["params"]["reply_markup"]
+    assert "I'm online" in captured["params"]["reply_markup"]
+
+
+def test_telegram_bot_callback_edits_online_prompt(monkeypatch):
+    calls = []
+    config = BotConfig(
+        token="token",
+        backend_url="https://activity.mempic.com",
+        allowed_chat_id=123,
+        bot_secret="secret",
+    )
+
+    def fake_close_reminder(backend_url, bot_secret, reminder_id, action, actor_telegram_username="", *, reminder_kind="day_end"):
+        calls.append(("close", reminder_id, action, reminder_kind))
+        return {"ok": True}
+
+    def fake_edit_reminder_message(token, chat_id, message_id, action, telegram_username="", *, reminder_kind="day_end"):
+        calls.append(("edit", action, reminder_kind))
+        return {"ok": True}
+
+    def fake_answer_callback_query(token, callback_query_id, text):
+        calls.append(("answer", text))
+        return {"ok": True}
+
+    monkeypatch.setattr("al_backend.telegram_bot.close_reminder", fake_close_reminder)
+    monkeypatch.setattr("al_backend.telegram_bot.edit_reminder_message", fake_edit_reminder_message)
+    monkeypatch.setattr("al_backend.telegram_bot.answer_callback_query", fake_answer_callback_query)
+
+    handle_callback_query(
+        config,
+        {
+            "id": "callback-1",
+            "data": "altm:prompt-1:dismiss",
+            "from": {"username": "dmitryshane"},
+            "message": {
+                "message_id": 42,
+                "chat": {"id": 123},
+                "text": 'Hi @dmitryshane. You have activity today but no "online" message yet.',
+            },
+        },
+    )
+
+    assert ("close", "prompt-1", "dismiss", "online_prompt") in calls
+    assert ("edit", "dismiss", "online_prompt") in calls
+    assert ("answer", "Dismissed.") in calls
 
 
 def test_telegram_bot_callback_edits_message_after_close(monkeypatch):
@@ -300,12 +372,12 @@ def test_telegram_bot_callback_edits_message_after_close(monkeypatch):
         bot_secret="secret",
     )
 
-    def fake_close_reminder(backend_url, bot_secret, reminder_id, action, actor_telegram_username=""):
-        calls.append(("close", backend_url, bot_secret, reminder_id, action, actor_telegram_username))
+    def fake_close_reminder(backend_url, bot_secret, reminder_id, action, actor_telegram_username="", *, reminder_kind="day_end"):
+        calls.append(("close", backend_url, bot_secret, reminder_id, action, actor_telegram_username, reminder_kind))
         return {"ok": True}
 
-    def fake_edit_reminder_message(token, chat_id, message_id, action, telegram_username=""):
-        calls.append(("edit", token, chat_id, message_id, action, telegram_username))
+    def fake_edit_reminder_message(token, chat_id, message_id, action, telegram_username="", *, reminder_kind="day_end"):
+        calls.append(("edit", token, chat_id, message_id, action, telegram_username, reminder_kind))
         return {"ok": True}
 
     def fake_answer_callback_query(token, callback_query_id, text):
@@ -330,8 +402,8 @@ def test_telegram_bot_callback_edits_message_after_close(monkeypatch):
         },
     )
 
-    assert ("close", "https://activity.mempic.com", "secret", "reminder-1", "overtime", "dmitryshane") in calls
-    assert ("edit", "token", 123, 42, "overtime", "dmitryshane") in calls
+    assert ("close", "https://activity.mempic.com", "secret", "reminder-1", "overtime", "dmitryshane", "day_end") in calls
+    assert ("edit", "token", 123, 42, "overtime", "dmitryshane", "day_end") in calls
     assert ("answer", "token", "callback-1", "Telegram day closed.") in calls
 
 
@@ -833,6 +905,123 @@ def test_telegram_reminder_close_keeps_day_visible_on_close_date():
     assert repo.db.day_sessions.items[0]["date"] == "2026-04-29"
     assert repo.db.daily_author_activity.items[0]["date"] == "2026-04-29"
     assert author["telegramDaySeconds"] == 82444
+
+
+def test_telegram_online_prompt_schedules_once_per_day():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+
+    assert len(repo.db.telegram_online_prompts.items) == 1
+
+
+def test_telegram_online_prompt_not_scheduled_without_telegram():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "timeZoneId": "UTC"})
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC))
+
+    assert repo.db.telegram_online_prompts.items == []
+
+
+def test_telegram_online_prompt_not_scheduled_when_day_session_exists():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo.db.day_sessions.insert_one(
+        {"rawAuthor": "A", "date": "2026-04-30", "startedAt": t0, "telegramUsername": "ta", "timeZoneId": "UTC"}
+    )
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+
+    assert repo.db.telegram_online_prompts.items == []
+
+
+def test_telegram_online_prompt_claim_after_delay():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+
+    assert repo.claim_due_telegram_online_prompts(t0 + dt.timedelta(minutes=14)) == []
+
+    due = repo.claim_due_telegram_online_prompts(t0 + dt.timedelta(minutes=16))
+    assert len(due) == 1
+    assert repo.claim_due_telegram_online_prompts(t0 + dt.timedelta(minutes=20)) == []
+
+
+def test_telegram_online_prompt_superseded_when_day_session_exists_at_claim():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+    repo.db.day_sessions.insert_one(
+        {"rawAuthor": "A", "date": "2026-04-30", "startedAt": t0, "telegramUsername": "ta", "timeZoneId": "UTC"}
+    )
+
+    assert repo.claim_due_telegram_online_prompts(t0 + dt.timedelta(minutes=16)) == []
+
+    doc = repo.db.telegram_online_prompts.items[0]
+    assert doc["status"] == "closed"
+    assert doc["closeAction"] == "superseded_day_session"
+
+
+def test_telegram_online_prompt_dismiss_closes_without_online_event():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+    rid = repo.db.telegram_online_prompts.items[0]["reminderId"]
+    repo.db.telegram_online_prompts.items[0]["status"] = "sent"
+
+    result = repo.close_telegram_online_prompt(rid, "dismiss", "2026-04-30T12:00:00Z", "ta")
+
+    assert result["ok"]
+    assert result["status"] == "online_prompt_dismissed"
+    assert repo.db.day_sessions.items == []
+    assert [e for e in repo.db.break_events.items if e.get("eventType") == "online"] == []
+
+
+def test_telegram_online_prompt_confirm_records_online():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+    rid = repo.db.telegram_online_prompts.items[0]["reminderId"]
+    repo.db.telegram_online_prompts.items[0]["status"] = "sent"
+    before = len(repo.db.break_events.items)
+
+    result = repo.close_telegram_online_prompt(rid, "confirm_online", "2026-04-30T12:00:00Z", "ta")
+
+    assert result["ok"]
+    assert len(repo.db.break_events.items) > before
+    assert repo.db.day_sessions.items
+    assert repo.db.telegram_online_prompts.items[0]["closeAction"] == "confirm_online"
+
+
+def test_record_break_event_online_invalidates_online_prompt():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+    repo.record_break_event("ta", "online", "2026-04-30T09:00:00Z")
+
+    doc = repo.db.telegram_online_prompts.items[0]
+    assert doc["status"] == "closed"
+    assert doc["closeAction"] == "cancelled_by_online"
+
+
+def test_telegram_online_prompt_close_rejects_wrong_actor():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+    rid = repo.db.telegram_online_prompts.items[0]["reminderId"]
+    repo.db.telegram_online_prompts.items[0]["status"] = "sent"
+
+    result = repo.close_telegram_online_prompt(rid, "dismiss", "2026-04-30T12:00:00Z", "other")
+
+    assert result["status"] == "wrong_user"
 
 
 def test_telegram_online_uses_author_time_zone_for_date():

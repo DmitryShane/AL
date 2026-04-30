@@ -17,6 +17,7 @@ from .auth import hash_password, new_session_token, session_token_hash, verify_p
 LOW_PRODUCTIVITY_THRESHOLD = 50
 LONG_BREAK_THRESHOLD_SECONDS = 3600
 TELEGRAM_DAY_REMINDER_SECONDS = 10 * 3600
+TELEGRAM_ONLINE_PROMPT_DELAY_SECONDS = 15 * 60
 DEFAULT_PLUGIN_WORK_WINDOW_SECONDS = 32400
 MICROSECONDS_PER_SECOND = 1_000_000
 MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS = 10
@@ -100,6 +101,8 @@ class Repository:
         self.db.meeting_intervals.create_index([("rawAuthor", ASCENDING), ("startedAt", ASCENDING), ("endedAt", ASCENDING)])
         self.db.telegram_day_reminders.create_index("reminderId", unique=True)
         self.db.telegram_day_reminders.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
+        self.db.telegram_online_prompts.create_index("reminderId", unique=True)
+        self.db.telegram_online_prompts.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
         self.db.interval_settings.create_index("kind", unique=True)
         self.db.interval_settings.create_index("author", unique=True, sparse=True)
         self.db.report_refresh_requests.create_index("author", unique=True)
@@ -1419,6 +1422,8 @@ class Repository:
             "breakSessions": self.db.break_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "breakIntervals": self.db.break_intervals.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "daySessions": self.db.day_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
+            "telegramDayReminders": self.db.telegram_day_reminders.delete_many({"rawAuthor": normalized_author}).deleted_count,
+            "telegramOnlinePrompts": self.db.telegram_online_prompts.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "meetingEvents": self.db.meeting_events.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "meetingSessions": self.db.meeting_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "meetingIntervals": self.db.meeting_intervals.delete_many({"rawAuthor": normalized_author}).deleted_count,
@@ -1542,6 +1547,8 @@ class Repository:
             },
             upsert=True,
         )
+
+        self._invalidate_telegram_online_prompts_for_online_day(raw_author, online_date)
 
         break_result = self._close_break_session(normalized_telegram, raw_author, event_time)
 
@@ -1917,6 +1924,179 @@ class Repository:
             {"$set": {"status": "closed", "closedAt": received_at, "closeAction": action, "updatedAt": received_at}},
         )
         return {"ok": True, "status": f"reminder_{action}", **metadata}
+
+    def _schedule_telegram_online_prompt_if_needed(
+        self, raw_author: str, day_date: str, source: str, received_at: dt.datetime
+    ) -> None:
+        if source != "ual" or not raw_author or not day_date:
+            return
+
+        if self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": day_date}, {"_id": 1}):
+            return
+
+        if self.db.telegram_online_prompts.find_one({"rawAuthor": raw_author, "date": day_date}, {"_id": 1}):
+            return
+
+        profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0, "telegramUsername": 1}) or {}
+        telegram_username = _normalize_telegram_username(profile.get("telegramUsername"))
+
+        if not telegram_username:
+            return
+
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_online_prompts.insert_one(
+            {
+                "reminderId": _new_id(),
+                "rawAuthor": raw_author,
+                "date": day_date,
+                "telegramUsername": telegram_username,
+                "firstReportReceivedAt": received_at,
+                "status": "pending",
+                "createdAt": now,
+                "updatedAt": now,
+            }
+        )
+
+    def _invalidate_telegram_online_prompts_for_online_day(self, raw_author: str, day_date: str) -> None:
+        if not raw_author or not day_date:
+            return
+
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_online_prompts.update_many(
+            {
+                "rawAuthor": raw_author,
+                "date": day_date,
+                "status": {"$in": ["pending", "claimed", "sent"]},
+            },
+            {
+                "$set": {
+                    "status": "closed",
+                    "closedAt": now,
+                    "closeAction": "cancelled_by_online",
+                    "updatedAt": now,
+                }
+            },
+        )
+
+    def claim_due_telegram_online_prompts(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
+        now = now or dt.datetime.now(dt.UTC)
+        due: list[dict[str, Any]] = []
+
+        for doc in list(self.db.telegram_online_prompts.find({"status": "pending"}, {"_id": 0})):
+            raw_author = str(doc.get("rawAuthor") or "")
+            day_date = str(doc.get("date") or "")
+            anchor = _coerce_datetime(doc.get("firstReportReceivedAt"))
+
+            if not raw_author or not day_date or not anchor:
+                continue
+
+            if (now - anchor).total_seconds() < TELEGRAM_ONLINE_PROMPT_DELAY_SECONDS:
+                continue
+
+            if self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": day_date}, {"_id": 1}):
+                self.db.telegram_online_prompts.update_one(
+                    {"reminderId": doc.get("reminderId")},
+                    {
+                        "$set": {
+                            "status": "closed",
+                            "closedAt": now,
+                            "closeAction": "superseded_day_session",
+                            "updatedAt": now,
+                        }
+                    },
+                )
+                continue
+
+            reminder_id = str(doc.get("reminderId") or "")
+            self.db.telegram_online_prompts.update_one(
+                {"reminderId": reminder_id},
+                {"$set": {"status": "claimed", "lastClaimedAt": now, "updatedAt": now}},
+            )
+            due.append(
+                {
+                    "reminderId": reminder_id,
+                    "rawAuthor": raw_author,
+                    "telegramUsername": str(doc.get("telegramUsername") or ""),
+                    "date": day_date,
+                    "firstReportReceivedAt": anchor.isoformat(),
+                }
+            )
+
+        return due
+
+    def mark_telegram_online_prompt_sent(self, reminder_id: str, message_id: int | None = None) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_online_prompts.update_one(
+            {"reminderId": reminder_id},
+            {
+                "$set": {
+                    "status": "sent",
+                    "messageId": message_id,
+                    "sentAt": now,
+                    "updatedAt": now,
+                }
+            },
+        )
+        return {"ok": True}
+
+    def close_telegram_online_prompt(
+        self,
+        reminder_id: str,
+        action: str,
+        timestamp: str | None = None,
+        actor_telegram_username: str | None = None,
+    ) -> dict[str, Any]:
+        action = action if action in {"confirm_online", "dismiss"} else "dismiss"
+        reminder = self.db.telegram_online_prompts.find_one({"reminderId": reminder_id}, {"_id": 0})
+
+        if not reminder:
+            return {"ok": False, "error": "Unknown reminder", "status": "unknown_reminder"}
+
+        if reminder.get("status") == "closed":
+            return {
+                "ok": True,
+                "status": "online_prompt_already_closed",
+                "reminderAction": reminder.get("closeAction") or action,
+            }
+
+        raw_author = str(reminder.get("rawAuthor") or "")
+        telegram_username = _normalize_telegram_username(reminder.get("telegramUsername"))
+        actor_telegram_username = _normalize_telegram_username(actor_telegram_username)
+        received_at = dt.datetime.now(dt.UTC)
+
+        if actor_telegram_username and telegram_username and actor_telegram_username != telegram_username:
+            return {"ok": False, "error": "Reminder belongs to another Telegram user", "status": "wrong_user"}
+
+        if action == "dismiss":
+            self.db.telegram_online_prompts.update_one(
+                {"reminderId": reminder_id},
+                {
+                    "$set": {
+                        "status": "closed",
+                        "closedAt": received_at,
+                        "closeAction": "dismiss",
+                        "updatedAt": received_at,
+                    }
+                },
+            )
+            return {"ok": True, "status": "online_prompt_dismissed"}
+
+        break_result = self.record_break_event(telegram_username, "online", timestamp)
+        if not break_result.get("ok"):
+            return {**break_result, "status": str(break_result.get("status") or "online_failed")}
+
+        self.db.telegram_online_prompts.update_one(
+            {"reminderId": reminder_id},
+            {
+                "$set": {
+                    "status": "closed",
+                    "closedAt": received_at,
+                    "closeAction": "confirm_online",
+                    "updatedAt": received_at,
+                }
+            },
+        )
+        return {"ok": True, "status": "online_prompt_confirmed_online", **break_result}
 
     def _upsert_telegram_day_activity(
         self,
@@ -2437,6 +2617,14 @@ class Repository:
         row["snapshotKey"] = session_key
         self.db.report_rows.insert_one(row)
         self._update_daily_author_activity(snapshot, deltas)
+        received_at = _coerce_datetime(snapshot.get("receivedAt")) or dt.datetime.now(dt.UTC)
+        if _has_time_delta(deltas) and str(snapshot.get("source") or "") == "ual":
+            self._schedule_telegram_online_prompt_if_needed(
+                str(snapshot.get("author") or "Unknown User"),
+                str(snapshot.get("date") or ""),
+                "ual",
+                received_at,
+            )
         self.db.aggregate_session_state.update_one(
             {"_id": session_key},
             {"$set": {"snapshot": _state_snapshot(snapshot), "updatedAt": snapshot.get("receivedAt", dt.datetime.now(dt.UTC))}},
@@ -2555,6 +2743,7 @@ class Repository:
             **batch_deltas,
         }
         self.db.report_rows.insert_one(row)
+        self._schedule_telegram_online_prompt_if_needed(author, str(last_event.get("date") or ""), source, received_at)
 
     def _apply_raw_event_to_aggregates(self, event: dict[str, Any]) -> dict[str, Any]:
         event = dict(event)

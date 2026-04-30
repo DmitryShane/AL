@@ -411,18 +411,35 @@ def record_discord_voice_event(event: DiscordVoiceEventIn, request: Request) -> 
 @app.get("/api/v1/telegram/reminders/due")
 def telegram_due_reminders(request: Request) -> dict:
     require_telegram_bot_secret(request)
-    return {"reminders": app.state.repo.claim_due_telegram_day_reminders()}
+    return {
+        "reminders": app.state.repo.claim_due_telegram_day_reminders(),
+        "onlinePrompts": app.state.repo.claim_due_telegram_online_prompts(),
+    }
 
 
 @app.post("/api/v1/telegram/reminders/sent")
 def telegram_reminder_sent(sent: TelegramReminderSentIn, request: Request) -> dict:
     require_telegram_bot_secret(request)
+    if sent.kind == "online_prompt":
+        return app.state.repo.mark_telegram_online_prompt_sent(sent.reminder_id, sent.message_id)
+
     return app.state.repo.mark_telegram_day_reminder_sent(sent.reminder_id, sent.message_id)
 
 
 @app.post("/api/v1/telegram/reminders/close")
 def telegram_reminder_close(close: TelegramReminderCloseIn, request: Request) -> dict:
     require_telegram_bot_secret(request)
+    if close.kind == "online_prompt":
+        if close.action not in {"confirm_online", "dismiss"}:
+            raise HTTPException(status_code=422, detail="Invalid action for online_prompt")
+
+        return app.state.repo.close_telegram_online_prompt(
+            close.reminder_id, close.action, close.timestamp, close.actor_telegram_username
+        )
+
+    if close.action not in {"offline", "overtime"}:
+        raise HTTPException(status_code=422, detail="Invalid action for day_end")
+
     return app.state.repo.close_telegram_day_from_reminder(close.reminder_id, close.action, close.timestamp, close.actor_telegram_username)
 
 

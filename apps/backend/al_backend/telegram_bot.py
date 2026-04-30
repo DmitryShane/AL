@@ -136,14 +136,15 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
             answer_callback_query(config.token, callback_id, "This action is not available in this chat.")
         return
 
-    parsed = parse_reminder_callback(str(callback_query.get("data") or ""))
+    parsed = parse_callback_data(str(callback_query.get("data") or ""))
 
     if not parsed:
         if callback_id:
             answer_callback_query(config.token, callback_id, "Unknown action.")
         return
 
-    reminder_id, action = parsed
+    family, reminder_id, action = parsed
+    reminder_kind = "online_prompt" if family == "altm" else "day_end"
     reminder_username = reminder_username_from_message(message)
 
     if reminder_username and actor_username and actor_username != reminder_username:
@@ -152,20 +153,35 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
             answer_callback_query(config.token, callback_id, "Sorry, this reminder was not sent to you.")
         return
 
-    result = close_reminder(config.backend_url, config.bot_secret, reminder_id, action, actor_username)
+    result = close_reminder(config.backend_url, config.bot_secret, reminder_id, action, actor_username, reminder_kind=reminder_kind)
 
     if result.get("status") == "wrong_user":
         if callback_id:
             answer_callback_query(config.token, callback_id, "Sorry, this reminder was not sent to you.")
         return
 
-    LOGGER.info("Closed Telegram day reminder %s with %s: %s", reminder_id, action, result)
+    LOGGER.info("Closed Telegram reminder %s (%s) with %s: %s", reminder_id, reminder_kind, action, result)
 
     if chat_id and message_id:
-        edit_reminder_message(config.token, chat_id, message_id, action, reminder_username or actor_username)
+        edit_reminder_message(
+            config.token,
+            int(chat_id),
+            int(message_id),
+            action,
+            reminder_username or actor_username,
+            reminder_kind=reminder_kind,
+        )
 
     if callback_id:
-        answer_callback_query(config.token, callback_id, "Telegram day closed.")
+        if reminder_kind == "online_prompt":
+            if action == "confirm_online":
+                answer_text = "Online."
+            else:
+                answer_text = "Dismissed."
+        else:
+            answer_text = "Telegram day closed."
+
+        answer_callback_query(config.token, callback_id, answer_text)
 
 
 def parse_event_type(text: str) -> str | None:
@@ -183,19 +199,41 @@ def reminder_username_from_message(message: dict[str, Any]) -> str:
     return telegram_username({"username": match.group(1)}) if match else ""
 
 
-def parse_reminder_callback(data: str) -> tuple[str, str] | None:
+def parse_callback_data(data: str) -> tuple[str, str, str] | None:
     parts = data.split(":")
 
-    if len(parts) != 3 or parts[0] != "altd":
+    if len(parts) != 3:
         return None
 
+    family = parts[0].strip()
     reminder_id = parts[1].strip()
     action = parts[2].strip()
 
-    if not reminder_id or action not in {"offline", "overtime"}:
+    if not reminder_id:
         return None
 
-    return reminder_id, action
+    if family == "altd":
+        if action not in {"offline", "overtime"}:
+            return None
+
+        return family, reminder_id, action
+
+    if family == "altm":
+        if action not in {"confirm_online", "dismiss"}:
+            return None
+
+        return family, reminder_id, action
+
+    return None
+
+
+def parse_reminder_callback(data: str) -> tuple[str, str] | None:
+    parsed = parse_callback_data(data)
+
+    if not parsed or parsed[0] != "altd":
+        return None
+
+    return parsed[1], parsed[2]
 
 
 def send_due_reminders(config: BotConfig) -> None:
@@ -207,7 +245,9 @@ def send_due_reminders(config: BotConfig) -> None:
         LOGGER.warning("Telegram reminders require AL_TELEGRAM_BOT_SECRET.")
         return
 
-    for reminder in due_reminders(config.backend_url, config.bot_secret):
+    bundle = fetch_reminders_due_bundle(config.backend_url, config.bot_secret)
+
+    for reminder in bundle.get("reminders", []):
         reminder_id = str(reminder.get("reminderId") or "")
         telegram_name = str(reminder.get("telegramUsername") or "").strip().lstrip("@")
 
@@ -217,7 +257,22 @@ def send_due_reminders(config: BotConfig) -> None:
         text = f"Hi @{telegram_name}. Did you forget to go offline, or are you working overtime?"
         result = send_reminder_message(config.token, config.allowed_chat_id, text, reminder_id)
         message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
-        mark_reminder_sent(config.backend_url, config.bot_secret, reminder_id, message_id)
+        mark_reminder_sent(config.backend_url, config.bot_secret, reminder_id, message_id, kind="day_end")
+
+    for prompt in bundle.get("onlinePrompts", []):
+        prompt_id = str(prompt.get("reminderId") or "")
+        telegram_name = str(prompt.get("telegramUsername") or "").strip().lstrip("@")
+
+        if not prompt_id or not telegram_name:
+            continue
+
+        text = (
+            f"Hi @{telegram_name}. You have activity today but no \"online\" message yet. "
+            "Are you online, or is this a mistake?"
+        )
+        result = send_online_prompt_message(config.token, config.allowed_chat_id, text, prompt_id)
+        message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
+        mark_reminder_sent(config.backend_url, config.bot_secret, prompt_id, message_id, kind="online_prompt")
 
 
 def submit_break_event(backend_url: str, telegram_username_value: str, event_type: str, telegram_timestamp: Any) -> dict[str, Any]:
@@ -242,22 +297,36 @@ def submit_break_event(backend_url: str, telegram_username_value: str, event_typ
         return json.loads(response.read().decode("utf-8"))
 
 
-def due_reminders(backend_url: str, bot_secret: str) -> list[dict[str, Any]]:
-    result = backend_request(backend_url, "/api/v1/telegram/reminders/due", bot_secret, method="GET")
-    return result.get("reminders", [])
+def fetch_reminders_due_bundle(backend_url: str, bot_secret: str) -> dict[str, Any]:
+    return backend_request(backend_url, "/api/v1/telegram/reminders/due", bot_secret, method="GET")
 
 
-def mark_reminder_sent(backend_url: str, bot_secret: str, reminder_id: str, message_id: int | None) -> dict[str, Any]:
+def mark_reminder_sent(
+    backend_url: str,
+    bot_secret: str,
+    reminder_id: str,
+    message_id: int | None,
+    *,
+    kind: str = "day_end",
+) -> dict[str, Any]:
     return backend_request(
         backend_url,
         "/api/v1/telegram/reminders/sent",
         bot_secret,
         method="POST",
-        payload={"reminderId": reminder_id, "messageId": message_id},
+        payload={"reminderId": reminder_id, "messageId": message_id, "kind": kind},
     )
 
 
-def close_reminder(backend_url: str, bot_secret: str, reminder_id: str, action: str, actor_telegram_username: str = "") -> dict[str, Any]:
+def close_reminder(
+    backend_url: str,
+    bot_secret: str,
+    reminder_id: str,
+    action: str,
+    actor_telegram_username: str = "",
+    *,
+    reminder_kind: str = "day_end",
+) -> dict[str, Any]:
     return backend_request(
         backend_url,
         "/api/v1/telegram/reminders/close",
@@ -266,6 +335,7 @@ def close_reminder(backend_url: str, bot_secret: str, reminder_id: str, action: 
         payload={
             "reminderId": reminder_id,
             "action": action,
+            "kind": reminder_kind,
             "timestamp": datetime.now().astimezone().isoformat(),
             "actorTelegramUsername": actor_telegram_username,
         },
@@ -306,20 +376,59 @@ def send_reminder_message(token: str, chat_id: int, text: str, reminder_id: str)
     )
 
 
+def send_online_prompt_message(token: str, chat_id: int, text: str, reminder_id: str) -> dict[str, Any]:
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "I'm online", "callback_data": f"altm:{reminder_id}:confirm_online"},
+                {"text": "Mistake", "callback_data": f"altm:{reminder_id}:dismiss"},
+            ]
+        ]
+    }
+    return telegram_request(
+        token,
+        "sendMessage",
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": json.dumps(reply_markup),
+        },
+    )
+
+
 def answer_callback_query(token: str, callback_query_id: str, text: str) -> dict[str, Any]:
     return telegram_request(token, "answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
 
 
-def edit_reminder_message(token: str, chat_id: int, message_id: int, action: str, telegram_username: str = "") -> dict[str, Any]:
-    label = "Overtime" if action == "overtime" else "Offline"
+def edit_reminder_message(
+    token: str,
+    chat_id: int,
+    message_id: int,
+    action: str,
+    telegram_username: str = "",
+    *,
+    reminder_kind: str = "day_end",
+) -> dict[str, Any]:
     author = f" @{telegram_username}" if telegram_username else ""
+    remove_keyboard = json.dumps({"inline_keyboard": []})
+
+    if reminder_kind == "online_prompt":
+        if action == "confirm_online":
+            body = f"Done.{author} Online."
+        else:
+            body = f"Done.{author} Dismissed as not applicable."
+    else:
+        label = "Overtime" if action == "overtime" else "Offline"
+        body = f"Done.{author} Telegram day closed as {label}."
+
     return telegram_request(
         token,
         "editMessageText",
         {
             "chat_id": chat_id,
             "message_id": message_id,
-            "text": f"Done.{author} Telegram day closed as {label}.",
+            "text": body,
+            "reply_markup": remove_keyboard,
         },
     )
 

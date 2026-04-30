@@ -54,6 +54,11 @@ stop
 
 `start` launches the backend and frontend. `stop` shuts them down.
 
+## Terminology
+
+- **AL (Activity Logger)** — the product and service as a whole: this repository (FastAPI backend, web dashboard, Telegram/Discord bots, and how data is stored and summarized).
+- **UAL** — specifically the **Unity package** `com.al.ual` and the client plugin(s) that report into AL with `source: ual`. Other editors (Blender, VS Code) use separate add-ons/extensions under the same package tree but are not called “UAL” in user-facing text; prefer **Activity Logger** or **AL** when talking about the system in general.
+
 ## Production Data Sync
 
 Production runs at `activity.mempic.com`. When the user asks to pull production data locally, use SSH as `root@activity.mempic.com` and treat MongoDB dumps as sensitive data.
