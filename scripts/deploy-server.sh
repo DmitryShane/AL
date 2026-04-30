@@ -153,9 +153,11 @@ systemctl daemon-reload
 systemctl enable mongod nginx al-backend al-telegram-bot al-discord-bot
 systemctl restart mongod
 systemctl restart al-backend
-sudo -H -u "${APP_USER}" env \
-  HOME="${APP_ROOT}" \
-  bash -lc "set -a && source '${BACKEND_ENV}' && set +a && cd '${APP_DIR}/apps/backend' && .venv/bin/python -m al_backend.discord_author_mappings"
+set -a
+# shellcheck disable=SC1090
+source "${BACKEND_ENV}"
+set +a
+bash -lc "cd '${APP_DIR}/apps/backend' && .venv/bin/python -m al_backend.discord_author_mappings"
 systemctl restart al-telegram-bot
 systemctl restart al-discord-bot
 nginx -t
