@@ -1091,8 +1091,24 @@ p {
   right: 0;
   left: 0;
   height: 3px;
-  background: #d8e0e8;
+  background: var(--duration-accent, #d8e0e8);
   content: "";
+}
+
+.productivity-duration.good {
+  --duration-accent: #16834a;
+}
+
+.productivity-duration.warning {
+  --duration-accent: #d97706;
+}
+
+.productivity-duration.bad {
+  --duration-accent: #dc2626;
+}
+
+.productivity-duration.overdrive {
+  --duration-accent: #8b5cf6;
 }
 
 .duration span {

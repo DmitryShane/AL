@@ -1708,7 +1708,7 @@ function ActivityPage({
             <Duration label="Idle" seconds={author.idleSeconds} />
             <Duration label="Overtime" seconds={author.overtimeActiveSeconds} />
             <Duration label="Break" seconds={author.breakSeconds} valueClassName={breakClassName(author.breakSeconds)} />
-            <div className="duration">
+            <div className={`duration productivity-duration ${productivityTone(author.productivity)}`}>
               <span>Productivity</span>
               <strong className={productivityClassName(author.productivity)}>{author.productivity.toFixed(2)}%</strong>
             </div>
