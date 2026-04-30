@@ -5,12 +5,15 @@ description = "Activity Logger backend API"
 requires-python = ">=3.14"
 dependencies = [
     "cryptography>=42.0.0",
+    "discord.py>=2.4.0",
     "fastapi[standard]>=0.115.0",
     "pymongo>=4.10.0",
 ]
 
 [project.scripts]
 al-telegram-bot = "al_backend.telegram_bot:main"
+al-discord-bot = "al_backend.discord_bot:main"
+al-apply-discord-author-mappings = "al_backend.discord_author_mappings:main"
 
 [dependency-groups]
 dev = [

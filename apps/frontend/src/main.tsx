@@ -41,6 +41,8 @@ type Report = {
   activityType?: string;
   telegramEventType?: string;
   telegramStatus?: string;
+  discordEventType?: string;
+  discordStatus?: string;
   pluginVersion?: string;
 };
 
@@ -50,6 +52,8 @@ type AuthorRow = {
   displayName: string;
   team?: string;
   telegramUsername?: string;
+  discordUserId?: string;
+  discordUsername?: string;
   authorColor?: string;
   source?: string;
   pluginVersion?: string;
@@ -60,6 +64,7 @@ type AuthorRow = {
   pluginDaySeconds: number;
   activeSeconds: number;
   idleSeconds: number;
+  meetingSeconds: number;
   breakSeconds: number;
   overtimeActiveSeconds: number;
   productivity: number;
@@ -100,6 +105,7 @@ type ActivitySummary = {
     pluginDaySeconds: number;
     activeSeconds: number;
     idleSeconds: number;
+    meetingSeconds: number;
     breakSeconds: number;
     overtimeActiveSeconds: number;
   };
@@ -124,6 +130,8 @@ type AuthorProfile = {
   displayName: string;
   team?: string;
   telegramUsername?: string;
+  discordUserId?: string;
+  discordUsername?: string;
   pluginEnabled?: boolean;
   authorColor?: string;
   timeZoneId?: string;
@@ -147,6 +155,7 @@ type HourlyActivity = {
   activeSeconds: number;
   idleSeconds: number;
   breakSeconds?: number;
+  meetingSeconds?: number;
   overtimeActiveSeconds?: number;
 };
 
@@ -181,6 +190,7 @@ type AnalyticsTotals = {
   daySeconds: number;
   activeSeconds: number;
   idleSeconds: number;
+  meetingSeconds: number;
   overtimeActiveSeconds: number;
   breakSeconds: number;
   pluginDaySeconds: number;
@@ -232,6 +242,7 @@ type AnalyticsDay = {
 type AnalyticsDelta = {
   activeSeconds: number;
   idleSeconds: number;
+  meetingSeconds: number;
   overtimeActiveSeconds: number;
   breakSeconds: number;
   pluginDaySeconds: number;
@@ -291,6 +302,7 @@ const emptyActivitySummary: ActivitySummary = {
     pluginDaySeconds: 0,
     activeSeconds: 0,
     idleSeconds: 0,
+    meetingSeconds: 0,
     breakSeconds: 0,
     overtimeActiveSeconds: 0
   },
@@ -1609,6 +1621,7 @@ function ActivityPage({
               <div className="mini-metrics">
                 <span>{formatDuration(item.activeSeconds)} active</span>
                 <span>{formatDuration(item.idleSeconds)} idle</span>
+                <span>{formatDuration(item.meetingSeconds ?? 0)} meeting</span>
                 <span>{formatDuration(item.breakSeconds)} break</span>
               </div>
               <div className={`productivity-badge ${productivityTone(item.productivity)}`}>
@@ -1640,6 +1653,7 @@ function ActivityPage({
             <Duration label="Day Time (Plugin)" seconds={author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds} />
             <Duration label="Active" seconds={author.activeSeconds} />
             <Duration label="Idle" seconds={author.idleSeconds} />
+            <Duration label="Meeting" seconds={author.meetingSeconds ?? 0} />
             <Duration label="Overtime" seconds={author.overtimeActiveSeconds} />
             <Duration label="Break" seconds={author.breakSeconds} valueClassName={breakClassName(author.breakSeconds)} />
             <div className="duration">
@@ -1967,6 +1981,8 @@ function SettingsPage({
       (draft.displayName ?? "") !== (profile.displayName ?? "") ||
       (draft.team ?? "") !== (profile.team ?? "") ||
       (draft.telegramUsername ?? "") !== (profile.telegramUsername ?? "") ||
+      (draft.discordUserId ?? "") !== (profile.discordUserId ?? "") ||
+      (draft.discordUsername ?? "") !== (profile.discordUsername ?? "") ||
       (draft.authorColor ?? "") !== (profile.authorColor ?? "") ||
       (draft.pluginEnabled ?? true) !== (profile.pluginEnabled ?? true)
     );
@@ -2062,8 +2078,8 @@ function SettingsPage({
       <div className="panel">
         <h2>Author Profiles</h2>
         <p className="settings-caption">
-          Telegram username links chat messages to the author. Use the same username from the work chat, with or without @.
-          Raw Author must exactly match the value that Unity or Blender will send from git config user.name.
+          Telegram and Discord mappings link chat and meeting events to the author.
+          Raw Author must exactly match the value sent by activity logger plugins.
         </p>
         <div className="profile-create-card">
           <label>
@@ -2099,6 +2115,22 @@ function SettingsPage({
             />
           </label>
           <label>
+            Discord ID
+            <input
+              value={newProfile.discordUserId ?? ""}
+              onChange={(event) => setNewProfile((profile) => ({ ...profile, discordUserId: event.target.value }))}
+              placeholder="User ID"
+            />
+          </label>
+          <label>
+            Discord Name
+            <input
+              value={newProfile.discordUsername ?? ""}
+              onChange={(event) => setNewProfile((profile) => ({ ...profile, discordUsername: event.target.value }))}
+              placeholder="username"
+            />
+          </label>
+          <label>
             Color
             <input
               type="color"
@@ -2131,6 +2163,8 @@ function SettingsPage({
             <span>Display Name</span>
             <span>Team</span>
             <span>Telegram</span>
+            <span>Discord ID</span>
+            <span>Discord Name</span>
             <span>Timezone</span>
             <span>Color</span>
             <span>Plugin</span>
@@ -2161,6 +2195,20 @@ function SettingsPage({
                     setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, telegramUsername: event.target.value } }))
                   }
                   placeholder="@username"
+                />
+                <input
+                  value={draft.discordUserId ?? ""}
+                  onChange={(event) =>
+                    setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, discordUserId: event.target.value } }))
+                  }
+                  placeholder="User ID"
+                />
+                <input
+                  value={draft.discordUsername ?? ""}
+                  onChange={(event) =>
+                    setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, discordUsername: event.target.value } }))
+                  }
+                  placeholder="username"
                 />
                 <span className="profile-readonly-cell" title={formatProfileTimeZoneTitle(profile)}>{formatProfileTimeZoneLabel(profile)}</span>
                 <input
@@ -2632,6 +2680,8 @@ function emptyAuthorProfile(): AuthorProfile {
     displayName: "",
     team: "",
     telegramUsername: "",
+    discordUserId: "",
+    discordUsername: "",
     pluginEnabled: true,
     authorColor: "#13a37b"
   };
@@ -2643,6 +2693,8 @@ function authorProfilePayload(profile: AuthorProfile) {
     displayName: profile.displayName,
     team: profile.team ?? "",
     telegramUsername: profile.telegramUsername ?? "",
+    discordUserId: profile.discordUserId ?? "",
+    discordUsername: profile.discordUsername ?? "",
     pluginEnabled: profile.pluginEnabled ?? true,
     authorColor: profile.authorColor ?? "#13a37b"
   };
@@ -2898,15 +2950,15 @@ function formatReportOvertime(seconds: number) {
 }
 
 function formatReportActive(report: Report) {
-  return isTelegramReport(report) ? "-" : formatReportMinutes(report.activeDeltaSeconds ?? 0);
+  return isNonActivityReport(report) ? "-" : formatReportMinutes(report.activeDeltaSeconds ?? 0);
 }
 
 function formatReportIdle(report: Report) {
-  return isTelegramReport(report) ? "-" : formatReportMinutes(report.idleDeltaSeconds ?? 0);
+  return isNonActivityReport(report) ? "-" : formatReportMinutes(report.idleDeltaSeconds ?? 0);
 }
 
-function isTelegramReport(report: Report) {
-  return report.source === "telegram" || report.reportType === "telegram";
+function isNonActivityReport(report: Report) {
+  return report.source === "telegram" || report.reportType === "telegram" || report.source === "discord" || report.reportType === "meeting";
 }
 
 function formatDurationDelta(seconds: number) {
@@ -3025,6 +3077,10 @@ function formatSource(source?: string) {
     return "Telegram";
   }
 
+  if (source === "discord") {
+    return "Discord";
+  }
+
   return source ?? "-";
 }
 
@@ -3047,6 +3103,10 @@ function sourceIcon(source?: string) {
 
   if (source === "telegram") {
     return <TelegramIcon />;
+  }
+
+  if (source === "discord") {
+    return <Activity size={16} />;
   }
 
   return <Activity size={16} />;
@@ -3095,6 +3155,10 @@ function formatReportType(report: Report) {
     return formatTelegramEvent(report.telegramEventType ?? report.activityType);
   }
 
+  if (report.reportType === "meeting") {
+    return formatDiscordEvent(report.discordEventType ?? report.activityType);
+  }
+
   if (report.reportType === "manual") {
     return "manual";
   }
@@ -3103,7 +3167,7 @@ function formatReportType(report: Report) {
 }
 
 function reportTypeBadgeClassName(reportType?: string) {
-  if (reportType === "telegram") {
+  if (reportType === "telegram" || reportType === "meeting") {
     return "report-type-badge manual";
   }
 
@@ -3125,6 +3189,19 @@ function formatTelegramEvent(eventType?: string) {
   };
 
   return labels[eventType ?? ""] ?? "telegram";
+}
+
+function formatDiscordEvent(eventType?: string) {
+  const labels: Record<string, string> = {
+    join: "meeting join",
+    leave: "meeting leave",
+    reconcile: "meeting live",
+    meeting_join: "meeting join",
+    meeting_leave: "meeting leave",
+    meeting_reconcile: "meeting live"
+  };
+
+  return labels[eventType ?? ""] ?? "meeting";
 }
 
 function formatActivityType(type: string) {

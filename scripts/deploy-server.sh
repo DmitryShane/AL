@@ -13,6 +13,7 @@ PYTHON_VERSION="${PYTHON_VERSION:-3.14}"
 
 BACKEND_ENV="/etc/al/backend.env"
 TELEGRAM_ENV="/etc/al/telegram-bot.env"
+DISCORD_ENV="/etc/al/discord-bot.env"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this script as root." >&2
@@ -28,6 +29,28 @@ if [[ ! -f "${TELEGRAM_ENV}" ]]; then
   echo "Missing ${TELEGRAM_ENV}" >&2
   exit 1
 fi
+
+if [[ ! -f "${DISCORD_ENV}" ]]; then
+  echo "Missing ${DISCORD_ENV}" >&2
+  exit 1
+fi
+
+require_env_key() {
+  local env_file="$1"
+  local key="$2"
+
+  if ! grep -Eq "^[[:space:]]*(export[[:space:]]+)?${key}=" "${env_file}"; then
+    echo "Missing ${key} in ${env_file}" >&2
+    exit 1
+  fi
+}
+
+require_env_key "${BACKEND_ENV}" "AL_DISCORD_BOT_SECRET"
+require_env_key "${DISCORD_ENV}" "DISCORD_BOT_TOKEN"
+require_env_key "${DISCORD_ENV}" "DISCORD_GUILD_ID"
+require_env_key "${DISCORD_ENV}" "DISCORD_MEETING_CHANNEL_ID"
+require_env_key "${DISCORD_ENV}" "AL_BACKEND_URL"
+require_env_key "${DISCORD_ENV}" "AL_DISCORD_BOT_SECRET"
 
 install -d -o "${APP_USER}" -g "${APP_USER}" "${APP_ROOT}" "${APP_ROOT}/python" "${APP_ROOT}/.cache" "${APP_ROOT}/.cache/uv" "${APP_ROOT}/.config"
 
@@ -70,6 +93,12 @@ sed \
   -e "s#__APP_USER__#${APP_USER}#g" \
   -e "s#__APP_ROOT__#${APP_ROOT}#g" \
   "${APP_DIR}/deploy/systemd/al-telegram-bot.service" > /etc/systemd/system/al-telegram-bot.service
+
+sed \
+  -e "s#__APP_DIR__#${APP_DIR}#g" \
+  -e "s#__APP_USER__#${APP_USER}#g" \
+  -e "s#__APP_ROOT__#${APP_ROOT}#g" \
+  "${APP_DIR}/deploy/systemd/al-discord-bot.service" > /etc/systemd/system/al-discord-bot.service
 
 SSL_SERVER_BLOCK=""
 
@@ -121,10 +150,14 @@ ln -sf /etc/nginx/sites-available/al.conf /etc/nginx/sites-enabled/al.conf
 rm -f /etc/nginx/sites-enabled/default
 
 systemctl daemon-reload
-systemctl enable mongod nginx al-backend al-telegram-bot
+systemctl enable mongod nginx al-backend al-telegram-bot al-discord-bot
 systemctl restart mongod
 systemctl restart al-backend
+sudo -H -u "${APP_USER}" env \
+  HOME="${APP_ROOT}" \
+  bash -lc "set -a && source '${BACKEND_ENV}' && set +a && cd '${APP_DIR}/apps/backend' && .venv/bin/python -m al_backend.discord_author_mappings"
 systemctl restart al-telegram-bot
+systemctl restart al-discord-bot
 nginx -t
 systemctl reload nginx
 

@@ -478,8 +478,8 @@ p {
 .authors-table-head,
 .authors-row {
   display: grid;
-  grid-template-columns: 1.5fr 0.65fr 0.82fr 0.82fr 0.72fr 0.72fr 0.72fr 0.72fr 0.8fr 0.78fr 0.58fr 0.82fr;
-  min-width: 1280px;
+  grid-template-columns: 1.5fr 0.65fr 0.82fr 0.82fr 0.72fr 0.72fr 0.72fr 0.72fr 0.72fr 0.8fr 0.78fr 0.58fr 0.82fr;
+  min-width: 1360px;
   gap: 0;
   align-items: center;
 }
@@ -2226,7 +2226,7 @@ p {
 }
 
 .profile-table {
-  --profile-columns: minmax(220px, 1.3fr) minmax(180px, 1.1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(76px, 0.55fr) minmax(110px, 0.7fr) 300px;
+  --profile-columns: minmax(220px, 1.3fr) minmax(180px, 1.1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(170px, 1fr) minmax(76px, 0.55fr) minmax(110px, 0.7fr) 300px;
   display: grid;
   overflow-x: auto;
 }
@@ -2550,6 +2550,10 @@ p {
   background: #4fa4ff;
 }
 
+.hourly-chart-segment.meeting {
+  background: #f97316;
+}
+
 .hourly-chart-segment.idle {
   background: #ffcf75;
 }
@@ -2587,6 +2591,10 @@ p {
 
 .hourly-chart-legend i.break {
   background: #4fa4ff;
+}
+
+.hourly-chart-legend i.meeting {
+  background: #f97316;
 }
 
 .hourly-chart-legend i.idle {

@@ -13,6 +13,7 @@ export type AuthorsTableRow = {
   pluginDaySeconds: number;
   activeSeconds: number;
   idleSeconds: number;
+  meetingSeconds: number;
   overtimeActiveSeconds: number;
   breakSeconds: number;
   productivity: number;
@@ -40,6 +41,7 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
         <span>Day Time (Plugin)</span>
         <span>Active Time</span>
         <span>Idle Time</span>
+        <span>Meeting</span>
         <span>Overtime</span>
         <span>Break Time</span>
         <span>Productivity</span>
@@ -61,6 +63,7 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
           <span>{formatDuration(author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds)}</span>
           <span>{formatDuration(author.activeSeconds)}</span>
           <span>{formatDuration(author.idleSeconds)}</span>
+          <span>{formatDuration(author.meetingSeconds ?? 0)}</span>
           <span>{formatDuration(author.overtimeActiveSeconds)}</span>
           <span className={breakClassName(author.breakSeconds)}>{formatMinutes(author.breakSeconds)}</span>
           <strong className={productivityClassName(author.productivity)}>{author.productivity.toFixed(2)}%</strong>
@@ -128,6 +131,10 @@ function formatSource(source?: string) {
 
   if (source === "telegram") {
     return "Telegram";
+  }
+
+  if (source === "discord") {
+    return "Discord";
   }
 
   return source ?? "unknown";

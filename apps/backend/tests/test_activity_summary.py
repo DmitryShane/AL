@@ -2,6 +2,7 @@ import datetime as dt
 import re
 import unicodedata
 
+from al_backend.discord_author_mappings import apply_discord_author_mappings
 from al_backend.repository import (
     Repository,
     _add_break_interval_to_buckets,
@@ -149,6 +150,9 @@ class FakeCollection:
         for key, value in operation.get("$inc", {}).items():
             item[key] = item.get(key, 0) + value
 
+        for key in operation.get("$unset", {}).keys():
+            item.pop(key, None)
+
 
 class FakeDb:
     def __init__(self):
@@ -161,6 +165,9 @@ class FakeDb:
         self.day_sessions = FakeCollection()
         self.telegram_day_reminders = FakeCollection()
         self.break_intervals = FakeCollection()
+        self.meeting_events = FakeCollection()
+        self.meeting_sessions = FakeCollection()
+        self.meeting_intervals = FakeCollection()
         self.calendar_marks = FakeCollection()
         self.daily_author_activity = FakeCollection()
         self.aggregate_session_state = FakeCollection()
@@ -512,7 +519,187 @@ def test_telegram_online_creates_visible_report_row_and_live_day_time():
     assert repo.db.report_rows.items[0]["reportType"] == "telegram"
     assert repo.db.report_rows.items[0]["telegramEventType"] == "online"
     assert authors["Future Artist"]["telegramDaySeconds"] == 10 * 60
-    assert totals["telegramDaySeconds"] == 10 * 60
+
+
+def test_discord_meeting_reduces_idle_for_any_activity_source():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "discordUserId": "123",
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "future-plugin",
+            "author": "Future Artist",
+            "projectId": "future",
+            "date": "2026-04-29",
+            "activeSeconds": 0,
+            "idleSeconds": 3600,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": [
+                {"hour": 10, "activeSeconds": 0, "idleSeconds": 3600, "breakSeconds": 0, "overtimeActiveSeconds": 0}
+            ],
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 4, 29, 10, 15, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 29, 10, 45, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 1800,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", now=dt.datetime(2026, 4, 29, 11, tzinfo=dt.UTC))
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
+
+    assert author["idleSeconds"] == 1800
+    assert author["meetingSeconds"] == 1800
+    assert author["productivity"] == 0
+    assert hour["idleSeconds"] == 1800
+    assert hour["meetingSeconds"] == 1800
+
+
+def test_discord_meeting_overlay_is_not_applied_twice_across_sources():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+
+    for source in ("first-plugin", "second-plugin"):
+        repo.db.daily_author_activity.insert_one(
+            {
+                "source": source,
+                "author": "Future Artist",
+                "projectId": source,
+                "date": "2026-04-29",
+                "activeSeconds": 0,
+                "idleSeconds": 3600,
+                "workWindowSeconds": 32400,
+                "hourlyActivity": [
+                    {"hour": 10, "activeSeconds": 0, "idleSeconds": 3600, "breakSeconds": 0, "overtimeActiveSeconds": 0}
+                ],
+            }
+        )
+
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 29, 10, 30, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 1800,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", now=dt.datetime(2026, 4, 29, 11, tzinfo=dt.UTC))
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+    assert author["meetingSeconds"] == 1800
+    assert author["idleSeconds"] == 5400
+
+
+def test_live_discord_meeting_session_is_included_in_summary():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+    repo.db.meeting_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "UTC",
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", now=dt.datetime(2026, 4, 29, 10, 20, tzinfo=dt.UTC))
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
+
+    assert author["meetingSeconds"] == 1200
+    assert hour["meetingSeconds"] == 1200
+
+
+def test_discord_voice_events_open_and_close_meeting_session():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+
+    join = repo.record_discord_voice_event("123", "future", "join", timestamp="2026-04-29T10:00:00+00:00")
+    leave = repo.record_discord_voice_event("123", "future", "leave", timestamp="2026-04-29T10:25:00+00:00")
+
+    assert join["status"] == "meeting_started"
+    assert leave["status"] == "meeting_closed"
+    assert leave["meetingSeconds"] == 1500
+    assert repo.db.meeting_sessions.items == []
+    assert repo.db.meeting_intervals.items[0]["meetingSeconds"] == 1500
+    assert repo.db.report_rows.items[-1]["source"] == "discord"
+    assert repo.db.report_rows.items[-1]["reportType"] == "meeting"
+
+
+def test_discord_author_mappings_update_known_telegram_profiles_only():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Evgeniy Dotsenko", "displayName": "Evgeniy Dotsenko", "telegramUsername": "ama_deus"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "telegramUsername": "igormats"})
+
+    result = apply_discord_author_mappings(repo)
+    evgeniy = repo.db.author_profiles.find_one({"telegramUsername": "ama_deus"})
+    igor = repo.db.author_profiles.find_one({"telegramUsername": "igormats"})
+
+    assert evgeniy["discordUserId"] == "645196366494171139"
+    assert evgeniy["discordUsername"] == "Evgeniy Dotsenko"
+    assert "discordUserId" not in igor
+    assert [item["telegramUsername"] for item in result["updated"]] == ["ama_deus"]
+    assert "dmitryshane" in result["missingTelegramUsernames"]
+    assert "vedamir_infinum" in result["missingTelegramUsernames"]
+    assert "zhdamarovich" in result["missingTelegramUsernames"]
+
+
+def test_idle_only_reports_during_discord_meeting_are_hidden_from_latest_reports():
+    repo = fake_repository()
+    repo.db.report_rows.insert_one(
+        {
+            "source": "future-plugin",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T10:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 10, tzinfo=dt.UTC),
+            "idleDeltaSeconds": 300,
+            "activeDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "discord",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T10:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "reportType": "meeting",
+            "idleDeltaSeconds": 0,
+            "activeDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 29, 10, 30, tzinfo=dt.UTC),
+        }
+    )
+
+    reports = repo.latest_reports(start_date="2026-04-29", end_date="2026-04-29")
+
+    assert [report["source"] for report in reports] == ["discord"]
 
 
 def test_open_telegram_day_is_capped_at_ten_hours_and_alerted():

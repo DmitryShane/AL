@@ -1,6 +1,7 @@
 .DS_Store
 .env
 .env.telegram-bot
+.env.discord-bot
 .venv/
 __pycache__/
 *.py[cod]
@@ -35,3 +36,4 @@ mongo-backup/
 al-prod-sync/
 backend.env
 telegram-bot.env
+discord-bot.env

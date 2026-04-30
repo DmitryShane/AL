@@ -71,6 +71,8 @@ class AuthorProfileIn(ApiModel):
     display_name: str | None = Field(default=None, alias="displayName")
     team: str | None = None
     telegram_username: str | None = Field(default=None, alias="telegramUsername")
+    discord_user_id: str | None = Field(default=None, alias="discordUserId")
+    discord_username: str | None = Field(default=None, alias="discordUsername")
     plugin_enabled: bool = Field(default=True, alias="pluginEnabled")
     author_color: str | None = Field(default=None, alias="authorColor")
 
@@ -108,6 +110,15 @@ class TelegramReminderCloseIn(ApiModel):
     action: str = Field(pattern="^(offline|overtime)$")
     timestamp: str | None = None
     actor_telegram_username: str | None = Field(default=None, alias="actorTelegramUsername")
+
+
+class DiscordVoiceEventIn(ApiModel):
+    discord_user_id: str = Field(alias="discordUserId", min_length=1)
+    discord_username: str | None = Field(default=None, alias="discordUsername")
+    event_type: str = Field(alias="eventType", pattern="^(join|leave|reconcile)$")
+    guild_id: str | None = Field(default=None, alias="guildId")
+    channel_id: str | None = Field(default=None, alias="channelId")
+    timestamp: str | None = None
 
 
 class SubmitReportResponse(ApiModel):

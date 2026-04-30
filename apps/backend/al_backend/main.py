@@ -12,6 +12,7 @@ from .models import (
     BreakEventIn,
     CalendarMarkIn,
     CalendarReasonIn,
+    DiscordVoiceEventIn,
     HealthResponse,
     IntervalSettingsIn,
     LoginIn,
@@ -72,6 +73,7 @@ PUBLIC_API_PATHS = {
     "/api/v1/telegram/reminders/due",
     "/api/v1/telegram/reminders/sent",
     "/api/v1/telegram/reminders/close",
+    "/api/v1/discord/voice-events",
     "/api/v1/auth/login",
     "/api/v1/auth/me",
     "/api/v1/auth/dev-login",
@@ -137,6 +139,14 @@ def require_telegram_bot_secret(request: Request) -> None:
 
     if request.headers.get("x-al-telegram-bot-secret") != settings.telegram_bot_secret:
         raise HTTPException(status_code=403, detail="Invalid Telegram bot secret")
+
+
+def require_discord_bot_secret(request: Request) -> None:
+    if not settings.discord_bot_secret:
+        raise HTTPException(status_code=503, detail="Discord bot secret is not configured")
+
+    if request.headers.get("x-al-discord-bot-secret") != settings.discord_bot_secret:
+        raise HTTPException(status_code=403, detail="Invalid Discord bot secret")
 
 
 @app.post("/api/v1/auth/login")
@@ -336,6 +346,8 @@ def upsert_author_profile(profile: AuthorProfileIn, _: dict = Depends(require_pe
         display_name=profile.display_name,
         team=profile.team,
         telegram_username=profile.telegram_username,
+        discord_user_id=profile.discord_user_id,
+        discord_username=profile.discord_username,
         plugin_enabled=profile.plugin_enabled,
         author_color=profile.author_color,
     )
@@ -379,6 +391,19 @@ def record_break_event(event: BreakEventIn) -> dict:
     return app.state.repo.record_break_event(
         telegram_username=event.telegram_username,
         event_type=event.event_type,
+        timestamp=event.timestamp,
+    )
+
+
+@app.post("/api/v1/discord/voice-events")
+def record_discord_voice_event(event: DiscordVoiceEventIn, request: Request) -> dict:
+    require_discord_bot_secret(request)
+    return app.state.repo.record_discord_voice_event(
+        discord_user_id=event.discord_user_id,
+        discord_username=event.discord_username,
+        event_type=event.event_type,
+        guild_id=event.guild_id,
+        channel_id=event.channel_id,
         timestamp=event.timestamp,
     )
 

@@ -56,7 +56,7 @@ WINDOWS_TIME_ZONE_IDS = {
 
 
 class Repository:
-    aggregates_version = 17
+    aggregates_version = 18
 
     def __init__(self, settings: Settings):
         self.client: MongoClient = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=1500)
@@ -92,8 +92,12 @@ class Repository:
         self.db.author_aliases.create_index("sourceRawAuthor", unique=True)
         self.db.author_aliases.create_index("targetRawAuthor")
         self.db.author_profiles.create_index("telegramUsername", unique=True, sparse=True)
+        self.db.author_profiles.create_index("discordUserId", unique=True, sparse=True)
         self.db.break_events.create_index([("telegramUsername", ASCENDING), ("timestamp", DESCENDING)])
         self.db.break_sessions.create_index("telegramUsername", unique=True)
+        self.db.meeting_events.create_index([("discordUserId", ASCENDING), ("timestamp", DESCENDING)])
+        self.db.meeting_sessions.create_index("discordUserId", unique=True)
+        self.db.meeting_intervals.create_index([("rawAuthor", ASCENDING), ("startedAt", ASCENDING), ("endedAt", ASCENDING)])
         self.db.telegram_day_reminders.create_index("reminderId", unique=True)
         self.db.telegram_day_reminders.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
         self.db.interval_settings.create_index("kind", unique=True)
@@ -618,6 +622,9 @@ class Repository:
             ):
                 continue
 
+            if self._is_idle_report_during_meeting(item):
+                continue
+
             profile = profiles.get(item.get("author") or "Unknown User", {})
             item["displayName"] = _display_name(item.get("author"), profile)
             item["team"] = profile.get("team", "")
@@ -628,6 +635,36 @@ class Repository:
                 break
 
         return reports
+
+    def _is_idle_report_during_meeting(self, report_row: dict[str, Any]) -> bool:
+        if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
+            return False
+
+        idle_seconds = int(report_row.get("idleDeltaSeconds", 0))
+        active_seconds = int(report_row.get("activeDeltaSeconds", 0))
+        overtime_seconds = int(report_row.get("overtimeActiveDeltaSeconds", 0))
+
+        if idle_seconds <= 0 or active_seconds > 0 or overtime_seconds > 0:
+            return False
+
+        raw_author = report_row.get("author") or "Unknown User"
+        recorded_at = _coerce_datetime(report_row.get("recordedAt") or report_row.get("lastRecordedAt") or report_row.get("receivedAt"))
+
+        if not recorded_at:
+            return False
+
+        if self.db.meeting_intervals.find_one(
+            {"rawAuthor": raw_author, "startedAt": {"$lte": recorded_at}, "endedAt": {"$gte": recorded_at}},
+            {"_id": 1},
+        ):
+            return True
+
+        return bool(
+            self.db.meeting_sessions.find_one(
+                {"rawAuthor": raw_author, "startedAt": {"$lte": recorded_at}},
+                {"_id": 1},
+            )
+        )
 
     def activity_summary(
         self,
@@ -642,6 +679,7 @@ class Repository:
             "pluginDaySeconds": 0,
             "activeSeconds": 0,
             "idleSeconds": 0,
+            "meetingSeconds": 0,
             "overtimeActiveSeconds": 0,
             "breakSeconds": 0,
         }
@@ -654,6 +692,8 @@ class Repository:
         normal_consumed_by_author_date: dict[tuple[str, str], int] = {}
         telegram_seconds_by_author_date: dict[tuple[str, str], int] = {}
         break_seconds_by_author_date: dict[tuple[str, str], int] = {}
+        meeting_seconds_by_author_date: dict[tuple[str, str], int] = {}
+        meeting_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         profiles = self._profiles_by_raw_author()
         now = now or dt.datetime.now(dt.UTC)
         daily_items = sorted(
@@ -677,6 +717,7 @@ class Repository:
                 )
             ]
         break_buckets = self._break_buckets_for_daily_items(daily_items)
+        meeting_buckets = self._meeting_buckets_for_daily_items(daily_items, now)
 
         for item in daily_items:
             raw_author = item.get("author") or "Unknown User"
@@ -688,9 +729,15 @@ class Repository:
                 item.get("hourlyActivity", []),
                 break_buckets.get(author_date_key, []),
             )
+            hourly_activity = _apply_meetings_to_hourly_activity(
+                hourly_activity,
+                meeting_buckets.get(author_date_key, []),
+                meeting_consumed_by_author_date_hour.setdefault(author_date_key, _empty_hourly_activity()),
+            )
             report_active_seconds = int(item.get("activeSeconds", 0))
-            report_idle_seconds = int(item.get("idleSeconds", 0))
+            report_idle_seconds = sum(int(hour.get("idleSeconds", 0)) for hour in hourly_activity)
             effective_break_seconds = sum(int(hour.get("breakSeconds", 0)) for hour in hourly_activity)
+            effective_meeting_seconds = sum(int(hour.get("meetingSeconds", 0)) for hour in hourly_activity)
             telegram_day_seconds = int(item.get("daySeconds", 0))
             work_window_seconds = int(item.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS)
             normal_consumed = normal_consumed_by_author_date.get(author_date_key, 0)
@@ -698,17 +745,19 @@ class Repository:
             plugin_day_seconds = min(max(0, report_active_seconds + report_idle_seconds), normal_available)
             effective_active_seconds = min(report_active_seconds, plugin_day_seconds)
             effective_idle_seconds = min(
-                max(0, report_idle_seconds - effective_break_seconds),
+                max(0, report_idle_seconds),
                 max(0, plugin_day_seconds - effective_active_seconds),
             )
             normal_consumed_by_author_date[author_date_key] = normal_consumed + plugin_day_seconds
             telegram_seconds_by_author_date[author_date_key] = telegram_seconds_by_author_date.get(author_date_key, 0) + telegram_day_seconds
             break_seconds_by_author_date[author_date_key] = break_seconds_by_author_date.get(author_date_key, 0) + effective_break_seconds
+            meeting_seconds_by_author_date[author_date_key] = meeting_seconds_by_author_date.get(author_date_key, 0) + effective_meeting_seconds
             totals["daySeconds"] += telegram_day_seconds
             totals["telegramDaySeconds"] += telegram_day_seconds
             totals["pluginDaySeconds"] += plugin_day_seconds
             totals["activeSeconds"] += effective_active_seconds
             totals["idleSeconds"] += effective_idle_seconds
+            totals["meetingSeconds"] += effective_meeting_seconds
             totals["overtimeActiveSeconds"] += int(item.get("overtimeActiveSeconds", 0))
             totals["breakSeconds"] += effective_break_seconds
 
@@ -759,6 +808,8 @@ class Repository:
                     "displayName": display_name,
                     "team": profile.get("team", ""),
                     "telegramUsername": profile.get("telegramUsername", ""),
+                    "discordUserId": profile.get("discordUserId", ""),
+                    "discordUsername": profile.get("discordUsername", ""),
                     "authorColor": profile.get("authorColor") or _author_color(raw_author),
                     "source": item.get("source"),
                     "pluginVersion": item.get("pluginVersion"),
@@ -771,6 +822,7 @@ class Repository:
                     "pluginDaySeconds": 0,
                     "activeSeconds": 0,
                     "idleSeconds": 0,
+                    "meetingSeconds": 0,
                     "breakSeconds": 0,
                     "overtimeActiveSeconds": 0,
                     "activityCounts": [],
@@ -785,6 +837,7 @@ class Repository:
             author_row["pluginDaySeconds"] += plugin_day_seconds
             author_row["activeSeconds"] += effective_active_seconds
             author_row["idleSeconds"] += effective_idle_seconds
+            author_row["meetingSeconds"] += effective_meeting_seconds
             author_row["breakSeconds"] += effective_break_seconds
             author_row["overtimeActiveSeconds"] += int(item.get("overtimeActiveSeconds", 0))
             author_row["authorEmail"] = profile.get("authorEmail") or item.get("authorEmail") or author_row.get("authorEmail", "")
@@ -847,7 +900,10 @@ class Repository:
             end_date,
             date_mode,
             now,
+            meeting_seconds_by_author_date,
+            meeting_buckets,
         )
+        _merge_meeting_buckets_into_hourly_author_rows(hourly_by_author, meeting_buckets, profiles)
         security_alerts_by_author = self._security_alerts_by_author(start_date, end_date)
 
         for raw_author, alerts in security_alerts_by_author.items():
@@ -861,6 +917,8 @@ class Repository:
                     "displayName": _display_name(raw_author, profile),
                     "team": profile.get("team", ""),
                     "telegramUsername": profile.get("telegramUsername", ""),
+                    "discordUserId": profile.get("discordUserId", ""),
+                    "discordUsername": profile.get("discordUsername", ""),
                     "authorColor": profile.get("authorColor") or _author_color(raw_author),
                     "source": alerts[0].get("source"),
                     "pluginVersion": alerts[0].get("pluginVersion"),
@@ -871,6 +929,7 @@ class Repository:
                     "pluginDaySeconds": 0,
                     "activeSeconds": 0,
                     "idleSeconds": 0,
+                    "meetingSeconds": 0,
                     "breakSeconds": 0,
                     "overtimeActiveSeconds": 0,
                     "activityCounts": [],
@@ -963,7 +1022,12 @@ class Repository:
 
         by_author: dict[str, list[dict[str, Any]]] = {}
 
-        for index, event in enumerate(self.db.report_security_events.find(query, {"_id": 0}).sort("createdAt", DESCENDING).limit(100)):
+        events = list(self.db.report_security_events.find(query, {"_id": 0}).sort("createdAt", DESCENDING).limit(100))
+
+        if query and not events:
+            events = list(self.db.report_security_events.find({}, {"_id": 0}).sort("createdAt", DESCENDING).limit(100))
+
+        for index, event in enumerate(events):
             raw_author = self.resolve_author_alias(event.get("author") or "Unknown User")
             created_at = _iso(event.get("createdAt"))
             challenge_id = event.get("challengeId")
@@ -1144,6 +1208,8 @@ class Repository:
                     "displayName": _display_name(raw_author, profile),
                     "team": profile.get("team", ""),
                     "telegramUsername": profile.get("telegramUsername", ""),
+                    "discordUserId": profile.get("discordUserId", ""),
+                    "discordUsername": profile.get("discordUsername", ""),
                     "pluginEnabled": profile.get("pluginEnabled", True),
                     "authorColor": profile.get("authorColor") or _author_color(raw_author),
                     "timeZoneId": profile.get("timeZoneId") or (author_activity or {}).get("timeZoneId", ""),
@@ -1276,6 +1342,8 @@ class Repository:
         display_name: str | None,
         team: str | None,
         telegram_username: str | None,
+        discord_user_id: str | None = None,
+        discord_username: str | None = None,
         plugin_enabled: bool = True,
         author_color: str | None = None,
         time_zone_id: str | None = None,
@@ -1283,6 +1351,8 @@ class Repository:
         now = dt.datetime.now(dt.UTC)
         raw_author = _normalize_author(raw_author)
         normalized_telegram = _normalize_telegram_username(telegram_username)
+        normalized_discord_user_id = _normalize_discord_user_id(discord_user_id)
+        normalized_discord_username = str(discord_username or "").strip()
         update = {
             "rawAuthor": raw_author,
             "displayName": (display_name or raw_author).strip(),
@@ -1302,6 +1372,16 @@ class Repository:
             update["telegramUsername"] = normalized_telegram
         else:
             operation["$unset"] = {"telegramUsername": ""}
+
+        if normalized_discord_user_id:
+            update["discordUserId"] = normalized_discord_user_id
+        else:
+            operation.setdefault("$unset", {})["discordUserId"] = ""
+
+        if normalized_discord_username:
+            update["discordUsername"] = normalized_discord_username
+        else:
+            operation.setdefault("$unset", {})["discordUsername"] = ""
 
         self.db.author_profiles.update_one({"rawAuthor": raw_author}, operation, upsert=True)
         return {"ok": True, "profile": {k: v for k, v in update.items() if k != "updatedAt"}}
@@ -1339,6 +1419,9 @@ class Repository:
             "breakSessions": self.db.break_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "breakIntervals": self.db.break_intervals.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "daySessions": self.db.day_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
+            "meetingEvents": self.db.meeting_events.delete_many({"rawAuthor": normalized_author}).deleted_count,
+            "meetingSessions": self.db.meeting_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
+            "meetingIntervals": self.db.meeting_intervals.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "reportChallenges": self.db.report_challenges.delete_many({"author": normalized_author}).deleted_count,
         }
 
@@ -1468,6 +1551,206 @@ class Repository:
 
         self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "break_closed", break_result)
         return {"ok": True, "status": "break_closed", **break_result}
+
+    def record_discord_voice_event(
+        self,
+        discord_user_id: str,
+        discord_username: str | None,
+        event_type: str,
+        guild_id: str | None = None,
+        channel_id: str | None = None,
+        timestamp: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_discord_user_id = _normalize_discord_user_id(discord_user_id)
+        event_time = _parse_timestamp(timestamp)
+        received_at = dt.datetime.now(dt.UTC)
+        profile = self.db.author_profiles.find_one({"discordUserId": normalized_discord_user_id})
+
+        if not profile:
+            return {"ok": False, "error": "Unknown Discord user"}
+
+        raw_author = profile["rawAuthor"]
+        time_zone_id = _valid_time_zone_id(profile.get("timeZoneId")) or "UTC"
+        event_date = _telegram_event_date(event_time, time_zone_id)
+        normalized_discord_username = str(discord_username or profile.get("discordUsername") or "").strip()
+        event_type = event_type if event_type in {"join", "leave", "reconcile"} else "reconcile"
+
+        self.db.meeting_events.insert_one(
+            {
+                "discordUserId": normalized_discord_user_id,
+                "discordUsername": normalized_discord_username,
+                "rawAuthor": raw_author,
+                "eventType": event_type,
+                "guildId": str(guild_id or ""),
+                "channelId": str(channel_id or ""),
+                "timestamp": event_time,
+                "date": event_date,
+                "timeZoneId": time_zone_id,
+                "createdAt": received_at,
+            }
+        )
+
+        if normalized_discord_username and normalized_discord_username != profile.get("discordUsername"):
+            self.db.author_profiles.update_one(
+                {"rawAuthor": raw_author},
+                {"$set": {"discordUsername": normalized_discord_username, "updatedAt": received_at}},
+            )
+
+        if event_type in {"join", "reconcile"}:
+            session = self.db.meeting_sessions.find_one({"discordUserId": normalized_discord_user_id})
+
+            if session:
+                self._insert_discord_meeting_report_row(
+                    raw_author,
+                    normalized_discord_user_id,
+                    normalized_discord_username,
+                    event_type,
+                    event_time,
+                    event_date,
+                    time_zone_id,
+                    received_at,
+                    "meeting_already_started",
+                    guild_id,
+                    channel_id,
+                )
+                return {"ok": True, "status": "meeting_already_started"}
+
+            self.db.meeting_sessions.update_one(
+                {"discordUserId": normalized_discord_user_id},
+                {
+                    "$set": {
+                        "discordUserId": normalized_discord_user_id,
+                        "discordUsername": normalized_discord_username,
+                        "rawAuthor": raw_author,
+                        "guildId": str(guild_id or ""),
+                        "channelId": str(channel_id or ""),
+                        "startedAt": event_time,
+                        "date": event_date,
+                        "timeZoneId": time_zone_id,
+                    }
+                },
+                upsert=True,
+            )
+            self._insert_discord_meeting_report_row(
+                raw_author,
+                normalized_discord_user_id,
+                normalized_discord_username,
+                event_type,
+                event_time,
+                event_date,
+                time_zone_id,
+                received_at,
+                "meeting_started",
+                guild_id,
+                channel_id,
+            )
+            return {"ok": True, "status": "meeting_started"}
+
+        meeting_result = self._close_meeting_session(
+            normalized_discord_user_id,
+            raw_author,
+            normalized_discord_username,
+            event_time,
+            received_at,
+            guild_id,
+            channel_id,
+        )
+        status = "meeting_closed" if meeting_result else "meeting_leave_without_join"
+        self._insert_discord_meeting_report_row(
+            raw_author,
+            normalized_discord_user_id,
+            normalized_discord_username,
+            event_type,
+            event_time,
+            event_date,
+            time_zone_id,
+            received_at,
+            status,
+            guild_id,
+            channel_id,
+            meeting_result,
+        )
+        return {"ok": True, "status": status, **meeting_result}
+
+    def _close_meeting_session(
+        self,
+        normalized_discord_user_id: str,
+        raw_author: str,
+        discord_username: str,
+        event_time: dt.datetime,
+        received_at: dt.datetime,
+        guild_id: str | None,
+        channel_id: str | None,
+    ) -> dict[str, Any]:
+        session = self.db.meeting_sessions.find_one({"discordUserId": normalized_discord_user_id})
+
+        if not session:
+            return {}
+
+        started_at = _coerce_datetime(session["startedAt"]) or event_time
+        meeting_seconds = max(0, int((event_time - started_at).total_seconds()))
+        time_zone_id = _valid_time_zone_id(session.get("timeZoneId")) or "UTC"
+        meeting_date = str(session.get("date") or _telegram_event_date(started_at, time_zone_id))
+        self.db.meeting_sessions.delete_one({"discordUserId": normalized_discord_user_id})
+        self.db.meeting_intervals.insert_one(
+            {
+                "discordUserId": normalized_discord_user_id,
+                "discordUsername": discord_username or session.get("discordUsername", ""),
+                "rawAuthor": raw_author,
+                "guildId": str(guild_id or session.get("guildId") or ""),
+                "channelId": str(channel_id or session.get("channelId") or ""),
+                "startedAt": started_at,
+                "endedAt": event_time,
+                "date": meeting_date,
+                "timeZoneId": time_zone_id,
+                "meetingSeconds": meeting_seconds,
+                "createdAt": received_at,
+            }
+        )
+        return {"meetingSeconds": meeting_seconds}
+
+    def _insert_discord_meeting_report_row(
+        self,
+        raw_author: str,
+        discord_user_id: str,
+        discord_username: str,
+        event_type: str,
+        event_time: dt.datetime,
+        event_date: str,
+        time_zone_id: str,
+        received_at: dt.datetime,
+        status: str,
+        guild_id: str | None,
+        channel_id: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        deltas = _empty_event_deltas()
+        self.db.report_rows.insert_one(
+            {
+                "source": "discord",
+                "pluginVersion": "discord-bot",
+                "author": raw_author,
+                "authorEmail": "",
+                "projectId": "discord",
+                "sessionId": discord_user_id,
+                "deviceId": "",
+                "date": event_date,
+                "recordedAt": event_time.isoformat(),
+                "receivedAt": received_at,
+                "lastRecordedAt": event_time.isoformat(),
+                "lastReceivedAt": received_at,
+                "timeZoneId": time_zone_id,
+                "timeZoneDisplayName": time_zone_id,
+                "reportType": "meeting",
+                "activityType": f"meeting_{event_type}",
+                "discordEventType": event_type,
+                "discordStatus": status,
+                "discordUserId": discord_user_id,
+                "discordUsername": discord_username,
+                "metadata": {"guildId": str(guild_id or ""), "channelId": str(channel_id or ""), **(metadata or {})},
+                **deltas,
+            }
+        )
 
     def claim_due_telegram_day_reminders(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
         now = now or dt.datetime.now(dt.UTC)
@@ -1798,6 +2081,58 @@ class Repository:
 
         return buckets
 
+    def _meeting_buckets_for_daily_items(
+        self, daily_items: list[dict[str, Any]], now: dt.datetime | None = None
+    ) -> dict[tuple[str, str], list[dict[str, int]]]:
+        author_dates = {
+            (item.get("author") or "Unknown User", item.get("date") or "")
+            for item in daily_items
+            if item.get("date")
+        }
+
+        if not author_dates:
+            return {}
+
+        authors = sorted({author for author, _date in author_dates})
+        dates = sorted({_date for _author, _date in author_dates})
+        profiles = self._profiles_by_raw_author()
+        min_start = _date_start(dates[0]) - dt.timedelta(days=1)
+        max_end = _date_start(dates[-1]) + dt.timedelta(days=2)
+        buckets = {key: _empty_hourly_activity() for key in author_dates}
+
+        interval_query = {
+            "rawAuthor": {"$in": authors},
+            "startedAt": {"$lt": max_end},
+            "endedAt": {"$gt": min_start},
+        }
+
+        for interval in self.db.meeting_intervals.find(interval_query, {"_id": 0}):
+            _add_meeting_interval_to_buckets(
+                buckets,
+                interval.get("rawAuthor"),
+                _coerce_datetime(interval.get("startedAt")),
+                _coerce_datetime(interval.get("endedAt")),
+                _author_time_zone_id(interval.get("rawAuthor"), profiles, interval.get("timeZoneId")),
+            )
+
+        now = now or dt.datetime.now(dt.UTC)
+
+        for session in self.db.meeting_sessions.find({"rawAuthor": {"$in": authors}}, {"_id": 0}):
+            started_at = _coerce_datetime(session.get("startedAt"))
+
+            if not started_at:
+                continue
+
+            _add_meeting_interval_to_buckets(
+                buckets,
+                session.get("rawAuthor"),
+                started_at,
+                now,
+                _author_time_zone_id(session.get("rawAuthor"), profiles, session.get("timeZoneId")),
+            )
+
+        return buckets
+
     def _apply_live_telegram_summary(
         self,
         authors_by_raw: dict[str, dict[str, Any]],
@@ -1809,7 +2144,12 @@ class Repository:
         end_date: str | None,
         date_mode: str | None,
         now: dt.datetime,
+        meeting_seconds_by_author_date: dict[tuple[str, str], int] | None = None,
+        meeting_buckets: dict[tuple[str, str], list[dict[str, int]]] | None = None,
     ) -> None:
+        meeting_seconds_by_author_date = meeting_seconds_by_author_date if meeting_seconds_by_author_date is not None else {}
+        meeting_buckets = meeting_buckets if meeting_buckets is not None else {}
+        totals.setdefault("meetingSeconds", 0)
         for session in self.db.day_sessions.find({}, {"_id": 0}):
             raw_author = session.get("rawAuthor") or "Unknown User"
             day_date = session.get("date") or ""
@@ -1873,7 +2213,57 @@ class Repository:
                 author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
                 author_row["breakSeconds"] += break_delta_seconds
                 totals["breakSeconds"] += break_delta_seconds
-                break_seconds_by_author_date[(raw_author, break_date)] = existing_break_seconds + break_delta_seconds
+
+        meeting_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        for interval in self.db.meeting_intervals.find(meeting_query, {"_id": 0}):
+            raw_author = interval.get("rawAuthor") or "Unknown User"
+            meeting_date = interval.get("date") or ""
+
+            if not _date_in_summary_scope(meeting_date, raw_author, profiles, interval.get("timeZoneId"), now, start_date, end_date, date_mode):
+                continue
+
+            meeting_seconds = int(interval.get("meetingSeconds", 0))
+            existing_meeting_seconds = meeting_seconds_by_author_date.get((raw_author, meeting_date), 0)
+            meeting_delta_seconds = max(0, meeting_seconds - existing_meeting_seconds)
+
+            if meeting_delta_seconds:
+                author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
+                author_row["meetingSeconds"] += meeting_delta_seconds
+                totals["meetingSeconds"] += meeting_delta_seconds
+                meeting_seconds_by_author_date[(raw_author, meeting_date)] = existing_meeting_seconds + meeting_delta_seconds
+
+        for session in self.db.meeting_sessions.find({}, {"_id": 0}):
+            raw_author = session.get("rawAuthor") or "Unknown User"
+            started_at = _coerce_datetime(session.get("startedAt"))
+
+            if not started_at:
+                continue
+
+            meeting_date = str(session.get("date") or _telegram_event_date(started_at, _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))))
+
+            if not _date_in_summary_scope(meeting_date, raw_author, profiles, session.get("timeZoneId"), now, start_date, end_date, date_mode):
+                continue
+
+            live_meeting_seconds = max(0, int((now - started_at).total_seconds()))
+            existing_meeting_seconds = meeting_seconds_by_author_date.get((raw_author, meeting_date), 0)
+            meeting_delta_seconds = max(0, live_meeting_seconds - existing_meeting_seconds)
+
+            if meeting_delta_seconds:
+                author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
+                author_row["meetingSeconds"] += meeting_delta_seconds
+                totals["meetingSeconds"] += meeting_delta_seconds
+
+            key = (raw_author, meeting_date)
+            if key not in meeting_buckets:
+                meeting_buckets[key] = _empty_hourly_activity()
+                _add_meeting_interval_to_buckets(
+                    meeting_buckets,
+                    raw_author,
+                    started_at,
+                    now,
+                    _author_time_zone_id(raw_author, profiles, session.get("timeZoneId")),
+                )
 
         for session in self.db.break_sessions.find({}, {"_id": 0}):
             raw_author = session.get("rawAuthor") or "Unknown User"
@@ -1895,6 +2285,7 @@ class Repository:
                 author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
                 author_row["breakSeconds"] += break_delta_seconds
                 totals["breakSeconds"] += break_delta_seconds
+                break_seconds_by_author_date[(raw_author, break_date)] = existing_break_seconds + break_delta_seconds
 
     def _ensure_summary_author(
         self, authors_by_raw: dict[str, dict[str, Any]], raw_author: str, profiles: dict[str, dict[str, Any]]
@@ -1911,6 +2302,8 @@ class Repository:
             "displayName": _display_name(raw_author, profile),
             "team": profile.get("team", ""),
             "telegramUsername": profile.get("telegramUsername", ""),
+            "discordUserId": profile.get("discordUserId", ""),
+            "discordUsername": profile.get("discordUsername", ""),
             "authorColor": profile.get("authorColor") or _author_color(raw_author),
             "source": None,
             "pluginVersion": None,
@@ -1921,6 +2314,7 @@ class Repository:
             "pluginDaySeconds": 0,
             "activeSeconds": 0,
             "idleSeconds": 0,
+            "meetingSeconds": 0,
             "breakSeconds": 0,
             "overtimeActiveSeconds": 0,
             "activityCounts": [],
@@ -2001,6 +2395,28 @@ class Repository:
                 time_zone_id,
                 received_at,
                 str(event.get("eventType") or "telegram"),
+            )
+
+        for event in self.db.meeting_events.find({}).sort("timestamp", ASCENDING):
+            event_time = _coerce_datetime(event.get("timestamp"))
+
+            if not event_time:
+                continue
+
+            received_at = _coerce_datetime(event.get("createdAt")) or event_time
+            time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
+            self._insert_discord_meeting_report_row(
+                str(event.get("rawAuthor") or "Unknown User"),
+                str(event.get("discordUserId") or ""),
+                str(event.get("discordUsername") or ""),
+                str(event.get("eventType") or "reconcile"),
+                event_time,
+                str(event.get("date") or _telegram_event_date(event_time, time_zone_id)),
+                time_zone_id,
+                received_at,
+                str(event.get("eventType") or "meeting"),
+                str(event.get("guildId") or ""),
+                str(event.get("channelId") or ""),
             )
 
         self.db.aggregate_metadata.update_one(
@@ -3086,6 +3502,10 @@ def _normalize_telegram_username(value: str | None) -> str:
     return (value or "").strip().lstrip("@").lower()
 
 
+def _normalize_discord_user_id(value: str | None) -> str:
+    return str(value or "").strip()
+
+
 def _parse_timestamp(value: str | None) -> dt.datetime:
     if not value:
         return dt.datetime.now(dt.UTC)
@@ -3224,7 +3644,7 @@ def _count_deltas(current: list[dict[str, Any]], previous: list[dict[str, Any]],
 
 def _empty_hourly_activity() -> list[dict[str, int]]:
     return [
-        {"hour": hour, "activeSeconds": 0, "idleSeconds": 0, "breakSeconds": 0, "overtimeActiveSeconds": 0}
+        {"hour": hour, "activeSeconds": 0, "idleSeconds": 0, "breakSeconds": 0, "meetingSeconds": 0, "overtimeActiveSeconds": 0}
         for hour in range(24)
     ]
 
@@ -3236,6 +3656,7 @@ def _public_hourly_activity(source: list[dict[str, Any]]) -> list[dict[str, int]
             "activeSeconds": int(item.get("activeSeconds", 0)),
             "idleSeconds": int(item.get("idleSeconds", 0)),
             "breakSeconds": int(item.get("breakSeconds", 0)),
+            "meetingSeconds": int(item.get("meetingSeconds", 0)),
             "overtimeActiveSeconds": int(item.get("overtimeActiveSeconds", 0)),
         }
         for item in source
@@ -3282,6 +3703,7 @@ def _merge_hourly_activity(target: list[dict[str, Any]], deltas: list[dict[str, 
         target_item["activeSeconds"] = _seconds_from_microseconds(active_microseconds)
         target_item["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
         target_item["breakSeconds"] = int(target_item.get("breakSeconds", 0)) + int(delta_item.get("breakSeconds", 0))
+        target_item["meetingSeconds"] = int(target_item.get("meetingSeconds", 0)) + int(delta_item.get("meetingSeconds", 0))
         target_item["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_active_microseconds)
 
 
@@ -3317,11 +3739,86 @@ def _apply_breaks_to_hourly_activity(
                 "activeSeconds": active_seconds,
                 "idleSeconds": idle_seconds,
                 "breakSeconds": break_seconds,
+                "meetingSeconds": int(source_hour.get("meetingSeconds", 0)),
                 "overtimeActiveSeconds": overtime_active_seconds,
             }
         )
 
     return hourly_activity
+
+
+def _apply_meetings_to_hourly_activity(
+    source: list[dict[str, Any]],
+    meeting_buckets: list[dict[str, Any]],
+    consumed_buckets: list[dict[str, Any]],
+) -> list[dict[str, int]]:
+    source_by_hour = {int(item.get("hour", 0)): item for item in source}
+    meeting_by_hour = {int(item.get("hour", 0)): item for item in meeting_buckets}
+    consumed_by_hour = {int(item.get("hour", 0)): item for item in consumed_buckets}
+    hourly_activity = []
+
+    for hour in range(24):
+        source_hour = source_by_hour.get(hour, {})
+        consumed_hour = consumed_by_hour.get(hour, {})
+        active_seconds = int(source_hour.get("activeSeconds", 0))
+        overtime_active_seconds = int(source_hour.get("overtimeActiveSeconds", 0))
+        break_seconds = int(source_hour.get("breakSeconds", 0))
+        idle_seconds = int(source_hour.get("idleSeconds", 0))
+        requested_meeting_seconds = max(0, int((meeting_by_hour.get(hour, {}) or {}).get("meetingSeconds", 0)))
+        consumed_meeting_seconds = max(0, int(consumed_hour.get("meetingSeconds", 0)))
+        available_meeting_seconds = max(0, requested_meeting_seconds - consumed_meeting_seconds)
+        available_hour_seconds = max(0, 3600 - active_seconds - overtime_active_seconds - break_seconds)
+        meeting_seconds = min(available_meeting_seconds, available_hour_seconds)
+        idle_seconds = max(0, min(idle_seconds, available_hour_seconds) - meeting_seconds)
+        consumed_hour["meetingSeconds"] = consumed_meeting_seconds + meeting_seconds
+
+        hourly_activity.append(
+            {
+                "hour": hour,
+                "activeSeconds": active_seconds,
+                "idleSeconds": idle_seconds,
+                "breakSeconds": break_seconds,
+                "meetingSeconds": meeting_seconds,
+                "overtimeActiveSeconds": overtime_active_seconds,
+            }
+        )
+
+    return hourly_activity
+
+
+def _merge_meeting_buckets_into_hourly_author_rows(
+    hourly_by_author: dict[str, dict[str, Any]],
+    meeting_buckets: dict[tuple[str, str], list[dict[str, int]]],
+    profiles: dict[str, dict[str, Any]],
+) -> None:
+    for (raw_author, _date), meeting_hours in meeting_buckets.items():
+        author_row = hourly_by_author.get(raw_author)
+
+        if not author_row:
+            profile = profiles.get(raw_author, {})
+            author_row = {
+                "author": _display_name(raw_author, profile),
+                "rawAuthor": raw_author,
+                "timeZoneId": profile.get("timeZoneId"),
+                "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
+                "hourlyActivity": _empty_hourly_activity(),
+            }
+            hourly_by_author[raw_author] = author_row
+
+        current_by_hour = {int(item.get("hour", 0)): item for item in author_row.get("hourlyActivity", [])}
+
+        for meeting_hour in meeting_hours:
+            hour = int(meeting_hour.get("hour", 0))
+            target_hour = current_by_hour.get(hour)
+
+            if not target_hour:
+                continue
+
+            meeting_seconds = int(meeting_hour.get("meetingSeconds", 0))
+            current_meeting_seconds = int(target_hour.get("meetingSeconds", 0))
+
+            if meeting_seconds > current_meeting_seconds:
+                target_hour["meetingSeconds"] = meeting_seconds
 
 
 def _add_break_interval_to_buckets(
@@ -3352,6 +3849,38 @@ def _add_break_interval_to_buckets(
         if target:
             seconds = max(0, int((segment_end - current).total_seconds()))
             target[current.hour]["breakSeconds"] = int(target[current.hour].get("breakSeconds", 0)) + seconds
+
+        current = segment_end
+
+
+def _add_meeting_interval_to_buckets(
+    buckets: dict[tuple[str, str], list[dict[str, int]]],
+    raw_author: Any,
+    started_at: dt.datetime | None,
+    ended_at: dt.datetime | None,
+    time_zone_id: str,
+) -> None:
+    if not raw_author or not started_at or not ended_at or ended_at <= started_at:
+        return
+
+    try:
+        zone = ZoneInfo(time_zone_id)
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
+
+    current = started_at.astimezone(zone)
+    local_end = ended_at.astimezone(zone)
+
+    while current < local_end:
+        hour_end = current.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+        segment_end = min(hour_end, local_end)
+        date = current.date().isoformat()
+        key = (str(raw_author), date)
+        target = buckets.get(key)
+
+        if target:
+            seconds = max(0, int((segment_end - current).total_seconds()))
+            target[current.hour]["meetingSeconds"] = int(target[current.hour].get("meetingSeconds", 0)) + seconds
 
         current = segment_end
 
