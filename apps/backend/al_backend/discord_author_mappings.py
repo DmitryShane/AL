@@ -30,6 +30,11 @@ DISCORD_AUTHOR_MAPPINGS = [
         "discordUserId": "689511934030119014",
         "discordUsername": "Dmitriy Zhdamarov",
     },
+    {
+        "telegramUsername": "igormats",
+        "discordUserId": "689526024857321504",
+        "discordUsername": "Igor Mats",
+    },
 ]
 
 

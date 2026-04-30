@@ -655,8 +655,9 @@ def test_discord_author_mappings_update_known_telegram_profiles_only():
 
     assert evgeniy["discordUserId"] == "645196366494171139"
     assert evgeniy["discordUsername"] == "Evgeniy Dotsenko"
-    assert "discordUserId" not in igor
-    assert [item["telegramUsername"] for item in result["updated"]] == ["ama_deus"]
+    assert igor["discordUserId"] == "689526024857321504"
+    assert igor["discordUsername"] == "Igor Mats"
+    assert [item["telegramUsername"] for item in result["updated"]] == ["ama_deus", "igormats"]
     assert "dmitryshane" in result["missingTelegramUsernames"]
     assert "vedamir_infinum" in result["missingTelegramUsernames"]
     assert "zhdamarovich" in result["missingTelegramUsernames"]
