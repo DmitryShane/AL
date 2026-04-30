@@ -61,6 +61,19 @@ stop
 - **AL (Activity Logger)** — the product and service as a whole: this repository (FastAPI backend, web dashboard, Telegram/Discord bots, and how data is stored and summarized).
 - **UAL** — specifically the **Unity package** `com.al.ual` and the client plugin(s) that report into AL with `source: ual`. Other editors (Blender, VS Code) use separate add-ons/extensions under the same package tree but are not called “UAL” in user-facing text; prefer **Activity Logger** or **AL** when talking about the system in general.
 
+## Communication With The Repo Owner
+
+- Default to **short, direct answers** unless the user asks for depth, a tutorial, or a formal write-up. Skip long preamble and filler.
+- The owner may write in Russian in chat; **repository and product text stay English** per the rule above.
+
+## MongoDB Data Layout (backend)
+
+- Storage is **MongoDB** (`AL_MONGO_DATABASE`, usually `al`), not a single file: many **collections**, see `apps/backend/al_backend/repository.py` → `ensure_indexes()`.
+- **Ingest / raw**: `raw_reports`, `raw_event_batches`, `raw_activity_events` (event-level, unique `eventId`).
+- **Derived / reporting**: `report_rows`, `daily_author_activity` (per author/source/project/day), `activity_snapshots`, `day_sessions`, plus author data in `author_profiles` / `author_aliases`.
+- **Weeks / months** in the UI are built from daily (and related) data at query time, not one monolithic “all history” document per author.
+- **Performance**: compound and sparse indexes on the hot fields; aggregate docs are versioned (`aggregates_version`) and rebuilt when the backend bumps that version (`rebuild_aggregates_if_needed`).
+
 ## Production Data Sync
 
 Production runs at `activity.mempic.com`. When the user asks to pull production data locally, use SSH as `root@activity.mempic.com` and treat MongoDB dumps as sensitive data.

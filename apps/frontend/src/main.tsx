@@ -75,6 +75,7 @@ type AuthorRow = {
   overtimeActivityMix?: ActivityCount[];
   overtimeSavedPrefabs?: SavedPrefab[];
   status?: "online" | "stale";
+  stalePresence?: "telegram" | "reports" | "both";
   alerts?: AuthorAlert[];
   alertStats?: AlertStats;
 };
@@ -1515,6 +1516,35 @@ function AlertsPage({ authors }: { authors: AuthorRow[] }) {
     { total: 0, critical: 0, warning: 0, healthy: 0 }
   );
 
+  const alertTypeBreakdownMap = new Map<
+    string,
+    { count: number; title: string; severity: AuthorAlert["severity"] }
+  >();
+
+  for (const author of sortedAuthors) {
+    for (const alert of author.alerts ?? []) {
+      const key = `${alert.type}\0${alert.severity}`;
+      const prev = alertTypeBreakdownMap.get(key);
+
+      if (prev) {
+        prev.count += 1;
+      }
+      else {
+        alertTypeBreakdownMap.set(key, { count: 1, title: alert.title, severity: alert.severity });
+      }
+    }
+  }
+
+  const alertTypeBreakdown = [...alertTypeBreakdownMap.entries()]
+    .map(([breakdownKey, row]) => ({ breakdownKey, ...row }))
+    .sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+
+      return left.title.localeCompare(right.title);
+    });
+
   return (
     <section className="page-section alerts-page">
       <div className="alerts-summary-strip">
@@ -1523,6 +1553,20 @@ function AlertsPage({ authors }: { authors: AuthorRow[] }) {
         <AlertSummaryMetric label="Warning" value={totals.warning} tone={totals.warning ? "warning" : "neutral"} />
         <AlertSummaryMetric label="Healthy authors" value={totals.healthy} tone="healthy" />
       </div>
+
+      {alertTypeBreakdown.length ? (
+        <div className="alerts-type-breakdown" aria-label="Alert types breakdown">
+          <span className="alerts-type-breakdown-label">By alert type</span>
+          <ul className="alerts-type-breakdown-list">
+            {alertTypeBreakdown.map((row) => (
+              <li className={`alerts-type-breakdown-item ${row.severity}`} key={row.breakdownKey}>
+                <span className="alerts-type-breakdown-title">{row.title}</span>
+                <span className="alerts-type-breakdown-count">×{row.count}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="alerts-card-grid">
         {sortedAuthors.map((author) => {
@@ -1538,7 +1582,7 @@ function AlertsPage({ authors }: { authors: AuthorRow[] }) {
                   <small>{author.authorEmail || author.rawAuthor}</small>
                   <small>{author.team || "No team"}</small>
                 </div>
-                <span className={authorStatusBadgeClassName(author.status)}>{formatAuthorStatus(author)}</span>
+                <span className={authorStatusBadgeClassName(author.status, author.stalePresence)}>{formatAuthorStatus(author)}</span>
               </div>
 
               <div className="alert-count-stack">
@@ -3366,18 +3410,36 @@ function matchesAuthorSearch(author: AuthorRow, search: string) {
 
 function formatAuthorStatus(author: AuthorRow) {
   if (author.status === "stale") {
+    if (author.stalePresence === "telegram") {
+      return "Signed off";
+    }
+
     return author.lastReceivedAt ? "Offline" : "No reports";
   }
 
   return "Online";
 }
 
-function authorStatusBadgeClassName(status?: "online" | "stale") {
-  return status === "stale" ? "status-badge stale" : "status-badge online";
+function authorStatusBadgeClassName(status?: "online" | "stale", stalePresence?: AuthorRow["stalePresence"]) {
+  if (status === "stale") {
+    if (stalePresence === "telegram") {
+      return "status-badge telegram-signed-off";
+    }
+
+    return "status-badge stale";
+  }
+
+  return "status-badge online";
 }
 
 function authorCardClassName(author: AuthorRow, active: boolean) {
-  return `author-card ${active ? "active " : ""}${author.status === "stale" ? "is-offline" : "is-online"} ${productivityTone(author.productivity)}`.trim();
+  let presenceClass = "is-online";
+
+  if (author.status === "stale") {
+    presenceClass = author.stalePresence === "telegram" ? "is-telegram-offline" : "is-offline";
+  }
+
+  return `author-card ${active ? "active " : ""}${presenceClass} ${productivityTone(author.productivity)}`.trim();
 }
 
 function compareAuthorCardStatus(left: AuthorRow, right: AuthorRow) {

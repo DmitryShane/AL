@@ -3673,7 +3673,18 @@ def _with_alerts(
 
     critical_count = sum(1 for alert in alerts if alert["severity"] == "critical")
     warning_count = sum(1 for alert in alerts if alert["severity"] == "warning")
-    item["status"] = "stale" if forced_offline or any(alert["type"] == "reports_stopped" for alert in alerts) else "online"
+    has_reports_stopped = any(alert["type"] == "reports_stopped" for alert in alerts)
+    is_stale = forced_offline or has_reports_stopped
+    item["status"] = "stale" if is_stale else "online"
+
+    if is_stale:
+        if has_reports_stopped and forced_offline:
+            item["stalePresence"] = "both"
+        elif has_reports_stopped:
+            item["stalePresence"] = "reports"
+        else:
+            item["stalePresence"] = "telegram"
+
     item["alerts"] = alerts
     item["alertStats"] = {
         "total": len(alerts),

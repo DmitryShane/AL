@@ -15,6 +15,8 @@ from al_backend.repository import (
     _normalize_telegram_username,
     _plugin_day_seconds,
     _saved_prefab_delta,
+    _with_activity_mix,
+    _with_alerts,
     _with_productivity,
 )
 from al_backend.telegram_bot import (
@@ -748,9 +750,13 @@ def _insert_presence_daily_activity(repo, received_at):
     )
 
 
-def _author_status(repo, now):
+def _author_from_summary(repo, now):
     summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28", now=now)
-    return next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")["status"]
+    return next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+
+def _author_status(repo, now):
+    return _author_from_summary(repo, now)["status"]
 
 
 def test_fresh_normal_plugin_report_without_telegram_offline_keeps_author_online():
@@ -758,7 +764,9 @@ def test_fresh_normal_plugin_report_without_telegram_offline_keeps_author_online
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
     _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 18, 0, tzinfo=dt.UTC))
 
-    assert _author_status(repo, dt.datetime(2026, 4, 28, 18, 1, tzinfo=dt.UTC)) == "online"
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 1, tzinfo=dt.UTC))
+    assert author["status"] == "online"
+    assert "stalePresence" not in author
 
 
 def test_telegram_offline_after_fresh_plugin_report_marks_author_stale():
@@ -768,7 +776,69 @@ def test_telegram_offline_after_fresh_plugin_report_marks_author_stale():
     repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
     repo.record_break_event("future_artist", "offline", "2026-04-28T18:05:00Z")
 
-    assert _author_status(repo, dt.datetime(2026, 4, 28, 18, 6, tzinfo=dt.UTC)) == "stale"
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 6, tzinfo=dt.UTC))
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "telegram"
+
+
+def test_stale_presence_reports_when_unity_reports_stop_without_telegram_signoff():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC))
+
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC))
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "reports"
+
+
+def test_with_alerts_stale_presence_telegram_without_reports_stopped():
+    frozen_now = dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC)
+    author = {
+        "rawAuthor": "Future Artist",
+        "displayName": "Future Artist",
+        "securityAlerts": [],
+        "telegramAlerts": [],
+        "activeSeconds": 60,
+        "idleSeconds": 0,
+        "breakSeconds": 0,
+        "overtimeActiveSeconds": 0,
+        "activityCounts": [{"type": "selection", "count": 1}],
+        "lastReceivedAt": dt.datetime(2026, 4, 28, 18, 9, tzinfo=dt.UTC),
+    }
+    wrapped = _with_activity_mix(_with_productivity(author))
+    result = _with_alerts(
+        wrapped,
+        60,
+        frozen_now,
+        {"offlineAt": dt.datetime(2026, 4, 28, 18, 0, tzinfo=dt.UTC)},
+    )
+    assert result["status"] == "stale"
+    assert result["stalePresence"] == "telegram"
+
+
+def test_with_alerts_stale_presence_both_when_telegram_offline_and_reports_stopped():
+    frozen_now = dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC)
+    author = {
+        "rawAuthor": "Future Artist",
+        "displayName": "Future Artist",
+        "securityAlerts": [],
+        "telegramAlerts": [],
+        "activeSeconds": 60,
+        "idleSeconds": 0,
+        "breakSeconds": 0,
+        "overtimeActiveSeconds": 0,
+        "activityCounts": [{"type": "selection", "count": 1}],
+        "lastReceivedAt": dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC),
+    }
+    wrapped = _with_activity_mix(_with_productivity(author))
+    result = _with_alerts(
+        wrapped,
+        60,
+        frozen_now,
+        {"offlineAt": dt.datetime(2026, 4, 28, 18, 5, tzinfo=dt.UTC)},
+    )
+    assert result["status"] == "stale"
+    assert result["stalePresence"] == "both"
 
 
 def test_non_overtime_report_after_telegram_offline_keeps_author_stale():

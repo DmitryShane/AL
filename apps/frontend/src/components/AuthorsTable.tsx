@@ -19,6 +19,7 @@ export type AuthorsTableRow = {
   productivity: number;
   authorColor?: string;
   status?: "online" | "stale";
+  stalePresence?: "telegram" | "reports" | "both";
   alertStats?: {
     total: number;
     critical: number;
@@ -68,7 +69,7 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
           <span className={breakClassName(author.breakSeconds)}>{formatMinutes(author.breakSeconds)}</span>
           <strong className={productivityClassName(author.productivity)}>{author.productivity.toFixed(2)}%</strong>
           <span className="author-status-stack">
-            <span className={statusBadgeClassName(author.status)}>{formatStatus(author)}</span>
+            <span className={statusBadgeClassName(author.status, author.stalePresence)}>{formatStatus(author)}</span>
           </span>
           <span>{formatSource(author.source)}</span>
           <span className="author-last-report" title={formatTimestamp(author.lastRecordedAt)}>
@@ -214,14 +215,26 @@ function formatOffsetTimestampTime(value: string) {
 
 function formatStatus(author: AuthorsTableRow) {
   if (author.status === "stale") {
+    if (author.stalePresence === "telegram") {
+      return "Signed off";
+    }
+
     return author.lastReceivedAt ? "Offline" : "No reports";
   }
 
   return "Online";
 }
 
-function statusBadgeClassName(status?: "online" | "stale") {
-  return status === "stale" ? "status-badge stale" : "status-badge online";
+function statusBadgeClassName(status?: "online" | "stale", stalePresence?: AuthorsTableRow["stalePresence"]) {
+  if (status === "stale") {
+    if (stalePresence === "telegram") {
+      return "status-badge telegram-signed-off";
+    }
+
+    return "status-badge stale";
+  }
+
+  return "status-badge online";
 }
 
 function productivityClassName(value: number) {
