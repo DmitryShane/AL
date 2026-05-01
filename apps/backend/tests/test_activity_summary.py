@@ -22,6 +22,7 @@ from al_backend.repository import (
 from al_backend.telegram_bot import (
     BotConfig,
     edit_reminder_message,
+    format_prompt_time,
     get_updates,
     handle_callback_query,
     parse_callback_data,
@@ -344,6 +345,10 @@ def test_telegram_bot_break_activity_prompt_message_has_buttons(monkeypatch):
     assert "altb:prompt-1:still_afk" in captured["params"]["reply_markup"]
     assert "I'm online" in captured["params"]["reply_markup"]
     assert "Still AFK" in captured["params"]["reply_markup"]
+
+
+def test_telegram_bot_formats_prompt_time_in_author_time_zone():
+    assert format_prompt_time("2026-05-01T13:09:24", "Europe/Madrid") == "15:09"
 
 
 def test_telegram_bot_callback_edits_online_prompt(monkeypatch):

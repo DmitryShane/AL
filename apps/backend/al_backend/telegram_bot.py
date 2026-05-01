@@ -9,8 +9,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 LOGGER = logging.getLogger("al.telegram_bot")
@@ -203,10 +204,21 @@ def telegram_username(sender: dict[str, Any]) -> str:
     return str(sender.get("username") or "").strip().lstrip("@").lower()
 
 
-def format_prompt_time(value: Any) -> str:
+def format_prompt_time(value: Any, time_zone_id: Any = None) -> str:
     if isinstance(value, str) and value:
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).strftime("%H:%M")
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+
+            if time_zone_id:
+                try:
+                    parsed = parsed.astimezone(ZoneInfo(str(time_zone_id)))
+                except ZoneInfoNotFoundError:
+                    pass
+
+            return parsed.strftime("%H:%M")
         except ValueError:
             return value
 
@@ -303,7 +315,7 @@ def send_due_reminders(config: BotConfig) -> None:
     for prompt in bundle.get("breakActivityPrompts", []):
         prompt_id = str(prompt.get("reminderId") or "")
         telegram_name = str(prompt.get("telegramUsername") or "").strip().lstrip("@")
-        break_started_at = format_prompt_time(prompt.get("breakStartedAt"))
+        break_started_at = format_prompt_time(prompt.get("breakStartedAt"), prompt.get("timeZoneId"))
 
         if not prompt_id or not telegram_name:
             continue
