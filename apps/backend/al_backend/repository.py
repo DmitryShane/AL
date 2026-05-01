@@ -945,20 +945,26 @@ class Repository:
             meeting_seconds_by_author_date,
             meeting_buckets,
         )
-        meeting_idle_reductions = _merge_meeting_buckets_into_hourly_author_rows(hourly_by_author, meeting_buckets, profiles)
+        meeting_hourly_adjustments = _merge_meeting_buckets_into_hourly_author_rows(hourly_by_author, meeting_buckets, profiles)
 
-        for raw_author, idle_reduction in meeting_idle_reductions.items():
-            if idle_reduction <= 0:
-                continue
-
+        for raw_author, adjustment in meeting_hourly_adjustments.items():
             author_row = authors_by_raw.get(raw_author)
 
             if not author_row:
                 continue
 
-            applied_reduction = min(int(author_row.get("idleSeconds", 0)), idle_reduction)
-            author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) - applied_reduction
-            totals["idleSeconds"] = max(0, int(totals.get("idleSeconds", 0)) - applied_reduction)
+            meeting_addition = int(adjustment.get("meetingSeconds", 0))
+
+            if meeting_addition > 0:
+                author_row["meetingSeconds"] = int(author_row.get("meetingSeconds", 0)) + meeting_addition
+                totals["meetingSeconds"] = int(totals.get("meetingSeconds", 0)) + meeting_addition
+
+            idle_reduction = int(adjustment.get("idleSeconds", 0))
+
+            if idle_reduction > 0:
+                applied_reduction = min(int(author_row.get("idleSeconds", 0)), idle_reduction)
+                author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) - applied_reduction
+                totals["idleSeconds"] = max(0, int(totals.get("idleSeconds", 0)) - applied_reduction)
 
         security_alerts_by_author = self._security_alerts_by_author(start_date, end_date)
 
@@ -1014,6 +1020,7 @@ class Repository:
                 "hourlyActivity": _empty_hourly_activity(),
             }
 
+        self._apply_latest_report_metadata(authors_by_raw, start_date, end_date, date_mode, profiles, now)
         presence_overrides = self._author_presence_overrides(authors_by_raw.keys())
         author_rows = [
             _with_alerts(
@@ -1040,6 +1047,58 @@ class Repository:
             "authorAliases": self.author_aliases(),
             "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]),
         }
+
+    def _apply_latest_report_metadata(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        profiles: dict[str, dict[str, Any]],
+        now: dt.datetime,
+    ) -> None:
+        latest_by_author: dict[str, dict[str, Any]] = {}
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        for report in self.db.report_rows.find(query, {"_id": 0}):
+            raw_author = str(report.get("author") or "Unknown User")
+
+            if raw_author not in authors_by_raw:
+                continue
+
+            if date_mode == "authorLocalToday" and not _is_author_local_today(
+                report.get("date"),
+                raw_author,
+                profiles,
+                report.get("timeZoneId"),
+                now,
+            ):
+                continue
+
+            if self._is_empty_plugin_report_without_signal(report) or self._is_idle_report_during_meeting(report):
+                continue
+
+            received_at = _coerce_datetime(report.get("receivedAt") or report.get("lastReceivedAt"))
+            recorded_at = _coerce_datetime(report.get("recordedAt") or report.get("lastRecordedAt") or report.get("receivedAt"))
+            report_sort_at = received_at or recorded_at
+
+            if not report_sort_at:
+                continue
+
+            current = latest_by_author.get(raw_author)
+
+            if current and report_sort_at <= current["sortAt"]:
+                continue
+
+            latest_by_author[raw_author] = {"report": report, "sortAt": report_sort_at}
+
+        for raw_author, latest in latest_by_author.items():
+            report = latest["report"]
+            author_row = authors_by_raw[raw_author]
+            author_row["source"] = report.get("source") or author_row.get("source")
+            author_row["pluginVersion"] = report.get("pluginVersion") or author_row.get("pluginVersion")
+            author_row["lastRecordedAt"] = report.get("lastRecordedAt") or report.get("recordedAt") or author_row.get("lastRecordedAt")
+            author_row["lastReceivedAt"] = _iso(report.get("lastReceivedAt") or report.get("receivedAt")) or author_row.get("lastReceivedAt")
 
     def _author_presence_overrides(self, raw_authors: Any) -> dict[str, dict[str, Any]]:
         authors = [str(author or "") for author in raw_authors if str(author or "")]
@@ -2639,14 +2698,8 @@ class Repository:
                 continue
 
             key = (raw_author, meeting_date)
-            live_meeting_seconds = max(0, int((now - started_at).total_seconds()))
-            existing_meeting_seconds = meeting_seconds_by_author_date.get(key, 0)
-            meeting_delta_seconds = max(0, live_meeting_seconds - existing_meeting_seconds)
-
-            if meeting_delta_seconds and key not in meeting_seconds_by_author_date:
-                author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
-                author_row["meetingSeconds"] += meeting_delta_seconds
-                totals["meetingSeconds"] += meeting_delta_seconds
+            author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
+            author_row["activeMeeting"] = True
 
             if key not in meeting_buckets:
                 meeting_buckets[key] = _empty_hourly_activity()
@@ -3643,9 +3696,12 @@ def _with_alerts(
     alerts.extend(item.get("telegramAlerts") or [])
     last_received_at = _coerce_datetime(item.get("lastReceivedAt"))
     stale_threshold_seconds = max(0, send_interval_seconds * 2)
+    active_meeting = bool(item.get("activeMeeting"))
     forced_offline = False
 
-    if last_received_at:
+    if active_meeting:
+        pass
+    elif last_received_at:
         seconds_since_report = max(0, int((now - last_received_at).total_seconds()))
 
         if seconds_since_report > stale_threshold_seconds:
@@ -3680,6 +3736,9 @@ def _with_alerts(
         if overtime_received_at:
             seconds_since_overtime = max(0, int((now - overtime_received_at).total_seconds()))
             forced_offline = seconds_since_overtime > stale_threshold_seconds
+
+    if active_meeting:
+        forced_offline = False
 
     productivity = float(item.get("productivity", 0))
     plugin_day_seconds = int(item.get("pluginDaySeconds", 0))
@@ -4292,8 +4351,8 @@ def _merge_meeting_buckets_into_hourly_author_rows(
     hourly_by_author: dict[str, dict[str, Any]],
     meeting_buckets: dict[tuple[str, str], list[dict[str, int]]],
     profiles: dict[str, dict[str, Any]],
-) -> dict[str, int]:
-    idle_reductions_by_author: dict[str, int] = {}
+) -> dict[str, dict[str, int]]:
+    adjustments_by_author: dict[str, dict[str, int]] = {}
 
     for (raw_author, _date), meeting_hours in meeting_buckets.items():
         author_row = hourly_by_author.get(raw_author)
@@ -4339,11 +4398,14 @@ def _merge_meeting_buckets_into_hourly_author_rows(
 
                 if idle_reduction:
                     target_hour["idleSeconds"] = current_idle_seconds - idle_reduction
-                    idle_reductions_by_author[raw_author] = idle_reductions_by_author.get(raw_author, 0) + idle_reduction
+                    adjustment = adjustments_by_author.setdefault(raw_author, {"idleSeconds": 0, "meetingSeconds": 0})
+                    adjustment["idleSeconds"] += idle_reduction
 
                 target_hour["meetingSeconds"] = current_meeting_seconds + added_meeting_seconds
+                adjustment = adjustments_by_author.setdefault(raw_author, {"idleSeconds": 0, "meetingSeconds": 0})
+                adjustment["meetingSeconds"] += added_meeting_seconds
 
-    return idle_reductions_by_author
+    return adjustments_by_author
 
 
 def _add_break_interval_to_buckets(
