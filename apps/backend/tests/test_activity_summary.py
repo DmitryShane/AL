@@ -578,6 +578,7 @@ def test_telegram_online_creates_visible_report_row_and_live_day_time():
     totals = {"daySeconds": 0, "telegramDaySeconds": 0, "breakSeconds": 0}
     repo._apply_live_telegram_summary(
         authors,
+        {},
         totals,
         repo._profiles_by_raw_author(),
         {},
@@ -1272,6 +1273,38 @@ def test_live_discord_meeting_session_is_counted_with_empty_daily_row():
     assert hour["meetingSeconds"] == 1200
 
 
+def test_live_discord_closed_meeting_interval_is_counted_without_daily_row():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "Europe/Madrid"})
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 4, 28, 22, 29, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 28, 23, 26, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "Europe/Madrid",
+            "meetingSeconds": 3420,
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        date_mode="authorLocalToday",
+        now=dt.datetime(2026, 4, 29, 1, 0, tzinfo=dt.UTC),
+    )
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    hourly = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")["hourlyActivity"]
+    hour_0 = next(item for item in hourly if item["hour"] == 0)
+    hour_1 = next(item for item in hourly if item["hour"] == 1)
+
+    assert author["meetingSeconds"] == 3420
+    assert summary["totals"]["meetingSeconds"] == 3420
+    assert hour_0["meetingSeconds"] == 31 * 60
+    assert hour_1["meetingSeconds"] == 26 * 60
+
+
 def test_live_discord_meeting_session_marks_offline_author_online():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
@@ -1925,6 +1958,7 @@ def test_live_telegram_summary_includes_open_session_outside_selected_date_range
 
     repo._apply_live_telegram_summary(
         authors,
+        {},
         totals,
         repo._profiles_by_raw_author(),
         {},
@@ -2702,6 +2736,7 @@ def test_live_telegram_summary_adds_open_day_and_break():
 
     repo._apply_live_telegram_summary(
         authors,
+        {},
         totals,
         repo._profiles_by_raw_author(),
         {},

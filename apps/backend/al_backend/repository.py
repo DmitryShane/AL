@@ -934,6 +934,7 @@ class Repository:
 
         self._apply_live_telegram_summary(
             authors_by_raw,
+            hourly_by_author,
             totals,
             profiles,
             telegram_seconds_by_author_date,
@@ -2583,6 +2584,7 @@ class Repository:
     def _apply_live_telegram_summary(
         self,
         authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
         totals: dict[str, int],
         profiles: dict[str, dict[str, Any]],
         telegram_seconds_by_author_date: dict[tuple[str, str], int],
@@ -2662,6 +2664,7 @@ class Repository:
                 totals["breakSeconds"] += break_delta_seconds
 
         meeting_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+        meeting_bucket_keys_from_daily_items = set(meeting_buckets)
 
         for interval in self.db.meeting_intervals.find(meeting_query, {"_id": 0}):
             raw_author = interval.get("rawAuthor") or "Unknown User"
@@ -2684,6 +2687,31 @@ class Repository:
                 author_row["meetingSeconds"] += meeting_delta_seconds
                 totals["meetingSeconds"] += meeting_delta_seconds
                 meeting_seconds_by_author_date[meeting_key] = existing_meeting_seconds + meeting_delta_seconds
+                interval_bucket = {meeting_key: _empty_hourly_activity()}
+                _add_meeting_interval_to_buckets(
+                    interval_bucket,
+                    raw_author,
+                    _coerce_datetime(interval.get("startedAt")),
+                    _coerce_datetime(interval.get("endedAt")),
+                    _author_time_zone_id(raw_author, profiles, interval.get("timeZoneId")),
+                )
+                meeting_bucket = meeting_buckets.setdefault(meeting_key, _empty_hourly_activity())
+                _merge_hourly_activity(meeting_bucket, interval_bucket[meeting_key])
+
+                hourly_author = hourly_by_author.get(raw_author)
+
+                if not hourly_author:
+                    profile = profiles.get(raw_author, {})
+                    hourly_author = {
+                        "author": _display_name(raw_author, profile),
+                        "rawAuthor": raw_author,
+                        "timeZoneId": profile.get("timeZoneId") or interval.get("timeZoneId"),
+                        "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
+                        "hourlyActivity": _empty_hourly_activity(),
+                    }
+                    hourly_by_author[raw_author] = hourly_author
+
+                _merge_hourly_activity(hourly_author["hourlyActivity"], interval_bucket[meeting_key])
 
         for session in self.db.meeting_sessions.find({}, {"_id": 0}):
             raw_author = session.get("rawAuthor") or "Unknown User"
@@ -2701,8 +2729,8 @@ class Repository:
             author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
             author_row["activeMeeting"] = True
 
-            if key not in meeting_buckets:
-                meeting_buckets[key] = _empty_hourly_activity()
+            if key not in meeting_bucket_keys_from_daily_items:
+                meeting_buckets.setdefault(key, _empty_hourly_activity())
                 _add_meeting_interval_to_buckets(
                     meeting_buckets,
                     raw_author,

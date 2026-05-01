@@ -2813,7 +2813,7 @@ function paletteColor(index: number) {
 
 function DateRangePicker({ value, onChange }: { value: DateRange; onChange: (range: DateRange) => void }) {
   function updateDateRange(next: Pick<DateRange, "startDate" | "endDate">) {
-    onChange({ ...next, preset: dateRangePreset(next) });
+    onChange({ ...next, preset: "custom" });
   }
 
   return (
@@ -2832,22 +2832,6 @@ function DateRangePicker({ value, onChange }: { value: DateRange; onChange: (ran
       </div>
     </div>
   );
-}
-
-function dateRangePreset(value: Pick<DateRange, "startDate" | "endDate">): DateRange["preset"] {
-  if (sameDateRange(value, todayRange())) {
-    return "live";
-  }
-
-  if (sameDateRange(value, yesterdayRange())) {
-    return "yesterday";
-  }
-
-  return "custom";
-}
-
-function sameDateRange(left: Pick<DateRange, "startDate" | "endDate">, right: Pick<DateRange, "startDate" | "endDate">) {
-  return left.startDate === right.startDate && left.endDate === right.endDate;
 }
 
 function Duration({ label, seconds, valueClassName }: { label: string; seconds: number; valueClassName?: string }) {
