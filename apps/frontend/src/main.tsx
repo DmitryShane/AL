@@ -3409,6 +3409,13 @@ function isTelegramSignedOff(stalePresence?: AuthorRow["stalePresence"]) {
 }
 
 function compareAuthorCardStatus(left: AuthorRow, right: AuthorRow, dateRange: DateRange) {
+  const leftSignedOff = isTelegramSignedOff(left.stalePresence);
+  const rightSignedOff = isTelegramSignedOff(right.stalePresence);
+
+  if (leftSignedOff !== rightSignedOff) {
+    return leftSignedOff ? 1 : -1;
+  }
+
   if (left.status !== right.status) {
     return left.status === "stale" ? 1 : -1;
   }
