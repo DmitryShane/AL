@@ -391,6 +391,11 @@ def discord_settings(request: Request) -> dict:
     return app.state.repo.get_discord_settings()
 
 
+@app.get("/api/v1/discord/meeting-recordings/recent")
+def recent_discord_meeting_recordings(_: dict = Depends(require_permission("manageSettings"))) -> dict:
+    return {"recordings": app.state.repo.recent_meeting_recordings(limit=10)}
+
+
 @app.put("/api/v1/authors/profile")
 def upsert_author_profile(profile: AuthorProfileIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.upsert_author_profile(

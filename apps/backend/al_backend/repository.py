@@ -2789,6 +2789,47 @@ class Repository:
             upsert=True,
         )
 
+    def recent_meeting_recordings(self, limit: int = 10) -> list[dict[str, Any]]:
+        summaries_by_recording_id = {
+            str(summary.get("recordingId") or ""): summary
+            for summary in self.db.meeting_summaries.find({}, {"_id": 0})
+            if summary.get("recordingId")
+        }
+        items: list[dict[str, Any]] = []
+
+        for recording in self.db.meeting_recordings.find({}, {"_id": 0}).sort("startedAt", DESCENDING).limit(limit):
+            summary = summaries_by_recording_id.get(str(recording.get("recordingId") or ""))
+            status = str(recording.get("status") or "")
+
+            if summary:
+                summary_status = str(summary.get("status") or "")
+
+                if summary.get("telegramSentAt"):
+                    status = "telegram_sent"
+                elif summary_status:
+                    status = f"summary_{summary_status}"
+
+            items.append(
+                {
+                    "recordingId": recording.get("recordingId", ""),
+                    "summaryId": (summary or {}).get("summaryId") or recording.get("summaryId"),
+                    "status": status,
+                    "recordingStatus": recording.get("status", ""),
+                    "summaryStatus": (summary or {}).get("status"),
+                    "startedAt": _iso(recording.get("startedAt")),
+                    "endedAt": _iso(recording.get("endedAt")),
+                    "durationSeconds": int(recording.get("durationSeconds") or 0),
+                    "participantNames": recording.get("participantNames", []),
+                    "participantCount": len(recording.get("participantNames") or []),
+                    "recipient": (summary or {}).get("recipient"),
+                    "telegramSentAt": _iso((summary or {}).get("telegramSentAt")),
+                    "error": recording.get("error") or (summary or {}).get("error"),
+                    "updatedAt": _iso(recording.get("updatedAt")),
+                }
+            )
+
+        return items
+
     def claim_due_telegram_day_reminders(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
         now = now or dt.datetime.now(dt.UTC)
         reminders: list[dict[str, Any]] = []

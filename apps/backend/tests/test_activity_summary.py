@@ -2088,6 +2088,37 @@ def test_meeting_summary_chat_id_uses_private_recipient():
     assert meeting_summary_chat_id(1, {"recipient": {"kind": "work_chat"}}) == 1
 
 
+def test_recent_meeting_recordings_include_summary_delivery_status():
+    repo = fake_repository()
+    repo.db.meeting_recordings.insert_one(
+        {
+            "recordingId": "recording-1",
+            "startedAt": dt.datetime(2026, 5, 1, 10, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 1, 10, 5, tzinfo=dt.UTC),
+            "durationSeconds": 300,
+            "participantNames": ["dmitryshane"],
+            "status": "summarized",
+            "updatedAt": dt.datetime(2026, 5, 1, 10, 6, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.meeting_summaries.insert_one(
+        {
+            "recordingId": "recording-1",
+            "summaryId": "summary-1",
+            "status": "sent",
+            "recipient": {"kind": "private", "label": "@dmitryshane"},
+            "telegramSentAt": dt.datetime(2026, 5, 1, 10, 7, tzinfo=dt.UTC),
+        }
+    )
+
+    recordings = repo.recent_meeting_recordings()
+
+    assert recordings[0]["recordingId"] == "recording-1"
+    assert recordings[0]["summaryId"] == "summary-1"
+    assert recordings[0]["status"] == "telegram_sent"
+    assert recordings[0]["recipient"]["kind"] == "private"
+
+
 def test_discord_author_mappings_update_known_telegram_profiles_only():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Evgeniy Dotsenko", "displayName": "Evgeniy Dotsenko", "telegramUsername": "ama_deus"})

@@ -228,6 +228,23 @@ type SiteUser = {
   active: boolean;
 };
 
+type MeetingRecordingStatus = {
+  recordingId: string;
+  summaryId?: string;
+  status: string;
+  recordingStatus?: string;
+  summaryStatus?: string;
+  startedAt?: string;
+  endedAt?: string;
+  durationSeconds?: number;
+  participantNames?: string[];
+  participantCount?: number;
+  recipient?: { kind?: string; label?: string };
+  telegramSentAt?: string;
+  error?: string;
+  updatedAt?: string;
+};
+
 type AnalyticsTotals = {
   daySeconds: number;
   activeSeconds: number;
@@ -1795,6 +1812,8 @@ function SettingsPage({
   const [newProfile, setNewProfile] = useState<AuthorProfile>(() => emptyAuthorProfile());
   const [aliasSource, setAliasSource] = useState("");
   const [aliasTarget, setAliasTarget] = useState("");
+  const [meetingRecordings, setMeetingRecordings] = useState<MeetingRecordingStatus[]>([]);
+  const [meetingRecordingsError, setMeetingRecordingsError] = useState("");
 
   useEffect(() => {
     const nextDrafts: Record<string, AuthorProfile> = {};
@@ -1818,6 +1837,43 @@ function SettingsPage({
       setAliasTarget(profiles[0].rawAuthor);
     }
   }, [aliasTarget, profiles]);
+
+  useEffect(() => {
+    if (settingsTab !== "meetingSummaries") {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadMeetingRecordings() {
+      try {
+        const response = await apiFetch("/api/v1/discord/meeting-recordings/recent");
+
+        if (!response.ok) {
+          throw new Error("Meeting recording status load failed");
+        }
+
+        const data = await response.json() as { recordings?: MeetingRecordingStatus[] };
+
+        if (!cancelled) {
+          setMeetingRecordings(data.recordings ?? []);
+          setMeetingRecordingsError("");
+        }
+      } catch {
+        if (!cancelled) {
+          setMeetingRecordingsError("Could not load meeting summary status.");
+        }
+      }
+    }
+
+    void loadMeetingRecordings();
+    const intervalId = window.setInterval(() => void loadMeetingRecordings(), 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [settingsTab]);
 
   async function saveProfile(rawAuthor: string) {
     const profile = drafts[rawAuthor];
@@ -2457,6 +2513,27 @@ function SettingsPage({
               {settingsSaveButtonLabel("discord", saving, saveStatus)}
             </button>
           </div>
+          <div className="settings-section">
+            <h3>Recent meeting summary activity</h3>
+            <p className="settings-caption">
+              Live status for the Discord recording, OpenAI summary, and Telegram delivery pipeline.
+            </p>
+            {meetingRecordingsError ? (
+              <p className="empty">{meetingRecordingsError}</p>
+            ) : meetingRecordings.length ? (
+              <div className="settings-list">
+                {meetingRecordings.map((recording) => (
+                  <div className="settings-list-item" key={recording.recordingId}>
+                    <strong>{meetingRecordingStatusLabel(recording)}</strong>
+                    <span>{meetingRecordingDetail(recording)}</span>
+                    {recording.error ? <span className="alert-text">{recording.error}</span> : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="empty">No meeting summary activity yet.</p>
+            )}
+          </div>
         </div>
       ) : (
         <SiteUsersPanel currentUser={currentUser} />
@@ -2907,6 +2984,52 @@ function settingsSaveButtonClassName(status: "saved" | "error" | undefined, outl
   }
 
   return baseClassName;
+}
+
+function meetingRecordingStatusLabel(recording: MeetingRecordingStatus) {
+  if (recording.status === "recording") {
+    return "Recording now";
+  }
+
+  if (recording.status === "summarized" || recording.status === "summary_pending") {
+    return "Summary created, waiting for Telegram";
+  }
+
+  if (recording.status === "telegram_sent") {
+    return "Summary sent to Telegram";
+  }
+
+  if (recording.status === "summary_failed") {
+    return "Summary failed";
+  }
+
+  if (recording.status.startsWith("skipped_")) {
+    return `Skipped: ${recording.status.replace("skipped_", "").replaceAll("_", " ")}`;
+  }
+
+  return recording.status.replaceAll("_", " ");
+}
+
+function meetingRecordingDetail(recording: MeetingRecordingStatus) {
+  const people = recording.participantNames?.length ? recording.participantNames.join(", ") : "No participants";
+  const duration = recording.durationSeconds ? `, ${formatReportMinutes(recording.durationSeconds)}` : "";
+  const recipient = meetingRecordingRecipientLabel(recording);
+  const sentAt = recording.telegramSentAt ? `, sent ${formatTimestamp(recording.telegramSentAt)}` : "";
+  const startedAt = recording.startedAt ? `Started ${formatTimestamp(recording.startedAt)}` : "Started time unknown";
+
+  return `${people}${duration}. ${startedAt}${recipient}${sentAt}.`;
+}
+
+function meetingRecordingRecipientLabel(recording: MeetingRecordingStatus) {
+  if (!recording.recipient) {
+    return "";
+  }
+
+  if (recording.recipient.kind === "private") {
+    return `, recipient ${recording.recipient.label || "private chat"}`;
+  }
+
+  return ", recipient work chat";
 }
 
 function emptyAuthorProfile(): AuthorProfile {
