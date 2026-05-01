@@ -53,6 +53,11 @@ require_env_key "${DISCORD_ENV}" "DISCORD_AFK_CHANNEL_ID"
 require_env_key "${DISCORD_ENV}" "AL_BACKEND_URL"
 require_env_key "${DISCORD_ENV}" "AL_DISCORD_BOT_SECRET"
 
+if ! ldconfig -p | grep -q "libopus"; then
+  apt-get update
+  apt-get install -y libopus0
+fi
+
 install -d -o "${APP_USER}" -g "${APP_USER}" "${APP_ROOT}" "${APP_ROOT}/python" "${APP_ROOT}/.cache" "${APP_ROOT}/.cache/uv" "${APP_ROOT}/.config"
 
 if [[ ! -d "${APP_DIR}/.git" ]]; then

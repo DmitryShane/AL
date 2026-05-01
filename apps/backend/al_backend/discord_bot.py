@@ -8,6 +8,7 @@ import tempfile
 import urllib.error
 import urllib.request
 import uuid
+from ctypes.util import find_library
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +47,7 @@ class RecordingSession:
 
 def main() -> None:
     logging.basicConfig(level=os.getenv("AL_DISCORD_LOG_LEVEL", "INFO"))
+    ensure_opus_loaded()
     config = load_config()
     asyncio.run(run_bot(config))
 
@@ -253,6 +255,11 @@ class MeetingClient(discord.Client):
         Path(self.config.recording_temp_dir).mkdir(parents=True, exist_ok=True)
         recording_id = uuid.uuid4().hex
         audio_path = str(Path(self.config.recording_temp_dir) / f"al-meeting-{recording_id}.wav")
+        LOGGER.info(
+            "Starting Discord meeting recording %s with participants: %s",
+            recording_id,
+            ", ".join(member.name for member in human_members),
+        )
         voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient, self_deaf=False, self_mute=True)
         voice_client.listen(voice_recv.WaveSink(audio_path))
         started_at = datetime.now(timezone.utc)
@@ -265,6 +272,7 @@ class MeetingClient(discord.Client):
             voice_client=voice_client,
         )
         await asyncio.to_thread(submit_recording_started, self.config, self.recording)
+        LOGGER.info("Discord meeting recording %s registered in backend.", recording_id)
 
     async def finish_recording_if_needed(self, *, force: bool = False) -> None:
         if not self.recording:
@@ -279,6 +287,7 @@ class MeetingClient(discord.Client):
                 recording.voice_client.stop_listening()
 
             await recording.voice_client.disconnect(force=force)
+            LOGGER.info("Submitting Discord meeting recording %s for summary processing.", recording.recording_id)
             await asyncio.to_thread(submit_recording_finished, self.config, recording, ended_at)
         finally:
             try:
@@ -309,6 +318,19 @@ class MeetingClient(discord.Client):
             "thresholdSeconds": self.solo_timeout_seconds,
         }
         await asyncio.to_thread(submit_auto_afk_event, self.config, payload)
+
+
+def ensure_opus_loaded() -> None:
+    if discord.opus.is_loaded():
+        return
+
+    opus_library = find_library("opus")
+
+    if not opus_library:
+        raise RuntimeError("Discord voice recording requires libopus. Install the libopus0 system package.")
+
+    discord.opus.load_opus(opus_library)
+    LOGGER.info("Loaded Discord Opus library: %s", opus_library)
 
 
 def submit_voice_event(config: DiscordBotConfig, payload: dict[str, Any]) -> dict[str, Any]:
