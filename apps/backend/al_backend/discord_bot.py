@@ -68,7 +68,6 @@ class MeetingClient(discord.Client):
 
     async def on_ready(self) -> None:
         LOGGER.info("Discord bot started as %s. Backend: %s", self.user, self.config.backend_url)
-        await self.reconcile_meeting_channel()
 
     async def on_voice_state_update(
         self,
@@ -91,25 +90,6 @@ class MeetingClient(discord.Client):
 
         if before_channel_id == self.config.meeting_channel_id:
             await self.submit_voice_event(member, "leave")
-
-    async def reconcile_meeting_channel(self) -> None:
-        guild = self.get_guild(self.config.guild_id)
-
-        if guild is None:
-            LOGGER.warning("Guild %s is not available to the bot.", self.config.guild_id)
-            return
-
-        channel = guild.get_channel(self.config.meeting_channel_id)
-
-        if channel is None or not hasattr(channel, "members"):
-            LOGGER.warning("Meeting channel %s is not available to the bot.", self.config.meeting_channel_id)
-            return
-
-        for member in getattr(channel, "members", []):
-            if member.bot:
-                continue
-
-            await self.submit_voice_event(member, "reconcile")
 
     async def submit_voice_event(self, member: discord.Member, event_type: str) -> None:
         payload = {

@@ -100,3 +100,9 @@ Production runs at `activity.mempic.com`. When the user asks to pull production 
 - Normal deployment flow is local work followed by push or merge to `main`; `.github/workflows/deploy.yml` deploys `main` to production automatically.
 - Production database changes must never be shipped through git or normal deploy. Only run production imports/restores when the user explicitly asks for that exact operation.
 - Before committing, check `git status --short` and do not add database artifacts or env snapshots. The deploy workflow runs `scripts/check-no-data-artifacts.sh` and must stay in place.
+
+## Push Command
+
+- In owner chat, the word **"пуш"** means: review current changes, write a short accurate commit message, commit the relevant files, and push the current branch so the automatic deploy workflow can update production.
+- Before committing, inspect `git status --short` and the diff. Do not include secrets, environment files, MongoDB dumps, restored data exports, or unrelated user changes.
+- Keep the commit message concise and focused on the actual production change. After pushing, report the commit message and push result briefly.
