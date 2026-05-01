@@ -59,6 +59,12 @@ class DiscordSettingsIn(ApiModel):
     meeting_summary_min_participants: int = Field(default=2, alias="meetingSummaryMinParticipants", ge=1)
     meeting_summary_min_duration_seconds: int = Field(default=120, alias="meetingSummaryMinDurationSeconds", ge=1)
     meeting_summary_language: str = Field(default="English", alias="meetingSummaryLanguage", min_length=2)
+    meeting_summary_recipient: str = Field(default="work_chat", alias="meetingSummaryRecipient", min_length=1)
+
+
+class TelegramPrivateChatIn(ApiModel):
+    telegram_username: str = Field(alias="telegramUsername", min_length=1)
+    chat_id: int = Field(alias="chatId")
 
 
 class LoginIn(ApiModel):

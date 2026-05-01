@@ -30,6 +30,7 @@ from .models import (
     SiteUserIn,
     SubmitReportResponse,
     SummaryResponse,
+    TelegramPrivateChatIn,
     TelegramReminderCloseIn,
     TelegramReminderSentIn,
 )
@@ -80,6 +81,7 @@ PUBLIC_API_PATHS = {
     "/api/v1/telegram/reminders/due",
     "/api/v1/telegram/reminders/sent",
     "/api/v1/telegram/reminders/close",
+    "/api/v1/telegram/private-chat",
     "/api/v1/discord/voice-events",
     "/api/v1/discord/meeting-auto-afk",
     "/api/v1/discord/meeting-recordings/start",
@@ -379,6 +381,7 @@ def update_discord_settings(settings_in: DiscordSettingsIn, _: dict = Depends(re
         meeting_summary_min_participants=settings_in.meeting_summary_min_participants,
         meeting_summary_min_duration_seconds=settings_in.meeting_summary_min_duration_seconds,
         meeting_summary_language=settings_in.meeting_summary_language,
+        meeting_summary_recipient=settings_in.meeting_summary_recipient,
     )
 
 
@@ -542,6 +545,12 @@ def telegram_due_reminders(request: Request) -> dict:
         "meetingAutoAfkNotifications": app.state.repo.claim_due_telegram_meeting_auto_afk_notifications(),
         "meetingSummaryNotifications": app.state.repo.claim_due_telegram_meeting_summary_notifications(),
     }
+
+
+@app.post("/api/v1/telegram/private-chat")
+def telegram_private_chat(chat: TelegramPrivateChatIn, request: Request) -> dict:
+    require_telegram_bot_secret(request)
+    return app.state.repo.save_telegram_private_chat(chat.telegram_username, chat.chat_id)
 
 
 @app.post("/api/v1/telegram/reminders/sent")

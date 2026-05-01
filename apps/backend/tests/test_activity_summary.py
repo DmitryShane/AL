@@ -29,6 +29,7 @@ from al_backend.telegram_bot import (
     parse_callback_data,
     parse_event_type,
     parse_reminder_callback,
+    meeting_summary_chat_id,
     send_break_activity_prompt_message,
     send_online_prompt_message,
     send_plain_message,
@@ -1941,6 +1942,7 @@ def test_discord_settings_default_and_save():
         meeting_summary_min_participants=2,
         meeting_summary_min_duration_seconds=120,
         meeting_summary_language="English",
+        meeting_summary_recipient="work_chat",
     )
 
     assert result["meetingAutoAfkTimeoutSeconds"] == 900
@@ -1956,6 +1958,7 @@ def test_meeting_recording_finished_creates_summary_notification():
         meeting_summary_min_participants=2,
         meeting_summary_min_duration_seconds=60,
         meeting_summary_language="English",
+        meeting_summary_recipient="work_chat",
     )
 
     class FakeSummary:
@@ -1988,6 +1991,7 @@ def test_meeting_recording_finished_skips_solo_recording():
         meeting_summary_min_participants=2,
         meeting_summary_min_duration_seconds=60,
         meeting_summary_language="English",
+        meeting_summary_recipient="work_chat",
     )
 
     result = repo.process_meeting_recording_finished(
@@ -2065,6 +2069,22 @@ def test_telegram_meeting_auto_afk_notifications_can_be_claimed_and_marked_sent(
     assert sent == {"ok": True}
     assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["status"] == "sent"
     assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["messageId"] == 42
+
+
+def test_telegram_private_chat_is_saved_for_profile():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "telegramUsername": "dmitryshane"})
+
+    result = repo.save_telegram_private_chat("dmitryshane", 12345)
+    profile = repo.db.author_profiles.find_one({"rawAuthor": "Dmitry Shane"})
+
+    assert result["ok"] is True
+    assert profile["telegramPrivateChatId"] == 12345
+
+
+def test_meeting_summary_chat_id_uses_private_recipient():
+    assert meeting_summary_chat_id(1, {"recipient": {"kind": "private", "chatId": 42}}) == 42
+    assert meeting_summary_chat_id(1, {"recipient": {"kind": "work_chat"}}) == 1
 
 
 def test_discord_author_mappings_update_known_telegram_profiles_only():

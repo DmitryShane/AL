@@ -101,6 +101,15 @@ def handle_update(config: BotConfig, update: dict[str, Any]) -> None:
     message = update.get("message") or {}
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
+    text = message.get("text") or ""
+    chat_type = str(chat.get("type") or "")
+    username = telegram_username(message.get("from") or {})
+
+    if text.strip().lower().split(maxsplit=1)[0] == "/start" and chat_type == "private" and username and chat_id:
+        result = save_private_chat(config.backend_url, config.bot_secret, username, int(chat_id))
+        LOGGER.info("Saved private Telegram chat for @%s: %s", username, result)
+        send_plain_message(config.token, int(chat_id), "Done. I can send meeting summaries here.")
+        return
 
     if config.allowed_chat_id is not None and chat_id != config.allowed_chat_id:
         LOGGER.info("Ignoring message from chat id %s. Allowed chat id is %s.", chat_id, config.allowed_chat_id)
@@ -109,12 +118,10 @@ def handle_update(config: BotConfig, update: dict[str, Any]) -> None:
     if config.allowed_chat_id is None:
         LOGGER.info("Received message from chat id %s. Set TELEGRAM_ALLOWED_CHAT_ID to lock the bot to this chat.", chat_id)
 
-    event_type = parse_event_type(message.get("text") or "")
+    event_type = parse_event_type(text)
 
     if not event_type:
         return
-
-    username = telegram_username(message.get("from") or {})
 
     if not username:
         LOGGER.warning("Ignoring %s event because sender has no Telegram username.", event_type)
@@ -362,7 +369,8 @@ def send_due_reminders(config: BotConfig) -> None:
             continue
 
         text = f"Meeting summary\n\n{summary_text}"
-        result = send_plain_message(config.token, config.allowed_chat_id, text)
+        chat_id = meeting_summary_chat_id(config.allowed_chat_id, notification)
+        result = send_plain_message(config.token, chat_id, text)
         message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
         mark_reminder_sent(config.backend_url, config.bot_secret, summary_id, message_id, kind="meeting_summary")
 
@@ -391,6 +399,25 @@ def submit_break_event(backend_url: str, telegram_username_value: str, event_typ
 
 def fetch_reminders_due_bundle(backend_url: str, bot_secret: str) -> dict[str, Any]:
     return backend_request(backend_url, "/api/v1/telegram/reminders/due", bot_secret, method="GET")
+
+
+def save_private_chat(backend_url: str, bot_secret: str, telegram_username_value: str, chat_id: int) -> dict[str, Any]:
+    return backend_request(
+        backend_url,
+        "/api/v1/telegram/private-chat",
+        bot_secret,
+        method="POST",
+        payload={"telegramUsername": telegram_username_value, "chatId": chat_id},
+    )
+
+
+def meeting_summary_chat_id(default_chat_id: int, notification: dict[str, Any]) -> int:
+    recipient = notification.get("recipient") if isinstance(notification.get("recipient"), dict) else {}
+
+    if recipient.get("kind") == "private" and recipient.get("chatId"):
+        return int(recipient["chatId"])
+
+    return default_chat_id
 
 
 def mark_reminder_sent(

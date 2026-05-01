@@ -408,6 +408,7 @@ class Repository:
                     "meetingSummaryMinParticipants": current["meetingSummaryMinParticipants"],
                     "meetingSummaryMinDurationSeconds": current["meetingSummaryMinDurationSeconds"],
                     "meetingSummaryLanguage": current["meetingSummaryLanguage"],
+                    "meetingSummaryRecipient": current["meetingSummaryRecipient"],
                     "updatedAt": now,
                 }
             },
@@ -423,6 +424,7 @@ class Repository:
         meeting_summary_min_participants: int,
         meeting_summary_min_duration_seconds: int,
         meeting_summary_language: str,
+        meeting_summary_recipient: str,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         self.db.system_settings.update_one(
@@ -435,6 +437,7 @@ class Repository:
                     "meetingSummaryMinParticipants": meeting_summary_min_participants,
                     "meetingSummaryMinDurationSeconds": meeting_summary_min_duration_seconds,
                     "meetingSummaryLanguage": meeting_summary_language.strip() or "English",
+                    "meetingSummaryRecipient": meeting_summary_recipient.strip() or "work_chat",
                     "updatedAt": now,
                 }
             },
@@ -452,6 +455,7 @@ class Repository:
             "meetingSummaryMinParticipants": int(settings.get("meetingSummaryMinParticipants", 2)),
             "meetingSummaryMinDurationSeconds": int(settings.get("meetingSummaryMinDurationSeconds", 120)),
             "meetingSummaryLanguage": str(settings.get("meetingSummaryLanguage") or "English"),
+            "meetingSummaryRecipient": str(settings.get("meetingSummaryRecipient") or "work_chat"),
         }
 
     def create_report_challenge(self, challenge_in: Any, keys: Any) -> dict[str, Any]:
@@ -1150,6 +1154,7 @@ class Repository:
                     "displayName": display_name,
                     "team": profile.get("team", ""),
                     "telegramUsername": profile.get("telegramUsername", ""),
+                    "telegramPrivateChatId": profile.get("telegramPrivateChatId"),
                     "discordUserId": profile.get("discordUserId", ""),
                     "discordUsername": profile.get("discordUsername", ""),
                     "authorColor": profile.get("authorColor") or _author_color(raw_author),
@@ -1978,6 +1983,23 @@ class Repository:
             },
             upsert=True,
         )
+
+    def save_telegram_private_chat(self, telegram_username: str, chat_id: int) -> dict[str, Any]:
+        normalized_username = _normalize_telegram_username(telegram_username)
+
+        if not normalized_username:
+            return {"ok": False, "error": "Telegram username is required"}
+
+        result = self.db.author_profiles.update_one(
+            {"telegramUsername": normalized_username},
+            {
+                "$set": {
+                    "telegramPrivateChatId": int(chat_id),
+                    "telegramPrivateChatUpdatedAt": dt.datetime.now(dt.UTC),
+                }
+            },
+        )
+        return {"ok": True, "matched": getattr(result, "matched_count", 0)}
 
     def update_author_time_zone(
         self, raw_author: str, time_zone_id: Any, time_zone_display_name: Any | None = None
@@ -3246,10 +3268,29 @@ class Repository:
                     "endedAt": _isoformat_or_none(doc.get("endedAt")),
                     "durationSeconds": int(doc.get("durationSeconds", 0)),
                     "summary": doc.get("summary", ""),
+                    "recipient": self._meeting_summary_recipient(),
                 }
             )
 
         return notifications
+
+    def _meeting_summary_recipient(self) -> dict[str, Any]:
+        recipient = self.get_discord_settings()["meetingSummaryRecipient"]
+
+        if recipient == "work_chat":
+            return {"kind": "work_chat"}
+
+        profile = self.db.author_profiles.find_one({"rawAuthor": recipient}, {"_id": 0, "telegramPrivateChatId": 1, "telegramUsername": 1})
+
+        if profile and profile.get("telegramPrivateChatId"):
+            return {
+                "kind": "private",
+                "rawAuthor": recipient,
+                "telegramUsername": profile.get("telegramUsername", ""),
+                "chatId": int(profile["telegramPrivateChatId"]),
+            }
+
+        return {"kind": "work_chat", "fallbackReason": "missing_private_chat"}
 
     def mark_telegram_meeting_summary_sent(self, summary_id: str, message_id: int | None = None) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)

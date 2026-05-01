@@ -66,6 +66,7 @@ type AuthorRow = {
   displayName: string;
   team?: string;
   telegramUsername?: string;
+  telegramPrivateChatId?: number;
   discordUserId?: string;
   discordUsername?: string;
   authorColor?: string;
@@ -151,6 +152,7 @@ type AuthorProfile = {
   displayName: string;
   team?: string;
   telegramUsername?: string;
+  telegramPrivateChatId?: number;
   discordUserId?: string;
   discordUsername?: string;
   pluginEnabled?: boolean;
@@ -202,6 +204,7 @@ type Summary = {
     meetingSummaryMinParticipants: number;
     meetingSummaryMinDurationSeconds: number;
     meetingSummaryLanguage: string;
+    meetingSummaryRecipient: string;
   };
   activitySummary: ActivitySummary;
 };
@@ -1783,6 +1786,7 @@ function SettingsPage({
   const [meetingSummaryMinParticipants, setMeetingSummaryMinParticipants] = useState(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
   const [meetingSummaryMinDuration, setMeetingSummaryMinDuration] = useState(String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120));
   const [meetingSummaryLanguage, setMeetingSummaryLanguage] = useState(summary?.discordSettings.meetingSummaryLanguage ?? "English");
+  const [meetingSummaryRecipient, setMeetingSummaryRecipient] = useState(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
   const [saving, setSaving] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
   const [aliasError, setAliasError] = useState("");
@@ -1806,6 +1810,7 @@ function SettingsPage({
     setMeetingSummaryMinParticipants(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
     setMeetingSummaryMinDuration(String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120));
     setMeetingSummaryLanguage(summary?.discordSettings.meetingSummaryLanguage ?? "English");
+    setMeetingSummaryRecipient(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
   }, [summary]);
 
   useEffect(() => {
@@ -1928,7 +1933,8 @@ function SettingsPage({
           meetingSummariesEnabled,
           meetingSummaryMinParticipants: Number(meetingSummaryMinParticipants),
           meetingSummaryMinDurationSeconds: Number(meetingSummaryMinDuration),
-          meetingSummaryLanguage
+          meetingSummaryLanguage,
+          meetingSummaryRecipient
         })
       });
 
@@ -2431,6 +2437,20 @@ function SettingsPage({
                 {MEETING_SUMMARY_LANGUAGES.map((language) => (
                   <option value={language} key={language}>{language}</option>
                 ))}
+              </select>
+            </label>
+            <label>
+              Send summaries to
+              <select value={meetingSummaryRecipient} onChange={(event) => setMeetingSummaryRecipient(event.target.value)}>
+                <option value="work_chat">Work chat</option>
+                {profiles
+                  .filter((profile) => profile.telegramUsername)
+                  .map((profile) => (
+                    <option value={profile.rawAuthor} key={profile.rawAuthor}>
+                      {profile.displayName || profile.rawAuthor}
+                      {profile.telegramPrivateChatId ? "" : " (send /start first)"}
+                    </option>
+                  ))}
               </select>
             </label>
             <button className={settingsSaveButtonClassName(saveStatus.discord)} onClick={() => void saveDiscordSettings()} disabled={saving === "discord"}>
