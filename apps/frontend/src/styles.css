@@ -2761,6 +2761,10 @@ p {
   animation: currentHourPulse 1.65s ease-in-out infinite;
 }
 
+.hourly-chart-segment {
+  flex-shrink: 0;
+}
+
 @keyframes currentHourPulse {
   0%,
   100% {
