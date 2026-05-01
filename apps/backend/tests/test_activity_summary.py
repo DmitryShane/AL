@@ -30,6 +30,7 @@ from al_backend.telegram_bot import (
     parse_event_type,
     parse_reminder_callback,
     meeting_summary_chat_id,
+    format_meeting_summary_message,
     send_break_activity_prompt_message,
     send_online_prompt_message,
     send_plain_message,
@@ -2086,6 +2087,22 @@ def test_telegram_private_chat_is_saved_for_profile():
 def test_meeting_summary_chat_id_uses_private_recipient():
     assert meeting_summary_chat_id(1, {"recipient": {"kind": "private", "chatId": 42}}) == 42
     assert meeting_summary_chat_id(1, {"recipient": {"kind": "work_chat"}}) == 1
+
+
+def test_meeting_summary_message_includes_meeting_metadata():
+    message = format_meeting_summary_message(
+        {
+            "startedAt": "2026-05-01T10:00:00+00:00",
+            "durationSeconds": 180,
+            "participantNames": ["Dmitry", "Igor"],
+        },
+        "Participants:\n- Dmitry\n- Igor\n\nDiscussed:\n- Backend status UI.",
+    )
+
+    assert "Date: 2026-05-01" in message
+    assert "Duration: 3 minutes" in message
+    assert "Participants: Dmitry, Igor" in message
+    assert "Discussed:" in message
 
 
 def test_recent_meeting_recordings_include_summary_delivery_status():
