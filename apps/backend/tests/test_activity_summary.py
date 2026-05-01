@@ -23,6 +23,7 @@ from al_backend.telegram_bot import (
     BotConfig,
     edit_reminder_message,
     format_prompt_time,
+    format_duration_label,
     get_updates,
     handle_callback_query,
     parse_callback_data,
@@ -366,6 +367,12 @@ def test_telegram_bot_plain_message_has_no_buttons(monkeypatch):
 
 def test_telegram_bot_formats_prompt_time_in_author_time_zone():
     assert format_prompt_time("2026-05-01T13:09:24", "Europe/Madrid") == "15:09"
+
+
+def test_telegram_bot_formats_duration_labels():
+    assert format_duration_label(60) == "1 minute"
+    assert format_duration_label(600) == "10 minutes"
+    assert format_duration_label(75) == "75 seconds"
 
 
 def test_telegram_bot_callback_edits_online_prompt(monkeypatch):

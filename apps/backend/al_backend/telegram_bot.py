@@ -225,6 +225,16 @@ def format_prompt_time(value: Any, time_zone_id: Any = None) -> str:
     return "unknown time"
 
 
+def format_duration_label(seconds: int) -> str:
+    if seconds >= 60 and seconds % 60 == 0:
+        minutes = seconds // 60
+        unit = "minute" if minutes == 1 else "minutes"
+        return f"{minutes} {unit}"
+
+    unit = "second" if seconds == 1 else "seconds"
+    return f"{seconds} {unit}"
+
+
 def reminder_username_from_message(message: dict[str, Any]) -> str:
     text = str(message.get("text") or "")
     match = re.search(r"Hi\s+@([A-Za-z0-9_]{5,32})\b", text)
@@ -331,12 +341,13 @@ def send_due_reminders(config: BotConfig) -> None:
     for notification in bundle.get("meetingAutoAfkNotifications", []):
         notification_id = str(notification.get("reminderId") or "")
         telegram_name = str(notification.get("telegramUsername") or "").strip().lstrip("@")
+        timeout_label = format_duration_label(int(notification.get("excludedSeconds") or 0))
 
         if not notification_id or not telegram_name:
             continue
 
         text = (
-            f"Hi @{telegram_name}. You were alone in the meeting channel for over 10 minutes, "
+            f"Hi @{telegram_name}. You were alone in the meeting channel for over {timeout_label}, "
             "so I moved you to AFK."
         )
         result = send_plain_message(config.token, config.allowed_chat_id, text)
