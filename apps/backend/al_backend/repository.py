@@ -1258,6 +1258,26 @@ class Repository:
                 "hourlyActivity": _empty_hourly_activity(),
             }
 
+        self._apply_plugin_hour_idle_gaps(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+        )
+        self._apply_offline_idle_gaps(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+        )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_latest_report_metadata(authors_by_raw, start_date, end_date, date_mode, profiles, now)
         presence_overrides = self._author_presence_overrides(authors_by_raw.keys())
@@ -1286,6 +1306,116 @@ class Repository:
             "authorAliases": self.author_aliases(),
             "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]),
         }
+
+    def _apply_plugin_hour_idle_gaps(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+
+        for (raw_author, day_date), latest_report_at in latest_report_by_author_date.items():
+            time_zone_id = _author_time_zone_id(raw_author, profiles, None)
+
+            if not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            author_row = authors_by_raw.get(raw_author)
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not author_row or not hourly_author:
+                continue
+
+            local_latest_report_at = _to_local_datetime(latest_report_at, time_zone_id)
+            hour_start = local_latest_report_at.replace(minute=0, second=0, microsecond=0)
+            elapsed_seconds = max(0, int((local_latest_report_at - hour_start).total_seconds()))
+
+            if elapsed_seconds <= 0:
+                continue
+
+            hourly_activity = hourly_author.get("hourlyActivity", [])
+
+            if local_latest_report_at.hour < 0 or local_latest_report_at.hour >= len(hourly_activity):
+                continue
+
+            hour = hourly_activity[local_latest_report_at.hour]
+            accounted_seconds = (
+                int(hour.get("activeSeconds", 0))
+                + int(hour.get("idleSeconds", 0))
+                + int(hour.get("breakSeconds", 0))
+                + int(hour.get("meetingSeconds", 0))
+                + int(hour.get("overtimeActiveSeconds", 0))
+            )
+            gap_seconds = max(0, elapsed_seconds - accounted_seconds)
+            remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - int(author_row.get("pluginDaySeconds", 0)))
+            idle_seconds = min(gap_seconds, remaining_plugin_seconds)
+
+            if idle_seconds <= 0:
+                continue
+
+            idle_microseconds = _time_microseconds(hour, "idleSeconds", "idleMicroseconds") + (idle_seconds * MICROSECONDS_PER_SECOND)
+            hour["idleMicroseconds"] = idle_microseconds
+            hour["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
+            author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) + idle_seconds
+            author_row["pluginDaySeconds"] = int(author_row.get("pluginDaySeconds", 0)) + idle_seconds
+            totals["idleSeconds"] = int(totals.get("idleSeconds", 0)) + idle_seconds
+            totals["pluginDaySeconds"] = int(totals.get("pluginDaySeconds", 0)) + idle_seconds
+
+    def _apply_offline_idle_gaps(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+
+        for session in self.db.day_sessions.find({}, {"_id": 0}):
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            day_date = str(session.get("date") or "")
+            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
+
+            if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
+            ended_at = _coerce_datetime(session.get("lastOfflineAt"))
+
+            if not latest_report_at or not ended_at or ended_at <= latest_report_at:
+                continue
+
+            author_row = authors_by_raw.get(raw_author)
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not author_row or not hourly_author:
+                continue
+
+            gap_seconds = max(0, int((ended_at - latest_report_at).total_seconds()))
+            remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - int(author_row.get("pluginDaySeconds", 0)))
+            idle_seconds = min(gap_seconds, remaining_plugin_seconds)
+
+            if idle_seconds <= 0:
+                continue
+
+            idle_end = latest_report_at + dt.timedelta(seconds=idle_seconds)
+            hourly_activity = _empty_hourly_activity()
+            _add_idle_interval_to_buckets(hourly_activity, latest_report_at, idle_end, time_zone_id)
+            _merge_hourly_activity(hourly_author["hourlyActivity"], hourly_activity)
+
+            author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) + idle_seconds
+            author_row["pluginDaySeconds"] = int(author_row.get("pluginDaySeconds", 0)) + idle_seconds
+            totals["idleSeconds"] = int(totals.get("idleSeconds", 0)) + idle_seconds
+            totals["pluginDaySeconds"] = int(totals.get("pluginDaySeconds", 0)) + idle_seconds
 
     def _apply_visual_missed_hours(
         self,

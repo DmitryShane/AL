@@ -879,6 +879,117 @@ def test_activity_summary_does_not_mark_visual_end_missed_before_offline():
     assert hourly_by_hour[14]["missedSeconds"] == 0
 
 
+def test_activity_summary_counts_latest_report_to_offline_gap_as_idle():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-04-28T20:10:00Z")
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "activity-start",
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": dt.datetime(2026, 4, 28, 9, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-04-28",
+            "recordedAt": "2026-04-28T20:07:00Z",
+            "receivedAt": dt.datetime(2026, 4, 28, 20, 7, 5, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 7 * 60,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[20]["idleSeconds"] = 7 * 60
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "activeSeconds": 0,
+            "idleSeconds": 7 * 60,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert hourly_by_hour[20]["idleSeconds"] == 10 * 60
+    assert hourly_by_hour[20]["missedEndSeconds"] == 50 * 60
+    assert hourly_by_hour[20]["missedSeconds"] == 50 * 60
+    assert author["idleSeconds"] == 10 * 60
+    assert author["pluginDaySeconds"] == 10 * 60
+    assert summary["totals"]["idleSeconds"] == 10 * 60
+    assert summary["totals"]["pluginDaySeconds"] == 10 * 60
+
+
+def test_activity_summary_counts_unaccounted_latest_report_hour_gap_as_idle():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-04-28T20:10:00Z")
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "activity-start",
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": dt.datetime(2026, 4, 28, 9, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-04-28",
+            "recordedAt": "2026-04-28T20:07:00Z",
+            "receivedAt": dt.datetime(2026, 4, 28, 20, 7, 5, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 6 * 60,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[20]["idleSeconds"] = 6 * 60
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "activeSeconds": 0,
+            "idleSeconds": 6 * 60,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert hourly_by_hour[20]["idleSeconds"] == 10 * 60
+    assert hourly_by_hour[20]["missedEndSeconds"] == 50 * 60
+    assert author["idleSeconds"] == 10 * 60
+    assert author["pluginDaySeconds"] == 10 * 60
+    assert summary["totals"]["idleSeconds"] == 10 * 60
+    assert summary["totals"]["pluginDaySeconds"] == 10 * 60
+
+
 def test_telegram_to_first_activity_gap_counts_as_idle_hourly_activity():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
