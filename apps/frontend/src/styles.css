@@ -2794,6 +2794,10 @@ p {
   background: #ffcf75;
 }
 
+.hourly-chart-segment.missed {
+  background: #202a36;
+}
+
 .hourly-chart-legend {
   display: flex;
   justify-content: center;
@@ -2835,6 +2839,10 @@ p {
 
 .hourly-chart-legend i.idle {
   background: #ffcf75;
+}
+
+.hourly-chart-legend i.missed {
+  background: #202a36;
 }
 
 .analytics-activity-overview {

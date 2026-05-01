@@ -1148,6 +1148,7 @@ class Repository:
                 "hourlyActivity": _empty_hourly_activity(),
             }
 
+        self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_latest_report_metadata(authors_by_raw, start_date, end_date, date_mode, profiles, now)
         presence_overrides = self._author_presence_overrides(authors_by_raw.keys())
         author_rows = [
@@ -1175,6 +1176,129 @@ class Repository:
             "authorAliases": self.author_aliases(),
             "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]),
         }
+
+    def _apply_visual_missed_hours(
+        self,
+        hourly_by_author: dict[str, dict[str, Any]],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+
+        for session in self.db.day_sessions.find({}, {"_id": 0}):
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            day_date = str(session.get("date") or "")
+            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
+
+            if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            started_at = _coerce_datetime(session.get("startedAt"))
+            ended_at = _coerce_datetime(session.get("lastOfflineAt"))
+            latest_signal_at = _latest_datetime(ended_at, latest_report_by_author_date.get((raw_author, day_date))) if ended_at else None
+
+            if not started_at and not latest_signal_at:
+                continue
+
+            profile = profiles.get(raw_author, {})
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not hourly_author:
+                hourly_author = {
+                    "author": _display_name(raw_author, profile),
+                    "rawAuthor": raw_author,
+                    "timeZoneId": profile.get("timeZoneId") or session.get("timeZoneId"),
+                    "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
+                    "hourlyActivity": _empty_hourly_activity(),
+                }
+                hourly_by_author[raw_author] = hourly_author
+
+            hourly_activity = hourly_author.get("hourlyActivity", [])
+            self._add_visual_missed_start(hourly_activity, started_at, time_zone_id)
+            self._add_visual_missed_end(hourly_activity, latest_signal_at, time_zone_id)
+
+    def _latest_report_times_by_author_date(
+        self,
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        profiles: dict[str, dict[str, Any]],
+        now: dt.datetime,
+    ) -> dict[tuple[str, str], dt.datetime]:
+        latest_by_key: dict[tuple[str, str], dt.datetime] = {}
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        for report in self.db.report_rows.find(
+            query,
+            {
+                "_id": 0,
+                "author": 1,
+                "date": 1,
+                "source": 1,
+                "reportType": 1,
+                "recordedAt": 1,
+                "lastRecordedAt": 1,
+                "receivedAt": 1,
+                "lastReceivedAt": 1,
+            },
+        ):
+            if report.get("source") in {"telegram", "discord"} or report.get("reportType") in {"telegram", "meeting"}:
+                continue
+
+            raw_author = str(report.get("author") or "Unknown User")
+            report_date = str(report.get("date") or "")
+
+            if not report_date:
+                continue
+
+            occurred_at = (
+                _coerce_datetime(report.get("recordedAt"))
+                or _coerce_datetime(report.get("lastRecordedAt"))
+                or _coerce_datetime(report.get("receivedAt"))
+                or _coerce_datetime(report.get("lastReceivedAt"))
+            )
+
+            if not occurred_at:
+                continue
+
+            key = (raw_author, report_date)
+            current = latest_by_key.get(key)
+
+            if not current or occurred_at > current:
+                latest_by_key[key] = occurred_at
+
+        return latest_by_key
+
+    def _add_visual_missed_start(
+        self,
+        hourly_activity: list[dict[str, Any]],
+        started_at: dt.datetime | None,
+        time_zone_id: str,
+    ) -> None:
+        if not started_at:
+            return
+
+        local_start = _to_local_datetime(started_at, time_zone_id)
+        hour_start = local_start.replace(minute=0, second=0, microsecond=0)
+        missed_seconds = max(0, int((local_start - hour_start).total_seconds()))
+        _add_visual_missed_seconds(hourly_activity, local_start.hour, missed_seconds, "missedStartSeconds")
+
+    def _add_visual_missed_end(
+        self,
+        hourly_activity: list[dict[str, Any]],
+        ended_at: dt.datetime | None,
+        time_zone_id: str,
+    ) -> None:
+        if not ended_at:
+            return
+
+        local_end = _to_local_datetime(ended_at, time_zone_id)
+        hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+        missed_seconds = max(0, int((hour_end - local_end).total_seconds()))
+        _add_visual_missed_seconds(hourly_activity, local_end.hour, missed_seconds, "missedEndSeconds")
 
     def _apply_latest_report_metadata(
         self,
@@ -4332,6 +4456,28 @@ def _telegram_event_date(event_time: dt.datetime, time_zone_id: str) -> str:
     return event_time.astimezone(zone).date().isoformat()
 
 
+def _to_local_datetime(value: dt.datetime, time_zone_id: str) -> dt.datetime:
+    try:
+        zone = ZoneInfo(time_zone_id)
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
+
+    return value.astimezone(zone)
+
+
+def _latest_datetime(*values: dt.datetime | None) -> dt.datetime | None:
+    latest = None
+
+    for value in values:
+        if not value:
+            continue
+
+        if not latest or value > latest:
+            latest = value
+
+    return latest
+
+
 def _parse_local_datetime(value: Any) -> dt.datetime | None:
     if isinstance(value, dt.datetime):
         return value
@@ -4448,7 +4594,17 @@ def _count_deltas(current: list[dict[str, Any]], previous: list[dict[str, Any]],
 
 def _empty_hourly_activity() -> list[dict[str, int]]:
     return [
-        {"hour": hour, "activeSeconds": 0, "idleSeconds": 0, "breakSeconds": 0, "meetingSeconds": 0, "overtimeActiveSeconds": 0}
+        {
+            "hour": hour,
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "breakSeconds": 0,
+            "meetingSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "missedSeconds": 0,
+            "missedStartSeconds": 0,
+            "missedEndSeconds": 0,
+        }
         for hour in range(24)
     ]
 
@@ -4462,9 +4618,23 @@ def _public_hourly_activity(source: list[dict[str, Any]]) -> list[dict[str, int]
             "breakSeconds": int(item.get("breakSeconds", 0)),
             "meetingSeconds": int(item.get("meetingSeconds", 0)),
             "overtimeActiveSeconds": int(item.get("overtimeActiveSeconds", 0)),
+            "missedSeconds": int(item.get("missedSeconds", 0)),
+            "missedStartSeconds": int(item.get("missedStartSeconds", 0)),
+            "missedEndSeconds": int(item.get("missedEndSeconds", 0)),
         }
         for item in source
     ]
+
+
+def _add_visual_missed_seconds(hourly_activity: list[dict[str, Any]], hour: int, seconds: int, segment_key: str) -> None:
+    if seconds <= 0:
+        return
+
+    if hour < 0 or hour >= len(hourly_activity):
+        return
+
+    hourly_activity[hour]["missedSeconds"] = int(hourly_activity[hour].get("missedSeconds", 0)) + seconds
+    hourly_activity[hour][segment_key] = int(hourly_activity[hour].get(segment_key, 0)) + seconds
 
 
 def _hourly_deltas(current: list[dict[str, Any]], previous: list[dict[str, Any]]) -> list[dict[str, int]]:

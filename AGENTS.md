@@ -56,6 +56,17 @@ stop
 
 `start` launches the backend and frontend. `stop` shuts them down.
 
+### Local Rebuild And Restart
+
+When code changes need local verification, decide whether rebuild/restart is actually required and perform it yourself only when necessary.
+
+- Backend Python changes under `apps/backend` usually require restarting the local backend process so the API reads the new code. Use `stop` then `start` when a reliable full local refresh is needed.
+- Frontend React/CSS changes under `apps/frontend` do not usually require restarting Vite dev server; hot reload should update the browser. If viewing production `dist`, run `npm run build` and restart the process serving `dist`.
+- Dependency, lockfile, env, config, startup script, or build pipeline changes require the relevant install/build/restart step.
+- MongoDB data-only changes do not require restart; refresh the page or re-query the API.
+- If both backend and frontend runtime code changed and the user needs to see the result locally, prefer a reliable `stop` then `start`, followed by page refresh.
+- Do not rebuild or restart just by habit. Do it when it is needed for the user's requested verification or for the running app to pick up the change.
+
 ## Terminology
 
 - **AL (Activity Logger)** — the product and service as a whole: this repository (FastAPI backend, web dashboard, Telegram/Discord bots, and how data is stored and summarized).

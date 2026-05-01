@@ -5,6 +5,9 @@ type HourlyActivity = {
   breakSeconds?: number;
   meetingSeconds?: number;
   overtimeActiveSeconds?: number;
+  missedSeconds?: number;
+  missedStartSeconds?: number;
+  missedEndSeconds?: number;
 };
 
 type AuthorHourlyActivity = {
@@ -25,6 +28,9 @@ type AuthorHourlyChart = {
     meetingMinutes: number;
     idleMinutes: number;
     overtimeMinutes: number;
+    missedMinutes: number;
+    missedStartMinutes: number;
+    missedEndMinutes: number;
     isInProgress: boolean;
   }>;
 };
@@ -68,6 +74,10 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                             title={formatHourTitle(hour)}
                           >
                             <div
+                              className="hourly-chart-segment missed"
+                              style={{ height: `${segments.missedStartPercent}%` }}
+                            />
+                            <div
                               className="hourly-chart-segment active"
                               style={{ height: `${segments.activePercent}%` }}
                             />
@@ -86,6 +96,10 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                             <div
                               className="hourly-chart-segment idle"
                               style={{ height: `${segments.idlePercent}%` }}
+                            />
+                            <div
+                              className="hourly-chart-segment missed"
+                              style={{ height: `${segments.missedEndPercent}%` }}
                             />
                           </div>
                         </div>
@@ -108,6 +122,7 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                 <span><i className="break" />AFK</span>
                 <span><i className="meeting" />Meeting</span>
                 <span><i className="idle" />Idle</span>
+                <span><i className="missed" />Missed</span>
               </div>
             </article>
           ))}
@@ -126,7 +141,10 @@ function createEmptyHourlyActivity(): Required<HourlyActivity>[] {
     idleSeconds: 0,
     breakSeconds: 0,
     meetingSeconds: 0,
-    overtimeActiveSeconds: 0
+    overtimeActiveSeconds: 0,
+    missedSeconds: 0,
+    missedStartSeconds: 0,
+    missedEndSeconds: 0
   }));
 }
 
@@ -143,6 +161,9 @@ function normalizeHourlyActivity(source: HourlyActivity[]) {
     hourlyActivity[sourceHour.hour].breakSeconds = sourceHour.breakSeconds ?? 0;
     hourlyActivity[sourceHour.hour].meetingSeconds = sourceHour.meetingSeconds ?? 0;
     hourlyActivity[sourceHour.hour].overtimeActiveSeconds = sourceHour.overtimeActiveSeconds ?? 0;
+    hourlyActivity[sourceHour.hour].missedSeconds = sourceHour.missedSeconds ?? 0;
+    hourlyActivity[sourceHour.hour].missedStartSeconds = sourceHour.missedStartSeconds ?? 0;
+    hourlyActivity[sourceHour.hour].missedEndSeconds = sourceHour.missedEndSeconds ?? 0;
   }
 
   return hourlyActivity;
@@ -162,6 +183,9 @@ function toAuthorHourlyActivity(author: AuthorHourlyActivity): AuthorHourlyChart
       meetingMinutes: Math.min(60, (hour.meetingSeconds ?? 0) / 60),
       idleMinutes: Math.min(60, hour.idleSeconds / 60),
       overtimeMinutes: Math.min(60, (hour.overtimeActiveSeconds ?? 0) / 60),
+      missedMinutes: Math.min(60, (hour.missedSeconds ?? 0) / 60),
+      missedStartMinutes: Math.min(60, (hour.missedStartSeconds ?? 0) / 60),
+      missedEndMinutes: Math.min(60, (hour.missedEndSeconds ?? 0) / 60),
       isInProgress: hour.hour === inProgressHour
     }))
   };
@@ -171,16 +195,18 @@ function toPercentOfHour(minutes: number) {
   return Math.min(100, Math.max(0, (minutes / 60) * 100));
 }
 
-function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; meetingMinutes: number; idleMinutes: number; overtimeMinutes: number }) {
+function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; meetingMinutes: number; idleMinutes: number; overtimeMinutes: number; missedStartMinutes: number; missedEndMinutes: number }) {
   const activeMinutes = Math.max(0, hour.activeMinutes);
   const overtimeMinutes = Math.max(0, hour.overtimeMinutes);
   const breakMinutes = Math.max(0, hour.breakMinutes);
   const meetingMinutes = Math.max(0, hour.meetingMinutes);
   const idleMinutes = Math.max(0, hour.idleMinutes);
-  const totalMinutes = activeMinutes + overtimeMinutes + breakMinutes + meetingMinutes + idleMinutes;
+  const missedStartMinutes = Math.max(0, hour.missedStartMinutes);
+  const missedEndMinutes = Math.max(0, hour.missedEndMinutes);
+  const totalMinutes = activeMinutes + overtimeMinutes + breakMinutes + meetingMinutes + idleMinutes + missedStartMinutes + missedEndMinutes;
 
   if (totalMinutes <= 0) {
-    return { activePercent: 0, overtimePercent: 0, breakPercent: 0, meetingPercent: 0, idlePercent: 0 };
+    return { activePercent: 0, overtimePercent: 0, breakPercent: 0, meetingPercent: 0, idlePercent: 0, missedStartPercent: 0, missedEndPercent: 0 };
   }
 
   return {
@@ -188,12 +214,14 @@ function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; 
     overtimePercent: toPercentOfHour(overtimeMinutes),
     breakPercent: toPercentOfHour(breakMinutes),
     meetingPercent: toPercentOfHour(meetingMinutes),
-    idlePercent: toPercentOfHour(idleMinutes)
+    idlePercent: toPercentOfHour(idleMinutes),
+    missedStartPercent: toPercentOfHour(missedStartMinutes),
+    missedEndPercent: toPercentOfHour(missedEndMinutes)
   };
 }
 
-function hasHourlyActivity(hour: { activeMinutes: number; breakMinutes: number; meetingMinutes: number; idleMinutes: number; overtimeMinutes: number }) {
-  return hour.activeMinutes > 0 || hour.overtimeMinutes > 0 || hour.breakMinutes > 0 || hour.meetingMinutes > 0 || hour.idleMinutes > 0;
+function hasHourlyActivity(hour: { activeMinutes: number; breakMinutes: number; meetingMinutes: number; idleMinutes: number; overtimeMinutes: number; missedMinutes: number }) {
+  return hour.activeMinutes > 0 || hour.overtimeMinutes > 0 || hour.breakMinutes > 0 || hour.meetingMinutes > 0 || hour.idleMinutes > 0 || hour.missedMinutes > 0;
 }
 
 function findInProgressHour(hours: Required<HourlyActivity>[]) {
@@ -215,8 +243,8 @@ function formatHour(hour: number) {
   return `${displayHour}:00`;
 }
 
-function formatHourTitle(hour: { hour: number; activeMinutes: number; breakMinutes: number; meetingMinutes: number; idleMinutes: number; overtimeMinutes: number }) {
-  return `${formatHour(hour.hour)}: ${Math.round(hour.activeMinutes)}m active, ${Math.round(hour.overtimeMinutes)}m overtime, ${Math.round(hour.breakMinutes)}m AFK, ${Math.round(hour.meetingMinutes)}m meeting, ${Math.round(hour.idleMinutes)}m idle`;
+function formatHourTitle(hour: { hour: number; activeMinutes: number; breakMinutes: number; meetingMinutes: number; idleMinutes: number; overtimeMinutes: number; missedMinutes: number }) {
+  return `${formatHour(hour.hour)}: ${Math.round(hour.activeMinutes)}m active, ${Math.round(hour.overtimeMinutes)}m overtime, ${Math.round(hour.breakMinutes)}m AFK, ${Math.round(hour.meetingMinutes)}m meeting, ${Math.round(hour.idleMinutes)}m idle, ${Math.round(hour.missedMinutes)}m missed`;
 }
 
 function formatTimeZoneLabel(author: AuthorHourlyActivity) {
