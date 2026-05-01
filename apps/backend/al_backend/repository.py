@@ -701,13 +701,6 @@ class Repository:
         if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
             return False
 
-        idle_seconds = int(report_row.get("idleDeltaSeconds", 0))
-        active_seconds = int(report_row.get("activeDeltaSeconds", 0))
-        overtime_seconds = int(report_row.get("overtimeActiveDeltaSeconds", 0))
-
-        if idle_seconds <= 0 or active_seconds > 0 or overtime_seconds > 0:
-            return False
-
         raw_author = report_row.get("author") or "Unknown User"
         recorded_at = _coerce_datetime(report_row.get("recordedAt") or report_row.get("lastRecordedAt") or report_row.get("receivedAt"))
 
@@ -861,13 +854,6 @@ class Repository:
 
         for report_row in report_rows:
             if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
-                continue
-
-            idle_seconds = int(report_row.get("idleDeltaSeconds", 0))
-            active_seconds = int(report_row.get("activeDeltaSeconds", 0))
-            overtime_seconds = int(report_row.get("overtimeActiveDeltaSeconds", 0))
-
-            if idle_seconds <= 0 or active_seconds > 0 or overtime_seconds > 0:
                 continue
 
             recorded_at = _coerce_datetime(

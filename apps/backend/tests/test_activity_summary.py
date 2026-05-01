@@ -1844,7 +1844,7 @@ def test_active_reports_during_discord_meeting_remain_visible_in_latest_reports(
     assert [report["source"] for report in reports] == ["future-plugin"]
 
 
-def test_idle_only_reports_during_break_interval_are_hidden_from_latest_reports():
+def test_plugin_reports_during_break_interval_are_hidden_from_latest_reports():
     repo = fake_repository()
     repo.db.report_rows.insert_one(
         {
@@ -1860,12 +1860,38 @@ def test_idle_only_reports_during_break_interval_are_hidden_from_latest_reports(
     )
     repo.db.report_rows.insert_one(
         {
+            "source": "future-plugin",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T10:15:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 15, tzinfo=dt.UTC),
+            "idleDeltaSeconds": 0,
+            "activeDeltaSeconds": 60,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
             "source": "telegram",
             "author": "Future Artist",
             "date": "2026-04-29",
             "recordedAt": "2026-04-29T10:00:00+00:00",
             "receivedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
             "reportType": "telegram",
+            "telegramEventType": "afk",
+            "idleDeltaSeconds": 0,
+            "activeDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "discord",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T10:20:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 20, tzinfo=dt.UTC),
+            "reportType": "meeting",
             "idleDeltaSeconds": 0,
             "activeDeltaSeconds": 0,
             "overtimeActiveDeltaSeconds": 0,
@@ -1881,7 +1907,7 @@ def test_idle_only_reports_during_break_interval_are_hidden_from_latest_reports(
 
     reports = repo.latest_reports(start_date="2026-04-29", end_date="2026-04-29")
 
-    assert [report["source"] for report in reports] == ["telegram"]
+    assert {report["source"] for report in reports} == {"discord", "telegram"}
 
 
 def test_idle_only_reports_during_open_break_are_hidden_from_latest_reports():
