@@ -4,6 +4,7 @@ import { Activity, BarChart3, Bell, Box, CalendarDays, LogOut, RefreshCw, Search
 import { AuthorsTable } from "./components/AuthorsTable";
 import { AnalyticsActivityOverview } from "./components/AnalyticsActivityOverview";
 import { HourlyActivityChart } from "./components/HourlyActivityChart";
+import cursorIconUrl from "./assets/cursor-icon.png";
 import "./styles.css";
 
 const LOCAL_HOSTNAMES = new Set(["127.0.0.1", "localhost"]);
@@ -155,6 +156,7 @@ type ActivityCount = {
 type SavedPrefab = {
   path: string;
   name: string;
+  projectId?: string;
   saveCount: number;
 };
 
@@ -1668,7 +1670,7 @@ function ActivityPage({
               title="Saved Files"
               items={savedPrefabs.map((prefab, index) => ({
                 id: prefab.path || `${prefab.name}-${index}`,
-                label: prefab.name || prefab.path,
+                label: savedFileLabel(prefab),
                 value: prefab.saveCount,
                 displayValue: String(prefab.saveCount),
                 color: paletteColor(index)
@@ -1685,7 +1687,7 @@ function ActivityPage({
               }))}
               savedItems={overtimeSavedPrefabs.map((prefab, index) => ({
                 id: prefab.path || `${prefab.name}-${index}`,
-                label: prefab.name || prefab.path,
+                label: savedFileLabel(prefab),
                 value: prefab.saveCount,
                 displayValue: String(prefab.saveCount),
                 color: paletteColor(index)
@@ -2912,6 +2914,16 @@ function paletteColor(index: number) {
   return colors[index % colors.length];
 }
 
+function savedFileLabel(prefab: SavedPrefab) {
+  const fileName = prefab.name || prefab.path;
+
+  if (!prefab.projectId || fileName === prefab.projectId) {
+    return fileName;
+  }
+
+  return `${fileName} · ${prefab.projectId}`;
+}
+
 function DateRangePicker({ value, onChange }: { value: DateRange; onChange: (range: DateRange) => void }) {
   function updateDateRange(next: Pick<DateRange, "startDate" | "endDate">) {
     onChange({ ...next, preset: "custom" });
@@ -3132,6 +3144,10 @@ function formatSource(source?: string) {
     return "VS Code";
   }
 
+  if (source === "cur") {
+    return "Cursor";
+  }
+
   if (source === "telegram") {
     return "Telegram";
   }
@@ -3158,6 +3174,10 @@ function sourceIcon(source?: string) {
 
   if (source === "vsc") {
     return <VSCodeIcon />;
+  }
+
+  if (source === "cur") {
+    return <CursorIcon />;
   }
 
   if (source === "telegram") {
@@ -3199,6 +3219,10 @@ function VSCodeIcon() {
       <path d="M17.9 2.4 7.6 11.8 3.2 8.4 1.8 9.2v5.6l1.4.8 4.4-3.4 10.3 9.4 4.3-1.7V4.1l-4.3-1.7Zm-.4 5.7v7.8l-5.8-3.9 5.8-3.9Z" />
     </svg>
   );
+}
+
+function CursorIcon() {
+  return <img className="source-icon cursor-icon" src={cursorIconUrl} alt="" aria-hidden="true" />;
 }
 
 function TelegramIcon() {

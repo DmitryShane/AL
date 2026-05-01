@@ -1994,6 +1994,47 @@ def test_reports_page_paginates_author_reports_and_keeps_source_options():
     assert filtered_page["sources"] == ["bal", "ual"]
 
 
+def test_cursor_activity_project_appears_in_saved_files_without_file_save():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "AL",
+            "date": "2026-04-29",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "activityCounts": [{"type": "scene_changed", "count": 3}],
+            "savedPrefabs": [],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "bike-rush-2",
+            "date": "2026-04-29",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "activityCounts": [{"type": "selection", "count": 1}],
+            "savedPrefabs": [{"path": "Assets/Project/Levels/Level.008/Level.008.prefab", "name": "Level.008", "saveCount": 1}],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+    assert {"path": "cursor:AL", "name": "AL", "projectId": "AL", "saveCount": 3} in author["savedPrefabs"]
+    assert {
+        "path": "Assets/Project/Levels/Level.008/Level.008.prefab",
+        "name": "Level.008",
+        "saveCount": 1,
+    } in author["savedPrefabs"]
+
+
 def test_activity_summary_author_source_uses_latest_report_row():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
@@ -3298,7 +3339,11 @@ def test_figma_file_saved_is_counted_as_saved_file():
         }
     )
 
-    assert saved == {"path": "https://www.figma.com/design/abc123/Game-HUD", "name": "Game HUD", "saveCount": 1}
+    assert saved == {
+        "path": "https://www.figma.com/design/abc123/Game-HUD",
+        "name": "Game HUD",
+        "saveCount": 1,
+    }
 
 
 def test_vscode_file_saved_is_counted_as_saved_file():
@@ -3306,6 +3351,7 @@ def test_vscode_file_saved_is_counted_as_saved_file():
         {
             "source": "vsc",
             "eventType": "file_saved",
+            "projectId": "game",
             "metadata": {
                 "path": "/projects/game/Assets/Scripts/PlayerController.cs",
                 "name": "PlayerController.cs",
@@ -3314,7 +3360,33 @@ def test_vscode_file_saved_is_counted_as_saved_file():
         }
     )
 
-    assert saved == {"path": "/projects/game/Assets/Scripts/PlayerController.cs", "name": "PlayerController.cs", "saveCount": 1}
+    assert saved == {
+        "path": "/projects/game/Assets/Scripts/PlayerController.cs",
+        "name": "PlayerController.cs",
+        "saveCount": 1,
+    }
+
+
+def test_cursor_file_saved_is_counted_as_saved_file_with_project():
+    saved = _saved_prefab_delta(
+        {
+            "source": "cur",
+            "eventType": "file_saved",
+            "projectId": "AL",
+            "metadata": {
+                "path": "/projects/AL/apps/frontend/src/main.tsx",
+                "name": "main.tsx",
+                "languageId": "typescriptreact",
+            },
+        }
+    )
+
+    assert saved == {
+        "path": "/projects/AL/apps/frontend/src/main.tsx",
+        "name": "main.tsx",
+        "projectId": "AL",
+        "saveCount": 1,
+    }
 
 
 def test_author_alias_rebuilds_raw_events_into_target_author():

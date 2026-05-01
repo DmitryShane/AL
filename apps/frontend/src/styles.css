@@ -1463,6 +1463,10 @@ p {
   fill: #007acc;
 }
 
+.cursor-icon {
+  object-fit: contain;
+}
+
 .telegram-icon {
   fill: #26a5e4;
 }

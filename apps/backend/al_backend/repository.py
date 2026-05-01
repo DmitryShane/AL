@@ -1045,7 +1045,10 @@ class Repository:
                 if activity_type:
                     overtime_activity_counts[activity_type] = overtime_activity_counts.get(activity_type, 0) + int(count.get("count", 0))
 
-            for prefab in item.get("savedPrefabs", []):
+            saved_prefab_items = _saved_prefabs_for_summary_item(item)
+            overtime_saved_prefab_items = item.get("overtimeSavedPrefabs", [])
+
+            for prefab in saved_prefab_items:
                 path = prefab.get("path")
 
                 if not path:
@@ -1058,7 +1061,7 @@ class Repository:
                 else:
                     saved_prefabs[path] = dict(prefab)
 
-            for prefab in item.get("overtimeSavedPrefabs", []):
+            for prefab in overtime_saved_prefab_items:
                 path = prefab.get("path")
 
                 if not path:
@@ -1127,13 +1130,13 @@ class Repository:
                 author_row.get("activityCounts", []), item.get("activityCounts", []), "type", "count"
             )
             author_row["savedPrefabs"] = _merge_count_list(
-                author_row.get("savedPrefabs", []), item.get("savedPrefabs", []), "path", "saveCount"
+                author_row.get("savedPrefabs", []), saved_prefab_items, "path", "saveCount"
             )
             author_row["overtimeActivityCounts"] = _merge_count_list(
                 author_row.get("overtimeActivityCounts", []), item.get("overtimeActivityCounts", []), "type", "count"
             )
             author_row["overtimeSavedPrefabs"] = _merge_count_list(
-                author_row.get("overtimeSavedPrefabs", []), item.get("overtimeSavedPrefabs", []), "path", "saveCount"
+                author_row.get("overtimeSavedPrefabs", []), overtime_saved_prefab_items, "path", "saveCount"
             )
 
             if str(item.get("lastRecordedAt") or "") > str(author_row.get("lastRecordedAt") or ""):
@@ -3973,6 +3976,35 @@ def _merge_batch_deltas(target: dict[str, Any], source: dict[str, Any]) -> None:
     )
 
 
+def _saved_prefabs_for_summary_item(item: dict[str, Any]) -> list[dict[str, Any]]:
+    saved_prefabs = [dict(prefab) for prefab in item.get("savedPrefabs", [])]
+
+    if item.get("source") != "cur":
+        return saved_prefabs
+
+    project_id = str(item.get("projectId") or "")
+
+    if not project_id:
+        return saved_prefabs
+
+    cursor_path = f"cursor:{project_id}"
+
+    if any(prefab.get("path") == cursor_path for prefab in saved_prefabs):
+        return saved_prefabs
+
+    activity_count = sum(int(count.get("count", 0)) for count in item.get("activityCounts", []))
+    save_count = max(1, activity_count)
+    saved_prefabs.append(
+        {
+            "path": cursor_path,
+            "name": project_id,
+            "projectId": project_id,
+            "saveCount": save_count,
+        }
+    )
+    return saved_prefabs
+
+
 def _has_time_delta(deltas: dict[str, Any]) -> bool:
     return (
         _time_microseconds(deltas, "activeDeltaSeconds", "activeDeltaMicroseconds") > 0
@@ -4090,13 +4122,18 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
     if event_type == "file_saved" and event.get("source") == "fch":
         if "figma.com/" not in lower_path and not metadata.get("fileKey"):
             return None
-    elif event_type == "file_saved" and event.get("source") == "vsc":
+    elif event_type == "file_saved" and event.get("source") in {"cur", "vsc"}:
         pass
     elif event_type == "file_saved" and not lower_path.endswith(".blend"):
         return None
 
     name = str(metadata.get("name") or path.rsplit("/", 1)[-1])
-    return {"path": path, "name": name, "saveCount": 1}
+    saved_file = {"path": path, "name": name, "saveCount": 1}
+
+    if event.get("source") == "cur":
+        saved_file["projectId"] = str(event.get("projectId") or "")
+
+    return saved_file
 
 
 def _is_overtime_event_delta(consumed_normal_microseconds: int, deltas: dict[str, Any]) -> bool:
