@@ -354,6 +354,18 @@ def send_due_reminders(config: BotConfig) -> None:
         message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
         mark_reminder_sent(config.backend_url, config.bot_secret, notification_id, message_id, kind="meeting_auto_afk")
 
+    for notification in bundle.get("meetingSummaryNotifications", []):
+        summary_id = str(notification.get("summaryId") or "")
+        summary_text = str(notification.get("summary") or "").strip()
+
+        if not summary_id or not summary_text:
+            continue
+
+        text = f"Meeting summary\n\n{summary_text}"
+        result = send_plain_message(config.token, config.allowed_chat_id, text)
+        message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
+        mark_reminder_sent(config.backend_url, config.bot_secret, summary_id, message_id, kind="meeting_summary")
+
 
 def submit_break_event(backend_url: str, telegram_username_value: str, event_type: str, telegram_timestamp: Any) -> dict[str, Any]:
     timestamp = None

@@ -4,13 +4,17 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import discord
+from discord.ext import voice_recv
 
 
 LOGGER = logging.getLogger("al.discord_bot")
@@ -27,6 +31,17 @@ class DiscordBotConfig:
     guild_id: int
     meeting_channel_id: int
     afk_channel_id: int
+    recording_temp_dir: str
+
+
+@dataclass
+class RecordingSession:
+    recording_id: str
+    started_at: datetime
+    audio_path: str
+    participant_ids: set[int]
+    participant_names: dict[int, str]
+    voice_client: Any
 
 
 def main() -> None:
@@ -42,6 +57,7 @@ def load_config() -> DiscordBotConfig:
     guild_id = _parse_required_int("DISCORD_GUILD_ID")
     meeting_channel_id = _parse_required_int("DISCORD_MEETING_CHANNEL_ID")
     afk_channel_id = _parse_required_int("DISCORD_AFK_CHANNEL_ID")
+    recording_temp_dir = os.getenv("AL_DISCORD_RECORDING_TEMP_DIR", tempfile.gettempdir()).strip()
 
     if not token:
         raise RuntimeError("DISCORD_BOT_TOKEN is required")
@@ -56,6 +72,7 @@ def load_config() -> DiscordBotConfig:
         guild_id=guild_id,
         meeting_channel_id=meeting_channel_id,
         afk_channel_id=afk_channel_id,
+        recording_temp_dir=recording_temp_dir,
     )
 
 
@@ -77,7 +94,10 @@ class MeetingClient(discord.Client):
         self.auto_moved_member_ids: set[int] = set()
         self.solo_monitor_task: asyncio.Task | None = None
         self.solo_timeout_seconds = DEFAULT_SOLO_TIMEOUT_SECONDS
+        self.meeting_summaries_enabled = False
+        self.meeting_summary_min_participants = 2
         self.settings_loaded_at: datetime | None = None
+        self.recording: RecordingSession | None = None
 
     async def on_ready(self) -> None:
         LOGGER.info("Discord bot started as %s. Backend: %s", self.user, self.config.backend_url)
@@ -104,16 +124,19 @@ class MeetingClient(discord.Client):
         if after_channel_id == self.config.meeting_channel_id:
             await self.submit_voice_event(member, "join")
             await self.refresh_solo_state()
+            await self.refresh_recording_state()
             return
 
         if before_channel_id == self.config.meeting_channel_id:
             if member.id in self.auto_moved_member_ids and after_channel_id == self.config.afk_channel_id:
                 self.auto_moved_member_ids.discard(member.id)
                 await self.refresh_solo_state()
+                await self.finish_recording_if_needed(force=True)
                 return
 
             await self.submit_voice_event(member, "leave")
             await self.refresh_solo_state()
+            await self.refresh_recording_state()
 
     async def monitor_solo_meeting(self) -> None:
         await self.wait_until_ready()
@@ -122,6 +145,7 @@ class MeetingClient(discord.Client):
             try:
                 await self.refresh_settings_if_needed()
                 await self.refresh_solo_state()
+                await self.refresh_recording_state()
                 await self.move_solo_member_if_due()
             except Exception:
                 LOGGER.exception("Discord solo meeting monitor failed.")
@@ -197,8 +221,70 @@ class MeetingClient(discord.Client):
 
         if isinstance(timeout_seconds, int) and timeout_seconds >= 60:
             self.solo_timeout_seconds = timeout_seconds
+        self.meeting_summaries_enabled = bool(settings.get("meetingSummariesEnabled", False))
+        self.meeting_summary_min_participants = int(settings.get("meetingSummaryMinParticipants") or 2)
 
         self.settings_loaded_at = now
+
+    async def refresh_recording_state(self) -> None:
+        channel = self.get_channel(self.config.meeting_channel_id)
+
+        if not isinstance(channel, discord.VoiceChannel):
+            return
+
+        human_members = [member for member in channel.members if not member.bot]
+
+        if self.recording:
+            for member in human_members:
+                self.recording.participant_ids.add(member.id)
+                self.recording.participant_names[member.id] = member.name
+
+            if not human_members:
+                await self.finish_recording_if_needed(force=True)
+
+            return
+
+        if not self.meeting_summaries_enabled or len(human_members) < self.meeting_summary_min_participants:
+            return
+
+        await self.start_recording(channel, human_members)
+
+    async def start_recording(self, channel: discord.VoiceChannel, human_members: list[discord.Member]) -> None:
+        Path(self.config.recording_temp_dir).mkdir(parents=True, exist_ok=True)
+        recording_id = uuid.uuid4().hex
+        audio_path = str(Path(self.config.recording_temp_dir) / f"al-meeting-{recording_id}.wav")
+        voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient, self_deaf=False, self_mute=True)
+        voice_client.listen(voice_recv.WaveSink(audio_path))
+        started_at = datetime.now(timezone.utc)
+        self.recording = RecordingSession(
+            recording_id=recording_id,
+            started_at=started_at,
+            audio_path=audio_path,
+            participant_ids={member.id for member in human_members},
+            participant_names={member.id: member.name for member in human_members},
+            voice_client=voice_client,
+        )
+        await asyncio.to_thread(submit_recording_started, self.config, self.recording)
+
+    async def finish_recording_if_needed(self, *, force: bool = False) -> None:
+        if not self.recording:
+            return
+
+        recording = self.recording
+        self.recording = None
+        ended_at = datetime.now(timezone.utc)
+
+        try:
+            if hasattr(recording.voice_client, "stop_listening"):
+                recording.voice_client.stop_listening()
+
+            await recording.voice_client.disconnect(force=force)
+            await asyncio.to_thread(submit_recording_finished, self.config, recording, ended_at)
+        finally:
+            try:
+                os.remove(recording.audio_path)
+            except FileNotFoundError:
+                pass
 
     async def submit_voice_event(self, member: discord.Member, event_type: str) -> None:
         payload = {
@@ -233,6 +319,31 @@ def submit_auto_afk_event(config: DiscordBotConfig, payload: dict[str, Any]) -> 
     return submit_backend_event(config, "/api/v1/discord/meeting-auto-afk", payload)
 
 
+def submit_recording_started(config: DiscordBotConfig, recording: RecordingSession) -> dict[str, Any]:
+    payload = {
+        "recordingId": recording.recording_id,
+        "guildId": str(config.guild_id),
+        "channelId": str(config.meeting_channel_id),
+        "startedAt": recording.started_at.isoformat(),
+        "participantDiscordUserIds": [str(item) for item in sorted(recording.participant_ids)],
+        "participantNames": [recording.participant_names[item] for item in sorted(recording.participant_names.keys())],
+    }
+    return submit_backend_event(config, "/api/v1/discord/meeting-recordings/start", payload)
+
+
+def submit_recording_finished(config: DiscordBotConfig, recording: RecordingSession, ended_at: datetime) -> dict[str, Any]:
+    fields = {
+        "recordingId": recording.recording_id,
+        "guildId": str(config.guild_id),
+        "channelId": str(config.meeting_channel_id),
+        "startedAt": recording.started_at.isoformat(),
+        "endedAt": ended_at.isoformat(),
+        "participantDiscordUserIds": json.dumps([str(item) for item in sorted(recording.participant_ids)]),
+        "participantNames": json.dumps([recording.participant_names[item] for item in sorted(recording.participant_names.keys())]),
+    }
+    return submit_multipart_event(config, "/api/v1/discord/meeting-recordings/finish", fields, "audio", recording.audio_path)
+
+
 def fetch_discord_settings(config: DiscordBotConfig) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{config.backend_url}/api/v1/discord/settings",
@@ -250,6 +361,53 @@ def fetch_discord_settings(config: DiscordBotConfig) -> dict[str, Any]:
         body = exc.read().decode("utf-8", errors="replace")
         LOGGER.warning("Discord settings rejected with HTTP %s: %s", exc.code, body)
         return {}
+
+
+def submit_multipart_event(
+    config: DiscordBotConfig,
+    path: str,
+    fields: dict[str, str],
+    file_field: str,
+    file_path: str,
+) -> dict[str, Any]:
+    boundary = f"----ALBoundary{uuid.uuid4().hex}"
+    body = bytearray()
+
+    for name, value in fields.items():
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        body.extend(str(value).encode("utf-8"))
+        body.extend(b"\r\n")
+
+    filename = os.path.basename(file_path)
+    body.extend(f"--{boundary}\r\n".encode("utf-8"))
+    body.extend(f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'.encode("utf-8"))
+    body.extend(b"Content-Type: audio/wav\r\n\r\n")
+
+    with open(file_path, "rb") as audio_file:
+        body.extend(audio_file.read())
+
+    body.extend(b"\r\n")
+    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+    request = urllib.request.Request(
+        f"{config.backend_url}{path}",
+        data=bytes(body),
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "x-al-discord-bot-secret": config.bot_secret,
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            LOGGER.info("Recorded Discord multipart event %s: %s", path, result)
+            return result
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        LOGGER.warning("Discord multipart event rejected with HTTP %s: %s", exc.code, body_text)
+        return {"ok": False, "error": body_text}
 
 
 def submit_backend_event(config: DiscordBotConfig, path: str, payload: dict[str, Any]) -> dict[str, Any]:

@@ -13,6 +13,9 @@ class Settings:
     default_send_interval_seconds: int
     telegram_bot_secret: str
     discord_bot_secret: str
+    openai_api_key: str
+    openai_transcription_model: str
+    openai_summary_model: str
     cors_origins: list[str]
     admin_email: str
     admin_password: str
@@ -29,6 +32,9 @@ def load_settings() -> Settings:
         default_send_interval_seconds=int(os.getenv("AL_DEFAULT_SEND_INTERVAL_SECONDS", "300")),
         telegram_bot_secret=os.getenv("AL_TELEGRAM_BOT_SECRET", "").strip(),
         discord_bot_secret=os.getenv("AL_DISCORD_BOT_SECRET", "").strip(),
+        openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
+        openai_transcription_model=os.getenv("AL_OPENAI_TRANSCRIPTION_MODEL", "whisper-1").strip(),
+        openai_summary_model=os.getenv("AL_OPENAI_SUMMARY_MODEL", "gpt-4o-mini").strip(),
         cors_origins=[origin.strip() for origin in raw_origins.split(",") if origin.strip()],
         admin_email=os.getenv("AL_ADMIN_EMAIL", "").strip(),
         admin_password=os.getenv("AL_ADMIN_PASSWORD", ""),

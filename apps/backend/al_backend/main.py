@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -14,6 +17,7 @@ from .models import (
     CalendarReasonIn,
     DiscordSettingsIn,
     DiscordMeetingAutoAfkIn,
+    DiscordMeetingRecordingStartIn,
     DiscordVoiceEventIn,
     HealthResponse,
     IntervalSettingsIn,
@@ -32,6 +36,7 @@ from .models import (
 from .protocol import decode_alr1, generate_report_challenge_keys
 from .repository import Repository
 from .settings import load_settings
+from .meeting_summary import generate_meeting_summary
 
 
 settings = load_settings()
@@ -77,6 +82,8 @@ PUBLIC_API_PATHS = {
     "/api/v1/telegram/reminders/close",
     "/api/v1/discord/voice-events",
     "/api/v1/discord/meeting-auto-afk",
+    "/api/v1/discord/meeting-recordings/start",
+    "/api/v1/discord/meeting-recordings/finish",
     "/api/v1/discord/settings",
     "/api/v1/auth/login",
     "/api/v1/auth/me",
@@ -366,8 +373,12 @@ def update_intervals(settings_in: IntervalSettingsIn, _: dict = Depends(require_
 
 @app.put("/api/v1/settings/discord")
 def update_discord_settings(settings_in: DiscordSettingsIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
-    return app.state.repo.upsert_discord_settings(
+    return app.state.repo.upsert_discord_summary_settings(
         meeting_auto_afk_timeout_seconds=settings_in.meeting_auto_afk_timeout_seconds,
+        meeting_summaries_enabled=settings_in.meeting_summaries_enabled,
+        meeting_summary_min_participants=settings_in.meeting_summary_min_participants,
+        meeting_summary_min_duration_seconds=settings_in.meeting_summary_min_duration_seconds,
+        meeting_summary_language=settings_in.meeting_summary_language,
     )
 
 
@@ -461,6 +472,66 @@ def record_discord_meeting_auto_afk(event: DiscordMeetingAutoAfkIn, request: Req
     )
 
 
+@app.post("/api/v1/discord/meeting-recordings/start")
+def record_discord_meeting_recording_started(event: DiscordMeetingRecordingStartIn, request: Request) -> dict:
+    require_discord_bot_secret(request)
+    return app.state.repo.record_meeting_recording_started(
+        recording_id=event.recording_id,
+        guild_id=event.guild_id,
+        channel_id=event.channel_id,
+        started_at=event.started_at,
+        participant_discord_user_ids=event.participant_discord_user_ids,
+        participant_names=event.participant_names,
+    )
+
+
+@app.post("/api/v1/discord/meeting-recordings/finish")
+def record_discord_meeting_recording_finished(
+    request: Request,
+    recording_id: str = Form(alias="recordingId"),
+    guild_id: str | None = Form(default=None, alias="guildId"),
+    channel_id: str | None = Form(default=None, alias="channelId"),
+    started_at: str = Form(alias="startedAt"),
+    ended_at: str = Form(alias="endedAt"),
+    participant_discord_user_ids: str = Form(default="[]", alias="participantDiscordUserIds"),
+    participant_names: str = Form(default="[]", alias="participantNames"),
+    audio: UploadFile = File(),
+) -> dict:
+    require_discord_bot_secret(request)
+    participant_ids = json.loads(participant_discord_user_ids or "[]")
+    names = json.loads(participant_names or "[]")
+    temp_path = ""
+
+    try:
+        suffix = os.path.splitext(audio.filename or "meeting.wav")[1] or ".wav"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_path = temp_file.name
+            temp_file.write(audio.file.read())
+
+        return app.state.repo.process_meeting_recording_finished(
+            recording_id=recording_id,
+            guild_id=guild_id,
+            channel_id=channel_id,
+            started_at=started_at,
+            ended_at=ended_at,
+            participant_discord_user_ids=[str(item) for item in participant_ids],
+            participant_names=[str(item) for item in names],
+            audio_path=temp_path,
+            summary_generator=lambda path, people, language: generate_meeting_summary(
+                settings,
+                path,
+                participant_names=people,
+                language=language,
+            ),
+        )
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except FileNotFoundError:
+                pass
+
+
 @app.get("/api/v1/telegram/reminders/due")
 def telegram_due_reminders(request: Request) -> dict:
     require_telegram_bot_secret(request)
@@ -469,6 +540,7 @@ def telegram_due_reminders(request: Request) -> dict:
         "onlinePrompts": app.state.repo.claim_due_telegram_online_prompts(),
         "breakActivityPrompts": app.state.repo.claim_due_telegram_break_activity_prompts(),
         "meetingAutoAfkNotifications": app.state.repo.claim_due_telegram_meeting_auto_afk_notifications(),
+        "meetingSummaryNotifications": app.state.repo.claim_due_telegram_meeting_summary_notifications(),
     }
 
 
@@ -483,6 +555,9 @@ def telegram_reminder_sent(sent: TelegramReminderSentIn, request: Request) -> di
 
     if sent.kind == "meeting_auto_afk":
         return app.state.repo.mark_telegram_meeting_auto_afk_notification_sent(sent.reminder_id, sent.message_id)
+
+    if sent.kind == "meeting_summary":
+        return app.state.repo.mark_telegram_meeting_summary_sent(sent.reminder_id, sent.message_id)
 
     return app.state.repo.mark_telegram_day_reminder_sent(sent.reminder_id, sent.message_id)
 

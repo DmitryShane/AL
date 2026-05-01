@@ -178,6 +178,8 @@ class FakeDb:
         self.telegram_online_prompts = FakeCollection()
         self.telegram_break_activity_prompts = FakeCollection()
         self.telegram_meeting_auto_afk_notifications = FakeCollection()
+        self.meeting_recordings = FakeCollection()
+        self.meeting_summaries = FakeCollection()
         self.break_intervals = FakeCollection()
         self.meeting_events = FakeCollection()
         self.meeting_sessions = FakeCollection()
@@ -1933,10 +1935,75 @@ def test_discord_settings_default_and_save():
 
     assert repo.get_discord_settings()["meetingAutoAfkTimeoutSeconds"] == 600
 
-    result = repo.upsert_discord_settings(900)
+    result = repo.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=900,
+        meeting_summaries_enabled=True,
+        meeting_summary_min_participants=2,
+        meeting_summary_min_duration_seconds=120,
+        meeting_summary_language="English",
+    )
 
     assert result["meetingAutoAfkTimeoutSeconds"] == 900
+    assert result["meetingSummariesEnabled"] is True
     assert repo.get_discord_settings()["meetingAutoAfkTimeoutSeconds"] == 900
+
+
+def test_meeting_recording_finished_creates_summary_notification():
+    repo = fake_repository()
+    repo.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=600,
+        meeting_summaries_enabled=True,
+        meeting_summary_min_participants=2,
+        meeting_summary_min_duration_seconds=60,
+        meeting_summary_language="English",
+    )
+
+    class FakeSummary:
+        transcript = "Dmitry and Igor agreed to create a Discord summary task."
+        summary = "Participants:\n- Dmitry\n- Igor\n\nDecisions:\n- Add Discord summaries.\n\nAction items:\n- Create a task.\n\nOpen questions:\n- None."
+
+    result = repo.process_meeting_recording_finished(
+        recording_id="recording-1",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        ended_at="2026-04-29T10:03:00+00:00",
+        participant_discord_user_ids=["1", "2"],
+        participant_names=["Dmitry", "Igor"],
+        audio_path="/tmp/missing.wav",
+        summary_generator=lambda path, people, language: FakeSummary(),
+    )
+    notifications = repo.claim_due_telegram_meeting_summary_notifications()
+
+    assert result["status"] == "summary_created"
+    assert notifications[0]["summaryId"] == result["summaryId"]
+    assert "Discord summaries" in notifications[0]["summary"]
+
+
+def test_meeting_recording_finished_skips_solo_recording():
+    repo = fake_repository()
+    repo.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=600,
+        meeting_summaries_enabled=True,
+        meeting_summary_min_participants=2,
+        meeting_summary_min_duration_seconds=60,
+        meeting_summary_language="English",
+    )
+
+    result = repo.process_meeting_recording_finished(
+        recording_id="recording-1",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        ended_at="2026-04-29T10:03:00+00:00",
+        participant_discord_user_ids=["1"],
+        participant_names=["Dmitry"],
+        audio_path="/tmp/missing.wav",
+        summary_generator=lambda path, people, language: None,
+    )
+
+    assert result["status"] == "skipped_not_enough_participants"
+    assert repo.db.meeting_summaries.items == []
 
 
 def test_discord_auto_afk_is_idempotent():

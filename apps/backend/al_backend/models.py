@@ -55,6 +55,10 @@ class IntervalSettingsIn(ApiModel):
 
 class DiscordSettingsIn(ApiModel):
     meeting_auto_afk_timeout_seconds: int = Field(alias="meetingAutoAfkTimeoutSeconds", ge=60)
+    meeting_summaries_enabled: bool = Field(default=False, alias="meetingSummariesEnabled")
+    meeting_summary_min_participants: int = Field(default=2, alias="meetingSummaryMinParticipants", ge=1)
+    meeting_summary_min_duration_seconds: int = Field(default=120, alias="meetingSummaryMinDurationSeconds", ge=1)
+    meeting_summary_language: str = Field(default="English", alias="meetingSummaryLanguage", min_length=2)
 
 
 class LoginIn(ApiModel):
@@ -107,7 +111,7 @@ class BreakEventIn(ApiModel):
 class TelegramReminderSentIn(ApiModel):
     reminder_id: str = Field(alias="reminderId", min_length=1)
     message_id: int | None = Field(default=None, alias="messageId")
-    kind: str = Field(default="day_end", alias="kind", pattern="^(day_end|online_prompt|break_activity_prompt|meeting_auto_afk)$")
+    kind: str = Field(default="day_end", alias="kind", pattern="^(day_end|online_prompt|break_activity_prompt|meeting_auto_afk|meeting_summary)$")
 
 
 class TelegramReminderCloseIn(ApiModel):
@@ -136,6 +140,15 @@ class DiscordMeetingAutoAfkIn(ApiModel):
     solo_started_at: str = Field(alias="soloStartedAt", min_length=1)
     moved_at: str | None = Field(default=None, alias="movedAt")
     threshold_seconds: int | None = Field(default=None, alias="thresholdSeconds", ge=1)
+
+
+class DiscordMeetingRecordingStartIn(ApiModel):
+    recording_id: str = Field(alias="recordingId", min_length=1)
+    guild_id: str | None = Field(default=None, alias="guildId")
+    channel_id: str | None = Field(default=None, alias="channelId")
+    started_at: str = Field(alias="startedAt", min_length=1)
+    participant_discord_user_ids: list[str] = Field(default_factory=list, alias="participantDiscordUserIds")
+    participant_names: list[str] = Field(default_factory=list, alias="participantNames")
 
 
 class SubmitReportResponse(ApiModel):

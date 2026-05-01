@@ -106,6 +106,10 @@ class Repository:
         self.db.meeting_intervals.create_index([("rawAuthor", ASCENDING), ("startedAt", ASCENDING), ("endedAt", ASCENDING)])
         self.db.telegram_meeting_auto_afk_notifications.create_index("reminderId", unique=True)
         self.db.telegram_meeting_auto_afk_notifications.create_index("autoAfkEventId", unique=True)
+        self.db.meeting_recordings.create_index("recordingId", unique=True)
+        self.db.meeting_summaries.create_index("summaryId", unique=True)
+        self.db.meeting_summaries.create_index("recordingId", unique=True)
+        self.db.meeting_summaries.create_index([("status", ASCENDING), ("createdAt", ASCENDING)])
         self.db.telegram_day_reminders.create_index("reminderId", unique=True)
         self.db.telegram_day_reminders.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
         self.db.telegram_online_prompts.create_index("reminderId", unique=True)
@@ -393,12 +397,44 @@ class Repository:
 
     def upsert_discord_settings(self, meeting_auto_afk_timeout_seconds: int) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
+        current = self.get_discord_settings()
         self.db.system_settings.update_one(
             {"kind": "discord"},
             {
                 "$set": {
                     "kind": "discord",
                     "meetingAutoAfkTimeoutSeconds": meeting_auto_afk_timeout_seconds,
+                    "meetingSummariesEnabled": current["meetingSummariesEnabled"],
+                    "meetingSummaryMinParticipants": current["meetingSummaryMinParticipants"],
+                    "meetingSummaryMinDurationSeconds": current["meetingSummaryMinDurationSeconds"],
+                    "meetingSummaryLanguage": current["meetingSummaryLanguage"],
+                    "updatedAt": now,
+                }
+            },
+            upsert=True,
+        )
+        return self.get_discord_settings()
+
+    def upsert_discord_summary_settings(
+        self,
+        *,
+        meeting_auto_afk_timeout_seconds: int,
+        meeting_summaries_enabled: bool,
+        meeting_summary_min_participants: int,
+        meeting_summary_min_duration_seconds: int,
+        meeting_summary_language: str,
+    ) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        self.db.system_settings.update_one(
+            {"kind": "discord"},
+            {
+                "$set": {
+                    "kind": "discord",
+                    "meetingAutoAfkTimeoutSeconds": meeting_auto_afk_timeout_seconds,
+                    "meetingSummariesEnabled": meeting_summaries_enabled,
+                    "meetingSummaryMinParticipants": meeting_summary_min_participants,
+                    "meetingSummaryMinDurationSeconds": meeting_summary_min_duration_seconds,
+                    "meetingSummaryLanguage": meeting_summary_language.strip() or "English",
                     "updatedAt": now,
                 }
             },
@@ -411,7 +447,11 @@ class Repository:
         return {
             "meetingAutoAfkTimeoutSeconds": int(
                 settings.get("meetingAutoAfkTimeoutSeconds", DEFAULT_DISCORD_MEETING_AUTO_AFK_TIMEOUT_SECONDS)
-            )
+            ),
+            "meetingSummariesEnabled": bool(settings.get("meetingSummariesEnabled", False)),
+            "meetingSummaryMinParticipants": int(settings.get("meetingSummaryMinParticipants", 2)),
+            "meetingSummaryMinDurationSeconds": int(settings.get("meetingSummaryMinDurationSeconds", 120)),
+            "meetingSummaryLanguage": str(settings.get("meetingSummaryLanguage") or "English"),
         }
 
     def create_report_challenge(self, challenge_in: Any, keys: Any) -> dict[str, Any]:
@@ -2117,6 +2157,7 @@ class Repository:
             "meetingEvents": self.db.meeting_events.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "meetingSessions": self.db.meeting_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "meetingIntervals": self.db.meeting_intervals.delete_many({"rawAuthor": normalized_author}).deleted_count,
+            "meetingSummaries": self.db.meeting_summaries.delete_many({"participantNames": normalized_author}).deleted_count,
             "reportChallenges": self.db.report_challenges.delete_many({"author": normalized_author}).deleted_count,
         }
 
@@ -2586,6 +2627,144 @@ class Repository:
             upsert=True,
         )
 
+    def record_meeting_recording_started(
+        self,
+        *,
+        recording_id: str,
+        guild_id: str | None,
+        channel_id: str | None,
+        started_at: str,
+        participant_discord_user_ids: list[str],
+        participant_names: list[str],
+    ) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        started = _parse_timestamp(started_at)
+        self.db.meeting_recordings.update_one(
+            {"recordingId": recording_id},
+            {
+                "$setOnInsert": {
+                    "recordingId": recording_id,
+                    "guildId": str(guild_id or ""),
+                    "channelId": str(channel_id or ""),
+                    "startedAt": started,
+                    "participantDiscordUserIds": participant_discord_user_ids,
+                    "participantNames": participant_names,
+                    "status": "recording",
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+            },
+            upsert=True,
+        )
+        return {"ok": True, "status": "recording_started"}
+
+    def process_meeting_recording_finished(
+        self,
+        *,
+        recording_id: str,
+        guild_id: str | None,
+        channel_id: str | None,
+        started_at: str,
+        ended_at: str,
+        participant_discord_user_ids: list[str],
+        participant_names: list[str],
+        audio_path: str,
+        summary_generator: Any,
+    ) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        started = _parse_timestamp(started_at)
+        ended = _parse_timestamp(ended_at)
+        duration_seconds = max(0, int((ended - started).total_seconds()))
+        settings = self.get_discord_settings()
+
+        if len(participant_discord_user_ids) < int(settings["meetingSummaryMinParticipants"]):
+            status = "skipped_not_enough_participants"
+            self._mark_meeting_recording_finished(recording_id, status, ended, duration_seconds, now)
+            return {"ok": True, "status": status}
+
+        if duration_seconds < int(settings["meetingSummaryMinDurationSeconds"]):
+            status = "skipped_too_short"
+            self._mark_meeting_recording_finished(recording_id, status, ended, duration_seconds, now)
+            return {"ok": True, "status": status}
+
+        existing = self.db.meeting_summaries.find_one({"recordingId": recording_id}, {"_id": 0})
+
+        if existing:
+            return {"ok": True, "status": "summary_already_created", "summaryId": existing.get("summaryId")}
+
+        try:
+            result = summary_generator(audio_path, participant_names, str(settings["meetingSummaryLanguage"]))
+        except Exception as exc:
+            status = "summary_failed"
+            self.db.meeting_recordings.update_one(
+                {"recordingId": recording_id},
+                {"$set": {"status": status, "error": str(exc), "endedAt": ended, "durationSeconds": duration_seconds, "updatedAt": now}},
+                upsert=True,
+            )
+            return {"ok": False, "status": status, "error": str(exc)}
+
+        transcript = str(getattr(result, "transcript", "") or "").strip()
+        summary = str(getattr(result, "summary", "") or "").strip()
+
+        if not transcript or not summary:
+            status = "skipped_empty_transcript"
+            self._mark_meeting_recording_finished(recording_id, status, ended, duration_seconds, now)
+            return {"ok": True, "status": status}
+
+        summary_id = _new_id()
+        self.db.meeting_summaries.insert_one(
+            {
+                "summaryId": summary_id,
+                "recordingId": recording_id,
+                "guildId": str(guild_id or ""),
+                "channelId": str(channel_id or ""),
+                "startedAt": started,
+                "endedAt": ended,
+                "durationSeconds": duration_seconds,
+                "participantDiscordUserIds": participant_discord_user_ids,
+                "participantNames": participant_names,
+                "summary": summary,
+                "status": "pending",
+                "createdAt": now,
+                "updatedAt": now,
+            }
+        )
+        self.db.meeting_recordings.update_one(
+            {"recordingId": recording_id},
+            {
+                "$set": {
+                    "status": "summarized",
+                    "endedAt": ended,
+                    "durationSeconds": duration_seconds,
+                    "summaryId": summary_id,
+                    "updatedAt": now,
+                }
+            },
+            upsert=True,
+        )
+        return {"ok": True, "status": "summary_created", "summaryId": summary_id}
+
+    def _mark_meeting_recording_finished(
+        self,
+        recording_id: str,
+        status: str,
+        ended_at: dt.datetime,
+        duration_seconds: int,
+        updated_at: dt.datetime,
+    ) -> None:
+        self.db.meeting_recordings.update_one(
+            {"recordingId": recording_id},
+            {
+                "$set": {
+                    "status": status,
+                    "endedAt": ended_at,
+                    "durationSeconds": duration_seconds,
+                    "updatedAt": updated_at,
+                }
+            },
+            upsert=True,
+        )
+
     def claim_due_telegram_day_reminders(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
         now = now or dt.datetime.now(dt.UTC)
         reminders: list[dict[str, Any]] = []
@@ -3033,6 +3212,49 @@ class Repository:
         now = dt.datetime.now(dt.UTC)
         self.db.telegram_meeting_auto_afk_notifications.update_one(
             {"reminderId": reminder_id},
+            {
+                "$set": {
+                    "status": "sent",
+                    "messageId": message_id,
+                    "sentAt": now,
+                    "updatedAt": now,
+                }
+            },
+        )
+        return {"ok": True}
+
+    def claim_due_telegram_meeting_summary_notifications(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
+        now = now or dt.datetime.now(dt.UTC)
+        notifications: list[dict[str, Any]] = []
+
+        for doc in self.db.meeting_summaries.find({"status": "pending"}, {"_id": 0}):
+            summary_id = str(doc.get("summaryId") or "")
+
+            if not summary_id:
+                continue
+
+            self.db.meeting_summaries.update_one(
+                {"summaryId": summary_id},
+                {"$set": {"status": "claimed", "lastClaimedAt": now, "updatedAt": now}},
+            )
+            notifications.append(
+                {
+                    "summaryId": summary_id,
+                    "recordingId": doc.get("recordingId"),
+                    "participantNames": doc.get("participantNames", []),
+                    "startedAt": _isoformat_or_none(doc.get("startedAt")),
+                    "endedAt": _isoformat_or_none(doc.get("endedAt")),
+                    "durationSeconds": int(doc.get("durationSeconds", 0)),
+                    "summary": doc.get("summary", ""),
+                }
+            )
+
+        return notifications
+
+    def mark_telegram_meeting_summary_sent(self, summary_id: str, message_id: int | None = None) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        self.db.meeting_summaries.update_one(
+            {"summaryId": summary_id},
             {
                 "$set": {
                     "status": "sent",

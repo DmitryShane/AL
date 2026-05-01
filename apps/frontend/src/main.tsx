@@ -14,6 +14,18 @@ const REFRESH_INTERVAL_MS = 10000;
 const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
 const ACTIVITY_AUTHOR_STORAGE_KEY = "AL.Dashboard.ActivityAuthor";
 const AUTH_HINT_STORAGE_KEY = "AL.Dashboard.Authenticated";
+const MEETING_SUMMARY_LANGUAGES = [
+  "English",
+  "Spanish",
+  "French",
+  "German",
+  "Portuguese",
+  "Italian",
+  "Russian",
+  "Chinese",
+  "Japanese",
+  "Korean"
+];
 
 function apiFetch(path: string, init: RequestInit = {}) {
   return fetch(`${API_URL}${path}`, { ...init, credentials: "include" });
@@ -186,6 +198,10 @@ type Summary = {
   };
   discordSettings: {
     meetingAutoAfkTimeoutSeconds: number;
+    meetingSummariesEnabled: boolean;
+    meetingSummaryMinParticipants: number;
+    meetingSummaryMinDurationSeconds: number;
+    meetingSummaryLanguage: string;
   };
   activitySummary: ActivitySummary;
 };
@@ -1759,10 +1775,14 @@ function SettingsPage({
 }) {
   const profiles = summary?.activitySummary.profiles ?? [];
   const aliases = summary?.activitySummary.authorAliases ?? [];
-  const [settingsTab, setSettingsTab] = useState<"authors" | "discord" | "users">("authors");
+  const [settingsTab, setSettingsTab] = useState<"authors" | "discord" | "meetingSummaries" | "users">("authors");
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
   const [discordAutoAfkTimeout, setDiscordAutoAfkTimeout] = useState(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
+  const [meetingSummariesEnabled, setMeetingSummariesEnabled] = useState(Boolean(summary?.discordSettings.meetingSummariesEnabled));
+  const [meetingSummaryMinParticipants, setMeetingSummaryMinParticipants] = useState(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
+  const [meetingSummaryMinDuration, setMeetingSummaryMinDuration] = useState(String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120));
+  const [meetingSummaryLanguage, setMeetingSummaryLanguage] = useState(summary?.discordSettings.meetingSummaryLanguage ?? "English");
   const [saving, setSaving] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
   const [aliasError, setAliasError] = useState("");
@@ -1782,6 +1802,10 @@ function SettingsPage({
     setDrafts(nextDrafts);
     setGlobalInterval(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
     setDiscordAutoAfkTimeout(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
+    setMeetingSummariesEnabled(Boolean(summary?.discordSettings.meetingSummariesEnabled));
+    setMeetingSummaryMinParticipants(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
+    setMeetingSummaryMinDuration(String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120));
+    setMeetingSummaryLanguage(summary?.discordSettings.meetingSummaryLanguage ?? "English");
   }, [summary]);
 
   useEffect(() => {
@@ -1899,7 +1923,13 @@ function SettingsPage({
       const response = await apiFetch(`/api/v1/settings/discord`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ meetingAutoAfkTimeoutSeconds: Number(discordAutoAfkTimeout) })
+        body: JSON.stringify({
+          meetingAutoAfkTimeoutSeconds: Number(discordAutoAfkTimeout),
+          meetingSummariesEnabled,
+          meetingSummaryMinParticipants: Number(meetingSummaryMinParticipants),
+          meetingSummaryMinDurationSeconds: Number(meetingSummaryMinDuration),
+          meetingSummaryLanguage
+        })
       });
 
       if (!response.ok) {
@@ -2054,6 +2084,7 @@ function SettingsPage({
       <div className="settings-tabs">
         <button className={settingsTab === "authors" ? "active" : ""} onClick={() => setSettingsTab("authors")}>Author Profiles</button>
         <button className={settingsTab === "discord" ? "active" : ""} onClick={() => setSettingsTab("discord")}>Discord</button>
+        <button className={settingsTab === "meetingSummaries" ? "active" : ""} onClick={() => setSettingsTab("meetingSummaries")}>Meeting Summaries</button>
         <button className={settingsTab === "users" ? "active" : ""} onClick={() => setSettingsTab("users")}>Site Users</button>
       </div>
       {settingsTab === "authors" ? (
@@ -2351,6 +2382,56 @@ function SettingsPage({
                 min="60"
                 step="30"
               />
+            </label>
+            <button className={settingsSaveButtonClassName(saveStatus.discord)} onClick={() => void saveDiscordSettings()} disabled={saving === "discord"}>
+              {settingsSaveButtonLabel("discord", saving, saveStatus)}
+            </button>
+          </div>
+        </div>
+      ) : settingsTab === "meetingSummaries" ? (
+        <div className="panel">
+          <h2>Meeting Summaries</h2>
+          <p className="settings-caption">
+            Configure automatic Discord meeting summaries sent to the work Telegram chat.
+          </p>
+          <div className="settings-row">
+            <label>
+              Meeting summaries
+              <span className="checkbox-cell">
+                <input
+                  type="checkbox"
+                  checked={meetingSummariesEnabled}
+                  onChange={(event) => setMeetingSummariesEnabled(event.target.checked)}
+                />
+                Enabled
+              </span>
+            </label>
+            <label>
+              Min participants
+              <input
+                value={meetingSummaryMinParticipants}
+                onChange={(event) => setMeetingSummaryMinParticipants(event.target.value)}
+                type="number"
+                min="1"
+              />
+            </label>
+            <label>
+              Min duration, sec
+              <input
+                value={meetingSummaryMinDuration}
+                onChange={(event) => setMeetingSummaryMinDuration(event.target.value)}
+                type="number"
+                min="1"
+                step="30"
+              />
+            </label>
+            <label>
+              Summary language
+              <select value={meetingSummaryLanguage} onChange={(event) => setMeetingSummaryLanguage(event.target.value)}>
+                {MEETING_SUMMARY_LANGUAGES.map((language) => (
+                  <option value={language} key={language}>{language}</option>
+                ))}
+              </select>
             </label>
             <button className={settingsSaveButtonClassName(saveStatus.discord)} onClick={() => void saveDiscordSettings()} disabled={saving === "discord"}>
               {settingsSaveButtonLabel("discord", saving, saveStatus)}
