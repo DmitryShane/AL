@@ -3228,6 +3228,19 @@ class Repository:
         return _empty_event_deltas() if suppress_deltas else deltas
 
     def _normal_microseconds_consumed_for_event(self, event: dict[str, Any]) -> int:
+        work_window_microseconds = DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
+        day_session = self.db.day_sessions.find_one(
+            {
+                "rawAuthor": event.get("author") or "Unknown User",
+                "date": event.get("date") or "",
+                "reminderAction": "overtime",
+            },
+            {"_id": 0, "daySeconds": 1},
+        )
+
+        if day_session and int(day_session.get("daySeconds", 0)) >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS:
+            return work_window_microseconds
+
         consumed_microseconds = 0
 
         for current in self.db.daily_author_activity.find(
@@ -3240,7 +3253,7 @@ class Repository:
             consumed_microseconds += _time_microseconds(current, "activeSeconds", "activeMicroseconds")
             consumed_microseconds += _time_microseconds(current, "idleSeconds", "idleMicroseconds")
 
-        return min(DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND, max(0, consumed_microseconds))
+        return min(work_window_microseconds, max(0, consumed_microseconds))
 
     def _update_daily_author_activity(self, snapshot: dict[str, Any], deltas: dict[str, Any]) -> None:
         key = {
