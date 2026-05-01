@@ -185,6 +185,14 @@ type Summary = {
   activitySummary: ActivitySummary;
 };
 
+type ReportsPage = {
+  reports: Report[];
+  total: number;
+  limit: number;
+  offset: number;
+  sources: string[];
+};
+
 type SiteUserRole = "admin" | "editor" | "viewer";
 
 type SiteUser = {
@@ -560,7 +568,6 @@ function App() {
         {page === "activity" ? (
               <ActivityPage
                 summary={activitySummary}
-                reports={summary?.reports ?? []}
                 dateRange={appliedDateRange}
                 selectedAuthor={activeAuthor}
                 setSelectedAuthor={setSelectedAuthor}
@@ -1471,7 +1478,6 @@ function AlertSummaryMetric({ label, value, tone }: { label: string; value: numb
 
 function ActivityPage({
   summary,
-  reports,
   dateRange,
   selectedAuthor,
   setSelectedAuthor,
@@ -1479,7 +1485,6 @@ function ActivityPage({
   onRefreshAuthor
 }: {
   summary: ActivitySummary;
-  reports: Report[];
   dateRange: DateRange;
   selectedAuthor: string | null;
   setSelectedAuthor: (value: string) => void;
@@ -1493,12 +1498,92 @@ function ActivityPage({
   const authorHourly = hourly.length || !author
     ? hourly
     : [{ author: author.displayName, rawAuthor: author.rawAuthor, status: author.status, hourlyActivity: [] }];
-  const authorReports = reports.filter((report) => report.author === author?.rawAuthor);
   const activityMix = author?.activityMix ?? [];
   const savedPrefabs = author?.savedPrefabs ?? [];
   const overtimeActivityMix = author?.overtimeActivityMix ?? [];
   const overtimeSavedPrefabs = author?.overtimeSavedPrefabs ?? [];
   const cardAuthors = [...summary.authors].sort((left, right) => compareAuthorCardStatus(left, right, dateRange));
+  const [reports, setReports] = useState<Report[]>([]);
+  const [reportsTotal, setReportsTotal] = useState(0);
+  const [reportSources, setReportSources] = useState<string[]>([]);
+  const [reportsLoading, setReportsLoading] = useState(false);
+  const [reportsError, setReportsError] = useState<string | null>(null);
+  const [reportsPageSize, setReportsPageSize] = useState(10);
+  const [reportsPage, setReportsPage] = useState(1);
+  const [reportSourceFilter, setReportSourceFilter] = useState("");
+
+  useEffect(() => {
+    setReportsPage(1);
+  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportsPageSize, reportSourceFilter]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadReports() {
+      if (!author?.rawAuthor) {
+        setReports([]);
+        setReportsTotal(0);
+        setReportSources([]);
+        return;
+      }
+
+      setReportsLoading(true);
+      setReportsError(null);
+
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        author: author.rawAuthor,
+        limit: String(reportsPageSize),
+        offset: String((reportsPage - 1) * reportsPageSize)
+      });
+
+      if (dateRange.preset === "live") {
+        params.set("dateMode", "authorLocalToday");
+      }
+
+      if (reportSourceFilter) {
+        params.set("source", reportSourceFilter);
+      }
+
+      try {
+        const response = await apiFetch(`/api/v1/reports/table?${params.toString()}`);
+
+        if (!response.ok) {
+          throw new Error("Reports request failed");
+        }
+
+        const payload = (await response.json()) as ReportsPage;
+
+        if (ignore) {
+          return;
+        }
+
+        setReports(payload.reports);
+        setReportsTotal(payload.total);
+        setReportSources(payload.sources);
+      } catch (requestError) {
+        if (ignore) {
+          return;
+        }
+
+        setReports([]);
+        setReportsTotal(0);
+        setReportSources([]);
+        setReportsError(requestError instanceof Error ? requestError.message : "Unknown error");
+      } finally {
+        if (!ignore) {
+          setReportsLoading(false);
+        }
+      }
+    }
+
+    void loadReports();
+
+    return () => {
+      ignore = true;
+    };
+  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportsPage, reportsPageSize, reportSourceFilter]);
 
   return (
     <section className="page-section">
@@ -1603,7 +1688,19 @@ function ActivityPage({
             />
           </div>
 
-          <ReportsTable reports={authorReports} />
+          <ReportsTable
+            reports={reports}
+            total={reportsTotal}
+            page={reportsPage}
+            pageSize={reportsPageSize}
+            sourceFilter={reportSourceFilter}
+            sourceOptions={reportSources}
+            loading={reportsLoading}
+            error={reportsError}
+            setPage={setReportsPage}
+            setPageSize={setReportsPageSize}
+            setSourceFilter={setReportSourceFilter}
+          />
         </>
       ) : (
         <p className="empty">No author activity for this period.</p>
@@ -2453,50 +2550,48 @@ function AuthorProfileDeleteConfirm({
   );
 }
 
-function ReportsTable({ reports }: { reports: Report[] }) {
+function ReportsTable({
+  reports,
+  total,
+  page,
+  pageSize,
+  sourceFilter,
+  sourceOptions,
+  loading,
+  error,
+  setPage,
+  setPageSize,
+  setSourceFilter
+}: {
+  reports: Report[];
+  total: number;
+  page: number;
+  pageSize: number;
+  sourceFilter: string;
+  sourceOptions: string[];
+  loading: boolean;
+  error: string | null;
+  setPage: (value: number | ((current: number) => number)) => void;
+  setPageSize: (value: number) => void;
+  setSourceFilter: (value: string) => void;
+}) {
   const pageSizeOptions = [10, 25, 50];
-  const [pageSize, setPageSize] = useState(10);
-  const [page, setPage] = useState(1);
-  const [sourceFilter, setSourceFilter] = useState("");
-
-  const sourceOptions = useMemo(() => {
-    const keys = new Set<string>();
-
-    for (const report of reports) {
-      keys.add(report.source ?? "");
-    }
-
-    return [...keys].sort((left, right) => formatSource(left || undefined).localeCompare(formatSource(right || undefined)));
-  }, [reports]);
-
-  const filteredReports = useMemo(() => {
-    if (!sourceFilter) {
-      return reports;
-    }
-
-    return reports.filter((report) => (report.source ?? "") === sourceFilter);
-  }, [reports, sourceFilter]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredReports.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * pageSize;
-  const pageReports = filteredReports.slice(pageStart, pageStart + pageSize);
+  const pageEnd = Math.min(pageStart + reports.length, total);
 
   useEffect(() => {
     if (!sourceFilter) {
       return;
     }
 
-    const available = new Set(reports.map((item) => item.source ?? ""));
+    const available = new Set(sourceOptions);
 
     if (!available.has(sourceFilter)) {
       setSourceFilter("");
     }
-  }, [reports, sourceFilter]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [pageSize, reports, sourceFilter]);
+  }, [sourceOptions, sourceFilter, setSourceFilter]);
 
   return (
     <section className="panel table-panel">
@@ -2526,7 +2621,10 @@ function ReportsTable({ reports }: { reports: Report[] }) {
           <span>Type</span>
           <span>Timezone</span>
         </div>
-        {pageReports.map((report, index) => (
+        {loading ? <div className="table-row"><span>Loading reports...</span></div> : null}
+        {error ? <div className="table-row"><span>{error}</span></div> : null}
+        {!loading && !error && reports.length === 0 ? <div className="table-row"><span>No reports for this period.</span></div> : null}
+        {!loading && !error ? reports.map((report, index) => (
           <div className="table-row" key={`${report.recordedAt ?? "report"}-${index}`}>
             <span className="source-cell">{sourceIcon(report.source)}{formatSource(report.source)}</span>
             <span>{report.displayName ?? report.author ?? "Unknown User"}</span>
@@ -2538,13 +2636,11 @@ function ReportsTable({ reports }: { reports: Report[] }) {
             <span className={reportTypeBadgeClassName(report.reportType)}>{formatReportType(report)}</span>
             <span>{formatTimeZoneLabel(report) ?? "-"}</span>
           </div>
-        ))}
+        )) : null}
       </div>
       <div className="table-pagination">
         <span>
-          Rows {filteredReports.length ? pageStart + 1 : 0}-{Math.min(pageStart + pageSize, filteredReports.length)} of{" "}
-          {filteredReports.length}
-          {sourceFilter ? ` (filtered from ${reports.length})` : ""}
+          Rows {total ? pageStart + 1 : 0}-{pageEnd} of {total}
         </span>
         <label>
           Rows per page

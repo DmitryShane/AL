@@ -82,6 +82,8 @@ class Repository:
             [("sessionId", ASCENDING), ("date", ASCENDING), ("recordedAt", DESCENDING)]
         )
         self.db.report_rows.create_index([("receivedAt", DESCENDING)])
+        self.db.report_rows.create_index([("date", ASCENDING), ("receivedAt", DESCENDING)])
+        self.db.report_rows.create_index([("author", ASCENDING), ("date", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.report_rows.create_index(
             [("source", ASCENDING), ("author", ASCENDING), ("sessionId", ASCENDING), ("date", ASCENDING)]
         )
@@ -98,6 +100,7 @@ class Repository:
         self.db.break_sessions.create_index("telegramUsername", unique=True)
         self.db.meeting_events.create_index([("discordUserId", ASCENDING), ("timestamp", DESCENDING)])
         self.db.meeting_sessions.create_index("discordUserId", unique=True)
+        self.db.meeting_sessions.create_index([("rawAuthor", ASCENDING), ("startedAt", ASCENDING)])
         self.db.meeting_intervals.create_index([("rawAuthor", ASCENDING), ("startedAt", ASCENDING), ("endedAt", ASCENDING)])
         self.db.telegram_day_reminders.create_index("reminderId", unique=True)
         self.db.telegram_day_reminders.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
@@ -580,6 +583,8 @@ class Repository:
         start_date: str | None = None,
         end_date: str | None = None,
         date_mode: str | None = None,
+        author: str | None = None,
+        source: str | None = None,
     ) -> list[dict[str, Any]]:
         reports = []
         projection = {
@@ -615,7 +620,16 @@ class Repository:
         now = dt.datetime.now(dt.UTC)
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
-        for item in self.db.report_rows.find(query, projection).sort("receivedAt", DESCENDING):
+        if author:
+            query["author"] = self.resolve_author_alias(author)
+
+        if source:
+            query["source"] = source
+
+        report_rows = list(self.db.report_rows.find(query, projection).sort("receivedAt", DESCENDING))
+        meeting_lookup = self._meeting_lookup_for_reports(report_rows)
+
+        for item in report_rows:
             if date_mode == "authorLocalToday" and not _is_author_local_today(
                 item.get("date"),
                 item.get("author") or "Unknown User",
@@ -625,7 +639,7 @@ class Repository:
             ):
                 continue
 
-            if self._is_empty_plugin_report_without_signal(item) or self._is_idle_report_during_meeting(item):
+            if self._is_empty_plugin_report_without_signal(item) or self._is_idle_report_during_meeting(item, meeting_lookup):
                 continue
 
             profile = profiles.get(item.get("author") or "Unknown User", {})
@@ -639,7 +653,43 @@ class Repository:
 
         return reports
 
-    def _is_idle_report_during_meeting(self, report_row: dict[str, Any]) -> bool:
+    def reports_page(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_mode: str | None = None,
+        author: str | None = None,
+        source: str | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        all_reports = self.latest_reports(
+            start_date=start_date,
+            end_date=end_date,
+            date_mode=date_mode,
+            author=author,
+        )
+        sources = sorted(
+            {str(item.get("source") or "") for item in all_reports},
+            key=lambda value: value.lower(),
+        )
+        reports = [item for item in all_reports if not source or str(item.get("source") or "") == source]
+
+        return {
+            "reports": reports[offset : offset + limit],
+            "total": len(reports),
+            "limit": limit,
+            "offset": offset,
+            "sources": sources,
+        }
+
+    def _is_idle_report_during_meeting(
+        self,
+        report_row: dict[str, Any],
+        meeting_lookup: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
+    ) -> bool:
         if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
             return False
 
@@ -656,6 +706,24 @@ class Repository:
         if not recorded_at:
             return False
 
+        if meeting_lookup is not None:
+            author_lookup = meeting_lookup.get(raw_author, {})
+
+            for interval in author_lookup.get("intervals", []):
+                started_at = interval.get("startedAt")
+                ended_at = interval.get("endedAt")
+
+                if started_at and ended_at and started_at <= recorded_at <= ended_at:
+                    return True
+
+            for session in author_lookup.get("sessions", []):
+                started_at = session.get("startedAt")
+
+                if started_at and started_at <= recorded_at:
+                    return True
+
+            return False
+
         if self.db.meeting_intervals.find_one(
             {"rawAuthor": raw_author, "startedAt": {"$lte": recorded_at}, "endedAt": {"$gte": recorded_at}},
             {"_id": 1},
@@ -668,6 +736,65 @@ class Repository:
                 {"_id": 1},
             )
         )
+
+    def _meeting_lookup_for_reports(self, report_rows: list[dict[str, Any]]) -> dict[str, dict[str, list[dict[str, Any]]]]:
+        candidate_times_by_author: dict[str, list[dt.datetime]] = {}
+
+        for report_row in report_rows:
+            if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
+                continue
+
+            idle_seconds = int(report_row.get("idleDeltaSeconds", 0))
+            active_seconds = int(report_row.get("activeDeltaSeconds", 0))
+            overtime_seconds = int(report_row.get("overtimeActiveDeltaSeconds", 0))
+
+            if idle_seconds <= 0 or active_seconds > 0 or overtime_seconds > 0:
+                continue
+
+            recorded_at = _coerce_datetime(
+                report_row.get("recordedAt") or report_row.get("lastRecordedAt") or report_row.get("receivedAt")
+            )
+
+            if not recorded_at:
+                continue
+
+            raw_author = str(report_row.get("author") or "Unknown User")
+            candidate_times_by_author.setdefault(raw_author, []).append(recorded_at)
+
+        if not candidate_times_by_author:
+            return {}
+
+        authors = sorted(candidate_times_by_author)
+        min_recorded_at = min(min(values) for values in candidate_times_by_author.values())
+        max_recorded_at = max(max(values) for values in candidate_times_by_author.values())
+        lookup = {author: {"intervals": [], "sessions": []} for author in authors}
+
+        for interval in self.db.meeting_intervals.find(
+            {
+                "rawAuthor": {"$in": authors},
+                "startedAt": {"$lte": max_recorded_at},
+                "endedAt": {"$gte": min_recorded_at},
+            },
+            {"_id": 0},
+        ):
+            raw_author = str(interval.get("rawAuthor") or "")
+            started_at = _coerce_datetime(interval.get("startedAt"))
+            ended_at = _coerce_datetime(interval.get("endedAt"))
+
+            if raw_author in lookup and started_at and ended_at:
+                lookup[raw_author]["intervals"].append({"startedAt": started_at, "endedAt": ended_at})
+
+        for session in self.db.meeting_sessions.find(
+            {"rawAuthor": {"$in": authors}, "startedAt": {"$lte": max_recorded_at}},
+            {"_id": 0},
+        ):
+            raw_author = str(session.get("rawAuthor") or "")
+            started_at = _coerce_datetime(session.get("startedAt"))
+
+            if raw_author in lookup and started_at:
+                lookup[raw_author]["sessions"].append({"startedAt": started_at})
+
+        return lookup
 
     def _is_empty_plugin_report_without_signal(self, report_row: dict[str, Any]) -> bool:
         if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
@@ -1060,8 +1187,10 @@ class Repository:
     ) -> None:
         latest_by_author: dict[str, dict[str, Any]] = {}
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+        report_rows = list(self.db.report_rows.find(query, {"_id": 0}))
+        meeting_lookup = self._meeting_lookup_for_reports(report_rows)
 
-        for report in self.db.report_rows.find(query, {"_id": 0}):
+        for report in report_rows:
             raw_author = str(report.get("author") or "Unknown User")
 
             if raw_author not in authors_by_raw:
@@ -1076,7 +1205,7 @@ class Repository:
             ):
                 continue
 
-            if self._is_empty_plugin_report_without_signal(report) or self._is_idle_report_during_meeting(report):
+            if self._is_empty_plugin_report_without_signal(report) or self._is_idle_report_during_meeting(report, meeting_lookup):
                 continue
 
             received_at = _coerce_datetime(report.get("receivedAt") or report.get("lastReceivedAt"))

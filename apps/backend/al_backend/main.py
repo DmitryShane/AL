@@ -330,6 +330,27 @@ def request_report_refresh(refresh: ReportRefreshRequest, _: dict = Depends(requ
     return app.state.repo.request_report_refresh(author=refresh.author)
 
 
+@app.get("/api/v1/reports/table")
+def reports_table(
+    start_date: str | None = Query(default=None, alias="startDate"),
+    end_date: str | None = Query(default=None, alias="endDate"),
+    date_mode: str | None = Query(default=None, alias="dateMode"),
+    author: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    limit: int = Query(default=25, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    return app.state.repo.reports_page(
+        start_date=start_date,
+        end_date=end_date,
+        date_mode=date_mode,
+        author=author,
+        source=source,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @app.put("/api/v1/settings/intervals")
 def update_intervals(settings_in: IntervalSettingsIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.upsert_interval_settings(
@@ -488,7 +509,7 @@ def reports_summary(
 ) -> SummaryResponse:
     return SummaryResponse(
         authors=app.state.repo.list_authors(),
-        reports=app.state.repo.latest_reports(start_date=start_date, end_date=end_date, date_mode=date_mode),
+        reports=[],
         intervalSettings=app.state.repo.get_interval_settings(),
         activitySummary=app.state.repo.activity_summary(start_date=start_date, end_date=end_date, date_mode=date_mode),
     )

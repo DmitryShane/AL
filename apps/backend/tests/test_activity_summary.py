@@ -127,6 +127,9 @@ class FakeCollection:
                 if "$regex" in value and not re.search(value["$regex"], str(item_value or "")):
                     return False
 
+                if item_value is None and any(operator in value for operator in ("$gte", "$lte", "$lt", "$gt")):
+                    return False
+
                 if "$gte" in value and item_value < value["$gte"]:
                     return False
 
@@ -1486,6 +1489,61 @@ def test_idle_only_reports_during_discord_meeting_are_hidden_from_latest_reports
     reports = repo.latest_reports(start_date="2026-04-29", end_date="2026-04-29")
 
     assert [report["source"] for report in reports] == ["discord"]
+
+
+def test_reports_page_paginates_author_reports_and_keeps_source_options():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+
+    for index, source in enumerate(["ual", "bal", "ual"]):
+        repo.db.report_rows.insert_one(
+            {
+                "source": source,
+                "author": "Future Artist",
+                "date": "2026-04-29",
+                "recordedAt": f"2026-04-29T10:0{index}:00+00:00",
+                "receivedAt": dt.datetime(2026, 4, 29, 10, index, tzinfo=dt.UTC),
+                "activeDeltaSeconds": 60,
+                "idleDeltaSeconds": 0,
+                "overtimeActiveDeltaSeconds": 0,
+            }
+        )
+
+    repo.db.report_rows.insert_one(
+        {
+            "source": "vsc",
+            "author": "Other Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T10:05:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 5, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+
+    first_page = repo.reports_page(
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        author="Future Artist",
+        limit=2,
+        offset=0,
+    )
+    filtered_page = repo.reports_page(
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        author="Future Artist",
+        source="ual",
+        limit=10,
+        offset=0,
+    )
+
+    assert first_page["total"] == 3
+    assert len(first_page["reports"]) == 2
+    assert first_page["sources"] == ["bal", "ual"]
+    assert filtered_page["total"] == 2
+    assert [report["source"] for report in filtered_page["reports"]] == ["ual", "ual"]
+    assert filtered_page["sources"] == ["bal", "ual"]
 
 
 def test_activity_summary_author_source_uses_latest_report_row():
