@@ -104,6 +104,7 @@ Production runs at `activity.mempic.com`. When the user asks to pull production 
 
 ## Push Command
 
-- In owner chat, the word **"пуш"** means: review current changes, write a short accurate commit message, commit the relevant files, and push the current branch so the automatic deploy workflow can update production.
+- In owner chat, the word **"пуш"** means: review current changes, write a short accurate commit message, commit the relevant files, and push **only the current `AL` repository** (`/Volumes/MacMiniExternal2TB/Development/AL`) so the automatic deploy workflow can update production.
+- Do not commit or push any linked/external repository (for example `/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2` or `Packages/com.al.ual`) as part of **"пуш"**. Only do that when the user explicitly names that repository or separately asks to push it.
 - Before committing, inspect `git status --short` and the diff. Do not include secrets, environment files, MongoDB dumps, restored data exports, or unrelated user changes.
 - Keep the commit message concise and focused on the actual production change. After pushing, report the commit message and push result briefly.

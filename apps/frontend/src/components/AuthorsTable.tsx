@@ -134,6 +134,10 @@ function formatSource(source?: string) {
     return "VS Code";
   }
 
+  if (source === "cur") {
+    return "Cursor";
+  }
+
   if (source === "telegram") {
     return "Telegram";
   }
