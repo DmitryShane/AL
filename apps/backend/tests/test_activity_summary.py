@@ -3326,6 +3326,23 @@ def test_hourly_break_subtracts_idle_with_active_priority():
     assert hourly[16]["idleSeconds"] == 20 * 60
 
 
+def test_hourly_break_consumption_prevents_double_counting_across_sources():
+    first_source = _empty_hourly_activity()
+    first_source[16]["idleSeconds"] = 50 * 60
+    second_source = _empty_hourly_activity()
+    second_source[16]["idleSeconds"] = 50 * 60
+    breaks = _empty_hourly_activity()
+    breaks[16]["breakSeconds"] = 30 * 60
+    consumed = _empty_hourly_activity()
+
+    first_hourly = _apply_breaks_to_hourly_activity(first_source, breaks, consumed)
+    second_hourly = _apply_breaks_to_hourly_activity(second_source, breaks, consumed)
+
+    assert first_hourly[16]["breakSeconds"] == 30 * 60
+    assert second_hourly[16]["breakSeconds"] == 0
+    assert consumed[16]["breakSeconds"] == 30 * 60
+
+
 def test_totals_should_use_report_aggregates_not_hourly_buckets():
     source = _empty_hourly_activity()
     source[16]["activeSeconds"] = 60

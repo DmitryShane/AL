@@ -1182,6 +1182,14 @@ p {
   --duration-accent: #8b5cf6;
 }
 
+.break-duration.good {
+  --duration-accent: #16834a;
+}
+
+.break-duration.bad {
+  --duration-accent: #dc2626;
+}
+
 .duration span {
   display: block;
   color: #718093;

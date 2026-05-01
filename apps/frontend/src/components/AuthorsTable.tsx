@@ -258,5 +258,5 @@ function productivityClassName(value: number) {
 }
 
 function breakClassName(seconds: number) {
-  return seconds > 3600 ? "metric-value bad" : "metric-value";
+  return seconds > 61 * 60 ? "metric-value bad" : "metric-value good";
 }

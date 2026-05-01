@@ -1638,7 +1638,12 @@ function ActivityPage({
             <Duration label="Active" seconds={author.activeSeconds} />
             <Duration label="Idle" seconds={author.idleSeconds} />
             <Duration label="Overtime" seconds={author.overtimeActiveSeconds} />
-            <Duration label="Break" seconds={author.breakSeconds} valueClassName={breakClassName(author.breakSeconds)} />
+            <Duration
+              label="Break"
+              seconds={author.breakSeconds}
+              className={`break-duration ${breakTone(author.breakSeconds)}`}
+              valueClassName={breakClassName(author.breakSeconds)}
+            />
             <div className={`duration productivity-duration ${productivityTone(author.productivity)}`}>
               <span>Productivity</span>
               <strong className={productivityClassName(author.productivity)}>{author.productivity.toFixed(2)}%</strong>
@@ -2930,9 +2935,9 @@ function DateRangePicker({ value, onChange }: { value: DateRange; onChange: (ran
   );
 }
 
-function Duration({ label, seconds, valueClassName }: { label: string; seconds: number; valueClassName?: string }) {
+function Duration({ label, seconds, className, valueClassName }: { label: string; seconds: number; className?: string; valueClassName?: string }) {
   return (
-    <div className="duration">
+    <div className={`duration${className ? ` ${className}` : ""}`}>
       <span>{label}</span>
       <strong className={valueClassName}>{formatDuration(seconds)}</strong>
     </div>
@@ -3099,7 +3104,11 @@ function hasAuthorActivity(author: AuthorRow) {
 }
 
 function breakClassName(seconds: number) {
-  return seconds > 3600 ? "metric-value bad" : "metric-value";
+  return `metric-value ${breakTone(seconds)}`;
+}
+
+function breakTone(seconds: number) {
+  return seconds > 61 * 60 ? "bad" : "good";
 }
 
 function formatSource(source?: string) {

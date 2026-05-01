@@ -958,6 +958,7 @@ class Repository:
         telegram_seconds_by_author_date: dict[tuple[str, str], int] = {}
         break_seconds_by_author_date: dict[tuple[str, str], int] = {}
         meeting_seconds_by_author_date: dict[tuple[str, str], int] = {}
+        break_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         meeting_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         profiles = self._profiles_by_raw_author()
         now = now or dt.datetime.now(dt.UTC)
@@ -995,6 +996,7 @@ class Repository:
             hourly_activity = _apply_breaks_to_hourly_activity(
                 item.get("hourlyActivity", []),
                 break_buckets.get(author_date_key, []),
+                break_consumed_by_author_date_hour.setdefault(author_date_key, _empty_hourly_activity()),
             )
             hourly_activity = _apply_meetings_to_hourly_activity(
                 hourly_activity,
@@ -5014,19 +5016,24 @@ def _merge_hourly_activity(target: list[dict[str, Any]], deltas: list[dict[str, 
 def _apply_breaks_to_hourly_activity(
     source: list[dict[str, Any]],
     break_buckets: list[dict[str, Any]],
+    consumed_buckets: list[dict[str, int]] | None = None,
 ) -> list[dict[str, int]]:
     source_by_hour = {int(item.get("hour", 0)): item for item in source}
     breaks_by_hour = {int(item.get("hour", 0)): item for item in break_buckets}
+    consumed_by_hour = {int(item.get("hour", 0)): item for item in consumed_buckets or []}
     hourly_activity = []
 
     for hour in range(24):
         source_hour = source_by_hour.get(hour, {})
         break_hour = breaks_by_hour.get(hour, {})
+        consumed_hour = consumed_by_hour.get(hour, {})
         active_seconds = min(3600, _time_seconds(source_hour, "activeSeconds", "activeMicroseconds"))
         overtime_active_seconds = min(3600, _time_seconds(source_hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds"))
         raw_idle_seconds = _time_seconds(source_hour, "idleSeconds", "idleMicroseconds")
         requested_break_seconds = max(0, int(break_hour.get("breakSeconds", 0)))
-        break_seconds = min(requested_break_seconds, max(0, 3600 - active_seconds - overtime_active_seconds))
+        consumed_break_seconds = max(0, int(consumed_hour.get("breakSeconds", 0)))
+        available_break_seconds = max(0, requested_break_seconds - consumed_break_seconds)
+        break_seconds = min(available_break_seconds, max(0, 3600 - active_seconds - overtime_active_seconds))
         idle_seconds = max(0, raw_idle_seconds - break_seconds)
         idle_seconds = min(idle_seconds, max(0, 3600 - active_seconds - overtime_active_seconds - break_seconds))
 
@@ -5036,6 +5043,9 @@ def _apply_breaks_to_hourly_activity(
                 max(0, 3600 - active_seconds - overtime_active_seconds),
             )
             idle_seconds = 0
+
+        if consumed_buckets is not None:
+            consumed_hour["breakSeconds"] = consumed_break_seconds + break_seconds
 
         hourly_activity.append(
             {
