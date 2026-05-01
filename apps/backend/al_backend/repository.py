@@ -2700,6 +2700,13 @@ class Repository:
         ended = _parse_timestamp(ended_at)
         duration_seconds = max(0, int((ended - started).total_seconds()))
         settings = self.get_discord_settings()
+        self._update_meeting_recording_pipeline_status(
+            recording_id,
+            "uploading_audio",
+            ended_at=ended,
+            duration_seconds=duration_seconds,
+            updated_at=now,
+        )
 
         if len(participant_discord_user_ids) < int(settings["meetingSummaryMinParticipants"]):
             status = "skipped_not_enough_participants"
@@ -2717,7 +2724,12 @@ class Repository:
             return {"ok": True, "status": "summary_already_created", "summaryId": existing.get("summaryId")}
 
         try:
-            result = summary_generator(audio_path, participant_names, str(settings["meetingSummaryLanguage"]))
+            result = summary_generator(
+                audio_path,
+                participant_names,
+                str(settings["meetingSummaryLanguage"]),
+                progress_callback=lambda status: self._update_meeting_recording_pipeline_status(recording_id, status),
+            )
         except Exception as exc:
             status = "summary_failed"
             self.db.meeting_recordings.update_one(
@@ -2757,7 +2769,7 @@ class Repository:
             {"recordingId": recording_id},
             {
                 "$set": {
-                    "status": "summarized",
+                    "status": "waiting_for_telegram",
                     "endedAt": ended,
                     "durationSeconds": duration_seconds,
                     "summaryId": summary_id,
@@ -2767,6 +2779,33 @@ class Repository:
             upsert=True,
         )
         return {"ok": True, "status": "summary_created", "summaryId": summary_id}
+
+    def _update_meeting_recording_pipeline_status(
+        self,
+        recording_id: str,
+        status: str,
+        *,
+        ended_at: dt.datetime | None = None,
+        duration_seconds: int | None = None,
+        updated_at: dt.datetime | None = None,
+    ) -> None:
+        now = updated_at or dt.datetime.now(dt.UTC)
+        fields: dict[str, Any] = {
+            "status": status,
+            "updatedAt": now,
+        }
+
+        if ended_at is not None:
+            fields["endedAt"] = ended_at
+
+        if duration_seconds is not None:
+            fields["durationSeconds"] = duration_seconds
+
+        self.db.meeting_recordings.update_one(
+            {"recordingId": recording_id},
+            {"$set": fields},
+            upsert=True,
+        )
 
     def _mark_meeting_recording_finished(
         self,
@@ -2804,9 +2843,9 @@ class Repository:
             if summary:
                 summary_status = str(summary.get("status") or "")
 
-                if summary.get("telegramSentAt"):
+                if summary.get("telegramSentAt") or summary.get("sentAt"):
                     status = "telegram_sent"
-                elif summary_status:
+                elif status not in {"telegram_claimed"} and summary_status:
                     status = f"summary_{summary_status}"
 
             items.append(
@@ -2822,7 +2861,7 @@ class Repository:
                     "participantNames": recording.get("participantNames", []),
                     "participantCount": len(recording.get("participantNames") or []),
                     "recipient": (summary or {}).get("recipient"),
-                    "telegramSentAt": _iso((summary or {}).get("telegramSentAt")),
+                    "telegramSentAt": _iso((summary or {}).get("telegramSentAt") or (summary or {}).get("sentAt")),
                     "error": recording.get("error") or (summary or {}).get("error"),
                     "updatedAt": _iso(recording.get("updatedAt")),
                 }
@@ -3302,6 +3341,11 @@ class Repository:
                 {"summaryId": summary_id},
                 {"$set": {"status": "claimed", "lastClaimedAt": now, "updatedAt": now}},
             )
+            recording_id = str(doc.get("recordingId") or "")
+
+            if recording_id:
+                self._update_meeting_recording_pipeline_status(recording_id, "telegram_claimed", updated_at=now)
+
             notifications.append(
                 {
                     "summaryId": summary_id,
@@ -3337,6 +3381,7 @@ class Repository:
 
     def mark_telegram_meeting_summary_sent(self, summary_id: str, message_id: int | None = None) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
+        summary = self.db.meeting_summaries.find_one({"summaryId": summary_id}, {"_id": 0, "recordingId": 1})
         self.db.meeting_summaries.update_one(
             {"summaryId": summary_id},
             {
@@ -3348,6 +3393,10 @@ class Repository:
                 }
             },
         )
+
+        if summary and summary.get("recordingId"):
+            self._update_meeting_recording_pipeline_status(str(summary["recordingId"]), "telegram_sent", updated_at=now)
+
         return {"ok": True}
 
     def close_telegram_online_prompt(

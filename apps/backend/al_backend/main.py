@@ -525,11 +525,12 @@ def record_discord_meeting_recording_finished(
             participant_discord_user_ids=[str(item) for item in participant_ids],
             participant_names=[str(item) for item in names],
             audio_path=temp_path,
-            summary_generator=lambda path, people, language: generate_meeting_summary(
+            summary_generator=lambda path, people, language, progress_callback=None: generate_meeting_summary(
                 settings,
                 path,
                 participant_names=people,
                 language=language,
+                progress_callback=progress_callback,
             ),
         )
     finally:

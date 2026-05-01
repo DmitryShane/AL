@@ -2991,8 +2991,24 @@ function meetingRecordingStatusLabel(recording: MeetingRecordingStatus) {
     return "Recording now";
   }
 
-  if (recording.status === "summarized" || recording.status === "summary_pending") {
+  if (recording.status === "uploading_audio") {
+    return "Uploading audio to backend";
+  }
+
+  if (recording.status === "transcribing_openai") {
+    return "Transcribing with OpenAI";
+  }
+
+  if (recording.status === "summarizing_openai") {
+    return "Summarizing with OpenAI";
+  }
+
+  if (recording.status === "waiting_for_telegram" || recording.status === "summary_pending") {
     return "Summary created, waiting for Telegram";
+  }
+
+  if (recording.status === "telegram_claimed" || recording.status === "summary_claimed") {
+    return "Telegram is sending the summary";
   }
 
   if (recording.status === "telegram_sent") {
@@ -3016,8 +3032,9 @@ function meetingRecordingDetail(recording: MeetingRecordingStatus) {
   const recipient = meetingRecordingRecipientLabel(recording);
   const sentAt = recording.telegramSentAt ? `, sent ${formatTimestamp(recording.telegramSentAt)}` : "";
   const startedAt = recording.startedAt ? `Started ${formatTimestamp(recording.startedAt)}` : "Started time unknown";
+  const updatedAt = recording.updatedAt ? ` Last update ${formatTimestamp(recording.updatedAt)}.` : "";
 
-  return `${people}${duration}. ${startedAt}${recipient}${sentAt}.`;
+  return `${people}${duration}. ${startedAt}${recipient}${sentAt}.${updatedAt}`;
 }
 
 function meetingRecordingRecipientLabel(recording: MeetingRecordingStatus) {

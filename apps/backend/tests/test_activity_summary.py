@@ -1974,7 +1974,7 @@ def test_meeting_recording_finished_creates_summary_notification():
         participant_discord_user_ids=["1", "2"],
         participant_names=["Dmitry", "Igor"],
         audio_path="/tmp/missing.wav",
-        summary_generator=lambda path, people, language: FakeSummary(),
+        summary_generator=lambda path, people, language, progress_callback=None: FakeSummary(),
     )
     notifications = repo.claim_due_telegram_meeting_summary_notifications()
 
@@ -2003,7 +2003,7 @@ def test_meeting_recording_finished_skips_solo_recording():
         participant_discord_user_ids=["1"],
         participant_names=["Dmitry"],
         audio_path="/tmp/missing.wav",
-        summary_generator=lambda path, people, language: None,
+        summary_generator=lambda path, people, language, progress_callback=None: None,
     )
 
     assert result["status"] == "skipped_not_enough_participants"
@@ -2117,6 +2117,42 @@ def test_recent_meeting_recordings_include_summary_delivery_status():
     assert recordings[0]["summaryId"] == "summary-1"
     assert recordings[0]["status"] == "telegram_sent"
     assert recordings[0]["recipient"]["kind"] == "private"
+
+
+def test_meeting_recording_tracks_openai_pipeline_status():
+    repo = fake_repository()
+    repo.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=600,
+        meeting_summaries_enabled=True,
+        meeting_summary_min_participants=1,
+        meeting_summary_min_duration_seconds=60,
+        meeting_summary_language="English",
+        meeting_summary_recipient="work_chat",
+    )
+
+    class FakeSummary:
+        transcript = "Dmitry agreed to create a task."
+        summary = "Participants:\n- Dmitry\n\nDecisions:\n- Create a task.\n\nAction items:\n- Create a task.\n\nOpen questions:\n- None."
+
+    def fake_summary_generator(path, people, language, progress_callback=None):
+        progress_callback("transcribing_openai")
+        progress_callback("summarizing_openai")
+        return FakeSummary()
+
+    result = repo.process_meeting_recording_finished(
+        recording_id="recording-2",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        ended_at="2026-04-29T10:03:00+00:00",
+        participant_discord_user_ids=["1"],
+        participant_names=["Dmitry"],
+        audio_path="/tmp/missing.wav",
+        summary_generator=fake_summary_generator,
+    )
+
+    assert result["status"] == "summary_created"
+    assert repo.recent_meeting_recordings()[0]["status"] == "summary_pending"
 
 
 def test_discord_author_mappings_update_known_telegram_profiles_only():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from openai import OpenAI
 
@@ -19,11 +20,15 @@ def generate_meeting_summary(
     *,
     participant_names: list[str],
     language: str,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> MeetingSummaryResult:
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is required for meeting summaries")
 
     client = OpenAI(api_key=settings.openai_api_key)
+
+    if progress_callback:
+        progress_callback("transcribing_openai")
 
     with open(audio_path, "rb") as audio_file:
         transcription = client.audio.transcriptions.create(
@@ -35,6 +40,9 @@ def generate_meeting_summary(
 
     if not transcript:
         return MeetingSummaryResult(transcript="", summary="")
+
+    if progress_callback:
+        progress_callback("summarizing_openai")
 
     participants = ", ".join(participant_names) if participant_names else "Unknown participants"
     prompt = (
