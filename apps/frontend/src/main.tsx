@@ -3215,7 +3215,7 @@ function DiscordIcon() {
 
 function formatReportType(report: Report) {
   if (report.reportType === "telegram") {
-    return formatTelegramEvent(report.telegramEventType ?? report.activityType);
+    return formatTelegramEvent(report.telegramEventType ?? report.activityType, report.telegramStatus);
   }
 
   if (report.reportType === "meeting") {
@@ -3241,7 +3241,11 @@ function reportTypeBadgeClassName(reportType?: string) {
   return "report-type-badge auto";
 }
 
-function formatTelegramEvent(eventType?: string) {
+function formatTelegramEvent(eventType?: string, status?: string) {
+  if (status === "break_closed") {
+    return "break off";
+  }
+
   const labels: Record<string, string> = {
     online: "online",
     afk: "afk",
