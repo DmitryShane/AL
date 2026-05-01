@@ -3080,6 +3080,36 @@ class Repository:
                     "timeZoneId": str(event.get("timeZoneId") or "UTC"),
                 }
 
+        for event in self.db.raw_activity_events.find(
+            {"author": {"$in": authors}, "date": {"$in": dates}, "source": {"$nin": ["telegram", "discord"]}},
+            {
+                "_id": 0,
+                "author": 1,
+                "date": 1,
+                "source": 1,
+                "eventType": 1,
+                "occurredAtUtc": 1,
+                "occurredAtLocal": 1,
+                "receivedAt": 1,
+            },
+        ):
+            if str(event.get("eventType") or "") in NON_ACTIVITY_EVENT_TYPES:
+                continue
+
+            key = (str(event.get("author") or "Unknown User"), str(event.get("date") or ""))
+
+            if key not in author_dates:
+                continue
+
+            occurred_at = (
+                _coerce_datetime(event.get("occurredAtUtc"))
+                or _coerce_datetime(event.get("occurredAtLocal"))
+                or _coerce_datetime(event.get("receivedAt"))
+            )
+
+            if occurred_at and (key not in first_activity_by_key or occurred_at < first_activity_by_key[key]):
+                first_activity_by_key[key] = occurred_at
+
         for row in self.db.report_rows.find(
             {"author": {"$in": authors}, "date": {"$in": dates}},
             {
@@ -3108,6 +3138,9 @@ class Repository:
             key = (str(row.get("author") or "Unknown User"), str(row.get("date") or ""))
 
             if key not in author_dates:
+                continue
+
+            if key in first_activity_by_key:
                 continue
 
             occurred_at = (

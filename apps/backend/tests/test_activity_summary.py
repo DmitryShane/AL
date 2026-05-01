@@ -917,7 +917,7 @@ def test_telegram_to_first_activity_gap_counts_as_idle_hourly_activity():
     assert hourly_by_hour[10]["idleSeconds"] == 17 * 60 + 30
 
 
-def test_telegram_to_first_activity_uses_first_positive_report_row_not_raw_event():
+def test_telegram_to_first_activity_uses_first_raw_activity_event_before_report_row():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
         {
@@ -938,6 +938,61 @@ def test_telegram_to_first_activity_uses_first_positive_report_row_not_raw_event
             "occurredAtLocal": "2026-04-30T09:36:12+02:00",
         }
     )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry",
+            "date": "2026-04-30",
+            "recordedAt": "2026-04-30T09:43:12+02:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 7, 46, 15, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+            "savedPrefabDeltas": [{"path": "Assets/Level.prefab", "name": "Level", "saveCount": 1}],
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry",
+            "date": "2026-04-30",
+            "recordedAt": "2026-04-30T09:45:13+02:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 7, 46, 15, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 120,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry",
+            "projectId": "unity",
+            "date": "2026-04-30",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-30", end_date="2026-04-30")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry")
+
+    assert author["telegramToFirstActivitySeconds"] == 30
+
+
+def test_telegram_to_first_activity_falls_back_to_first_positive_report_row_without_raw_events():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry",
+            "displayName": "Dmitriy Zhdamarov",
+            "telegramUsername": "zhdamarovich",
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    repo.record_break_event("zhdamarovich", "online", "2026-04-30T07:35:42Z")
     repo.db.report_rows.insert_one(
         {
             "source": "ual",
