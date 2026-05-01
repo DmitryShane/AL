@@ -3121,7 +3121,11 @@ function formatSource(source?: string) {
   }
 
   if (source === "fch") {
-    return "Figma";
+    return "FigmaWeb";
+  }
+
+  if (source === "fig") {
+    return "FigmaApp";
   }
 
   if (source === "vsc") {
@@ -3148,7 +3152,7 @@ function sourceIcon(source?: string) {
     return <BlenderIcon />;
   }
 
-  if (source === "fch") {
+  if (source === "fch" || source === "fig") {
     return <FigmaIcon />;
   }
 
