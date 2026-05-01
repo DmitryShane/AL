@@ -3229,16 +3229,25 @@ class Repository:
 
     def _normal_microseconds_consumed_for_event(self, event: dict[str, Any]) -> int:
         work_window_microseconds = DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
+        event_time = _coerce_datetime(event.get("occurredAtUtc")) or event.get("occurredAt")
         day_session = self.db.day_sessions.find_one(
             {
                 "rawAuthor": event.get("author") or "Unknown User",
                 "date": event.get("date") or "",
                 "reminderAction": "overtime",
             },
-            {"_id": 0, "daySeconds": 1},
+            {"_id": 0, "daySeconds": 1, "lastOfflineAt": 1},
         )
 
-        if day_session and int(day_session.get("daySeconds", 0)) >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS:
+        overtime_started_at = _coerce_datetime((day_session or {}).get("lastOfflineAt"))
+
+        if (
+            day_session
+            and int(day_session.get("daySeconds", 0)) >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS
+            and isinstance(event_time, dt.datetime)
+            and overtime_started_at
+            and event_time >= overtime_started_at
+        ):
             return work_window_microseconds
 
         consumed_microseconds = 0
