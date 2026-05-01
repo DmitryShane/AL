@@ -144,7 +144,12 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
         return
 
     family, reminder_id, action = parsed
-    reminder_kind = "online_prompt" if family == "altm" else "day_end"
+    if family == "altm":
+        reminder_kind = "online_prompt"
+    elif family == "altb":
+        reminder_kind = "break_activity_prompt"
+    else:
+        reminder_kind = "day_end"
     reminder_username = reminder_username_from_message(message)
 
     if reminder_username and actor_username and actor_username != reminder_username:
@@ -178,6 +183,11 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
                 answer_text = "Online."
             else:
                 answer_text = "Dismissed."
+        elif reminder_kind == "break_activity_prompt":
+            if action == "confirm_online":
+                answer_text = "Online."
+            else:
+                answer_text = "Still AFK."
         else:
             answer_text = "Telegram day closed."
 
@@ -191,6 +201,16 @@ def parse_event_type(text: str) -> str | None:
 
 def telegram_username(sender: dict[str, Any]) -> str:
     return str(sender.get("username") or "").strip().lstrip("@").lower()
+
+
+def format_prompt_time(value: Any) -> str:
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).strftime("%H:%M")
+        except ValueError:
+            return value
+
+    return "unknown time"
 
 
 def reminder_username_from_message(message: dict[str, Any]) -> str:
@@ -220,6 +240,12 @@ def parse_callback_data(data: str) -> tuple[str, str, str] | None:
 
     if family == "altm":
         if action not in {"confirm_online", "dismiss"}:
+            return None
+
+        return family, reminder_id, action
+
+    if family == "altb":
+        if action not in {"confirm_online", "still_afk"}:
             return None
 
         return family, reminder_id, action
@@ -273,6 +299,22 @@ def send_due_reminders(config: BotConfig) -> None:
         result = send_online_prompt_message(config.token, config.allowed_chat_id, text, prompt_id)
         message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
         mark_reminder_sent(config.backend_url, config.bot_secret, prompt_id, message_id, kind="online_prompt")
+
+    for prompt in bundle.get("breakActivityPrompts", []):
+        prompt_id = str(prompt.get("reminderId") or "")
+        telegram_name = str(prompt.get("telegramUsername") or "").strip().lstrip("@")
+        break_started_at = format_prompt_time(prompt.get("breakStartedAt"))
+
+        if not prompt_id or not telegram_name:
+            continue
+
+        text = (
+            f"Hi @{telegram_name}. You went AFK at {break_started_at}, but I now see activity from you. "
+            "Did you forget to write online?"
+        )
+        result = send_break_activity_prompt_message(config.token, config.allowed_chat_id, text, prompt_id)
+        message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
+        mark_reminder_sent(config.backend_url, config.bot_secret, prompt_id, message_id, kind="break_activity_prompt")
 
 
 def submit_break_event(backend_url: str, telegram_username_value: str, event_type: str, telegram_timestamp: Any) -> dict[str, Any]:
@@ -396,6 +438,26 @@ def send_online_prompt_message(token: str, chat_id: int, text: str, reminder_id:
     )
 
 
+def send_break_activity_prompt_message(token: str, chat_id: int, text: str, reminder_id: str) -> dict[str, Any]:
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "I'm online", "callback_data": f"altb:{reminder_id}:confirm_online"},
+                {"text": "Still AFK", "callback_data": f"altb:{reminder_id}:still_afk"},
+            ]
+        ]
+    }
+    return telegram_request(
+        token,
+        "sendMessage",
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": json.dumps(reply_markup),
+        },
+    )
+
+
 def answer_callback_query(token: str, callback_query_id: str, text: str) -> dict[str, Any]:
     return telegram_request(token, "answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
 
@@ -417,6 +479,11 @@ def edit_reminder_message(
             body = f"Done.{author} Online."
         else:
             body = f"Done.{author} Dismissed as not applicable."
+    elif reminder_kind == "break_activity_prompt":
+        if action == "confirm_online":
+            body = f"Done.{author} Online."
+        else:
+            body = f"Done.{author} Still AFK."
     else:
         label = "Overtime" if action == "overtime" else "Offline"
         body = f"Done.{author} Telegram day closed as {label}."

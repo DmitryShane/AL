@@ -27,6 +27,7 @@ from al_backend.telegram_bot import (
     parse_callback_data,
     parse_event_type,
     parse_reminder_callback,
+    send_break_activity_prompt_message,
     send_online_prompt_message,
     send_reminder_message,
     telegram_username,
@@ -172,6 +173,7 @@ class FakeDb:
         self.day_sessions = FakeCollection()
         self.telegram_day_reminders = FakeCollection()
         self.telegram_online_prompts = FakeCollection()
+        self.telegram_break_activity_prompts = FakeCollection()
         self.break_intervals = FakeCollection()
         self.meeting_events = FakeCollection()
         self.meeting_sessions = FakeCollection()
@@ -257,6 +259,9 @@ def test_telegram_bot_parses_online_prompt_callbacks():
     assert parse_callback_data("altm:abc123:dismiss") == ("altm", "abc123", "dismiss")
     assert parse_callback_data("altm:abc:offline") is None
     assert parse_callback_data("altd:x:offline") == ("altd", "x", "offline")
+    assert parse_callback_data("altb:break1:confirm_online") == ("altb", "break1", "confirm_online")
+    assert parse_callback_data("altb:break1:still_afk") == ("altb", "break1", "still_afk")
+    assert parse_callback_data("altb:break1:dismiss") is None
 
 
 def test_telegram_bot_update_polling_includes_callbacks(monkeypatch):
@@ -324,6 +329,23 @@ def test_telegram_bot_online_prompt_message_has_buttons(monkeypatch):
     assert "I'm online" in captured["params"]["reply_markup"]
 
 
+def test_telegram_bot_break_activity_prompt_message_has_buttons(monkeypatch):
+    captured = {}
+
+    def fake_request(token, method, params):
+        captured.update({"token": token, "method": method, "params": params})
+        return {"result": {"message_id": 100}}
+
+    monkeypatch.setattr("al_backend.telegram_bot.telegram_request", fake_request)
+    send_break_activity_prompt_message("token", 123, "Hi @user. Test?", "prompt-1")
+
+    assert captured["method"] == "sendMessage"
+    assert "altb:prompt-1:confirm_online" in captured["params"]["reply_markup"]
+    assert "altb:prompt-1:still_afk" in captured["params"]["reply_markup"]
+    assert "I'm online" in captured["params"]["reply_markup"]
+    assert "Still AFK" in captured["params"]["reply_markup"]
+
+
 def test_telegram_bot_callback_edits_online_prompt(monkeypatch):
     calls = []
     config = BotConfig(
@@ -366,6 +388,50 @@ def test_telegram_bot_callback_edits_online_prompt(monkeypatch):
     assert ("close", "prompt-1", "dismiss", "online_prompt") in calls
     assert ("edit", "dismiss", "online_prompt") in calls
     assert ("answer", "Dismissed.") in calls
+
+
+def test_telegram_bot_callback_edits_break_activity_prompt(monkeypatch):
+    calls = []
+    config = BotConfig(
+        token="token",
+        backend_url="https://activity.mempic.com",
+        allowed_chat_id=123,
+        bot_secret="secret",
+    )
+
+    def fake_close_reminder(backend_url, bot_secret, reminder_id, action, actor_telegram_username="", *, reminder_kind="day_end"):
+        calls.append(("close", reminder_id, action, reminder_kind))
+        return {"ok": True}
+
+    def fake_edit_reminder_message(token, chat_id, message_id, action, telegram_username="", *, reminder_kind="day_end"):
+        calls.append(("edit", action, reminder_kind))
+        return {"ok": True}
+
+    def fake_answer_callback_query(token, callback_query_id, text):
+        calls.append(("answer", text))
+        return {"ok": True}
+
+    monkeypatch.setattr("al_backend.telegram_bot.close_reminder", fake_close_reminder)
+    monkeypatch.setattr("al_backend.telegram_bot.edit_reminder_message", fake_edit_reminder_message)
+    monkeypatch.setattr("al_backend.telegram_bot.answer_callback_query", fake_answer_callback_query)
+
+    handle_callback_query(
+        config,
+        {
+            "id": "callback-1",
+            "data": "altb:prompt-1:still_afk",
+            "from": {"username": "dmitryshane"},
+            "message": {
+                "message_id": 42,
+                "chat": {"id": 123},
+                "text": "Hi @dmitryshane. You went AFK at 14:30, but I now see activity from you.",
+            },
+        },
+    )
+
+    assert ("close", "prompt-1", "still_afk", "break_activity_prompt") in calls
+    assert ("edit", "still_afk", "break_activity_prompt") in calls
+    assert ("answer", "Still AFK.") in calls
 
 
 def test_telegram_bot_callback_edits_message_after_close(monkeypatch):
@@ -1630,6 +1696,75 @@ def test_idle_only_reports_during_discord_meeting_are_hidden_from_latest_reports
     assert [report["source"] for report in reports] == ["discord"]
 
 
+def test_idle_only_reports_during_break_interval_are_hidden_from_latest_reports():
+    repo = fake_repository()
+    repo.db.report_rows.insert_one(
+        {
+            "source": "future-plugin",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T10:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 10, tzinfo=dt.UTC),
+            "idleDeltaSeconds": 300,
+            "activeDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "telegram",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T10:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "reportType": "telegram",
+            "idleDeltaSeconds": 0,
+            "activeDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.break_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 29, 10, 30, tzinfo=dt.UTC),
+        }
+    )
+
+    reports = repo.latest_reports(start_date="2026-04-29", end_date="2026-04-29")
+
+    assert [report["source"] for report in reports] == ["telegram"]
+
+
+def test_idle_only_reports_during_open_break_are_hidden_from_latest_reports():
+    repo = fake_repository()
+    repo.db.report_rows.insert_one(
+        {
+            "source": "future-plugin",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T10:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 10, tzinfo=dt.UTC),
+            "idleDeltaSeconds": 300,
+            "activeDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.break_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "telegramUsername": "future_artist",
+            "startedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "UTC",
+        }
+    )
+
+    reports = repo.latest_reports(start_date="2026-04-29", end_date="2026-04-29")
+
+    assert reports == []
+
+
 def test_reports_page_paginates_author_reports_and_keeps_source_options():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
@@ -2066,6 +2201,112 @@ def test_telegram_online_prompt_close_rejects_wrong_actor():
     result = repo.close_telegram_online_prompt(rid, "dismiss", "2026-04-30T12:00:00Z", "other")
 
     assert result["status"] == "wrong_user"
+
+
+def test_break_activity_prompt_schedules_after_sixty_minutes_only():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    started_at = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo.db.break_sessions.insert_one(
+        {"rawAuthor": "A", "date": "2026-04-30", "startedAt": started_at, "telegramUsername": "ta", "timeZoneId": "UTC"}
+    )
+
+    repo._schedule_telegram_break_activity_prompt_if_needed("A", "2026-04-30", "ual", started_at + dt.timedelta(minutes=59))
+    assert repo.db.telegram_break_activity_prompts.items == []
+
+    repo._schedule_telegram_break_activity_prompt_if_needed("A", "2026-04-30", "ual", started_at + dt.timedelta(minutes=60))
+    repo._schedule_telegram_break_activity_prompt_if_needed("A", "2026-04-30", "ual", started_at + dt.timedelta(minutes=61))
+
+    assert len(repo.db.telegram_break_activity_prompts.items) == 1
+    assert repo.db.telegram_break_activity_prompts.items[0]["status"] == "pending"
+
+
+def test_break_activity_prompt_claim_and_mark_sent():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    started_at = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo.db.break_sessions.insert_one(
+        {"rawAuthor": "A", "date": "2026-04-30", "startedAt": started_at, "telegramUsername": "ta", "timeZoneId": "UTC"}
+    )
+    repo._schedule_telegram_break_activity_prompt_if_needed("A", "2026-04-30", "ual", started_at + dt.timedelta(minutes=60))
+
+    due = repo.claim_due_telegram_break_activity_prompts(started_at + dt.timedelta(minutes=61))
+
+    assert len(due) == 1
+    assert due[0]["telegramUsername"] == "ta"
+    assert repo.claim_due_telegram_break_activity_prompts(started_at + dt.timedelta(minutes=62)) == []
+
+    repo.mark_telegram_break_activity_prompt_sent(due[0]["reminderId"], 44)
+
+    assert repo.db.telegram_break_activity_prompts.items[0]["status"] == "sent"
+    assert repo.db.telegram_break_activity_prompts.items[0]["messageId"] == 44
+
+
+def test_break_activity_prompt_confirm_online_closes_break():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    started_at = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo.db.break_sessions.insert_one(
+        {"rawAuthor": "A", "date": "2026-04-30", "startedAt": started_at, "telegramUsername": "ta", "timeZoneId": "UTC"}
+    )
+    repo._schedule_telegram_break_activity_prompt_if_needed("A", "2026-04-30", "ual", started_at + dt.timedelta(minutes=60))
+    reminder_id = repo.db.telegram_break_activity_prompts.items[0]["reminderId"]
+    repo.db.telegram_break_activity_prompts.items[0]["status"] = "sent"
+
+    result = repo.close_telegram_break_activity_prompt(reminder_id, "confirm_online", "2026-04-30T09:05:00Z", "ta")
+
+    assert result["ok"]
+    assert result["status"] == "break_activity_prompt_confirmed_online"
+    assert repo.db.break_sessions.items == []
+    assert repo.db.break_intervals.items[0]["breakSeconds"] == 65 * 60
+    assert repo.db.telegram_break_activity_prompts.items[0]["closeAction"] == "confirm_online"
+
+
+def test_break_activity_prompt_still_afk_keeps_break_and_reports_hidden():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    started_at = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo.db.break_sessions.insert_one(
+        {"rawAuthor": "A", "date": "2026-04-30", "startedAt": started_at, "telegramUsername": "ta", "timeZoneId": "UTC"}
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "A",
+            "date": "2026-04-30",
+            "recordedAt": "2026-04-30T09:05:00Z",
+            "receivedAt": dt.datetime(2026, 4, 30, 9, 5, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 300,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo._schedule_telegram_break_activity_prompt_if_needed("A", "2026-04-30", "ual", started_at + dt.timedelta(minutes=60))
+    reminder_id = repo.db.telegram_break_activity_prompts.items[0]["reminderId"]
+    repo.db.telegram_break_activity_prompts.items[0]["status"] = "sent"
+
+    result = repo.close_telegram_break_activity_prompt(reminder_id, "still_afk", "2026-04-30T09:05:00Z", "ta")
+
+    assert result["status"] == "break_activity_prompt_still_afk"
+    assert repo.db.break_sessions.items
+    assert repo.latest_reports(start_date="2026-04-30", end_date="2026-04-30") == []
+
+
+def test_break_activity_prompt_close_rejects_wrong_actor():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    started_at = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo.db.break_sessions.insert_one(
+        {"rawAuthor": "A", "date": "2026-04-30", "startedAt": started_at, "telegramUsername": "ta", "timeZoneId": "UTC"}
+    )
+    repo._schedule_telegram_break_activity_prompt_if_needed("A", "2026-04-30", "ual", started_at + dt.timedelta(minutes=60))
+    reminder_id = repo.db.telegram_break_activity_prompts.items[0]["reminderId"]
+    repo.db.telegram_break_activity_prompts.items[0]["status"] = "sent"
+
+    result = repo.close_telegram_break_activity_prompt(reminder_id, "confirm_online", "2026-04-30T09:05:00Z", "other")
+
+    assert result["status"] == "wrong_user"
+    assert repo.db.break_sessions.items
 
 
 def test_telegram_online_uses_author_time_zone_for_date():

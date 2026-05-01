@@ -18,6 +18,7 @@ LOW_PRODUCTIVITY_THRESHOLD = 50
 LONG_BREAK_THRESHOLD_SECONDS = 3600
 TELEGRAM_DAY_REMINDER_SECONDS = 10 * 3600
 TELEGRAM_ONLINE_PROMPT_DELAY_SECONDS = 15 * 60
+TELEGRAM_BREAK_ACTIVITY_PROMPT_DELAY_SECONDS = 60 * 60
 DEFAULT_PLUGIN_WORK_WINDOW_SECONDS = 32400
 MICROSECONDS_PER_SECOND = 1_000_000
 MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS = 10
@@ -106,6 +107,8 @@ class Repository:
         self.db.telegram_day_reminders.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
         self.db.telegram_online_prompts.create_index("reminderId", unique=True)
         self.db.telegram_online_prompts.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
+        self.db.telegram_break_activity_prompts.create_index("reminderId", unique=True)
+        self.db.telegram_break_activity_prompts.create_index([("rawAuthor", ASCENDING), ("breakStartedAt", ASCENDING)], unique=True)
         self.db.interval_settings.create_index("kind", unique=True)
         self.db.interval_settings.create_index("author", unique=True, sparse=True)
         self.db.report_refresh_requests.create_index("author", unique=True)
@@ -628,6 +631,7 @@ class Repository:
 
         report_rows = list(self.db.report_rows.find(query, projection).sort("receivedAt", DESCENDING))
         meeting_lookup = self._meeting_lookup_for_reports(report_rows)
+        break_lookup = self._break_lookup_for_reports(report_rows)
 
         for item in report_rows:
             if date_mode == "authorLocalToday" and not _is_author_local_today(
@@ -639,7 +643,11 @@ class Repository:
             ):
                 continue
 
-            if self._is_empty_plugin_report_without_signal(item) or self._is_idle_report_during_meeting(item, meeting_lookup):
+            if (
+                self._is_empty_plugin_report_without_signal(item)
+                or self._is_idle_report_during_meeting(item, meeting_lookup)
+                or self._is_idle_report_during_break(item, break_lookup)
+            ):
                 continue
 
             profile = profiles.get(item.get("author") or "Unknown User", {})
@@ -684,6 +692,58 @@ class Repository:
             "offset": offset,
             "sources": sources,
         }
+
+    def _is_idle_report_during_break(
+        self,
+        report_row: dict[str, Any],
+        break_lookup: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
+    ) -> bool:
+        if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
+            return False
+
+        idle_seconds = int(report_row.get("idleDeltaSeconds", 0))
+        active_seconds = int(report_row.get("activeDeltaSeconds", 0))
+        overtime_seconds = int(report_row.get("overtimeActiveDeltaSeconds", 0))
+
+        if idle_seconds <= 0 or active_seconds > 0 or overtime_seconds > 0:
+            return False
+
+        raw_author = report_row.get("author") or "Unknown User"
+        recorded_at = _coerce_datetime(report_row.get("recordedAt") or report_row.get("lastRecordedAt") or report_row.get("receivedAt"))
+
+        if not recorded_at:
+            return False
+
+        if break_lookup is not None:
+            author_lookup = break_lookup.get(raw_author, {})
+
+            for interval in author_lookup.get("intervals", []):
+                started_at = interval.get("startedAt")
+                ended_at = interval.get("endedAt")
+
+                if started_at and ended_at and started_at <= recorded_at <= ended_at:
+                    return True
+
+            for session in author_lookup.get("sessions", []):
+                started_at = session.get("startedAt")
+
+                if started_at and started_at <= recorded_at:
+                    return True
+
+            return False
+
+        if self.db.break_intervals.find_one(
+            {"rawAuthor": raw_author, "startedAt": {"$lte": recorded_at}, "endedAt": {"$gte": recorded_at}},
+            {"_id": 1},
+        ):
+            return True
+
+        return bool(
+            self.db.break_sessions.find_one(
+                {"rawAuthor": raw_author, "startedAt": {"$lte": recorded_at}},
+                {"_id": 1},
+            )
+        )
 
     def _is_idle_report_during_meeting(
         self,
@@ -785,6 +845,65 @@ class Repository:
                 lookup[raw_author]["intervals"].append({"startedAt": started_at, "endedAt": ended_at})
 
         for session in self.db.meeting_sessions.find(
+            {"rawAuthor": {"$in": authors}, "startedAt": {"$lte": max_recorded_at}},
+            {"_id": 0},
+        ):
+            raw_author = str(session.get("rawAuthor") or "")
+            started_at = _coerce_datetime(session.get("startedAt"))
+
+            if raw_author in lookup and started_at:
+                lookup[raw_author]["sessions"].append({"startedAt": started_at})
+
+        return lookup
+
+    def _break_lookup_for_reports(self, report_rows: list[dict[str, Any]]) -> dict[str, dict[str, list[dict[str, Any]]]]:
+        candidate_times_by_author: dict[str, list[dt.datetime]] = {}
+
+        for report_row in report_rows:
+            if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
+                continue
+
+            idle_seconds = int(report_row.get("idleDeltaSeconds", 0))
+            active_seconds = int(report_row.get("activeDeltaSeconds", 0))
+            overtime_seconds = int(report_row.get("overtimeActiveDeltaSeconds", 0))
+
+            if idle_seconds <= 0 or active_seconds > 0 or overtime_seconds > 0:
+                continue
+
+            recorded_at = _coerce_datetime(
+                report_row.get("recordedAt") or report_row.get("lastRecordedAt") or report_row.get("receivedAt")
+            )
+
+            if not recorded_at:
+                continue
+
+            raw_author = str(report_row.get("author") or "Unknown User")
+            candidate_times_by_author.setdefault(raw_author, []).append(recorded_at)
+
+        if not candidate_times_by_author:
+            return {}
+
+        authors = sorted(candidate_times_by_author)
+        min_recorded_at = min(min(values) for values in candidate_times_by_author.values())
+        max_recorded_at = max(max(values) for values in candidate_times_by_author.values())
+        lookup = {author: {"intervals": [], "sessions": []} for author in authors}
+
+        for interval in self.db.break_intervals.find(
+            {
+                "rawAuthor": {"$in": authors},
+                "startedAt": {"$lte": max_recorded_at},
+                "endedAt": {"$gte": min_recorded_at},
+            },
+            {"_id": 0},
+        ):
+            raw_author = str(interval.get("rawAuthor") or "")
+            started_at = _coerce_datetime(interval.get("startedAt"))
+            ended_at = _coerce_datetime(interval.get("endedAt"))
+
+            if raw_author in lookup and started_at and ended_at:
+                lookup[raw_author]["intervals"].append({"startedAt": started_at, "endedAt": ended_at})
+
+        for session in self.db.break_sessions.find(
             {"rawAuthor": {"$in": authors}, "startedAt": {"$lte": max_recorded_at}},
             {"_id": 0},
         ):
@@ -2399,6 +2518,78 @@ class Repository:
                 }
             },
         )
+        self.db.telegram_break_activity_prompts.update_many(
+            {
+                "rawAuthor": raw_author,
+                "date": day_date,
+                "status": {"$in": ["pending", "claimed", "sent"]},
+            },
+            {
+                "$set": {
+                    "status": "closed",
+                    "closedAt": now,
+                    "closeAction": "cancelled_by_online",
+                    "updatedAt": now,
+                }
+            },
+        )
+
+    def _schedule_telegram_break_activity_prompt_if_needed(
+        self,
+        raw_author: str,
+        day_date: str,
+        source: str,
+        report_time: dt.datetime,
+    ) -> None:
+        if source in {"telegram", "discord"} or not raw_author or not day_date:
+            return
+
+        session = self.db.break_sessions.find_one({"rawAuthor": raw_author}, {"_id": 0})
+
+        if not session:
+            return
+
+        started_at = _coerce_datetime(session.get("startedAt"))
+
+        if not started_at or report_time < started_at:
+            return
+
+        if (report_time - started_at).total_seconds() < TELEGRAM_BREAK_ACTIVITY_PROMPT_DELAY_SECONDS:
+            return
+
+        if self.db.telegram_break_activity_prompts.find_one(
+            {
+                "rawAuthor": raw_author,
+                "breakStartedAt": started_at,
+                "status": {"$in": ["pending", "claimed", "sent", "closed"]},
+            },
+            {"_id": 1},
+        ):
+            return
+
+        telegram_username = _normalize_telegram_username(
+            session.get("telegramUsername")
+            or (self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0, "telegramUsername": 1}) or {}).get("telegramUsername")
+        )
+
+        if not telegram_username:
+            return
+
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_break_activity_prompts.insert_one(
+            {
+                "reminderId": _new_id(),
+                "rawAuthor": raw_author,
+                "date": day_date,
+                "telegramUsername": telegram_username,
+                "breakStartedAt": started_at,
+                "firstReportReceivedAt": report_time,
+                "timeZoneId": session.get("timeZoneId"),
+                "status": "pending",
+                "createdAt": now,
+                "updatedAt": now,
+            }
+        )
 
     def claim_due_telegram_online_prompts(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
         now = now or dt.datetime.now(dt.UTC)
@@ -2449,6 +2640,68 @@ class Repository:
     def mark_telegram_online_prompt_sent(self, reminder_id: str, message_id: int | None = None) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         self.db.telegram_online_prompts.update_one(
+            {"reminderId": reminder_id},
+            {
+                "$set": {
+                    "status": "sent",
+                    "messageId": message_id,
+                    "sentAt": now,
+                    "updatedAt": now,
+                }
+            },
+        )
+        return {"ok": True}
+
+    def claim_due_telegram_break_activity_prompts(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
+        now = now or dt.datetime.now(dt.UTC)
+        due: list[dict[str, Any]] = []
+
+        for doc in list(self.db.telegram_break_activity_prompts.find({"status": "pending"}, {"_id": 0})):
+            raw_author = str(doc.get("rawAuthor") or "")
+            break_started_at = _coerce_datetime(doc.get("breakStartedAt"))
+
+            if not raw_author or not break_started_at:
+                continue
+
+            session = self.db.break_sessions.find_one({"rawAuthor": raw_author}, {"_id": 0})
+            session_started_at = _coerce_datetime((session or {}).get("startedAt"))
+
+            if not session or session_started_at != break_started_at:
+                self.db.telegram_break_activity_prompts.update_one(
+                    {"reminderId": doc.get("reminderId")},
+                    {
+                        "$set": {
+                            "status": "closed",
+                            "closedAt": now,
+                            "closeAction": "superseded_break_session",
+                            "updatedAt": now,
+                        }
+                    },
+                )
+                continue
+
+            reminder_id = str(doc.get("reminderId") or "")
+            self.db.telegram_break_activity_prompts.update_one(
+                {"reminderId": reminder_id},
+                {"$set": {"status": "claimed", "lastClaimedAt": now, "updatedAt": now}},
+            )
+            due.append(
+                {
+                    "reminderId": reminder_id,
+                    "rawAuthor": raw_author,
+                    "telegramUsername": str(doc.get("telegramUsername") or ""),
+                    "date": str(doc.get("date") or ""),
+                    "breakStartedAt": break_started_at.isoformat(),
+                    "firstReportReceivedAt": _iso(doc.get("firstReportReceivedAt")),
+                    "timeZoneId": doc.get("timeZoneId"),
+                }
+            )
+
+        return due
+
+    def mark_telegram_break_activity_prompt_sent(self, reminder_id: str, message_id: int | None = None) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_break_activity_prompts.update_one(
             {"reminderId": reminder_id},
             {
                 "$set": {
@@ -2518,7 +2771,65 @@ class Repository:
                 }
             },
         )
-        return {"ok": True, "status": "online_prompt_confirmed_online", **break_result}
+        return {**break_result, "ok": True, "status": "online_prompt_confirmed_online"}
+
+    def close_telegram_break_activity_prompt(
+        self,
+        reminder_id: str,
+        action: str,
+        timestamp: str | None = None,
+        actor_telegram_username: str | None = None,
+    ) -> dict[str, Any]:
+        action = action if action in {"confirm_online", "still_afk"} else "still_afk"
+        reminder = self.db.telegram_break_activity_prompts.find_one({"reminderId": reminder_id}, {"_id": 0})
+
+        if not reminder:
+            return {"ok": False, "error": "Unknown reminder", "status": "unknown_reminder"}
+
+        if reminder.get("status") == "closed":
+            return {
+                "ok": True,
+                "status": "break_activity_prompt_already_closed",
+                "reminderAction": reminder.get("closeAction") or action,
+            }
+
+        telegram_username = _normalize_telegram_username(reminder.get("telegramUsername"))
+        actor_telegram_username = _normalize_telegram_username(actor_telegram_username)
+        received_at = dt.datetime.now(dt.UTC)
+
+        if actor_telegram_username and telegram_username and actor_telegram_username != telegram_username:
+            return {"ok": False, "error": "Reminder belongs to another Telegram user", "status": "wrong_user"}
+
+        if action == "still_afk":
+            self.db.telegram_break_activity_prompts.update_one(
+                {"reminderId": reminder_id},
+                {
+                    "$set": {
+                        "status": "closed",
+                        "closedAt": received_at,
+                        "closeAction": "still_afk",
+                        "updatedAt": received_at,
+                    }
+                },
+            )
+            return {"ok": True, "status": "break_activity_prompt_still_afk"}
+
+        break_result = self.record_break_event(telegram_username, "online", timestamp)
+        if not break_result.get("ok"):
+            return {**break_result, "status": str(break_result.get("status") or "online_failed")}
+
+        self.db.telegram_break_activity_prompts.update_one(
+            {"reminderId": reminder_id},
+            {
+                "$set": {
+                    "status": "closed",
+                    "closedAt": received_at,
+                    "closeAction": "confirm_online",
+                    "updatedAt": received_at,
+                }
+            },
+        )
+        return {**break_result, "ok": True, "status": "break_activity_prompt_confirmed_online"}
 
     def _upsert_telegram_day_activity(
         self,
@@ -3179,6 +3490,15 @@ class Repository:
         self.db.report_rows.insert_one(row)
         self._update_daily_author_activity(snapshot, deltas)
         received_at = _coerce_datetime(snapshot.get("receivedAt")) or dt.datetime.now(dt.UTC)
+        report_time = _coerce_datetime(snapshot.get("recordedAt") or snapshot.get("lastRecordedAt") or snapshot.get("receivedAt")) or received_at
+        if _has_active_or_overtime_delta(deltas):
+            self._schedule_telegram_break_activity_prompt_if_needed(
+                str(snapshot.get("author") or "Unknown User"),
+                str(snapshot.get("date") or ""),
+                str(snapshot.get("source") or ""),
+                report_time,
+            )
+
         if _has_time_delta(deltas) and str(snapshot.get("source") or "") == "ual":
             self._schedule_telegram_online_prompt_if_needed(
                 str(snapshot.get("author") or "Unknown User"),
@@ -3344,6 +3664,9 @@ class Repository:
             **batch_deltas,
         }
         self.db.report_rows.insert_one(row)
+        report_time = _coerce_datetime(last_event.get("occurredAtUtc") or last_event.get("occurredAtLocal")) or received_at
+        if _has_active_or_overtime_delta(batch_deltas):
+            self._schedule_telegram_break_activity_prompt_if_needed(author, str(last_event.get("date") or ""), source, report_time)
         self._schedule_telegram_online_prompt_if_needed(author, str(last_event.get("date") or ""), source, received_at)
 
     def _apply_raw_event_to_aggregates(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -3633,6 +3956,13 @@ def _has_time_delta(deltas: dict[str, Any]) -> bool:
     return (
         _time_microseconds(deltas, "activeDeltaSeconds", "activeDeltaMicroseconds") > 0
         or _time_microseconds(deltas, "idleDeltaSeconds", "idleDeltaMicroseconds") > 0
+        or _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") > 0
+    )
+
+
+def _has_active_or_overtime_delta(deltas: dict[str, Any]) -> bool:
+    return (
+        _time_microseconds(deltas, "activeDeltaSeconds", "activeDeltaMicroseconds") > 0
         or _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") > 0
     )
 

@@ -90,6 +90,7 @@ When code changes need local verification, decide whether rebuild/restart is act
 
 Production runs at `activity.mempic.com`. When the user asks to pull production data locally, use SSH as `root@activity.mempic.com` and treat MongoDB dumps as sensitive data.
 
+- In owner chat, phrases like **"обнови БД"**, **"обнови базу"**, or **"обнови локальную БД"** mean: pull the production MongoDB data and replace the local `al` database using this Production Data Sync flow.
 - Production env lives in `/etc/al/backend.env`; the current production MongoDB defaults are `AL_MONGO_URI=mongodb://127.0.0.1:27017` and `AL_MONGO_DATABASE=al`.
 - Store dump archives outside the repository, for example under `/tmp/al-prod-sync`. Never commit MongoDB dumps, restored data exports, secrets, or server env files.
 - Do not create a local backup before replacing the local `al` database unless the user explicitly asks for one. Local data is treated as disposable during production sync.

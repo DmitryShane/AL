@@ -435,6 +435,7 @@ def telegram_due_reminders(request: Request) -> dict:
     return {
         "reminders": app.state.repo.claim_due_telegram_day_reminders(),
         "onlinePrompts": app.state.repo.claim_due_telegram_online_prompts(),
+        "breakActivityPrompts": app.state.repo.claim_due_telegram_break_activity_prompts(),
     }
 
 
@@ -443,6 +444,9 @@ def telegram_reminder_sent(sent: TelegramReminderSentIn, request: Request) -> di
     require_telegram_bot_secret(request)
     if sent.kind == "online_prompt":
         return app.state.repo.mark_telegram_online_prompt_sent(sent.reminder_id, sent.message_id)
+
+    if sent.kind == "break_activity_prompt":
+        return app.state.repo.mark_telegram_break_activity_prompt_sent(sent.reminder_id, sent.message_id)
 
     return app.state.repo.mark_telegram_day_reminder_sent(sent.reminder_id, sent.message_id)
 
@@ -455,6 +459,14 @@ def telegram_reminder_close(close: TelegramReminderCloseIn, request: Request) ->
             raise HTTPException(status_code=422, detail="Invalid action for online_prompt")
 
         return app.state.repo.close_telegram_online_prompt(
+            close.reminder_id, close.action, close.timestamp, close.actor_telegram_username
+        )
+
+    if close.kind == "break_activity_prompt":
+        if close.action not in {"confirm_online", "still_afk"}:
+            raise HTTPException(status_code=422, detail="Invalid action for break_activity_prompt")
+
+        return app.state.repo.close_telegram_break_activity_prompt(
             close.reminder_id, close.action, close.timestamp, close.actor_telegram_username
         )
 
