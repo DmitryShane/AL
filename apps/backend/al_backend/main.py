@@ -12,6 +12,8 @@ from .models import (
     BreakEventIn,
     CalendarMarkIn,
     CalendarReasonIn,
+    DiscordSettingsIn,
+    DiscordMeetingAutoAfkIn,
     DiscordVoiceEventIn,
     HealthResponse,
     IntervalSettingsIn,
@@ -74,6 +76,8 @@ PUBLIC_API_PATHS = {
     "/api/v1/telegram/reminders/sent",
     "/api/v1/telegram/reminders/close",
     "/api/v1/discord/voice-events",
+    "/api/v1/discord/meeting-auto-afk",
+    "/api/v1/discord/settings",
     "/api/v1/auth/login",
     "/api/v1/auth/me",
     "/api/v1/auth/dev-login",
@@ -360,6 +364,19 @@ def update_intervals(settings_in: IntervalSettingsIn, _: dict = Depends(require_
     )
 
 
+@app.put("/api/v1/settings/discord")
+def update_discord_settings(settings_in: DiscordSettingsIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
+    return app.state.repo.upsert_discord_settings(
+        meeting_auto_afk_timeout_seconds=settings_in.meeting_auto_afk_timeout_seconds,
+    )
+
+
+@app.get("/api/v1/discord/settings")
+def discord_settings(request: Request) -> dict:
+    require_discord_bot_secret(request)
+    return app.state.repo.get_discord_settings()
+
+
 @app.put("/api/v1/authors/profile")
 def upsert_author_profile(profile: AuthorProfileIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.upsert_author_profile(
@@ -429,6 +446,20 @@ def record_discord_voice_event(event: DiscordVoiceEventIn, request: Request) -> 
     )
 
 
+@app.post("/api/v1/discord/meeting-auto-afk")
+def record_discord_meeting_auto_afk(event: DiscordMeetingAutoAfkIn, request: Request) -> dict:
+    require_discord_bot_secret(request)
+    return app.state.repo.record_discord_meeting_auto_afk(
+        discord_user_id=event.discord_user_id,
+        discord_username=event.discord_username,
+        guild_id=event.guild_id,
+        meeting_channel_id=event.meeting_channel_id,
+        afk_channel_id=event.afk_channel_id,
+        solo_started_at=event.solo_started_at,
+        moved_at=event.moved_at,
+    )
+
+
 @app.get("/api/v1/telegram/reminders/due")
 def telegram_due_reminders(request: Request) -> dict:
     require_telegram_bot_secret(request)
@@ -436,6 +467,7 @@ def telegram_due_reminders(request: Request) -> dict:
         "reminders": app.state.repo.claim_due_telegram_day_reminders(),
         "onlinePrompts": app.state.repo.claim_due_telegram_online_prompts(),
         "breakActivityPrompts": app.state.repo.claim_due_telegram_break_activity_prompts(),
+        "meetingAutoAfkNotifications": app.state.repo.claim_due_telegram_meeting_auto_afk_notifications(),
     }
 
 
@@ -447,6 +479,9 @@ def telegram_reminder_sent(sent: TelegramReminderSentIn, request: Request) -> di
 
     if sent.kind == "break_activity_prompt":
         return app.state.repo.mark_telegram_break_activity_prompt_sent(sent.reminder_id, sent.message_id)
+
+    if sent.kind == "meeting_auto_afk":
+        return app.state.repo.mark_telegram_meeting_auto_afk_notification_sent(sent.reminder_id, sent.message_id)
 
     return app.state.repo.mark_telegram_day_reminder_sent(sent.reminder_id, sent.message_id)
 
@@ -523,5 +558,6 @@ def reports_summary(
         authors=app.state.repo.list_authors(),
         reports=[],
         intervalSettings=app.state.repo.get_interval_settings(),
+        discordSettings=app.state.repo.get_discord_settings(),
         activitySummary=app.state.repo.activity_summary(start_date=start_date, end_date=end_date, date_mode=date_mode),
     )

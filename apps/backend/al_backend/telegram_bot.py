@@ -328,6 +328,21 @@ def send_due_reminders(config: BotConfig) -> None:
         message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
         mark_reminder_sent(config.backend_url, config.bot_secret, prompt_id, message_id, kind="break_activity_prompt")
 
+    for notification in bundle.get("meetingAutoAfkNotifications", []):
+        notification_id = str(notification.get("reminderId") or "")
+        telegram_name = str(notification.get("telegramUsername") or "").strip().lstrip("@")
+
+        if not notification_id or not telegram_name:
+            continue
+
+        text = (
+            f"Hi @{telegram_name}. You were alone in the meeting channel for over 10 minutes, "
+            "so I moved you to AFK."
+        )
+        result = send_plain_message(config.token, config.allowed_chat_id, text)
+        message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
+        mark_reminder_sent(config.backend_url, config.bot_secret, notification_id, message_id, kind="meeting_auto_afk")
+
 
 def submit_break_event(backend_url: str, telegram_username_value: str, event_type: str, telegram_timestamp: Any) -> dict[str, Any]:
     timestamp = None
@@ -466,6 +481,17 @@ def send_break_activity_prompt_message(token: str, chat_id: int, text: str, remi
             "chat_id": chat_id,
             "text": text,
             "reply_markup": json.dumps(reply_markup),
+        },
+    )
+
+
+def send_plain_message(token: str, chat_id: int, text: str) -> dict[str, Any]:
+    return telegram_request(
+        token,
+        "sendMessage",
+        {
+            "chat_id": chat_id,
+            "text": text,
         },
     )
 

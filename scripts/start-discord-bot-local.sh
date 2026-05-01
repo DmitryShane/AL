@@ -25,7 +25,7 @@ AL_BACKEND_URL_VALUE="${AL_BACKEND_URL:-https://activity.mempic.com}"
 if [ -z "${DISCORD_BOT_TOKEN:-}" ]; then
   echo "DISCORD_BOT_TOKEN is required."
   echo "Create $ENV_FILE from .env.discord-bot.example or run:"
-  echo "DISCORD_BOT_TOKEN=... DISCORD_GUILD_ID=... DISCORD_MEETING_CHANNEL_ID=... AL_DISCORD_BOT_SECRET=... scripts/start-discord-bot-local.sh"
+  echo "DISCORD_BOT_TOKEN=... DISCORD_GUILD_ID=... DISCORD_MEETING_CHANNEL_ID=... DISCORD_AFK_CHANNEL_ID=... AL_DISCORD_BOT_SECRET=... scripts/start-discord-bot-local.sh"
   exit 1
 fi
 
@@ -36,6 +36,11 @@ fi
 
 if [ -z "${DISCORD_MEETING_CHANNEL_ID:-}" ]; then
   echo "DISCORD_MEETING_CHANNEL_ID is required."
+  exit 1
+fi
+
+if [ -z "${DISCORD_AFK_CHANNEL_ID:-}" ]; then
+  echo "DISCORD_AFK_CHANNEL_ID is required."
   exit 1
 fi
 
@@ -72,6 +77,8 @@ write_bot_plist() {
     <string>$DISCORD_GUILD_ID</string>
     <key>DISCORD_MEETING_CHANNEL_ID</key>
     <string>$DISCORD_MEETING_CHANNEL_ID</string>
+    <key>DISCORD_AFK_CHANNEL_ID</key>
+    <string>$DISCORD_AFK_CHANNEL_ID</string>
     <key>AL_BACKEND_URL</key>
     <string>$AL_BACKEND_URL_VALUE</string>
     <key>AL_DISCORD_BOT_SECRET</key>

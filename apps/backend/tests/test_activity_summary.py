@@ -30,6 +30,7 @@ from al_backend.telegram_bot import (
     parse_reminder_callback,
     send_break_activity_prompt_message,
     send_online_prompt_message,
+    send_plain_message,
     send_reminder_message,
     telegram_username,
 )
@@ -175,6 +176,7 @@ class FakeDb:
         self.telegram_day_reminders = FakeCollection()
         self.telegram_online_prompts = FakeCollection()
         self.telegram_break_activity_prompts = FakeCollection()
+        self.telegram_meeting_auto_afk_notifications = FakeCollection()
         self.break_intervals = FakeCollection()
         self.meeting_events = FakeCollection()
         self.meeting_sessions = FakeCollection()
@@ -192,6 +194,7 @@ class FakeDb:
         self.report_rows = FakeCollection()
         self.report_security_events = FakeCollection()
         self.site_users = FakeCollection()
+        self.system_settings = FakeCollection()
 
 
 def fake_repository():
@@ -345,6 +348,20 @@ def test_telegram_bot_break_activity_prompt_message_has_buttons(monkeypatch):
     assert "altb:prompt-1:still_afk" in captured["params"]["reply_markup"]
     assert "I'm online" in captured["params"]["reply_markup"]
     assert "Still AFK" in captured["params"]["reply_markup"]
+
+
+def test_telegram_bot_plain_message_has_no_buttons(monkeypatch):
+    captured = {}
+
+    def fake_request(token, method, params):
+        captured.update({"token": token, "method": method, "params": params})
+        return {"result": {"message_id": 101}}
+
+    monkeypatch.setattr("al_backend.telegram_bot.telegram_request", fake_request)
+    send_plain_message("token", 123, "Hello")
+
+    assert captured["method"] == "sendMessage"
+    assert captured["params"] == {"chat_id": 123, "text": "Hello"}
 
 
 def test_telegram_bot_formats_prompt_time_in_author_time_zone():
@@ -1867,6 +1884,109 @@ def test_discord_voice_events_open_and_close_meeting_session():
     assert repo.db.meeting_intervals.items[0]["meetingSeconds"] == 1500
     assert repo.db.report_rows.items[-1]["source"] == "discord"
     assert repo.db.report_rows.items[-1]["reportType"] == "meeting"
+
+
+def test_discord_auto_afk_closes_meeting_at_solo_start_and_schedules_notification():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "discordUserId": "123",
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.record_discord_voice_event("123", "future", "join", guild_id="guild", channel_id="meeting", timestamp="2026-04-29T10:00:00+00:00")
+
+    result = repo.record_discord_meeting_auto_afk(
+        "123",
+        "future",
+        guild_id="guild",
+        meeting_channel_id="meeting",
+        afk_channel_id="afk",
+        solo_started_at="2026-04-29T10:25:00+00:00",
+        moved_at="2026-04-29T10:35:00+00:00",
+    )
+
+    assert result["status"] == "meeting_auto_afk"
+    assert result["meetingSeconds"] == 1500
+    assert repo.db.meeting_sessions.items == []
+    assert repo.db.meeting_intervals.items[0]["endedAt"] == dt.datetime(2026, 4, 29, 10, 25, tzinfo=dt.UTC)
+    assert repo.db.meeting_intervals.items[0]["meetingSeconds"] == 1500
+    assert repo.db.meeting_events.items[-1]["eventType"] == "auto_afk"
+    assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["telegramUsername"] == "future_artist"
+    assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["excludedSeconds"] == 600
+
+
+def test_discord_settings_default_and_save():
+    repo = fake_repository()
+
+    assert repo.get_discord_settings()["meetingAutoAfkTimeoutSeconds"] == 600
+
+    result = repo.upsert_discord_settings(900)
+
+    assert result["meetingAutoAfkTimeoutSeconds"] == 900
+    assert repo.get_discord_settings()["meetingAutoAfkTimeoutSeconds"] == 900
+
+
+def test_discord_auto_afk_is_idempotent():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "discordUserId": "123",
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.record_discord_voice_event("123", "future", "join", timestamp="2026-04-29T10:00:00+00:00")
+
+    first = repo.record_discord_meeting_auto_afk(
+        "123",
+        "future",
+        solo_started_at="2026-04-29T10:25:00+00:00",
+        moved_at="2026-04-29T10:35:00+00:00",
+    )
+    second = repo.record_discord_meeting_auto_afk(
+        "123",
+        "future",
+        solo_started_at="2026-04-29T10:25:00+00:00",
+        moved_at="2026-04-29T10:35:30+00:00",
+    )
+
+    assert first["status"] == "meeting_auto_afk"
+    assert second["status"] == "auto_afk_already_recorded"
+    assert len(repo.db.meeting_intervals.items) == 1
+    assert len(repo.db.telegram_meeting_auto_afk_notifications.items) == 1
+
+
+def test_telegram_meeting_auto_afk_notifications_can_be_claimed_and_marked_sent():
+    repo = fake_repository()
+    repo.db.telegram_meeting_auto_afk_notifications.insert_one(
+        {
+            "reminderId": "notification-1",
+            "autoAfkEventId": "123:2026-04-29T10:25:00+00:00",
+            "rawAuthor": "Future Artist",
+            "telegramUsername": "future_artist",
+            "soloStartedAt": dt.datetime(2026, 4, 29, 10, 25, tzinfo=dt.UTC),
+            "movedAt": dt.datetime(2026, 4, 29, 10, 35, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "excludedSeconds": 600,
+            "status": "pending",
+        }
+    )
+
+    notifications = repo.claim_due_telegram_meeting_auto_afk_notifications(now=dt.datetime(2026, 4, 29, 10, 36, tzinfo=dt.UTC))
+    sent = repo.mark_telegram_meeting_auto_afk_notification_sent("notification-1", 42)
+
+    assert notifications[0]["reminderId"] == "notification-1"
+    assert notifications[0]["telegramUsername"] == "future_artist"
+    assert notifications[0]["excludedSeconds"] == 600
+    assert sent == {"ok": True}
+    assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["status"] == "sent"
+    assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["messageId"] == 42
 
 
 def test_discord_author_mappings_update_known_telegram_profiles_only():

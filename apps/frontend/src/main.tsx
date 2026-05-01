@@ -184,6 +184,9 @@ type Summary = {
     defaultSendIntervalSeconds: number;
     authors: Array<{ author: string; sendIntervalSeconds: number }>;
   };
+  discordSettings: {
+    meetingAutoAfkTimeoutSeconds: number;
+  };
   activitySummary: ActivitySummary;
 };
 
@@ -1756,9 +1759,10 @@ function SettingsPage({
 }) {
   const profiles = summary?.activitySummary.profiles ?? [];
   const aliases = summary?.activitySummary.authorAliases ?? [];
-  const [settingsTab, setSettingsTab] = useState<"authors" | "users">("authors");
+  const [settingsTab, setSettingsTab] = useState<"authors" | "discord" | "users">("authors");
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
+  const [discordAutoAfkTimeout, setDiscordAutoAfkTimeout] = useState(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
   const [saving, setSaving] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
   const [aliasError, setAliasError] = useState("");
@@ -1777,6 +1781,7 @@ function SettingsPage({
 
     setDrafts(nextDrafts);
     setGlobalInterval(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
+    setDiscordAutoAfkTimeout(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
   }, [summary]);
 
   useEffect(() => {
@@ -1882,6 +1887,33 @@ function SettingsPage({
       setSaving(null);
       window.setTimeout(() => {
         setSaveStatus((items) => ({ ...items, interval: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function saveDiscordSettings() {
+    setSaving("discord");
+    setSaveStatus((items) => ({ ...items, discord: undefined }));
+
+    try {
+      const response = await apiFetch(`/api/v1/settings/discord`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meetingAutoAfkTimeoutSeconds: Number(discordAutoAfkTimeout) })
+      });
+
+      if (!response.ok) {
+        throw new Error("Discord settings save failed");
+      }
+
+      setSaveStatus((items) => ({ ...items, discord: "saved" }));
+      onSaved();
+    } catch {
+      setSaveStatus((items) => ({ ...items, discord: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, discord: undefined }));
       }, 2500);
     }
   }
@@ -2021,6 +2053,7 @@ function SettingsPage({
     <section className="page-section settings-layout">
       <div className="settings-tabs">
         <button className={settingsTab === "authors" ? "active" : ""} onClick={() => setSettingsTab("authors")}>Author Profiles</button>
+        <button className={settingsTab === "discord" ? "active" : ""} onClick={() => setSettingsTab("discord")}>Discord</button>
         <button className={settingsTab === "users" ? "active" : ""} onClick={() => setSettingsTab("users")}>Site Users</button>
       </div>
       {settingsTab === "authors" ? (
@@ -2302,6 +2335,28 @@ function SettingsPage({
         />
       ) : null}
         </>
+      ) : settingsTab === "discord" ? (
+        <div className="panel">
+          <h2>Discord</h2>
+          <p className="settings-caption">
+            Configure meeting channel automation. The Discord bot refreshes this value from the backend while it is running.
+          </p>
+          <div className="settings-row">
+            <label>
+              Auto-AFK timeout, sec
+              <input
+                value={discordAutoAfkTimeout}
+                onChange={(event) => setDiscordAutoAfkTimeout(event.target.value)}
+                type="number"
+                min="60"
+                step="30"
+              />
+            </label>
+            <button className={settingsSaveButtonClassName(saveStatus.discord)} onClick={() => void saveDiscordSettings()} disabled={saving === "discord"}>
+              {settingsSaveButtonLabel("discord", saving, saveStatus)}
+            </button>
+          </div>
+        </div>
       ) : (
         <SiteUsersPanel currentUser={currentUser} />
       )}

@@ -19,6 +19,7 @@ LONG_BREAK_THRESHOLD_SECONDS = 3600
 TELEGRAM_DAY_REMINDER_SECONDS = 10 * 3600
 TELEGRAM_ONLINE_PROMPT_DELAY_SECONDS = 15 * 60
 TELEGRAM_BREAK_ACTIVITY_PROMPT_DELAY_SECONDS = 60 * 60
+DEFAULT_DISCORD_MEETING_AUTO_AFK_TIMEOUT_SECONDS = 10 * 60
 DEFAULT_PLUGIN_WORK_WINDOW_SECONDS = 32400
 MICROSECONDS_PER_SECOND = 1_000_000
 MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS = 10
@@ -103,6 +104,8 @@ class Repository:
         self.db.meeting_sessions.create_index("discordUserId", unique=True)
         self.db.meeting_sessions.create_index([("rawAuthor", ASCENDING), ("startedAt", ASCENDING)])
         self.db.meeting_intervals.create_index([("rawAuthor", ASCENDING), ("startedAt", ASCENDING), ("endedAt", ASCENDING)])
+        self.db.telegram_meeting_auto_afk_notifications.create_index("reminderId", unique=True)
+        self.db.telegram_meeting_auto_afk_notifications.create_index("autoAfkEventId", unique=True)
         self.db.telegram_day_reminders.create_index("reminderId", unique=True)
         self.db.telegram_day_reminders.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
         self.db.telegram_online_prompts.create_index("reminderId", unique=True)
@@ -111,6 +114,7 @@ class Repository:
         self.db.telegram_break_activity_prompts.create_index([("rawAuthor", ASCENDING), ("breakStartedAt", ASCENDING)], unique=True)
         self.db.interval_settings.create_index("kind", unique=True)
         self.db.interval_settings.create_index("author", unique=True, sparse=True)
+        self.db.system_settings.create_index("kind", unique=True)
         self.db.report_refresh_requests.create_index("author", unique=True)
         self.db.report_refresh_requests.create_index("requestedAt")
         self.db.manual_report_expectations.create_index("author", unique=True)
@@ -385,6 +389,29 @@ class Repository:
                 global_setting.get("sendIntervalSeconds", self.default_send_interval_seconds)
             ),
             "authors": author_settings,
+        }
+
+    def upsert_discord_settings(self, meeting_auto_afk_timeout_seconds: int) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        self.db.system_settings.update_one(
+            {"kind": "discord"},
+            {
+                "$set": {
+                    "kind": "discord",
+                    "meetingAutoAfkTimeoutSeconds": meeting_auto_afk_timeout_seconds,
+                    "updatedAt": now,
+                }
+            },
+            upsert=True,
+        )
+        return self.get_discord_settings()
+
+    def get_discord_settings(self) -> dict[str, Any]:
+        settings = self.db.system_settings.find_one({"kind": "discord"}) or {}
+        return {
+            "meetingAutoAfkTimeoutSeconds": int(
+                settings.get("meetingAutoAfkTimeoutSeconds", DEFAULT_DISCORD_MEETING_AUTO_AFK_TIMEOUT_SECONDS)
+            )
         }
 
     def create_report_challenge(self, challenge_in: Any, keys: Any) -> dict[str, Any]:
@@ -2086,6 +2113,7 @@ class Repository:
             "daySessions": self.db.day_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "telegramDayReminders": self.db.telegram_day_reminders.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "telegramOnlinePrompts": self.db.telegram_online_prompts.delete_many({"rawAuthor": normalized_author}).deleted_count,
+            "telegramMeetingAutoAfkNotifications": self.db.telegram_meeting_auto_afk_notifications.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "meetingEvents": self.db.meeting_events.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "meetingSessions": self.db.meeting_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
             "meetingIntervals": self.db.meeting_intervals.delete_many({"rawAuthor": normalized_author}).deleted_count,
@@ -2419,6 +2447,136 @@ class Repository:
                 "metadata": {"guildId": str(guild_id or ""), "channelId": str(channel_id or ""), **(metadata or {})},
                 **deltas,
             }
+        )
+
+    def record_discord_meeting_auto_afk(
+        self,
+        discord_user_id: str,
+        discord_username: str | None,
+        guild_id: str | None = None,
+        meeting_channel_id: str | None = None,
+        afk_channel_id: str | None = None,
+        solo_started_at: str | None = None,
+        moved_at: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_discord_user_id = _normalize_discord_user_id(discord_user_id)
+        solo_start = _parse_timestamp(solo_started_at)
+        moved_time = _parse_timestamp(moved_at)
+        received_at = dt.datetime.now(dt.UTC)
+        profile = self.db.author_profiles.find_one({"discordUserId": normalized_discord_user_id})
+
+        if not profile:
+            return {"ok": False, "error": "Unknown Discord user"}
+
+        raw_author = profile["rawAuthor"]
+        telegram_username = _normalize_telegram_username(profile.get("telegramUsername"))
+        time_zone_id = _valid_time_zone_id(profile.get("timeZoneId")) or "UTC"
+        event_date = _telegram_event_date(solo_start, time_zone_id)
+        normalized_discord_username = str(discord_username or profile.get("discordUsername") or "").strip()
+        auto_afk_event_id = f"{normalized_discord_user_id}:{solo_start.isoformat()}"
+
+        if self.db.meeting_events.find_one({"autoAfkEventId": auto_afk_event_id}, {"_id": 1}):
+            return {"ok": True, "status": "auto_afk_already_recorded"}
+
+        meeting_result: dict[str, Any] = {}
+        session = self.db.meeting_sessions.find_one({"discordUserId": normalized_discord_user_id})
+
+        if session:
+            meeting_result = self._close_meeting_session(
+                normalized_discord_user_id,
+                raw_author,
+                normalized_discord_username,
+                solo_start,
+                received_at,
+                guild_id,
+                meeting_channel_id,
+            )
+
+        self.db.meeting_events.insert_one(
+            {
+                "discordUserId": normalized_discord_user_id,
+                "discordUsername": normalized_discord_username,
+                "rawAuthor": raw_author,
+                "eventType": "auto_afk",
+                "guildId": str(guild_id or ""),
+                "channelId": str(meeting_channel_id or ""),
+                "afkChannelId": str(afk_channel_id or ""),
+                "timestamp": moved_time,
+                "soloStartedAt": solo_start,
+                "movedAt": moved_time,
+                "date": event_date,
+                "timeZoneId": time_zone_id,
+                "autoAfkEventId": auto_afk_event_id,
+                "createdAt": received_at,
+            }
+        )
+        self._insert_discord_meeting_report_row(
+            raw_author,
+            normalized_discord_user_id,
+            normalized_discord_username,
+            "reconcile",
+            moved_time,
+            event_date,
+            time_zone_id,
+            received_at,
+            "meeting_auto_afk",
+            guild_id,
+            meeting_channel_id,
+            {
+                "autoAfkEventId": auto_afk_event_id,
+                "soloStartedAt": solo_start.isoformat(),
+                "movedAt": moved_time.isoformat(),
+                "afkChannelId": str(afk_channel_id or ""),
+                **meeting_result,
+            },
+        )
+        self._schedule_telegram_meeting_auto_afk_notification(
+            auto_afk_event_id,
+            raw_author,
+            telegram_username,
+            event_date,
+            time_zone_id,
+            solo_start,
+            moved_time,
+            meeting_result,
+        )
+        return {"ok": True, "status": "meeting_auto_afk", "autoAfkEventId": auto_afk_event_id, **meeting_result}
+
+    def _schedule_telegram_meeting_auto_afk_notification(
+        self,
+        auto_afk_event_id: str,
+        raw_author: str,
+        telegram_username: str,
+        event_date: str,
+        time_zone_id: str,
+        solo_started_at: dt.datetime,
+        moved_at: dt.datetime,
+        meeting_result: dict[str, Any],
+    ) -> None:
+        if not telegram_username:
+            return
+
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_meeting_auto_afk_notifications.update_one(
+            {"autoAfkEventId": auto_afk_event_id},
+            {
+                "$setOnInsert": {
+                    "reminderId": _new_id(),
+                    "autoAfkEventId": auto_afk_event_id,
+                    "rawAuthor": raw_author,
+                    "telegramUsername": telegram_username,
+                    "date": event_date,
+                    "timeZoneId": time_zone_id,
+                    "soloStartedAt": solo_started_at,
+                    "movedAt": moved_at,
+                    "excludedSeconds": max(0, int((moved_at - solo_started_at).total_seconds())),
+                    "meetingSeconds": int(meeting_result.get("meetingSeconds", 0)),
+                    "status": "pending",
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+            },
+            upsert=True,
         )
 
     def claim_due_telegram_day_reminders(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
@@ -2823,6 +2981,49 @@ class Repository:
     def mark_telegram_break_activity_prompt_sent(self, reminder_id: str, message_id: int | None = None) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         self.db.telegram_break_activity_prompts.update_one(
+            {"reminderId": reminder_id},
+            {
+                "$set": {
+                    "status": "sent",
+                    "messageId": message_id,
+                    "sentAt": now,
+                    "updatedAt": now,
+                }
+            },
+        )
+        return {"ok": True}
+
+    def claim_due_telegram_meeting_auto_afk_notifications(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
+        now = now or dt.datetime.now(dt.UTC)
+        notifications: list[dict[str, Any]] = []
+
+        for doc in self.db.telegram_meeting_auto_afk_notifications.find({"status": "pending"}, {"_id": 0}):
+            reminder_id = str(doc.get("reminderId") or "")
+
+            if not reminder_id:
+                continue
+
+            self.db.telegram_meeting_auto_afk_notifications.update_one(
+                {"reminderId": reminder_id},
+                {"$set": {"status": "claimed", "lastClaimedAt": now, "updatedAt": now}},
+            )
+            notifications.append(
+                {
+                    "reminderId": reminder_id,
+                    "rawAuthor": doc.get("rawAuthor"),
+                    "telegramUsername": doc.get("telegramUsername"),
+                    "soloStartedAt": _isoformat_or_none(doc.get("soloStartedAt")),
+                    "movedAt": _isoformat_or_none(doc.get("movedAt")),
+                    "timeZoneId": doc.get("timeZoneId"),
+                    "excludedSeconds": int(doc.get("excludedSeconds", 0)),
+                }
+            )
+
+        return notifications
+
+    def mark_telegram_meeting_auto_afk_notification_sent(self, reminder_id: str, message_id: int | None = None) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_meeting_auto_afk_notifications.update_one(
             {"reminderId": reminder_id},
             {
                 "$set": {
@@ -4942,6 +5143,11 @@ def _coerce_datetime(value: Any) -> dt.datetime | None:
         return parsed.astimezone(dt.UTC)
 
     return None
+
+
+def _isoformat_or_none(value: Any) -> str | None:
+    parsed = _coerce_datetime(value)
+    return parsed.isoformat() if parsed else None
 
 
 def _normalize_telegram_username(value: str | None) -> str:

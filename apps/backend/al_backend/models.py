@@ -53,6 +53,10 @@ class IntervalSettingsIn(ApiModel):
     author_send_interval_seconds: int | None = Field(default=None, alias="authorSendIntervalSeconds", ge=30)
 
 
+class DiscordSettingsIn(ApiModel):
+    meeting_auto_afk_timeout_seconds: int = Field(alias="meetingAutoAfkTimeoutSeconds", ge=60)
+
+
 class LoginIn(ApiModel):
     email: str = Field(min_length=3)
     password: str = Field(min_length=1)
@@ -103,7 +107,7 @@ class BreakEventIn(ApiModel):
 class TelegramReminderSentIn(ApiModel):
     reminder_id: str = Field(alias="reminderId", min_length=1)
     message_id: int | None = Field(default=None, alias="messageId")
-    kind: str = Field(default="day_end", alias="kind", pattern="^(day_end|online_prompt|break_activity_prompt)$")
+    kind: str = Field(default="day_end", alias="kind", pattern="^(day_end|online_prompt|break_activity_prompt|meeting_auto_afk)$")
 
 
 class TelegramReminderCloseIn(ApiModel):
@@ -123,6 +127,16 @@ class DiscordVoiceEventIn(ApiModel):
     timestamp: str | None = None
 
 
+class DiscordMeetingAutoAfkIn(ApiModel):
+    discord_user_id: str = Field(alias="discordUserId", min_length=1)
+    discord_username: str | None = Field(default=None, alias="discordUsername")
+    guild_id: str | None = Field(default=None, alias="guildId")
+    meeting_channel_id: str | None = Field(default=None, alias="meetingChannelId")
+    afk_channel_id: str | None = Field(default=None, alias="afkChannelId")
+    solo_started_at: str = Field(alias="soloStartedAt", min_length=1)
+    moved_at: str | None = Field(default=None, alias="movedAt")
+
+
 class SubmitReportResponse(ApiModel):
     ok: bool
     report_id: str = Field(alias="reportId")
@@ -137,4 +151,5 @@ class SummaryResponse(ApiModel):
     authors: list[str]
     reports: list[dict[str, Any]]
     interval_settings: dict[str, Any] = Field(alias="intervalSettings")
+    discord_settings: dict[str, Any] = Field(alias="discordSettings")
     activity_summary: dict[str, Any] = Field(alias="activitySummary")

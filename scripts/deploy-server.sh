@@ -49,6 +49,7 @@ require_env_key "${BACKEND_ENV}" "AL_DISCORD_BOT_SECRET"
 require_env_key "${DISCORD_ENV}" "DISCORD_BOT_TOKEN"
 require_env_key "${DISCORD_ENV}" "DISCORD_GUILD_ID"
 require_env_key "${DISCORD_ENV}" "DISCORD_MEETING_CHANNEL_ID"
+require_env_key "${DISCORD_ENV}" "DISCORD_AFK_CHANNEL_ID"
 require_env_key "${DISCORD_ENV}" "AL_BACKEND_URL"
 require_env_key "${DISCORD_ENV}" "AL_DISCORD_BOT_SECRET"
 
