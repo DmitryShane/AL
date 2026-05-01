@@ -1390,6 +1390,7 @@ p {
 .table {
   display: grid;
   overflow-x: auto;
+  --reports-row-height: 45px;
 }
 
 .table-head,
@@ -1401,6 +1402,24 @@ p {
   align-items: center;
   border-bottom: 1px solid #e5eaf0;
   padding: 12px 0;
+}
+
+.table-body {
+  position: relative;
+  min-width: 1080px;
+  min-height: calc(var(--reports-row-height) * var(--reports-page-size, 10));
+}
+
+.table-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid #e5eaf0;
+  color: #718093;
+  font-weight: 800;
+  text-align: center;
 }
 
 .table-head,

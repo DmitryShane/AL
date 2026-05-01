@@ -2643,7 +2643,7 @@ function ReportsTable({
           </select>
         </label>
       </div>
-      <div className="table">
+      <div className="table" style={{ "--reports-page-size": pageSize } as React.CSSProperties}>
         <div className="table-head">
           <span>Source</span>
           <span>Author</span>
@@ -2655,22 +2655,24 @@ function ReportsTable({
           <span>Type</span>
           <span>Timezone</span>
         </div>
-        {loading ? <div className="table-row"><span>Loading reports...</span></div> : null}
-        {error ? <div className="table-row"><span>{error}</span></div> : null}
-        {!loading && !error && reports.length === 0 ? <div className="table-row"><span>No reports for this period.</span></div> : null}
-        {!loading && !error ? reports.map((report, index) => (
-          <div className="table-row" key={`${report.recordedAt ?? "report"}-${index}`}>
-            <span className="source-cell">{sourceIcon(report.source)}{formatSource(report.source)}</span>
-            <span>{report.displayName ?? report.author ?? "Unknown User"}</span>
-            <span>{report.date ?? "-"}</span>
-            <span>{formatReportActive(report)}</span>
-            <span>{formatReportIdle(report)}</span>
-            <span>{formatReportOvertime(report.overtimeActiveDeltaSeconds ?? 0)}</span>
-            <span>{formatAuthorTime(report)}</span>
-            <span className={reportTypeBadgeClassName(report.reportType)}>{formatReportType(report)}</span>
-            <span>{formatTimeZoneLabel(report) ?? "-"}</span>
-          </div>
-        )) : null}
+        <div className="table-body">
+          {loading ? <div className="table-state">Loading reports...</div> : null}
+          {error ? <div className="table-state">{error}</div> : null}
+          {!loading && !error && reports.length === 0 ? <div className="table-state">No reports for this period.</div> : null}
+          {!loading && !error ? reports.map((report, index) => (
+            <div className="table-row" key={`${report.recordedAt ?? "report"}-${index}`}>
+              <span className="source-cell">{sourceIcon(report.source)}{formatSource(report.source)}</span>
+              <span>{report.displayName ?? report.author ?? "Unknown User"}</span>
+              <span>{report.date ?? "-"}</span>
+              <span>{formatReportActive(report)}</span>
+              <span>{formatReportIdle(report)}</span>
+              <span>{formatReportOvertime(report.overtimeActiveDeltaSeconds ?? 0)}</span>
+              <span>{formatAuthorTime(report)}</span>
+              <span className={reportTypeBadgeClassName(report.reportType)}>{formatReportType(report)}</span>
+              <span>{formatTimeZoneLabel(report) ?? "-"}</span>
+            </div>
+          )) : null}
+        </div>
       </div>
       <div className="table-pagination">
         <span>
