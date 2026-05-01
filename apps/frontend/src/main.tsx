@@ -195,6 +195,8 @@ type ReportsPage = {
   sources: string[];
 };
 
+type ReportsPageCache = Record<string, ReportsPage>;
+
 type SiteUserRole = "admin" | "editor" | "viewer";
 
 type SiteUser = {
@@ -1513,6 +1515,16 @@ function ActivityPage({
   const [reportsPageSize, setReportsPageSize] = useState(10);
   const [reportsPage, setReportsPage] = useState(1);
   const [reportSourceFilter, setReportSourceFilter] = useState("");
+  const [reportsPageCache, setReportsPageCache] = useState<ReportsPageCache>({});
+  const reportsCacheKey = useMemo(() => JSON.stringify({
+    author: author?.rawAuthor ?? "",
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+    dateMode: dateRange.preset === "live" ? "authorLocalToday" : "",
+    source: reportSourceFilter,
+    limit: reportsPageSize,
+    page: reportsPage
+  }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportsPageSize, reportsPage]);
 
   useEffect(() => {
     setReportsPage(1);
@@ -1526,6 +1538,17 @@ function ActivityPage({
         setReports([]);
         setReportsTotal(0);
         setReportSources([]);
+        return;
+      }
+
+      const cachedPage = reportsPageCache[reportsCacheKey];
+
+      if (cachedPage) {
+        setReports(cachedPage.reports);
+        setReportsTotal(cachedPage.total);
+        setReportSources(cachedPage.sources);
+        setReportsLoading(false);
+        setReportsError(null);
         return;
       }
 
@@ -1564,6 +1587,10 @@ function ActivityPage({
         setReports(payload.reports);
         setReportsTotal(payload.total);
         setReportSources(payload.sources);
+        setReportsPageCache((current) => ({
+          ...current,
+          [reportsCacheKey]: payload
+        }));
       } catch (requestError) {
         if (ignore) {
           return;
@@ -1585,7 +1612,7 @@ function ActivityPage({
     return () => {
       ignore = true;
     };
-  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportsPage, reportsPageSize, reportSourceFilter]);
+  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportsPage, reportsPageSize, reportSourceFilter, reportsCacheKey, reportsPageCache]);
 
   return (
     <section className="page-section">
