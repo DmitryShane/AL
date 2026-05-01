@@ -1441,10 +1441,10 @@ def test_discord_meeting_does_not_replace_active_time():
 
     assert author["activeSeconds"] == 600
     assert author["idleSeconds"] == 0
-    assert author["meetingSeconds"] == 600
+    assert author["meetingSeconds"] == 1200
     assert hour["activeSeconds"] == 600
     assert hour["idleSeconds"] == 0
-    assert hour["meetingSeconds"] == 600
+    assert hour["meetingSeconds"] == 1200
 
 
 def test_discord_meeting_overlay_is_not_applied_twice_across_sources():
@@ -1681,6 +1681,67 @@ def test_live_discord_meeting_session_compensates_idle_time():
     assert summary["totals"]["idleSeconds"] == 600
 
 
+def test_discord_meeting_graph_uses_full_interval_bucket_over_active_time():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Евгений Доценко",
+            "displayName": "Evgeniy Dotsenko",
+            "discordUserId": "123",
+            "timeZoneId": "Europe/Sofia",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Евгений Доценко",
+            "projectId": "bike-rush-2",
+            "date": "2026-05-01",
+            "activeSeconds": 2597,
+            "idleSeconds": 1003,
+            "hourlyActivity": [
+                {"hour": 17, "activeSeconds": 2597, "idleSeconds": 1003},
+                {"hour": 18, "activeSeconds": 0, "idleSeconds": 396},
+            ],
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Евгений Доценко",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 5, 1, 14, 2, 50, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 1, 14, 11, 5, tzinfo=dt.UTC),
+            "date": "2026-05-01",
+            "timeZoneId": "Europe/Sofia",
+            "meetingSeconds": 495,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Евгений Доценко",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 5, 1, 14, 27, 58, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 1, 15, 3, 48, tzinfo=dt.UTC),
+            "date": "2026-05-01",
+            "timeZoneId": "Europe/Sofia",
+            "meetingSeconds": 2150,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-01", end_date="2026-05-01", now=dt.datetime(2026, 5, 1, 15, 30, tzinfo=dt.UTC))
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Евгений Доценко")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Евгений Доценко")["hourlyActivity"]
+    hour_17 = next(item for item in hourly if item["hour"] == 17)
+    hour_18 = next(item for item in hourly if item["hour"] == 18)
+
+    assert hour_17["meetingSeconds"] == 2417
+    assert hour_17["activeSeconds"] == 1183
+    assert hour_17["idleSeconds"] == 0
+    assert hour_18["meetingSeconds"] == 228
+    assert author["activeSeconds"] == 2597
+    assert author["meetingSeconds"] == 2645
+
+
 def test_discord_voice_events_open_and_close_meeting_session():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
@@ -1754,6 +1815,33 @@ def test_idle_only_reports_during_discord_meeting_are_hidden_from_latest_reports
     reports = repo.latest_reports(start_date="2026-04-29", end_date="2026-04-29")
 
     assert [report["source"] for report in reports] == ["discord"]
+
+
+def test_active_reports_during_discord_meeting_remain_visible_in_latest_reports():
+    repo = fake_repository()
+    repo.db.report_rows.insert_one(
+        {
+            "source": "future-plugin",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T10:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 10, tzinfo=dt.UTC),
+            "idleDeltaSeconds": 0,
+            "activeDeltaSeconds": 300,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 29, 10, 30, tzinfo=dt.UTC),
+        }
+    )
+
+    reports = repo.latest_reports(start_date="2026-04-29", end_date="2026-04-29")
+
+    assert [report["source"] for report in reports] == ["future-plugin"]
 
 
 def test_idle_only_reports_during_break_interval_are_hidden_from_latest_reports():

@@ -5107,17 +5107,20 @@ def _apply_meetings_to_hourly_activity(
     for hour in range(24):
         source_hour = source_by_hour.get(hour, {})
         consumed_hour = consumed_by_hour.get(hour, {})
-        active_seconds = int(source_hour.get("activeSeconds", 0))
-        overtime_active_seconds = int(source_hour.get("overtimeActiveSeconds", 0))
         break_seconds = int(source_hour.get("breakSeconds", 0))
-        idle_seconds = int(source_hour.get("idleSeconds", 0))
         requested_meeting_seconds = max(0, int((meeting_by_hour.get(hour, {}) or {}).get("meetingSeconds", 0)))
         consumed_meeting_seconds = max(0, int(consumed_hour.get("meetingSeconds", 0)))
         available_meeting_seconds = max(0, requested_meeting_seconds - consumed_meeting_seconds)
-        available_hour_seconds = max(0, 3600 - active_seconds - overtime_active_seconds - break_seconds)
-        idle_seconds = min(idle_seconds, available_hour_seconds)
-        meeting_seconds = min(available_meeting_seconds, idle_seconds)
-        idle_seconds = max(0, min(idle_seconds, available_hour_seconds) - meeting_seconds)
+        available_hour_seconds = max(0, 3600 - break_seconds)
+        meeting_seconds = min(available_meeting_seconds, available_hour_seconds)
+        raw_idle_seconds = max(0, int(source_hour.get("idleSeconds", 0)))
+        idle_seconds = max(0, raw_idle_seconds - meeting_seconds)
+        remaining_seconds = max(0, available_hour_seconds - meeting_seconds - idle_seconds)
+        active_seconds = min(max(0, int(source_hour.get("activeSeconds", 0))), remaining_seconds)
+        overtime_active_seconds = min(
+            max(0, int(source_hour.get("overtimeActiveSeconds", 0))),
+            max(0, remaining_seconds - active_seconds),
+        )
         consumed_hour["meetingSeconds"] = consumed_meeting_seconds + meeting_seconds
 
         hourly_activity.append(
@@ -5168,27 +5171,28 @@ def _merge_meeting_buckets_into_hourly_author_rows(
             current_meeting_seconds = int(target_hour.get("meetingSeconds", 0))
 
             if meeting_seconds > current_meeting_seconds:
-                current_idle_seconds = max(0, int(target_hour.get("idleSeconds", 0)))
-                has_existing_activity = any(
-                    int(target_hour.get(key, 0)) > 0
-                    for key in ("activeSeconds", "idleSeconds", "breakSeconds", "meetingSeconds", "overtimeActiveSeconds")
-                )
-                added_meeting_seconds = (
-                    meeting_seconds - current_meeting_seconds
-                    if not has_existing_activity
-                    else min(meeting_seconds - current_meeting_seconds, current_idle_seconds)
-                )
-                idle_reduction = min(current_idle_seconds, added_meeting_seconds)
+                added_meeting_seconds = min(meeting_seconds - current_meeting_seconds, max(0, 3600 - current_meeting_seconds))
 
                 if added_meeting_seconds <= 0:
                     continue
 
+                target_hour["meetingSeconds"] = current_meeting_seconds + added_meeting_seconds
+                remaining_seconds = max(
+                    0,
+                    3600 - int(target_hour.get("breakSeconds", 0)) - int(target_hour.get("meetingSeconds", 0)),
+                )
+                current_idle_seconds = max(0, int(target_hour.get("idleSeconds", 0)))
+                target_hour["idleSeconds"] = max(0, current_idle_seconds - added_meeting_seconds)
+                remaining_seconds = max(0, remaining_seconds - int(target_hour.get("idleSeconds", 0)))
+                target_hour["activeSeconds"] = min(max(0, int(target_hour.get("activeSeconds", 0))), remaining_seconds)
+                target_hour["overtimeActiveSeconds"] = min(
+                    max(0, int(target_hour.get("overtimeActiveSeconds", 0))),
+                    max(0, remaining_seconds - int(target_hour.get("activeSeconds", 0))),
+                )
+                idle_reduction = current_idle_seconds - int(target_hour.get("idleSeconds", 0))
                 if idle_reduction:
-                    target_hour["idleSeconds"] = current_idle_seconds - idle_reduction
                     adjustment = adjustments_by_author.setdefault(raw_author, {"idleSeconds": 0, "meetingSeconds": 0})
                     adjustment["idleSeconds"] += idle_reduction
-
-                target_hour["meetingSeconds"] = current_meeting_seconds + added_meeting_seconds
                 adjustment = adjustments_by_author.setdefault(raw_author, {"idleSeconds": 0, "meetingSeconds": 0})
                 adjustment["meetingSeconds"] += added_meeting_seconds
 
