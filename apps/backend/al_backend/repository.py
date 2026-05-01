@@ -2663,38 +2663,40 @@ class Repository:
                 author_row["breakSeconds"] += break_delta_seconds
                 totals["breakSeconds"] += break_delta_seconds
 
-        meeting_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+        meeting_query = _meeting_interval_date_query(start_date, end_date, date_mode, profiles, now)
         meeting_bucket_keys_from_daily_items = set(meeting_buckets)
 
         for interval in self.db.meeting_intervals.find(meeting_query, {"_id": 0}):
             raw_author = interval.get("rawAuthor") or "Unknown User"
-            meeting_date = interval.get("date") or ""
+            time_zone_id = _author_time_zone_id(raw_author, profiles, interval.get("timeZoneId"))
+            meeting_dates = _meeting_interval_scope_dates(start_date, end_date, date_mode, now, time_zone_id)
 
-            if not _date_in_summary_scope(meeting_date, raw_author, profiles, interval.get("timeZoneId"), now, start_date, end_date, date_mode):
-                continue
+            for meeting_date in meeting_dates:
+                meeting_key = (raw_author, meeting_date)
 
-            meeting_seconds = int(interval.get("meetingSeconds", 0))
-            meeting_key = (raw_author, meeting_date)
+                if meeting_key in meeting_bucket_keys_from_daily_items:
+                    continue
 
-            if meeting_key in meeting_seconds_by_author_date:
-                continue
-
-            existing_meeting_seconds = meeting_seconds_by_author_date.get(meeting_key, 0)
-            meeting_delta_seconds = max(0, meeting_seconds - existing_meeting_seconds)
-
-            if meeting_delta_seconds:
-                author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
-                author_row["meetingSeconds"] += meeting_delta_seconds
-                totals["meetingSeconds"] += meeting_delta_seconds
-                meeting_seconds_by_author_date[meeting_key] = existing_meeting_seconds + meeting_delta_seconds
                 interval_bucket = {meeting_key: _empty_hourly_activity()}
                 _add_meeting_interval_to_buckets(
                     interval_bucket,
                     raw_author,
                     _coerce_datetime(interval.get("startedAt")),
                     _coerce_datetime(interval.get("endedAt")),
-                    _author_time_zone_id(raw_author, profiles, interval.get("timeZoneId")),
+                    time_zone_id,
                 )
+                meeting_delta_seconds = sum(
+                    int(hour.get("meetingSeconds", 0)) for hour in interval_bucket[meeting_key]
+                )
+
+                if meeting_delta_seconds <= 0:
+                    continue
+
+                existing_meeting_seconds = meeting_seconds_by_author_date.get(meeting_key, 0)
+                author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
+                author_row["meetingSeconds"] += meeting_delta_seconds
+                totals["meetingSeconds"] += meeting_delta_seconds
+                meeting_seconds_by_author_date[meeting_key] = existing_meeting_seconds + meeting_delta_seconds
                 meeting_bucket = meeting_buckets.setdefault(meeting_key, _empty_hourly_activity())
                 _merge_hourly_activity(meeting_bucket, interval_bucket[meeting_key])
 
@@ -3589,6 +3591,69 @@ def _report_date_query(
         dates.add(_local_date_for_time_zone(now, _author_time_zone_id(profile.get("rawAuthor"), profiles)))
 
     return {"date": {"$in": sorted(dates)}}
+
+
+def _meeting_interval_date_query(
+    start_date: str | None,
+    end_date: str | None,
+    date_mode: str | None,
+    profiles: dict[str, dict[str, Any]],
+    now: dt.datetime,
+) -> dict[str, Any]:
+    query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+    date_filter = query.get("date")
+    dates: set[str] = set()
+
+    if isinstance(date_filter, dict) and "$in" in date_filter:
+        dates.update(str(value) for value in date_filter["$in"])
+    elif isinstance(date_filter, dict):
+        range_start = str(date_filter.get("$gte") or start_date or "")
+        range_end = str(date_filter.get("$lte") or end_date or range_start)
+        dates.update(_date_values_between(range_start, range_end))
+    elif isinstance(date_filter, str):
+        dates.add(date_filter)
+    else:
+        dates.update(_date_values_between(start_date, end_date))
+
+    expanded_dates = set(dates)
+
+    for value in dates:
+        expanded_dates.add((_date_start(value) - dt.timedelta(days=1)).date().isoformat())
+
+    return {"date": {"$in": sorted(expanded_dates)}} if expanded_dates else query
+
+
+def _meeting_interval_scope_dates(
+    start_date: str | None,
+    end_date: str | None,
+    date_mode: str | None,
+    now: dt.datetime,
+    time_zone_id: str,
+) -> list[str]:
+    if date_mode == "authorLocalToday":
+        return [_local_date_for_time_zone(now, time_zone_id)]
+
+    return _date_values_between(start_date, end_date)
+
+
+def _date_values_between(start_date: str | None, end_date: str | None) -> list[str]:
+    if not start_date and not end_date:
+        return []
+
+    range_start = _date_start(start_date or end_date or "").date()
+    range_end = _date_start(end_date or start_date or "").date()
+
+    if range_end < range_start:
+        return []
+
+    dates = []
+    current = range_start
+
+    while current <= range_end:
+        dates.append(current.isoformat())
+        current += dt.timedelta(days=1)
+
+    return dates
 
 
 def _document_identity_query(item: dict[str, Any]) -> dict[str, Any]:

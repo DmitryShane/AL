@@ -1305,6 +1305,46 @@ def test_live_discord_closed_meeting_interval_is_counted_without_daily_row():
     assert hour_1["meetingSeconds"] == 26 * 60
 
 
+def test_live_discord_cross_midnight_meeting_fills_selected_local_day_hours():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "Europe/Madrid"})
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 4, 30, 21, 46, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 30, 22, 29, tzinfo=dt.UTC),
+            "date": "2026-04-30",
+            "timeZoneId": "Europe/Madrid",
+            "meetingSeconds": 43 * 60,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 4, 30, 22, 29, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 30, 23, 26, tzinfo=dt.UTC),
+            "date": "2026-05-01",
+            "timeZoneId": "Europe/Madrid",
+            "meetingSeconds": 57 * 60,
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-05-01",
+        end_date="2026-05-01",
+        date_mode="authorLocalToday",
+        now=dt.datetime(2026, 5, 1, 1, 0, tzinfo=dt.UTC),
+    )
+    hourly = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")["hourlyActivity"]
+    hour_0 = next(item for item in hourly if item["hour"] == 0)
+    hour_1 = next(item for item in hourly if item["hour"] == 1)
+
+    assert hour_0["meetingSeconds"] == 3600
+    assert hour_1["meetingSeconds"] == 26 * 60
+
+
 def test_live_discord_meeting_session_marks_offline_author_online():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
