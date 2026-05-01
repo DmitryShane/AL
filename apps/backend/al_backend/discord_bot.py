@@ -178,11 +178,12 @@ class MeetingClient(discord.Client):
             await self.refresh_solo_state()
             return
 
+        solo_started_at = self.solo_started_at
         moved_at = datetime.now(timezone.utc)
         self.auto_moved_member_ids.add(member.id)
         await member.move_to(afk_channel, reason="AL auto-AFK: alone in meeting channel for over 10 minutes")
         self.solo_notified_member_ids.add(member.id)
-        await self.submit_auto_afk_event(member, self.solo_started_at, moved_at)
+        await self.submit_auto_afk_event(member, solo_started_at, moved_at)
         await self.refresh_solo_state()
 
     async def refresh_settings_if_needed(self) -> None:
