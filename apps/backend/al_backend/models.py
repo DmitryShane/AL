@@ -135,6 +135,7 @@ class DiscordMeetingAutoAfkIn(ApiModel):
     afk_channel_id: str | None = Field(default=None, alias="afkChannelId")
     solo_started_at: str = Field(alias="soloStartedAt", min_length=1)
     moved_at: str | None = Field(default=None, alias="movedAt")
+    threshold_seconds: int | None = Field(default=None, alias="thresholdSeconds", ge=1)
 
 
 class SubmitReportResponse(ApiModel):

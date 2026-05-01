@@ -341,7 +341,7 @@ def send_due_reminders(config: BotConfig) -> None:
     for notification in bundle.get("meetingAutoAfkNotifications", []):
         notification_id = str(notification.get("reminderId") or "")
         telegram_name = str(notification.get("telegramUsername") or "").strip().lstrip("@")
-        timeout_label = format_duration_label(int(notification.get("excludedSeconds") or 0))
+        timeout_label = format_duration_label(int(notification.get("thresholdSeconds") or 0))
 
         if not notification_id or not telegram_name:
             continue

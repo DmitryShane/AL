@@ -1914,6 +1914,7 @@ def test_discord_auto_afk_closes_meeting_at_solo_start_and_schedules_notificatio
         afk_channel_id="afk",
         solo_started_at="2026-04-29T10:25:00+00:00",
         moved_at="2026-04-29T10:35:00+00:00",
+        threshold_seconds=60,
     )
 
     assert result["status"] == "meeting_auto_afk"
@@ -1924,6 +1925,7 @@ def test_discord_auto_afk_closes_meeting_at_solo_start_and_schedules_notificatio
     assert repo.db.meeting_events.items[-1]["eventType"] == "auto_afk"
     assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["telegramUsername"] == "future_artist"
     assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["excludedSeconds"] == 600
+    assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["thresholdSeconds"] == 60
 
 
 def test_discord_settings_default_and_save():
@@ -1981,6 +1983,7 @@ def test_telegram_meeting_auto_afk_notifications_can_be_claimed_and_marked_sent(
             "movedAt": dt.datetime(2026, 4, 29, 10, 35, tzinfo=dt.UTC),
             "timeZoneId": "UTC",
             "excludedSeconds": 600,
+            "thresholdSeconds": 60,
             "status": "pending",
         }
     )
@@ -1991,6 +1994,7 @@ def test_telegram_meeting_auto_afk_notifications_can_be_claimed_and_marked_sent(
     assert notifications[0]["reminderId"] == "notification-1"
     assert notifications[0]["telegramUsername"] == "future_artist"
     assert notifications[0]["excludedSeconds"] == 600
+    assert notifications[0]["thresholdSeconds"] == 60
     assert sent == {"ok": True}
     assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["status"] == "sent"
     assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["messageId"] == 42

@@ -220,6 +220,7 @@ class MeetingClient(discord.Client):
             "afkChannelId": str(self.config.afk_channel_id),
             "soloStartedAt": solo_started_at.isoformat(),
             "movedAt": moved_at.isoformat(),
+            "thresholdSeconds": self.solo_timeout_seconds,
         }
         await asyncio.to_thread(submit_auto_afk_event, self.config, payload)
 

@@ -2458,6 +2458,7 @@ class Repository:
         afk_channel_id: str | None = None,
         solo_started_at: str | None = None,
         moved_at: str | None = None,
+        threshold_seconds: int | None = None,
     ) -> dict[str, Any]:
         normalized_discord_user_id = _normalize_discord_user_id(discord_user_id)
         solo_start = _parse_timestamp(solo_started_at)
@@ -2474,6 +2475,7 @@ class Repository:
         event_date = _telegram_event_date(solo_start, time_zone_id)
         normalized_discord_username = str(discord_username or profile.get("discordUsername") or "").strip()
         auto_afk_event_id = f"{normalized_discord_user_id}:{solo_start.isoformat()}"
+        threshold_seconds = int(threshold_seconds or self.get_discord_settings()["meetingAutoAfkTimeoutSeconds"])
 
         if self.db.meeting_events.find_one({"autoAfkEventId": auto_afk_event_id}, {"_id": 1}):
             return {"ok": True, "status": "auto_afk_already_recorded"}
@@ -2504,6 +2506,7 @@ class Repository:
                 "timestamp": moved_time,
                 "soloStartedAt": solo_start,
                 "movedAt": moved_time,
+                "thresholdSeconds": threshold_seconds,
                 "date": event_date,
                 "timeZoneId": time_zone_id,
                 "autoAfkEventId": auto_afk_event_id,
@@ -2527,6 +2530,7 @@ class Repository:
                 "soloStartedAt": solo_start.isoformat(),
                 "movedAt": moved_time.isoformat(),
                 "afkChannelId": str(afk_channel_id or ""),
+                "thresholdSeconds": threshold_seconds,
                 **meeting_result,
             },
         )
@@ -2538,6 +2542,7 @@ class Repository:
             time_zone_id,
             solo_start,
             moved_time,
+            threshold_seconds,
             meeting_result,
         )
         return {"ok": True, "status": "meeting_auto_afk", "autoAfkEventId": auto_afk_event_id, **meeting_result}
@@ -2551,6 +2556,7 @@ class Repository:
         time_zone_id: str,
         solo_started_at: dt.datetime,
         moved_at: dt.datetime,
+        threshold_seconds: int,
         meeting_result: dict[str, Any],
     ) -> None:
         if not telegram_username:
@@ -2570,6 +2576,7 @@ class Repository:
                     "soloStartedAt": solo_started_at,
                     "movedAt": moved_at,
                     "excludedSeconds": max(0, int((moved_at - solo_started_at).total_seconds())),
+                    "thresholdSeconds": threshold_seconds,
                     "meetingSeconds": int(meeting_result.get("meetingSeconds", 0)),
                     "status": "pending",
                     "createdAt": now,
@@ -3016,6 +3023,7 @@ class Repository:
                     "movedAt": _isoformat_or_none(doc.get("movedAt")),
                     "timeZoneId": doc.get("timeZoneId"),
                     "excludedSeconds": int(doc.get("excludedSeconds", 0)),
+                    "thresholdSeconds": int(doc.get("thresholdSeconds") or doc.get("excludedSeconds") or 0),
                 }
             )
 

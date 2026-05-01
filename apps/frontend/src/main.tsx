@@ -3331,7 +3331,7 @@ function formatReportType(report: Report) {
   }
 
   if (report.reportType === "meeting") {
-    return formatDiscordEvent(report.discordEventType ?? report.activityType);
+    return formatDiscordEvent(report.discordEventType ?? report.activityType, report.discordStatus);
   }
 
   if (report.reportType === "manual") {
@@ -3370,7 +3370,11 @@ function formatTelegramEvent(eventType?: string, status?: string) {
   return labels[eventType ?? ""] ?? "telegram";
 }
 
-function formatDiscordEvent(eventType?: string) {
+function formatDiscordEvent(eventType?: string, status?: string) {
+  if (status === "meeting_auto_afk") {
+    return "auto leave";
+  }
+
   const labels: Record<string, string> = {
     join: "meeting join",
     leave: "meeting leave",

@@ -457,6 +457,7 @@ def record_discord_meeting_auto_afk(event: DiscordMeetingAutoAfkIn, request: Req
         afk_channel_id=event.afk_channel_id,
         solo_started_at=event.solo_started_at,
         moved_at=event.moved_at,
+        threshold_seconds=event.threshold_seconds,
     )
 
 
