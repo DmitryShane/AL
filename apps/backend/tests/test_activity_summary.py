@@ -2080,6 +2080,7 @@ def test_telegram_private_chat_is_saved_for_profile():
 
     assert result["ok"] is True
     assert profile["telegramPrivateChatId"] == 12345
+    assert repo.author_profiles()[0]["telegramPrivateChatId"] == 12345
 
 
 def test_meeting_summary_chat_id_uses_private_recipient():
