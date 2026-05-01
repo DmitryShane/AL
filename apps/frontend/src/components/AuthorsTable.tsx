@@ -216,7 +216,7 @@ function formatOffsetTimestampTime(value: string) {
 function formatStatus(author: AuthorsTableRow) {
   if (author.status === "stale") {
     if (isTelegramSignedOff(author.stalePresence)) {
-      return "Signed off";
+      return "Offline";
     }
 
     return author.lastReceivedAt ? "Offline" : "No reports";

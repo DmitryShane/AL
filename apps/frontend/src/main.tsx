@@ -58,6 +58,8 @@ type AuthorRow = {
   authorColor?: string;
   source?: string;
   pluginVersion?: string;
+  timeZoneId?: string;
+  timeZoneDisplayName?: string;
   lastRecordedAt?: string;
   lastReceivedAt?: string;
   daySeconds: number;
@@ -300,6 +302,7 @@ type CalendarSummary = {
 type DateRange = {
   startDate: string;
   endDate: string;
+  preset: "live" | "yesterday" | "custom";
 };
 
 const emptyActivitySummary: ActivitySummary = {
@@ -333,6 +336,7 @@ function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>(() => todayRange());
+  const [appliedDateRange, setAppliedDateRange] = useState<DateRange>(() => todayRange());
   const [search, setSearch] = useState("");
   const [selectedAuthor, setSelectedAuthorState] = useState<string | null>(() => loadSavedActivityAuthor());
   const [loading, setLoading] = useState(true);
@@ -381,13 +385,15 @@ function App() {
 
     setError(null);
 
+    const requestedDateRange = dateRange;
+
     try {
       const params = new URLSearchParams({
-        startDate: dateRange.startDate,
-        endDate: dateRange.endDate
+        startDate: requestedDateRange.startDate,
+        endDate: requestedDateRange.endDate
       });
 
-      if (dateRangePreset(dateRange) === "today") {
+      if (requestedDateRange.preset === "live") {
         params.set("dateMode", "authorLocalToday");
       }
 
@@ -409,6 +415,7 @@ function App() {
 
       setHealth(await healthResponse.json());
       setSummary(await summaryResponse.json());
+      setAppliedDateRange(requestedDateRange);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unknown error");
     } finally {
@@ -418,7 +425,7 @@ function App() {
 
   useEffect(() => {
     void load();
-  }, [authUser?.email, dateRange.startDate, dateRange.endDate]);
+  }, [authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset]);
 
   async function requestReportRefresh(author?: string | null) {
     setRefreshingReports(true);
@@ -457,7 +464,7 @@ function App() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [authUser?.email, dateRange.startDate, dateRange.endDate, dashboardRefreshMs]);
+  }, [authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset, dashboardRefreshMs]);
 
   const activitySummary = summary?.activitySummary ?? emptyActivitySummary;
   const authors = useMemo(() => activitySummary.authors.filter((author) => matchesAuthorSearch(author, search)), [activitySummary, search]);
@@ -526,8 +533,9 @@ function App() {
 
       <main className="workspace">
         <header className="workspace-topbar">
-          <div>
+          <div className="topbar-title-block">
             <h1>{pageTitle(page)}</h1>
+            {!authLoading && loading ? <span className="topbar-loading-popover">Loading dashboard data...</span> : null}
             <p>{pageSubtitle(page)}</p>
           </div>
           {page === "authors" || page === "activity" || page === "alerts" ? (
@@ -538,7 +546,6 @@ function App() {
         </header>
 
         {authLoading ? <p className="notice">Restoring dashboard session...</p> : null}
-        {!authLoading && loading ? <p className="notice">Loading dashboard data...</p> : null}
         {error ? <p className="notice error">{error}</p> : null}
 
         {page === "authors" ? (
@@ -551,12 +558,13 @@ function App() {
           />
         ) : null}
         {page === "activity" ? (
-          <ActivityPage
-            summary={activitySummary}
-            reports={summary?.reports ?? []}
-            selectedAuthor={activeAuthor}
-            setSelectedAuthor={setSelectedAuthor}
-            refreshing={refreshingReports}
+              <ActivityPage
+                summary={activitySummary}
+                reports={summary?.reports ?? []}
+                dateRange={appliedDateRange}
+                selectedAuthor={activeAuthor}
+                setSelectedAuthor={setSelectedAuthor}
+                refreshing={refreshingReports}
             onRefreshAuthor={(author) => void requestReportRefresh(author)}
           />
         ) : null}
@@ -684,7 +692,7 @@ function AuthorsPage({
   refreshing: boolean;
   onRefresh: () => void;
 }) {
-  const sortedAuthors = [...authors].sort(compareAuthorCardStatus);
+  const sortedAuthors = [...authors].sort(compareAuthorsByStatusAndProductivity);
 
   return (
     <section className="page-section">
@@ -1464,6 +1472,7 @@ function AlertSummaryMetric({ label, value, tone }: { label: string; value: numb
 function ActivityPage({
   summary,
   reports,
+  dateRange,
   selectedAuthor,
   setSelectedAuthor,
   refreshing,
@@ -1471,6 +1480,7 @@ function ActivityPage({
 }: {
   summary: ActivitySummary;
   reports: Report[];
+  dateRange: DateRange;
   selectedAuthor: string | null;
   setSelectedAuthor: (value: string) => void;
   refreshing: boolean;
@@ -1488,7 +1498,7 @@ function ActivityPage({
   const savedPrefabs = author?.savedPrefabs ?? [];
   const overtimeActivityMix = author?.overtimeActivityMix ?? [];
   const overtimeSavedPrefabs = author?.overtimeSavedPrefabs ?? [];
-  const cardAuthors = [...summary.authors].sort(compareAuthorCardStatus);
+  const cardAuthors = [...summary.authors].sort((left, right) => compareAuthorCardStatus(left, right, dateRange));
 
   return (
     <section className="page-section">
@@ -1512,7 +1522,7 @@ function ActivityPage({
                 <span>{formatDuration(item.idleSeconds)} idle</span>
                 <span>{formatDuration(item.breakSeconds)} break</span>
               </div>
-              <div className={`productivity-badge ${productivityTone(item.productivity)}`}>
+              <div className={`productivity-badge ${authorCardProductivityTone(item)}`}>
                 <strong>{item.productivity.toFixed(0)}%</strong>
               </div>
             </div>
@@ -2802,47 +2812,41 @@ function paletteColor(index: number) {
 }
 
 function DateRangePicker({ value, onChange }: { value: DateRange; onChange: (range: DateRange) => void }) {
-  const activePreset = dateRangePreset(value);
+  function updateDateRange(next: Pick<DateRange, "startDate" | "endDate">) {
+    onChange({ ...next, preset: dateRangePreset(next) });
+  }
 
   return (
     <div className="date-range-group">
       <div className="date-presets" aria-label="Date presets">
-        <button className={activePreset === "today" ? "active" : undefined} onClick={() => onChange(todayRange())}>Today</button>
-        <button className={activePreset === "yesterday" ? "active" : undefined} onClick={() => onChange(yesterdayRange())}>Yesterday</button>
-        <button className={activePreset === "week" ? "active" : undefined} onClick={() => onChange(currentWeekRange())}>Week</button>
-        <button className={activePreset === "month" ? "active" : undefined} onClick={() => onChange(currentMonthRange())}>Month</button>
+        <button className={`live-preset-button ${value.preset === "live" ? "active" : ""}`.trim()} onClick={() => onChange(todayRange())}>
+          <span className="live-preset-dot" aria-hidden="true" />
+          Live
+        </button>
+        <button className={value.preset === "yesterday" ? "active" : undefined} onClick={() => onChange(yesterdayRange())}>Yesterday</button>
       </div>
       <div className="date-range-control">
-        <CalendarDays size={18} />
-        <input type="date" value={value.startDate} onChange={(event) => onChange({ ...value, startDate: event.target.value })} />
+        <input type="date" value={value.startDate} onChange={(event) => updateDateRange({ ...value, startDate: event.target.value })} />
         <span>to</span>
-        <input type="date" value={value.endDate} onChange={(event) => onChange({ ...value, endDate: event.target.value })} />
+        <input type="date" value={value.endDate} onChange={(event) => updateDateRange({ ...value, endDate: event.target.value })} />
       </div>
     </div>
   );
 }
 
-function dateRangePreset(value: DateRange) {
+function dateRangePreset(value: Pick<DateRange, "startDate" | "endDate">): DateRange["preset"] {
   if (sameDateRange(value, todayRange())) {
-    return "today";
+    return "live";
   }
 
   if (sameDateRange(value, yesterdayRange())) {
     return "yesterday";
   }
 
-  if (sameDateRange(value, currentWeekRange())) {
-    return "week";
-  }
-
-  if (sameDateRange(value, currentMonthRange())) {
-    return "month";
-  }
-
   return "custom";
 }
 
-function sameDateRange(left: DateRange, right: DateRange) {
+function sameDateRange(left: Pick<DateRange, "startDate" | "endDate">, right: Pick<DateRange, "startDate" | "endDate">) {
   return left.startDate === right.startDate && left.endDate === right.endDate;
 }
 
@@ -2992,6 +2996,26 @@ function productivityTone(productivity: number) {
   }
 
   return "bad";
+}
+
+function authorCardProductivityTone(author: AuthorRow) {
+  if (author.status === "stale" && !hasAuthorActivity(author)) {
+    return "neutral";
+  }
+
+  return productivityTone(author.productivity);
+}
+
+function hasAuthorActivity(author: AuthorRow) {
+  return [
+    author.activeSeconds,
+    author.idleSeconds,
+    author.meetingSeconds,
+    author.breakSeconds,
+    author.overtimeActiveSeconds,
+    author.telegramDaySeconds,
+    author.rawPluginDaySeconds ?? author.pluginDaySeconds
+  ].some((value) => Number(value) > 0);
 }
 
 function breakClassName(seconds: number) {
@@ -3252,7 +3276,7 @@ function matchesAuthorSearch(author: AuthorRow, search: string) {
 function formatAuthorStatus(author: AuthorRow) {
   if (author.status === "stale") {
     if (isTelegramSignedOff(author.stalePresence)) {
-      return "Signed off";
+      return "Offline";
     }
 
     return author.lastReceivedAt ? "Offline" : "No reports";
@@ -3287,7 +3311,24 @@ function isTelegramSignedOff(stalePresence?: AuthorRow["stalePresence"]) {
   return stalePresence === "telegram" || stalePresence === "both";
 }
 
-function compareAuthorCardStatus(left: AuthorRow, right: AuthorRow) {
+function compareAuthorCardStatus(left: AuthorRow, right: AuthorRow, dateRange: DateRange) {
+  if (left.status !== right.status) {
+    return left.status === "stale" ? 1 : -1;
+  }
+
+  if (left.status === "stale") {
+    const leftLiveDate = isSelectedDateAuthorLocalToday(left, dateRange) && hasAuthorActivity(left);
+    const rightLiveDate = isSelectedDateAuthorLocalToday(right, dateRange) && hasAuthorActivity(right);
+
+    if (leftLiveDate !== rightLiveDate) {
+      return leftLiveDate ? -1 : 1;
+    }
+  }
+
+  return compareAuthorsByStatusAndProductivity(left, right);
+}
+
+function compareAuthorsByStatusAndProductivity(left: AuthorRow, right: AuthorRow) {
   if (left.status !== right.status) {
     return left.status === "stale" ? 1 : -1;
   }
@@ -3301,6 +3342,43 @@ function compareAuthorCardStatus(left: AuthorRow, right: AuthorRow) {
   }
 
   return left.displayName.localeCompare(right.displayName);
+}
+
+function isSelectedDateAuthorLocalToday(author: AuthorRow, dateRange: DateRange) {
+  if (dateRange.startDate !== dateRange.endDate || dateRange.preset === "live") {
+    return false;
+  }
+
+  return dateRange.startDate === authorLocalDate(author);
+}
+
+function authorLocalDate(author: AuthorRow) {
+  const now = new Date();
+  const timeZone = author.timeZoneId;
+
+  if (!timeZone) {
+    return toDateInputValue(now);
+  }
+
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(now);
+    const year = parts.find((part) => part.type === "year")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+    const day = parts.find((part) => part.type === "day")?.value;
+
+    if (year && month && day) {
+      return `${year}-${month}-${day}`;
+    }
+  } catch {
+    return toDateInputValue(now);
+  }
+
+  return toDateInputValue(now);
 }
 
 function alertCardClassName(severity: AuthorAlert["severity"]) {
@@ -3478,28 +3556,14 @@ function loadSavedActivityAuthor() {
 
 function todayRange(): DateRange {
   const today = toDateInputValue(new Date());
-  return { startDate: today, endDate: today };
+  return { startDate: today, endDate: today, preset: "live" };
 }
 
 function yesterdayRange(): DateRange {
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
   const date = toDateInputValue(yesterday);
-  return { startDate: date, endDate: date };
-}
-
-function currentWeekRange(): DateRange {
-  const end = new Date();
-  const start = new Date(end);
-  start.setDate(end.getDate() - 7);
-  return { startDate: toDateInputValue(start), endDate: toDateInputValue(end) };
-}
-
-function currentMonthRange(): DateRange {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  return { startDate: toDateInputValue(start), endDate: toDateInputValue(end) };
+  return { startDate: date, endDate: date, preset: "yesterday" };
 }
 
 function toDateInputValue(date: Date) {

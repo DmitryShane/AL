@@ -1137,6 +1137,47 @@ def test_discord_meeting_reduces_idle_for_any_activity_source():
     assert hour["meetingSeconds"] == 1800
 
 
+def test_discord_meeting_does_not_replace_active_time():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "future-plugin",
+            "author": "Future Artist",
+            "projectId": "future",
+            "date": "2026-04-29",
+            "activeSeconds": 600,
+            "idleSeconds": 600,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": [
+                {"hour": 10, "activeSeconds": 600, "idleSeconds": 600, "breakSeconds": 0, "overtimeActiveSeconds": 0}
+            ],
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 29, 10, 20, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 1200,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", now=dt.datetime(2026, 4, 29, 11, tzinfo=dt.UTC))
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
+
+    assert author["activeSeconds"] == 600
+    assert author["idleSeconds"] == 0
+    assert author["meetingSeconds"] == 600
+    assert hour["activeSeconds"] == 600
+    assert hour["idleSeconds"] == 0
+    assert hour["meetingSeconds"] == 600
+
+
 def test_discord_meeting_overlay_is_not_applied_twice_across_sources():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
@@ -1195,6 +1236,46 @@ def test_live_discord_meeting_session_is_included_in_summary():
 
     assert author["meetingSeconds"] == 1200
     assert hour["meetingSeconds"] == 1200
+
+
+def test_live_discord_meeting_session_compensates_idle_time():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "future-plugin",
+            "author": "Future Artist",
+            "projectId": "future",
+            "date": "2026-04-29",
+            "activeSeconds": 600,
+            "idleSeconds": 1500,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": [
+                {"hour": 10, "activeSeconds": 600, "idleSeconds": 1500, "breakSeconds": 0, "overtimeActiveSeconds": 0}
+            ],
+        }
+    )
+    repo.db.meeting_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "UTC",
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", now=dt.datetime(2026, 4, 29, 10, 15, tzinfo=dt.UTC))
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
+
+    assert author["activeSeconds"] == 600
+    assert author["idleSeconds"] == 600
+    assert author["meetingSeconds"] == 900
+    assert hour["activeSeconds"] == 600
+    assert hour["idleSeconds"] == 600
+    assert hour["meetingSeconds"] == 900
+    assert summary["totals"]["idleSeconds"] == 600
 
 
 def test_discord_voice_events_open_and_close_meeting_session():
@@ -1631,6 +1712,7 @@ def test_author_local_today_summary_includes_authors_on_different_local_dates():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Madrid Author", "displayName": "Madrid Author", "timeZoneId": "Europe/Madrid"})
     repo.db.author_profiles.insert_one({"rawAuthor": "Utc Author", "displayName": "Utc Author", "timeZoneId": "UTC"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "No Activity Author", "displayName": "No Activity Author", "timeZoneId": "UTC"})
     repo.db.daily_author_activity.insert_one(
         {
             "source": "ual",
@@ -1666,6 +1748,49 @@ def test_author_local_today_summary_includes_authors_on_different_local_dates():
     authors = {author["rawAuthor"]: author for author in summary["authors"]}
     assert authors["Madrid Author"]["activeSeconds"] == 60
     assert authors["Utc Author"]["activeSeconds"] == 120
+    assert authors["No Activity Author"]["activeSeconds"] == 0
+    assert authors["No Activity Author"]["status"] == "stale"
+
+
+def test_activity_summary_regular_date_keeps_calendar_filter_and_all_authors():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Madrid Author", "displayName": "Madrid Author", "timeZoneId": "Europe/Madrid"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Utc Author", "displayName": "Utc Author", "timeZoneId": "UTC"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "projectId": "unity",
+            "author": "Madrid Author",
+            "date": "2026-04-29",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "projectId": "unity",
+            "author": "Utc Author",
+            "date": "2026-04-28",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "timeZoneId": "UTC",
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        now=dt.datetime(2026, 4, 28, 22, 30, tzinfo=dt.UTC),
+    )
+
+    authors = {author["rawAuthor"]: author for author in summary["authors"]}
+    assert authors["Madrid Author"]["activeSeconds"] == 60
+    assert authors["Utc Author"]["activeSeconds"] == 0
+    assert authors["Utc Author"]["status"] == "stale"
 
 
 def test_live_telegram_summary_includes_open_session_outside_selected_date_range():

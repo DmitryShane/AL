@@ -945,7 +945,21 @@ class Repository:
             meeting_seconds_by_author_date,
             meeting_buckets,
         )
-        _merge_meeting_buckets_into_hourly_author_rows(hourly_by_author, meeting_buckets, profiles)
+        meeting_idle_reductions = _merge_meeting_buckets_into_hourly_author_rows(hourly_by_author, meeting_buckets, profiles)
+
+        for raw_author, idle_reduction in meeting_idle_reductions.items():
+            if idle_reduction <= 0:
+                continue
+
+            author_row = authors_by_raw.get(raw_author)
+
+            if not author_row:
+                continue
+
+            applied_reduction = min(int(author_row.get("idleSeconds", 0)), idle_reduction)
+            author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) - applied_reduction
+            totals["idleSeconds"] = max(0, int(totals.get("idleSeconds", 0)) - applied_reduction)
+
         security_alerts_by_author = self._security_alerts_by_author(start_date, end_date)
 
         for raw_author, alerts in security_alerts_by_author.items():
@@ -984,6 +998,9 @@ class Repository:
                 authors_by_raw[raw_author] = author_row
 
             author_row["securityAlerts"] = alerts
+
+        for raw_author in self.list_authors():
+            self._ensure_summary_author(authors_by_raw, raw_author, profiles)
 
         for raw_author, author_row in authors_by_raw.items():
             if raw_author in hourly_by_author:
@@ -2595,14 +2612,19 @@ class Repository:
                 continue
 
             meeting_seconds = int(interval.get("meetingSeconds", 0))
-            existing_meeting_seconds = meeting_seconds_by_author_date.get((raw_author, meeting_date), 0)
+            meeting_key = (raw_author, meeting_date)
+
+            if meeting_key in meeting_seconds_by_author_date:
+                continue
+
+            existing_meeting_seconds = meeting_seconds_by_author_date.get(meeting_key, 0)
             meeting_delta_seconds = max(0, meeting_seconds - existing_meeting_seconds)
 
             if meeting_delta_seconds:
                 author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
                 author_row["meetingSeconds"] += meeting_delta_seconds
                 totals["meetingSeconds"] += meeting_delta_seconds
-                meeting_seconds_by_author_date[(raw_author, meeting_date)] = existing_meeting_seconds + meeting_delta_seconds
+                meeting_seconds_by_author_date[meeting_key] = existing_meeting_seconds + meeting_delta_seconds
 
         for session in self.db.meeting_sessions.find({}, {"_id": 0}):
             raw_author = session.get("rawAuthor") or "Unknown User"
@@ -2616,16 +2638,16 @@ class Repository:
             if not _date_in_summary_scope(meeting_date, raw_author, profiles, session.get("timeZoneId"), now, start_date, end_date, date_mode):
                 continue
 
+            key = (raw_author, meeting_date)
             live_meeting_seconds = max(0, int((now - started_at).total_seconds()))
-            existing_meeting_seconds = meeting_seconds_by_author_date.get((raw_author, meeting_date), 0)
+            existing_meeting_seconds = meeting_seconds_by_author_date.get(key, 0)
             meeting_delta_seconds = max(0, live_meeting_seconds - existing_meeting_seconds)
 
-            if meeting_delta_seconds:
+            if meeting_delta_seconds and key not in meeting_seconds_by_author_date:
                 author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
                 author_row["meetingSeconds"] += meeting_delta_seconds
                 totals["meetingSeconds"] += meeting_delta_seconds
 
-            key = (raw_author, meeting_date)
             if key not in meeting_buckets:
                 meeting_buckets[key] = _empty_hourly_activity()
                 _add_meeting_interval_to_buckets(
@@ -2683,6 +2705,8 @@ class Repository:
             "daySeconds": 0,
             "telegramDaySeconds": 0,
             "pluginDaySeconds": 0,
+            "rawPluginDaySeconds": 0,
+            "telegramToFirstActivitySeconds": 0,
             "activeSeconds": 0,
             "idleSeconds": 0,
             "meetingSeconds": 0,
@@ -2691,6 +2715,8 @@ class Repository:
             "activityCounts": [],
             "activityMix": [],
             "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
             "telegramAlerts": [],
         }
         authors_by_raw[raw_author] = author_row
@@ -3729,6 +3755,23 @@ def _with_alerts(
     return item
 
 
+def _author_has_summary_activity(author: dict[str, Any]) -> bool:
+    return any(
+        int(author.get(key) or 0) > 0
+        for key in (
+            "daySeconds",
+            "telegramDaySeconds",
+            "pluginDaySeconds",
+            "rawPluginDaySeconds",
+            "activeSeconds",
+            "idleSeconds",
+            "meetingSeconds",
+            "breakSeconds",
+            "overtimeActiveSeconds",
+        )
+    )
+
+
 def _author_color(raw_author: Any) -> str:
     value = _normalize_author(raw_author)
     index = sum(ord(char) for char in value) % len(AUTHOR_COLORS)
@@ -4226,7 +4269,8 @@ def _apply_meetings_to_hourly_activity(
         consumed_meeting_seconds = max(0, int(consumed_hour.get("meetingSeconds", 0)))
         available_meeting_seconds = max(0, requested_meeting_seconds - consumed_meeting_seconds)
         available_hour_seconds = max(0, 3600 - active_seconds - overtime_active_seconds - break_seconds)
-        meeting_seconds = min(available_meeting_seconds, available_hour_seconds)
+        idle_seconds = min(idle_seconds, available_hour_seconds)
+        meeting_seconds = min(available_meeting_seconds, idle_seconds)
         idle_seconds = max(0, min(idle_seconds, available_hour_seconds) - meeting_seconds)
         consumed_hour["meetingSeconds"] = consumed_meeting_seconds + meeting_seconds
 
@@ -4248,7 +4292,9 @@ def _merge_meeting_buckets_into_hourly_author_rows(
     hourly_by_author: dict[str, dict[str, Any]],
     meeting_buckets: dict[tuple[str, str], list[dict[str, int]]],
     profiles: dict[str, dict[str, Any]],
-) -> None:
+) -> dict[str, int]:
+    idle_reductions_by_author: dict[str, int] = {}
+
     for (raw_author, _date), meeting_hours in meeting_buckets.items():
         author_row = hourly_by_author.get(raw_author)
 
@@ -4276,7 +4322,28 @@ def _merge_meeting_buckets_into_hourly_author_rows(
             current_meeting_seconds = int(target_hour.get("meetingSeconds", 0))
 
             if meeting_seconds > current_meeting_seconds:
-                target_hour["meetingSeconds"] = meeting_seconds
+                current_idle_seconds = max(0, int(target_hour.get("idleSeconds", 0)))
+                has_existing_activity = any(
+                    int(target_hour.get(key, 0)) > 0
+                    for key in ("activeSeconds", "idleSeconds", "breakSeconds", "meetingSeconds", "overtimeActiveSeconds")
+                )
+                added_meeting_seconds = (
+                    meeting_seconds - current_meeting_seconds
+                    if not has_existing_activity
+                    else min(meeting_seconds - current_meeting_seconds, current_idle_seconds)
+                )
+                idle_reduction = min(current_idle_seconds, added_meeting_seconds)
+
+                if added_meeting_seconds <= 0:
+                    continue
+
+                if idle_reduction:
+                    target_hour["idleSeconds"] = current_idle_seconds - idle_reduction
+                    idle_reductions_by_author[raw_author] = idle_reductions_by_author.get(raw_author, 0) + idle_reduction
+
+                target_hour["meetingSeconds"] = current_meeting_seconds + added_meeting_seconds
+
+    return idle_reductions_by_author
 
 
 def _add_break_interval_to_buckets(
