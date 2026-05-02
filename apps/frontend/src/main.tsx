@@ -239,6 +239,10 @@ type MeetingRecordingStatus = {
   durationSeconds?: number;
   participantNames?: string[];
   participantCount?: number;
+  audioFrameCount?: number;
+  nonSilentFrameCount?: number;
+  corruptedPacketCount?: number;
+  audioSizeBytes?: number;
   recipient?: { kind?: string; label?: string };
   telegramSentAt?: string;
   error?: string;
@@ -3041,8 +3045,9 @@ function meetingRecordingDetail(recording: MeetingRecordingStatus) {
   const sentAt = recording.telegramSentAt ? `, sent ${formatTimestamp(recording.telegramSentAt)}` : "";
   const startedAt = recording.startedAt ? `Started ${formatTimestamp(recording.startedAt)}` : "Started time unknown";
   const updatedAt = recording.updatedAt ? ` Last update ${formatTimestamp(recording.updatedAt)}.` : "";
+  const audioStats = meetingRecordingAudioStats(recording);
 
-  return `${people}${duration}. ${startedAt}${recipient}${sentAt}.${updatedAt}`;
+  return `${people}${duration}. ${startedAt}${recipient}${sentAt}.${audioStats}${updatedAt}`;
 }
 
 function meetingRecordingRecipientLabel(recording: MeetingRecordingStatus) {
@@ -3055,6 +3060,15 @@ function meetingRecordingRecipientLabel(recording: MeetingRecordingStatus) {
   }
 
   return ", recipient work chat";
+}
+
+function meetingRecordingAudioStats(recording: MeetingRecordingStatus) {
+  if (!recording.audioFrameCount && !recording.audioSizeBytes && !recording.corruptedPacketCount) {
+    return "";
+  }
+
+  const sizeMb = recording.audioSizeBytes ? `, file ${(recording.audioSizeBytes / 1024 / 1024).toFixed(2)} MB` : "";
+  return ` Audio frames: ${recording.nonSilentFrameCount ?? 0}/${recording.audioFrameCount ?? 0}, corrupted packets: ${recording.corruptedPacketCount ?? 0}${sizeMb}.`;
 }
 
 function emptyAuthorProfile(): AuthorProfile {

@@ -524,6 +524,10 @@ def record_discord_meeting_recording_finished(
     ended_at: str = Form(alias="endedAt"),
     participant_discord_user_ids: str = Form(default="[]", alias="participantDiscordUserIds"),
     participant_names: str = Form(default="[]", alias="participantNames"),
+    audio_frame_count: int = Form(default=0, alias="audioFrameCount"),
+    non_silent_frame_count: int = Form(default=0, alias="nonSilentFrameCount"),
+    corrupted_packet_count: int = Form(default=0, alias="corruptedPacketCount"),
+    audio_size_bytes: int = Form(default=0, alias="audioSizeBytes"),
     audio: UploadFile = File(),
 ) -> dict:
     require_discord_bot_secret(request)
@@ -545,6 +549,10 @@ def record_discord_meeting_recording_finished(
             ended_at=ended_at,
             participant_discord_user_ids=[str(item) for item in participant_ids],
             participant_names=[str(item) for item in names],
+            audio_frame_count=audio_frame_count,
+            non_silent_frame_count=non_silent_frame_count,
+            corrupted_packet_count=corrupted_packet_count,
+            audio_size_bytes=audio_size_bytes,
             audio_path=temp_path,
             summary_generator=lambda path, people, language, progress_callback=None: generate_meeting_summary(
                 settings,

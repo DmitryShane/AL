@@ -2692,6 +2692,10 @@ class Repository:
         ended_at: str,
         participant_discord_user_ids: list[str],
         participant_names: list[str],
+        audio_frame_count: int = 0,
+        non_silent_frame_count: int = 0,
+        corrupted_packet_count: int = 0,
+        audio_size_bytes: int = 0,
         audio_path: str,
         summary_generator: Any,
     ) -> dict[str, Any]:
@@ -2700,12 +2704,19 @@ class Repository:
         ended = _parse_timestamp(ended_at)
         duration_seconds = max(0, int((ended - started).total_seconds()))
         settings = self.get_discord_settings()
+        audio_stats = {
+            "audioFrameCount": max(0, int(audio_frame_count or 0)),
+            "nonSilentFrameCount": max(0, int(non_silent_frame_count or 0)),
+            "corruptedPacketCount": max(0, int(corrupted_packet_count or 0)),
+            "audioSizeBytes": max(0, int(audio_size_bytes or 0)),
+        }
         self._update_meeting_recording_pipeline_status(
             recording_id,
             "uploading_audio",
             ended_at=ended,
             duration_seconds=duration_seconds,
             updated_at=now,
+            extra_fields=audio_stats,
         )
 
         if len(participant_discord_user_ids) < int(settings["meetingSummaryMinParticipants"]):
@@ -2742,7 +2753,7 @@ class Repository:
         transcript = str(getattr(result, "transcript", "") or "").strip()
         summary = str(getattr(result, "summary", "") or "").strip()
 
-        if not transcript or not summary:
+        if not transcript or len(transcript) < 20 or not summary or _looks_like_missing_transcript_summary(summary):
             status = "skipped_empty_transcript"
             self._mark_meeting_recording_finished(recording_id, status, ended, duration_seconds, now)
             return {"ok": True, "status": status}
@@ -2788,6 +2799,7 @@ class Repository:
         ended_at: dt.datetime | None = None,
         duration_seconds: int | None = None,
         updated_at: dt.datetime | None = None,
+        extra_fields: dict[str, Any] | None = None,
     ) -> None:
         now = updated_at or dt.datetime.now(dt.UTC)
         fields: dict[str, Any] = {
@@ -2800,6 +2812,9 @@ class Repository:
 
         if duration_seconds is not None:
             fields["durationSeconds"] = duration_seconds
+
+        if extra_fields:
+            fields.update(extra_fields)
 
         self.db.meeting_recordings.update_one(
             {"recordingId": recording_id},
@@ -2888,6 +2903,10 @@ class Repository:
                     "durationSeconds": int(recording.get("durationSeconds") or 0),
                     "participantNames": recording.get("participantNames", []),
                     "participantCount": len(recording.get("participantNames") or []),
+                    "audioFrameCount": int(recording.get("audioFrameCount") or 0),
+                    "nonSilentFrameCount": int(recording.get("nonSilentFrameCount") or 0),
+                    "corruptedPacketCount": int(recording.get("corruptedPacketCount") or 0),
+                    "audioSizeBytes": int(recording.get("audioSizeBytes") or 0),
                     "recipient": (summary or {}).get("recipient"),
                     "telegramSentAt": _iso((summary or {}).get("telegramSentAt") or (summary or {}).get("sentAt")),
                     "error": recording.get("error") or (summary or {}).get("error"),
@@ -4942,6 +4961,17 @@ def _iso(value: Any) -> Any:
         return value.isoformat()
 
     return value
+
+
+def _looks_like_missing_transcript_summary(summary: str) -> bool:
+    normalized = summary.lower()
+    markers = [
+        "cannot provide a summary",
+        "without a specific transcript",
+        "please share the transcript",
+        "no transcript",
+    ]
+    return any(marker in normalized for marker in markers)
 
 
 def _date_query(start_date: str | None, end_date: str | None) -> dict[str, Any]:

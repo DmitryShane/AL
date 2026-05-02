@@ -4,8 +4,6 @@ import asyncio
 import json
 import logging
 import os
-import shutil
-import subprocess
 import tempfile
 import urllib.error
 import urllib.request
@@ -26,6 +24,7 @@ LOGGER = logging.getLogger("al.discord_bot")
 DEFAULT_SOLO_TIMEOUT_SECONDS = 10 * 60
 SOLO_CHECK_SECONDS = 15
 SETTINGS_REFRESH_SECONDS = 60
+CORRUPTED_OPUS_PACKETS = 0
 
 
 @dataclass(frozen=True)
@@ -44,10 +43,10 @@ class RecordingSession:
     recording_id: str
     started_at: datetime
     audio_path: str
-    upload_path: str | None
     participant_ids: set[int]
     participant_names: dict[int, str]
     voice_client: Any
+    sink: "RecordingStatsSink"
     cleanup_future: asyncio.Future[Exception | None]
 
 
@@ -261,7 +260,7 @@ class MeetingClient(discord.Client):
     async def start_recording(self, channel: discord.VoiceChannel, human_members: list[discord.Member]) -> None:
         Path(self.config.recording_temp_dir).mkdir(parents=True, exist_ok=True)
         recording_id = uuid.uuid4().hex
-        audio_path = str(Path(self.config.recording_temp_dir) / f"al-meeting-{recording_id}.wav")
+        audio_path = str(Path(self.config.recording_temp_dir) / f"al-meeting-{recording_id}.m4a")
         loop = asyncio.get_running_loop()
         cleanup_future: asyncio.Future[Exception | None] = loop.create_future()
 
@@ -274,17 +273,24 @@ class MeetingClient(discord.Client):
             recording_id,
             ", ".join(member.name for member in human_members),
         )
+        reset_corrupted_opus_packet_count()
+        sink = RecordingStatsSink(
+            voice_recv.FFmpegSink(
+                filename=audio_path,
+                options="-vn -ac 1 -ar 16000 -b:a 32k -movflags +faststart",
+            )
+        )
         voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient, self_deaf=False, self_mute=True)
-        voice_client.listen(voice_recv.WaveSink(audio_path), after=after_recording)
+        voice_client.listen(sink, after=after_recording)
         started_at = datetime.now(timezone.utc)
         self.recording = RecordingSession(
             recording_id=recording_id,
             started_at=started_at,
             audio_path=audio_path,
-            upload_path=None,
             participant_ids={member.id for member in human_members},
             participant_names={member.id: member.name for member in human_members},
             voice_client=voice_client,
+            sink=sink,
             cleanup_future=cleanup_future,
         )
         await asyncio.to_thread(submit_recording_started, self.config, self.recording)
@@ -304,9 +310,14 @@ class MeetingClient(discord.Client):
 
             await asyncio.wait_for(recording.cleanup_future, timeout=10)
             await recording.voice_client.disconnect(force=force)
-            await self.update_recording_status(recording.recording_id, "compressing_audio")
-            recording.upload_path = await asyncio.to_thread(compress_recording_audio, recording.audio_path)
-            LOGGER.info("Submitting Discord meeting recording %s for summary processing.", recording.recording_id)
+            LOGGER.info(
+                "Submitting Discord meeting recording %s for summary processing. frames=%s non_silent_frames=%s corrupted_packets=%s size=%.2f MB",
+                recording.recording_id,
+                recording.sink.frames_written,
+                recording.sink.non_silent_frames,
+                CORRUPTED_OPUS_PACKETS,
+                file_size_mb(recording.audio_path),
+            )
             result = await asyncio.to_thread(submit_recording_finished, self.config, recording, ended_at)
 
             if not result.get("ok"):
@@ -317,11 +328,6 @@ class MeetingClient(discord.Client):
                 os.remove(recording.audio_path)
             except FileNotFoundError:
                 pass
-            if recording.upload_path and recording.upload_path != recording.audio_path:
-                try:
-                    os.remove(recording.upload_path)
-                except FileNotFoundError:
-                    pass
 
     async def submit_voice_event(self, member: discord.Member, event_type: str) -> None:
         payload = {
@@ -373,13 +379,50 @@ def tolerate_corrupted_opus_packets() -> None:
     silence = b"\x00" * (opus.Decoder.SAMPLES_PER_FRAME * opus.Decoder.SAMPLE_SIZE)
 
     def decode_packet(self: PacketDecoder, packet: Any) -> tuple[Any, bytes]:
+        global CORRUPTED_OPUS_PACKETS
+
         try:
             return original_decode_packet(self, packet)
         except opus.OpusError:
-            LOGGER.warning("Skipping corrupted Discord Opus packet during meeting recording.", exc_info=True)
+            CORRUPTED_OPUS_PACKETS += 1
             return packet, silence
 
     PacketDecoder._decode_packet = decode_packet
+
+
+def reset_corrupted_opus_packet_count() -> None:
+    global CORRUPTED_OPUS_PACKETS
+    CORRUPTED_OPUS_PACKETS = 0
+
+
+class RecordingStatsSink(voice_recv.AudioSink):
+    def __init__(self, destination: voice_recv.AudioSink):
+        super().__init__(destination)
+        self.frames_written = 0
+        self.non_silent_frames = 0
+
+    def wants_opus(self) -> bool:
+        return self.destination.wants_opus()
+
+    @property
+    def destination(self) -> voice_recv.AudioSink:
+        child = self.child
+
+        if child is None:
+            raise RuntimeError("RecordingStatsSink destination is missing")
+
+        return child
+
+    def write(self, user: discord.User | None, data: Any) -> None:
+        self.frames_written += 1
+
+        if data.pcm and any(data.pcm):
+            self.non_silent_frames += 1
+
+        self.destination.write(user, data)
+
+    def cleanup(self) -> None:
+        pass
 
 
 def submit_voice_event(config: DiscordBotConfig, payload: dict[str, Any]) -> dict[str, Any]:
@@ -411,38 +454,12 @@ def submit_recording_finished(config: DiscordBotConfig, recording: RecordingSess
         "endedAt": ended_at.isoformat(),
         "participantDiscordUserIds": json.dumps([str(item) for item in sorted(recording.participant_ids)]),
         "participantNames": json.dumps([recording.participant_names[item] for item in sorted(recording.participant_names.keys())]),
+        "audioFrameCount": str(recording.sink.frames_written),
+        "nonSilentFrameCount": str(recording.sink.non_silent_frames),
+        "corruptedPacketCount": str(CORRUPTED_OPUS_PACKETS),
+        "audioSizeBytes": str(file_size_bytes(recording.audio_path)),
     }
-    return submit_multipart_event(config, "/api/v1/discord/meeting-recordings/finish", fields, "audio", recording.upload_path or recording.audio_path)
-
-
-def compress_recording_audio(audio_path: str) -> str:
-    ffmpeg_path = shutil.which("ffmpeg")
-
-    if not ffmpeg_path:
-        raise RuntimeError("ffmpeg is required to compress meeting recordings")
-
-    compressed_path = str(Path(audio_path).with_suffix(".m4a"))
-    command = [
-        ffmpeg_path,
-        "-y",
-        "-i",
-        audio_path,
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-b:a",
-        "32k",
-        compressed_path,
-    ]
-    subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    LOGGER.info(
-        "Compressed Discord meeting recording from %.1f MB to %.1f MB.",
-        os.path.getsize(audio_path) / 1024 / 1024,
-        os.path.getsize(compressed_path) / 1024 / 1024,
-    )
-    return compressed_path
+    return submit_multipart_event(config, "/api/v1/discord/meeting-recordings/finish", fields, "audio", recording.audio_path)
 
 
 def submit_recording_failed(config: DiscordBotConfig, recording_id: str, ended_at: datetime, error: str) -> dict[str, Any]:
@@ -553,6 +570,17 @@ def _parse_required_int(name: str) -> int:
         raise RuntimeError(f"{name} is required")
 
     return int(value)
+
+
+def file_size_bytes(path: str) -> int:
+    try:
+        return os.path.getsize(path)
+    except FileNotFoundError:
+        return 0
+
+
+def file_size_mb(path: str) -> float:
+    return file_size_bytes(path) / 1024 / 1024
 
 
 if __name__ == "__main__":

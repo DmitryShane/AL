@@ -51,6 +51,7 @@ def generate_meeting_summary(
         "Ignore greetings, jokes, small talk, filler, repeated phrases, and off-topic conversation.\n"
         "Include only work-relevant discussion: goals, problems discussed, decisions, action items, blockers, and open questions.\n"
         "If a section has no real content, write 'None'.\n"
+        "Never apologize or ask for a transcript. If the transcript has no usable work content, return the required sections with 'None'.\n"
         "For action items, include an owner or deadline only if explicitly mentioned.\n"
         "Keep every bullet short and practical for a work Telegram chat.\n\n"
         f"Expected participants: {participants}\n\n"
