@@ -71,7 +71,7 @@ WINDOWS_TIME_ZONE_IDS = {
 
 
 class Repository:
-    aggregates_version = 22
+    aggregates_version = 25
 
     def __init__(self, settings: Settings):
         self.client: MongoClient = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=1500)
@@ -1483,6 +1483,16 @@ class Repository:
             date_mode,
             now,
         )
+        self._apply_workday_hour_idle_gaps(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+        )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_latest_report_metadata(authors_by_raw, start_date, end_date, date_mode, profiles, now)
@@ -1566,9 +1576,7 @@ class Repository:
             if idle_seconds <= 0:
                 continue
 
-            idle_microseconds = _time_microseconds(hour, "idleSeconds", "idleMicroseconds") + (idle_seconds * MICROSECONDS_PER_SECOND)
-            hour["idleMicroseconds"] = idle_microseconds
-            hour["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
+            _add_idle_seconds_to_hour(hour, idle_seconds)
             author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) + idle_seconds
             author_row["pluginDaySeconds"] = int(author_row.get("pluginDaySeconds", 0)) + idle_seconds
             totals["idleSeconds"] = int(totals.get("idleSeconds", 0)) + idle_seconds
@@ -1624,6 +1632,79 @@ class Repository:
             author_row["pluginDaySeconds"] = int(author_row.get("pluginDaySeconds", 0)) + idle_seconds
             totals["idleSeconds"] = int(totals.get("idleSeconds", 0)) + idle_seconds
             totals["pluginDaySeconds"] = int(totals.get("pluginDaySeconds", 0)) + idle_seconds
+
+    def _apply_workday_hour_idle_gaps(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+        session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        for session in self.db.day_sessions.find(session_query, {"_id": 0}):
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            day_date = str(session.get("date") or "")
+            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
+
+            if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            started_at = _coerce_datetime(session.get("startedAt"))
+            ended_at = _coerce_datetime(session.get("lastOfflineAt")) or latest_report_by_author_date.get((raw_author, day_date))
+
+            if not started_at or not ended_at or ended_at <= started_at:
+                continue
+
+            author_row = authors_by_raw.get(raw_author)
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not author_row or not hourly_author:
+                continue
+
+            hourly_activity = hourly_author.get("hourlyActivity", [])
+
+            if not hourly_activity:
+                continue
+
+            local_start = _to_local_datetime(started_at, time_zone_id)
+            local_end = _to_local_datetime(ended_at, time_zone_id)
+            current_hour = local_start.replace(minute=0, second=0, microsecond=0)
+            final_hour = local_end.replace(minute=0, second=0, microsecond=0)
+
+            while current_hour <= final_hour:
+                hour_index = current_hour.hour
+
+                if 0 <= hour_index < len(hourly_activity):
+                    hour_start = current_hour
+                    hour_end = current_hour + dt.timedelta(hours=1)
+                    expected_start = max(local_start, hour_start)
+                    expected_end = min(local_end, hour_end)
+                    expected_seconds = max(0, int((expected_end - expected_start).total_seconds()))
+                    occupied_seconds = _visual_hour_occupied_seconds(hourly_activity[hour_index])
+
+                    if occupied_seconds <= 0:
+                        current_hour += dt.timedelta(hours=1)
+                        continue
+
+                    occupied_seconds = min(expected_seconds, occupied_seconds)
+                    gap_seconds = max(0, expected_seconds - occupied_seconds)
+                    remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - int(author_row.get("pluginDaySeconds", 0)))
+                    idle_seconds = min(gap_seconds, remaining_plugin_seconds)
+
+                    if idle_seconds > 0:
+                        _add_idle_seconds_to_hour(hourly_activity[hour_index], idle_seconds)
+                        author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) + idle_seconds
+                        author_row["pluginDaySeconds"] = int(author_row.get("pluginDaySeconds", 0)) + idle_seconds
+                        totals["idleSeconds"] = int(totals.get("idleSeconds", 0)) + idle_seconds
+                        totals["pluginDaySeconds"] = int(totals.get("pluginDaySeconds", 0)) + idle_seconds
+
+                current_hour += dt.timedelta(hours=1)
 
     def _apply_visual_missed_hours(
         self,
@@ -4466,7 +4547,7 @@ class Repository:
             for batch in self.db.raw_event_batches.find({}, {"_id": 0, "batchId": 1})
             if batch.get("batchId")
         }
-        batch_deltas_by_batch_id: dict[str, dict[str, Any]] = {}
+        batch_delta_items_by_batch_id: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
         last_event_by_batch_id: dict[str, dict[str, Any]] = {}
         orphan_report_rows: list[dict[str, Any]] = []
         raw_events = self.db.raw_activity_events.find({}).sort("occurredAtUtc", ASCENDING)
@@ -4479,8 +4560,8 @@ class Repository:
             batch_id = str(event.get("batchId") or "")
 
             if batch_id and batch_id in batch_ids:
-                batch_deltas = batch_deltas_by_batch_id.setdefault(batch_id, _empty_batch_deltas())
-                _merge_batch_deltas(batch_deltas, deltas)
+                batch_delta_items = batch_delta_items_by_batch_id.setdefault(batch_id, [])
+                batch_delta_items.append((event, deltas))
                 last_event_by_batch_id[batch_id] = event
                 continue
 
@@ -4508,14 +4589,21 @@ class Repository:
                 }
             )
 
+        last_report_time_by_author: dict[str, dt.datetime] = {}
+
         for batch in self.db.raw_event_batches.find({}).sort("receivedAt", ASCENDING):
             batch_id = str(batch.get("batchId") or "")
-            batch_deltas = batch_deltas_by_batch_id.get(batch_id)
-            last_event = last_event_by_batch_id.get(batch_id)
+            author = str(batch.get("author") or "Unknown User")
+            cutoff = last_report_time_by_author.get(author)
+            batch_deltas, last_event = _merge_event_delta_items(batch_delta_items_by_batch_id.get(batch_id, []), cutoff)
             row = self._build_event_batch_report_row(batch, batch_deltas, last_event)
 
             if row:
                 self.db.report_rows.insert_one(row)
+                row_time = _report_row_time(row)
+
+                if row_time:
+                    last_report_time_by_author[author] = row_time
 
         for row in orphan_report_rows:
             self.db.report_rows.insert_one(row)
@@ -4779,6 +4867,9 @@ class Repository:
         state_key = _raw_event_session_key(event)
         previous = self.db.aggregate_session_state.find_one({"_id": state_key}) or {}
         state = dict(previous.get("state", {}))
+        author_state_key = _raw_event_author_day_key(event)
+        author_previous = self.db.aggregate_session_state.find_one({"_id": author_state_key}) or {}
+        author_state = dict(author_previous.get("state", {}))
         event_type = str(event.get("eventType") or "")
         occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or event.get("occurredAt")
         occurred_at = occurred_at if isinstance(occurred_at, dt.datetime) else dt.datetime.now(dt.UTC)
@@ -4790,11 +4881,26 @@ class Repository:
         last_accounting_local_at = _parse_local_datetime(state.get("lastAccountingLocalAt"))
         last_activity_source = str(state.get("lastActivitySource") or "")
         last_accounting_source = str(state.get("lastAccountingSource") or "")
+        source_is_focused = state.get("isFocused")
         current_source = str(event.get("source") or "")
+        current_scope = _raw_event_activity_scope(event)
+        author_first_activity_at = _coerce_datetime(author_state.get("firstActivityAt"))
+        author_last_activity_at = _coerce_datetime(author_state.get("lastActivityAt"))
+        author_last_accounting_at = _coerce_datetime(author_state.get("lastAccountingAt"))
+        author_last_activity_local_at = _parse_local_datetime(author_state.get("lastActivityLocalAt"))
+        author_last_accounting_local_at = _parse_local_datetime(author_state.get("lastAccountingLocalAt"))
+        author_last_activity_scope = str(author_state.get("lastActivityScope") or "")
+        author_last_accounting_scope = str(author_state.get("lastAccountingScope") or "")
         deltas = _empty_event_deltas()
-        is_activity = _is_activity_event(event)
+        raw_is_activity = _is_activity_event(event)
+        is_activity = raw_is_activity and (source_is_focused is not False or event_type == "focus")
         consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
         idle_threshold_seconds = self.get_idle_threshold_for_author(str(event.get("author") or "Unknown User"))
+
+        if event_type == "focus":
+            source_is_focused = True
+        elif event_type == "blur":
+            source_is_focused = False
 
         if is_activity:
             if not first_activity_at:
@@ -4803,16 +4909,30 @@ class Repository:
                 last_accounting_local_at = occurred_local_at
                 last_accounting_source = current_source
             elif last_activity_at and last_accounting_at and occurred_at > last_activity_at:
-                interval_is_active = (occurred_at - last_activity_at).total_seconds() < idle_threshold_seconds
-                interval_deltas = _interval_deltas(
-                    last_accounting_at,
-                    occurred_at,
-                    last_accounting_local_at or last_accounting_at,
-                    occurred_local_at,
-                    interval_is_active,
-                    consumed_normal_microseconds,
-                )
-                _merge_batch_deltas(deltas, interval_deltas)
+                accounting_start_at = last_accounting_at
+                accounting_start_local_at = last_accounting_local_at or last_accounting_at
+
+                if author_last_accounting_at and author_last_accounting_at > accounting_start_at:
+                    accounting_start_at = author_last_accounting_at
+                    accounting_start_local_at = author_last_accounting_local_at or author_last_accounting_at
+
+                interval_activity_at = last_activity_at
+
+                if author_last_activity_at and author_last_activity_at > interval_activity_at:
+                    interval_activity_at = author_last_activity_at
+
+                if accounting_start_at < occurred_at:
+                    interval_is_active = (occurred_at - interval_activity_at).total_seconds() < idle_threshold_seconds
+                    interval_deltas = _interval_deltas(
+                        accounting_start_at,
+                        occurred_at,
+                        accounting_start_local_at,
+                        occurred_local_at,
+                        interval_is_active,
+                        consumed_normal_microseconds,
+                    )
+                    _merge_batch_deltas(deltas, interval_deltas)
+
                 last_accounting_at = occurred_at
                 last_accounting_local_at = occurred_local_at
                 last_accounting_source = current_source
@@ -4821,6 +4941,19 @@ class Repository:
                 last_activity_at = occurred_at
                 last_activity_local_at = occurred_local_at
                 last_activity_source = current_source
+
+            if not author_first_activity_at:
+                author_first_activity_at = occurred_at
+
+            if not author_last_accounting_at or occurred_at > author_last_accounting_at:
+                author_last_accounting_at = occurred_at
+                author_last_accounting_local_at = occurred_local_at
+                author_last_accounting_scope = current_scope
+
+            if not author_last_activity_at or occurred_at > author_last_activity_at:
+                author_last_activity_at = occurred_at
+                author_last_activity_local_at = occurred_local_at
+                author_last_activity_scope = current_scope
         elif (
             event_type == "heartbeat"
             and first_activity_at
@@ -4828,6 +4961,7 @@ class Repository:
             and last_accounting_at
             and occurred_at > last_accounting_at
             and (not last_activity_source or current_source == last_activity_source)
+            and (not author_last_activity_scope or current_scope == author_last_activity_scope)
         ):
             if (occurred_at - last_activity_at).total_seconds() >= idle_threshold_seconds:
                 heartbeat_end = occurred_at
@@ -4872,6 +5006,11 @@ class Repository:
                 last_accounting_at = heartbeat_end
                 last_accounting_local_at = heartbeat_local_end
                 last_accounting_source = current_source
+
+                if not author_last_accounting_at or heartbeat_end > author_last_accounting_at:
+                    author_last_accounting_at = heartbeat_end
+                    author_last_accounting_local_at = heartbeat_local_end
+                    author_last_accounting_scope = current_scope
 
         if is_activity:
             activity_type = _activity_count_type(event_type)
@@ -4924,6 +5063,25 @@ class Repository:
                         "lastAccountingLocalAt": last_accounting_local_at.isoformat() if last_accounting_local_at else None,
                         "lastActivitySource": last_activity_source or None,
                         "lastAccountingSource": last_accounting_source or None,
+                        "isFocused": source_is_focused,
+                    },
+                    "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
+                }
+            },
+            upsert=True,
+        )
+        self.db.aggregate_session_state.update_one(
+            {"_id": author_state_key},
+            {
+                "$set": {
+                    "state": {
+                        "firstActivityAt": author_first_activity_at.isoformat() if author_first_activity_at else None,
+                        "lastActivityAt": author_last_activity_at.isoformat() if author_last_activity_at else None,
+                        "lastAccountingAt": author_last_accounting_at.isoformat() if author_last_accounting_at else None,
+                        "lastActivityLocalAt": author_last_activity_local_at.isoformat() if author_last_activity_local_at else None,
+                        "lastAccountingLocalAt": author_last_accounting_local_at.isoformat() if author_last_accounting_local_at else None,
+                        "lastActivityScope": author_last_activity_scope or None,
+                        "lastAccountingScope": author_last_accounting_scope or None,
                     },
                     "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
                 }
@@ -5253,6 +5411,56 @@ def _raw_event_session_key(event: dict[str, Any]) -> str:
             str(event.get("projectId") or ""),
             str(event.get("deviceId") or ""),
         ]
+    )
+
+
+def _raw_event_author_day_key(event: dict[str, Any]) -> str:
+    return "|".join(
+        [
+            "author_day_activity_v1",
+            str(event.get("author") or "Unknown User"),
+            str(event.get("date") or ""),
+        ]
+    )
+
+
+def _raw_event_activity_scope(event: dict[str, Any]) -> str:
+    return "|".join(
+        [
+            str(event.get("source") or ""),
+            str(event.get("projectId") or ""),
+            str(event.get("deviceId") or ""),
+        ]
+    )
+
+
+def _merge_event_delta_items(
+    items: list[tuple[dict[str, Any], dict[str, Any]]], cutoff: dt.datetime | None
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    batch_deltas = _empty_batch_deltas()
+    last_event: dict[str, Any] | None = None
+
+    for event, deltas in items:
+        event_time = _raw_event_time(event)
+
+        if cutoff and event_time and event_time <= cutoff:
+            continue
+
+        _merge_batch_deltas(batch_deltas, deltas)
+        last_event = event
+
+    return batch_deltas, last_event
+
+
+def _raw_event_time(event: dict[str, Any]) -> dt.datetime | None:
+    return _coerce_datetime(event.get("occurredAtUtc")) or _parse_local_datetime(event.get("occurredAtLocal"))
+
+
+def _report_row_time(row: dict[str, Any]) -> dt.datetime | None:
+    return (
+        _coerce_datetime(row.get("lastRecordedAt"))
+        or _coerce_datetime(row.get("recordedAt"))
+        or _coerce_datetime(row.get("receivedAt"))
     )
 
 
@@ -6322,6 +6530,15 @@ def _add_visual_missed_seconds(hourly_activity: list[dict[str, Any]], hour: int,
 
     hourly_activity[hour]["missedSeconds"] = int(hourly_activity[hour].get("missedSeconds", 0)) + seconds
     hourly_activity[hour][segment_key] = int(hourly_activity[hour].get(segment_key, 0)) + seconds
+
+
+def _add_idle_seconds_to_hour(hour: dict[str, Any], seconds: int) -> None:
+    if seconds <= 0:
+        return
+
+    idle_microseconds = _time_microseconds(hour, "idleSeconds", "idleMicroseconds") + (seconds * MICROSECONDS_PER_SECOND)
+    hour["idleMicroseconds"] = idle_microseconds
+    hour["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
 
 
 def _visual_missed_end_hour(

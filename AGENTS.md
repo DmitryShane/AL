@@ -81,6 +81,12 @@ When code changes need local verification, decide whether rebuild/restart is act
 - Only skip the backend restart when the user explicitly says not to restart, no backend runtime code changed, or the backend is not running and the user did not ask for local API/UI verification. If the restart is skipped after backend work, state that explicitly in the final response.
 - Do not rebuild or restart just by habit. Do it when it is needed for the user's requested verification or for the running app to pick up the change.
 
+### Hourly Activity Chart Semantics
+
+On the hourly activity chart, the black `missed` fill is visual-only and has a narrow meaning: it may be used only before the Telegram work day starts, or after an explicit offline trigger/sign-off when the day has ended or the author is known to be offline.
+
+Do not use, suggest, or preserve black `missed` fill for holes inside an active work day. In-workday gaps must be explained by real tracked categories such as active, idle, break/AFK, meeting, or overtime; if a normal working-hour column is visually incomplete, investigate missing accounting data instead of filling it with `missed`.
+
 ## Terminology
 
 - **AL (Activity Logger)** — the product and service as a whole: this repository (FastAPI backend, web dashboard, Telegram/Discord bots, and how data is stored and summarized).

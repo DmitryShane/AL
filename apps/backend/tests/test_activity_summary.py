@@ -872,6 +872,49 @@ def test_activity_summary_marks_visual_missed_time_after_offline_hour_without_af
     assert author["pluginDaySeconds"] == 60
 
 
+def test_activity_summary_fills_intraday_partial_hour_gap_as_idle_not_missed():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Denis Ostrovskiy", "displayName": "Denis Ostrovskiy", "timeZoneId": "Europe/Moscow"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "date": "2026-05-01",
+            "startedAt": dt.datetime(2026, 5, 1, 8, 29, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 5, 1, 17, 31, tzinfo=dt.UTC),
+            "timeZoneId": "Europe/Moscow",
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[16]["activeSeconds"] = 2679
+    hourly_activity[16]["activeMicroseconds"] = 2679 * 1_000_000
+    hourly_activity[16]["idleSeconds"] = 837
+    hourly_activity[16]["idleMicroseconds"] = 837 * 1_000_000
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Denis Ostrovskiy",
+            "projectId": "unity",
+            "date": "2026-05-01",
+            "activeSeconds": 2679,
+            "idleSeconds": 837,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-01", end_date="2026-05-01")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Denis Ostrovskiy")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Denis Ostrovskiy")["hourlyActivity"]
+    hour_16 = next(item for item in hourly if item["hour"] == 16)
+
+    assert hour_16["activeSeconds"] == 2679
+    assert hour_16["idleSeconds"] == 921
+    assert hour_16["missedSeconds"] == 0
+    assert hour_16["activeSeconds"] + hour_16["idleSeconds"] == 3600
+    assert author["idleSeconds"] == 921
+    assert author["pluginDaySeconds"] == 3600
+
+
 def test_activity_summary_marks_visual_missed_time_after_latest_plugin_report():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
@@ -1646,12 +1689,13 @@ def test_raw_event_state_isolated_by_source_project_and_device():
     assert unity_deltas["idleDeltaSeconds"] == 0
     assert unity_deltas["activeDeltaSeconds"] == 0
     aggregate_state_items = getattr(repo.db.aggregate_session_state, "items")
-    assert len(aggregate_state_items) == 2
+    assert len(aggregate_state_items) == 3
     assert {
         item["_id"] for item in aggregate_state_items
     } == {
         "author_source_project_device_day_v2|Future Artist|2026-05-02|cur|al|mac-mini",
         "author_source_project_device_day_v2|Future Artist|2026-05-02|ual|bike-rush-2|mac-mini",
+        "author_day_activity_v1|Future Artist|2026-05-02",
     }
 
     unity_daily = repo.db.daily_author_activity.find_one(
@@ -4535,8 +4579,195 @@ def test_raw_event_state_isolated_between_unity_and_blender_sources():
     heartbeat_deltas = repo._apply_raw_event_to_aggregates(unity_heartbeat)
 
     assert blender_deltas["activeDeltaSeconds"] == 0
-    assert heartbeat_deltas["idleDeltaSeconds"] == 80
+    assert heartbeat_deltas["idleDeltaSeconds"] == 0
     assert heartbeat_deltas["activeDeltaSeconds"] == 0
+
+
+def test_cross_source_activity_clamps_unity_after_vscode_activity():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    unity_event = {
+        "source": "ual",
+        "author": "Igor Mats",
+        "projectId": "bike-rush-2",
+        "sessionId": "unity-session",
+        "deviceId": "mac-mini",
+        "date": "2026-05-01",
+        "eventType": "selection",
+        "occurredAtUtc": "2026-05-01T19:42:27Z",
+        "occurredAtLocal": "2026-05-01T12:42:27-07:00",
+        "receivedAt": dt.datetime(2026, 5, 1, 20, 4, tzinfo=dt.UTC),
+    }
+    unity_blur = {
+        **unity_event,
+        "eventType": "blur",
+        "occurredAtUtc": "2026-05-01T19:58:22Z",
+        "occurredAtLocal": "2026-05-01T12:58:22-07:00",
+    }
+    unity_background_event = {
+        **unity_event,
+        "eventType": "play_mode",
+        "occurredAtUtc": "2026-05-01T19:58:30Z",
+        "occurredAtLocal": "2026-05-01T12:58:30-07:00",
+    }
+    vscode_event = {
+        "source": "vsc",
+        "author": "Igor Mats",
+        "projectId": "unity-bike-rush-2",
+        "sessionId": "vscode-session",
+        "deviceId": "mac-mini",
+        "date": "2026-05-01",
+        "eventType": "selection",
+        "occurredAtUtc": "2026-05-01T19:58:59Z",
+        "occurredAtLocal": "2026-05-01T12:58:59-07:00",
+        "receivedAt": dt.datetime(2026, 5, 1, 20, 1, tzinfo=dt.UTC),
+    }
+    unity_focus_event = {
+        **unity_event,
+        "eventType": "focus",
+        "occurredAtUtc": "2026-05-01T19:59:19Z",
+        "occurredAtLocal": "2026-05-01T12:59:19-07:00",
+    }
+    unity_asset_event = {
+        **unity_event,
+        "eventType": "asset_saved",
+        "occurredAtUtc": "2026-05-01T20:00:33Z",
+        "occurredAtLocal": "2026-05-01T13:00:33-07:00",
+    }
+
+    repo._apply_raw_event_to_aggregates(unity_event)
+    repo._apply_raw_event_to_aggregates(unity_blur)
+    background_deltas = repo._apply_raw_event_to_aggregates(unity_background_event)
+    repo._apply_raw_event_to_aggregates(vscode_event)
+    focus_deltas = repo._apply_raw_event_to_aggregates(unity_focus_event)
+    asset_deltas = repo._apply_raw_event_to_aggregates(unity_asset_event)
+
+    assert background_deltas["activeDeltaSeconds"] == 0
+    assert background_deltas["idleDeltaSeconds"] == 0
+    assert focus_deltas["activeDeltaSeconds"] == 20
+    assert asset_deltas["activeDeltaSeconds"] == 74
+    assert focus_deltas["idleDeltaSeconds"] == 0
+    assert asset_deltas["idleDeltaSeconds"] == 0
+
+
+def test_rebuild_batch_row_ignores_deltas_before_previous_author_report():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    author = "Igor Mats"
+    common = {
+        "author": author,
+        "authorEmail": "",
+        "deviceId": "mac-mini",
+        "date": "2026-05-01",
+        "pluginVersion": "1.0.0",
+        "reportType": "auto",
+        "receivedAt": dt.datetime(2026, 5, 1, 20, 4, tzinfo=dt.UTC),
+    }
+    repo.db.raw_event_batches.insert_one(
+        {
+            "batchId": "vscode-batch",
+            "source": "vsc",
+            "author": author,
+            "authorEmail": "",
+            "projectId": "unity-bike-rush-2",
+            "sessionId": "vscode-session",
+            "deviceId": "mac-mini",
+            "receivedAt": dt.datetime(2026, 5, 1, 20, 1, tzinfo=dt.UTC),
+            "reportType": "auto",
+        }
+    )
+    repo.db.raw_event_batches.insert_one(
+        {
+            "batchId": "unity-batch",
+            "source": "ual",
+            "author": author,
+            "authorEmail": "",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "deviceId": "mac-mini",
+            "receivedAt": dt.datetime(2026, 5, 1, 20, 4, tzinfo=dt.UTC),
+            "reportType": "auto",
+        }
+    )
+
+    for event in [
+        {
+            **common,
+            "eventId": "unity-early",
+            "source": "ual",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "batchId": "unity-batch",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-01T19:42:27Z",
+            "occurredAtLocal": "2026-05-01T12:42:27-07:00",
+        },
+        {
+            **common,
+            "eventId": "unity-before-vscode",
+            "source": "ual",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "batchId": "unity-batch",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-01T19:57:00Z",
+            "occurredAtLocal": "2026-05-01T12:57:00-07:00",
+        },
+        {
+            **common,
+            "eventId": "vscode-start",
+            "source": "vsc",
+            "projectId": "unity-bike-rush-2",
+            "sessionId": "vscode-session",
+            "batchId": "vscode-batch",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-01T19:58:21Z",
+            "occurredAtLocal": "2026-05-01T12:58:21-07:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 20, 1, tzinfo=dt.UTC),
+        },
+        {
+            **common,
+            "eventId": "vscode-report-end",
+            "source": "vsc",
+            "projectId": "unity-bike-rush-2",
+            "sessionId": "vscode-session",
+            "batchId": "vscode-batch",
+            "eventType": "file_saved",
+            "occurredAtUtc": "2026-05-01T19:58:59Z",
+            "occurredAtLocal": "2026-05-01T12:58:59-07:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 20, 1, tzinfo=dt.UTC),
+        },
+        {
+            **common,
+            "eventId": "unity-focus",
+            "source": "ual",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "batchId": "unity-batch",
+            "eventType": "focus",
+            "occurredAtUtc": "2026-05-01T19:59:19Z",
+            "occurredAtLocal": "2026-05-01T12:59:19-07:00",
+        },
+        {
+            **common,
+            "eventId": "unity-report-end",
+            "source": "ual",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "batchId": "unity-batch",
+            "eventType": "asset_saved",
+            "occurredAtUtc": "2026-05-01T20:00:33Z",
+            "occurredAtLocal": "2026-05-01T13:00:33-07:00",
+        },
+    ]:
+        repo.db.raw_activity_events.insert_one(event)
+
+    repo.rebuild_aggregates_if_needed(force=True)
+
+    unity_row = repo.db.report_rows.find_one({"author": author, "source": "ual", "batchId": "unity-batch"})
+    assert unity_row is not None
+    assert unity_row["activeDeltaSeconds"] == 94
+    assert unity_row["idleDeltaSeconds"] == 0
 
 
 def test_raw_event_state_isolated_between_unity_blender_and_figma_sources():
@@ -4598,7 +4829,7 @@ def test_raw_event_state_isolated_between_unity_blender_and_figma_sources():
     assert blender_deltas["activeDeltaSeconds"] == 0
     assert figma_deltas["activeDeltaSeconds"] == 0
     assert figma_heartbeat_deltas["idleDeltaSeconds"] == 80
-    assert unity_heartbeat_deltas["idleDeltaSeconds"] == 144
+    assert unity_heartbeat_deltas["idleDeltaSeconds"] == 0
     assert unity_heartbeat_deltas["activeDeltaSeconds"] == 0
 
 
@@ -4688,7 +4919,7 @@ def test_idle_is_accounted_by_each_activity_source_state():
     unity_deltas = repo._apply_raw_event_to_aggregates(unity_heartbeat)
     blender_deltas = repo._apply_raw_event_to_aggregates(blender_heartbeat)
 
-    assert unity_deltas["idleDeltaSeconds"] == 80
+    assert unity_deltas["idleDeltaSeconds"] == 0
     assert unity_deltas["activeDeltaSeconds"] == 0
     assert blender_deltas["idleDeltaSeconds"] == 65
     assert blender_deltas["activeDeltaSeconds"] == 0
