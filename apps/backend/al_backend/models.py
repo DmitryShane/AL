@@ -49,6 +49,7 @@ class ReportRefreshRequest(ApiModel):
 
 class IntervalSettingsIn(ApiModel):
     default_send_interval_seconds: int | None = Field(default=None, alias="defaultSendIntervalSeconds", ge=30)
+    idle_threshold_seconds: int | None = Field(default=None, alias="idleThresholdSeconds", ge=30)
     author: str | None = None
     author_send_interval_seconds: int | None = Field(default=None, alias="authorSendIntervalSeconds", ge=30)
 

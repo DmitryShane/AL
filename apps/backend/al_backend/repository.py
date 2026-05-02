@@ -22,6 +22,7 @@ TELEGRAM_ONLINE_PROMPT_DELAY_SECONDS = 15 * 60
 TELEGRAM_BREAK_ACTIVITY_PROMPT_DELAY_SECONDS = 60 * 60
 DEFAULT_DISCORD_MEETING_AUTO_AFK_TIMEOUT_SECONDS = 10 * 60
 DEFAULT_PLUGIN_WORK_WINDOW_SECONDS = 32400
+DEFAULT_IDLE_THRESHOLD_SECONDS = 300
 AUTO_BREAK_SECONDS = 60 * 60
 MICROSECONDS_PER_SECOND = 1_000_000
 MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS = 10
@@ -285,6 +286,14 @@ class Repository:
 
         return self.default_send_interval_seconds
 
+    def get_idle_threshold_for_author(self, author: str) -> int:
+        global_setting = self.db.interval_settings.find_one({"kind": "global"}) or {}
+
+        if global_setting.get("idleThresholdSeconds"):
+            return int(global_setting["idleThresholdSeconds"])
+
+        return DEFAULT_IDLE_THRESHOLD_SECONDS
+
     def is_plugin_enabled_for_author(self, author: str) -> bool:
         author = self.resolve_author_alias(_normalize_author(author))
         profile = self.db.author_profiles.find_one({"rawAuthor": author}, {"pluginEnabled": 1})
@@ -368,15 +377,24 @@ class Repository:
     def upsert_interval_settings(
         self,
         default_send_interval_seconds: int | None,
+        idle_threshold_seconds: int | None,
         author: str | None,
         author_send_interval_seconds: int | None,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
 
+        global_update = {"updatedAt": now}
+
         if default_send_interval_seconds is not None:
+            global_update["sendIntervalSeconds"] = default_send_interval_seconds
+
+        if idle_threshold_seconds is not None:
+            global_update["idleThresholdSeconds"] = idle_threshold_seconds
+
+        if len(global_update) > 1:
             self.db.interval_settings.update_one(
                 {"kind": "global"},
-                {"$set": {"sendIntervalSeconds": default_send_interval_seconds, "updatedAt": now}},
+                {"$set": global_update},
                 upsert=True,
             )
 
@@ -406,6 +424,7 @@ class Repository:
             "defaultSendIntervalSeconds": int(
                 global_setting.get("sendIntervalSeconds", self.default_send_interval_seconds)
             ),
+            "idleThresholdSeconds": int(global_setting.get("idleThresholdSeconds", DEFAULT_IDLE_THRESHOLD_SECONDS)),
             "authors": author_settings,
         }
 
@@ -4775,7 +4794,7 @@ class Repository:
         deltas = _empty_event_deltas()
         is_activity = _is_activity_event(event)
         consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
-        idle_threshold_seconds = self.get_interval_for_author(str(event.get("author") or "Unknown User"))
+        idle_threshold_seconds = self.get_idle_threshold_for_author(str(event.get("author") or "Unknown User"))
 
         if is_activity:
             if not first_activity_at:

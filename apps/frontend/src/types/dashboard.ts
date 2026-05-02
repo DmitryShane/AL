@@ -167,6 +167,7 @@ export type Summary = {
   reports: Report[];
   intervalSettings: {
     defaultSendIntervalSeconds: number;
+    idleThresholdSeconds: number;
     authors: Array<{ author: string; sendIntervalSeconds: number }>;
   };
   discordSettings: {

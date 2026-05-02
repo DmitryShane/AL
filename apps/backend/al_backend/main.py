@@ -419,6 +419,7 @@ def reports_table(
 def update_intervals(settings_in: IntervalSettingsIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.upsert_interval_settings(
         default_send_interval_seconds=settings_in.default_send_interval_seconds,
+        idle_threshold_seconds=settings_in.idle_threshold_seconds,
         author=settings_in.author,
         author_send_interval_seconds=settings_in.author_send_interval_seconds,
     )

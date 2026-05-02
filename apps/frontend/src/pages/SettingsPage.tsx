@@ -18,6 +18,7 @@ export function SettingsPage({
   const [settingsTab, setSettingsTabState] = useState<SettingsTab>(() => loadSavedSettingsTab());
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
+  const [idleThreshold, setIdleThreshold] = useState(String(intervalSettingsIdleThreshold(summary)));
   const [discordAutoAfkTimeout, setDiscordAutoAfkTimeout] = useState(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
   const [meetingSummariesEnabled, setMeetingSummariesEnabled] = useState(Boolean(summary?.discordSettings.meetingSummariesEnabled));
   const [meetingSummaryMinParticipants, setMeetingSummaryMinParticipants] = useState(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
@@ -46,6 +47,7 @@ export function SettingsPage({
 
     setDrafts(nextDrafts);
     setGlobalInterval(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
+    setIdleThreshold(String(intervalSettingsIdleThreshold(summary)));
     setDiscordAutoAfkTimeout(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
     setMeetingSummariesEnabled(Boolean(summary?.discordSettings.meetingSummariesEnabled));
     setMeetingSummaryMinParticipants(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
@@ -196,7 +198,10 @@ export function SettingsPage({
       const response = await apiFetch(`/api/v1/settings/intervals`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ defaultSendIntervalSeconds: Number(globalInterval) })
+        body: JSON.stringify({
+          defaultSendIntervalSeconds: Number(globalInterval),
+          idleThresholdSeconds: Number(idleThreshold)
+        })
       });
 
       if (!response.ok) {
@@ -384,7 +389,8 @@ export function SettingsPage({
   }
 
   const savedGlobalInterval = String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300);
-  const isGlobalIntervalDirty = globalInterval !== savedGlobalInterval;
+  const savedIdleThreshold = String(intervalSettingsIdleThreshold(summary));
+  const isIntervalSettingsDirty = globalInterval !== savedGlobalInterval || idleThreshold !== savedIdleThreshold;
 
   return (
     <section className="page-section settings-layout">
@@ -405,7 +411,11 @@ export function SettingsPage({
               Global interval, sec
               <input value={globalInterval} onChange={(event) => setGlobalInterval(event.target.value)} type="number" min="30" />
             </label>
-            <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval" || !isGlobalIntervalDirty}>
+            <label>
+              Idle threshold, sec
+              <input value={idleThreshold} onChange={(event) => setIdleThreshold(event.target.value)} type="number" min="30" />
+            </label>
+            <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval" || !isIntervalSettingsDirty}>
               {settingsSaveButtonLabel("interval", saving, saveStatus)}
             </button>
           </div>
@@ -851,5 +861,10 @@ export function SettingsPage({
       )}
     </section>
   );
+}
+
+function intervalSettingsIdleThreshold(summary: Summary | null) {
+  const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { idleThresholdSeconds?: number }) | undefined;
+  return intervalSettings?.idleThresholdSeconds ?? 300;
 }
 

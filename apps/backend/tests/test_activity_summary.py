@@ -224,10 +224,35 @@ def fake_repository() -> Any:
     return repo
 
 
+def set_idle_threshold(repo: Any, seconds: int) -> None:
+    repo.db.interval_settings.update_one(
+        {"kind": "global"},
+        {"$set": {"idleThresholdSeconds": seconds}},
+        upsert=True,
+    )
+
+
 def test_productivity_ignores_first_break_hour():
     author = _with_productivity({"activeSeconds": 5 * 3600, "idleSeconds": 3 * 3600, "breakSeconds": 60 * 60})
 
     assert author["productivity"] == 62.5
+
+
+def test_interval_settings_include_independent_idle_threshold():
+    repo = fake_repository()
+
+    assert repo.get_interval_settings()["defaultSendIntervalSeconds"] == 60
+    assert repo.get_interval_settings()["idleThresholdSeconds"] == 300
+
+    result = repo.upsert_interval_settings(
+        default_send_interval_seconds=120,
+        idle_threshold_seconds=450,
+        author=None,
+        author_send_interval_seconds=None,
+    )
+
+    assert result["defaultSendIntervalSeconds"] == 120
+    assert result["idleThresholdSeconds"] == 450
 
 
 def test_productivity_penalizes_break_time_after_first_hour():
@@ -617,13 +642,16 @@ def test_repeated_security_alerts_keep_distinct_ids():
 def test_authors_without_alerts_have_zero_alert_stats():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Healthy Author", "displayName": "Healthy Author"})
+    received_at = dt.datetime.now(dt.UTC)
     repo.db.daily_author_activity.insert_one(
         {
             "source": "ual",
             "author": "Healthy Author",
             "projectId": "unity",
             "date": "2026-04-29",
-            "lastReceivedAt": dt.datetime.now(dt.UTC),
+            "activeSeconds": 1,
+            "lastRecordedAt": received_at,
+            "lastReceivedAt": received_at,
         }
     )
 
@@ -1731,7 +1759,7 @@ def test_heartbeat_idle_still_counts_within_same_raw_event_source_state():
 
 def test_heartbeat_idle_does_not_account_entire_delivery_gap_when_huge():
     repo = fake_repository()
-    repo.db.interval_settings.insert_one({"kind": "global", "sendIntervalSeconds": 120})
+    set_idle_threshold(repo, 120)
 
     repo._apply_raw_event_to_aggregates(
         {
@@ -1812,6 +1840,7 @@ def test_rebuild_keeps_cross_source_idle_out_of_unity_rows():
 
 def test_rebuild_restores_raw_event_batches_as_single_report_rows():
     repo = fake_repository()
+    set_idle_threshold(repo, 60)
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
     received_at = dt.datetime(2026, 5, 2, 8, 6, tzinfo=dt.UTC)
     payload = {
@@ -4465,6 +4494,7 @@ def test_author_day_consumption_includes_figma_source():
 
 def test_raw_event_state_isolated_between_unity_and_blender_sources():
     repo = fake_repository()
+    set_idle_threshold(repo, 60)
     unity_event = {
         "source": "ual",
         "author": "Dmitry Shane",
@@ -4511,6 +4541,7 @@ def test_raw_event_state_isolated_between_unity_and_blender_sources():
 
 def test_raw_event_state_isolated_between_unity_blender_and_figma_sources():
     repo = fake_repository()
+    set_idle_threshold(repo, 60)
     unity_event = {
         "source": "ual",
         "author": "Dmitry Shane",
@@ -4573,6 +4604,7 @@ def test_raw_event_state_isolated_between_unity_blender_and_figma_sources():
 
 def test_second_plugin_heartbeat_does_not_create_tiny_duplicate_idle_row():
     repo = fake_repository()
+    set_idle_threshold(repo, 60)
     activity = {
         "source": "ual",
         "author": "Dmitry Shane",
@@ -4613,6 +4645,7 @@ def test_second_plugin_heartbeat_does_not_create_tiny_duplicate_idle_row():
 
 def test_idle_is_accounted_by_each_activity_source_state():
     repo = fake_repository()
+    set_idle_threshold(repo, 60)
     unity_event = {
         "source": "ual",
         "author": "Dmitry Shane",
@@ -4663,6 +4696,7 @@ def test_idle_is_accounted_by_each_activity_source_state():
 
 def test_blender_scene_changed_without_input_metadata_is_not_activity():
     repo = fake_repository()
+    set_idle_threshold(repo, 60)
     file_saved = {
         "source": "bal",
         "author": "Dmitry Shane",
@@ -4725,8 +4759,11 @@ def test_manual_report_requested_is_not_author_activity():
     assert deltas["activityCountDeltas"] == []
 
 
-def test_heartbeat_idle_threshold_uses_plugin_interval():
+def test_heartbeat_idle_threshold_is_independent_from_plugin_interval():
     repo = fake_repository()
+    repo.db.interval_settings.insert_one(
+        {"kind": "global", "sendIntervalSeconds": 30, "idleThresholdSeconds": 120}
+    )
     activity = {
         "source": "ual",
         "author": "Dmitry Shane",
@@ -4749,6 +4786,41 @@ def test_heartbeat_idle_threshold_uses_plugin_interval():
     repo._apply_raw_event_to_aggregates(activity)
     heartbeat_deltas = repo._apply_raw_event_to_aggregates(heartbeat)
 
+    assert repo.get_interval_for_author("Dmitry Shane") == 30
+    assert repo.get_idle_threshold_for_author("Dmitry Shane") == 120
+    assert heartbeat_deltas["idleDeltaSeconds"] == 0
+    assert heartbeat_deltas["activeDeltaSeconds"] == 0
+
+
+def test_heartbeat_idle_threshold_can_be_lower_than_plugin_interval():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one(
+        {"kind": "global", "sendIntervalSeconds": 600, "idleThresholdSeconds": 60}
+    )
+    activity = {
+        "source": "ual",
+        "author": "Dmitry Shane",
+        "projectId": "unity",
+        "sessionId": "unity-session",
+        "date": "2026-04-28",
+        "eventType": "selection",
+        "occurredAtUtc": "2026-04-28T10:00:00Z",
+        "occurredAtLocal": "2026-04-28T10:00:00+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 0, tzinfo=dt.UTC),
+    }
+    heartbeat = {
+        **activity,
+        "eventType": "heartbeat",
+        "occurredAtUtc": "2026-04-28T10:01:00Z",
+        "occurredAtLocal": "2026-04-28T10:01:00+00:00",
+        "receivedAt": dt.datetime(2026, 4, 28, 10, 1, tzinfo=dt.UTC),
+    }
+
+    repo._apply_raw_event_to_aggregates(activity)
+    heartbeat_deltas = repo._apply_raw_event_to_aggregates(heartbeat)
+
+    assert repo.get_interval_for_author("Dmitry Shane") == 600
+    assert repo.get_idle_threshold_for_author("Dmitry Shane") == 60
     assert heartbeat_deltas["idleDeltaSeconds"] == 60
     assert heartbeat_deltas["activeDeltaSeconds"] == 0
 
