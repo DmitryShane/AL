@@ -3159,8 +3159,10 @@ class Repository:
     def _schedule_telegram_online_prompt_if_needed(
         self, raw_author: str, day_date: str, source: str, received_at: dt.datetime
     ) -> None:
-        if source != "ual" or not raw_author or not day_date:
+        if not raw_author or not day_date:
             return
+
+        _ = source
 
         if self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": day_date}, {"_id": 1}):
             return
@@ -4338,11 +4340,11 @@ class Repository:
                 report_time,
             )
 
-        if _has_time_delta(deltas) and str(snapshot.get("source") or "") == "ual":
+        if _has_time_delta(deltas):
             self._schedule_telegram_online_prompt_if_needed(
                 str(snapshot.get("author") or "Unknown User"),
                 str(snapshot.get("date") or ""),
-                "ual",
+                str(snapshot.get("source") or ""),
                 received_at,
             )
         self.db.aggregate_session_state.update_one(
