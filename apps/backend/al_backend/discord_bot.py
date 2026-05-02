@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Any
 
 import discord
+from discord import opus
 from discord.ext import voice_recv
+from discord.ext.voice_recv.opus import PacketDecoder
 
 
 LOGGER = logging.getLogger("al.discord_bot")
@@ -43,11 +45,13 @@ class RecordingSession:
     participant_ids: set[int]
     participant_names: dict[int, str]
     voice_client: Any
+    cleanup_future: asyncio.Future[Exception | None]
 
 
 def main() -> None:
     logging.basicConfig(level=os.getenv("AL_DISCORD_LOG_LEVEL", "INFO"))
     ensure_opus_loaded()
+    tolerate_corrupted_opus_packets()
     config = load_config()
     asyncio.run(run_bot(config))
 
@@ -255,13 +259,20 @@ class MeetingClient(discord.Client):
         Path(self.config.recording_temp_dir).mkdir(parents=True, exist_ok=True)
         recording_id = uuid.uuid4().hex
         audio_path = str(Path(self.config.recording_temp_dir) / f"al-meeting-{recording_id}.wav")
+        loop = asyncio.get_running_loop()
+        cleanup_future: asyncio.Future[Exception | None] = loop.create_future()
+
+        def after_recording(error: Exception | None) -> None:
+            if not cleanup_future.done():
+                loop.call_soon_threadsafe(cleanup_future.set_result, error)
+
         LOGGER.info(
             "Starting Discord meeting recording %s with participants: %s",
             recording_id,
             ", ".join(member.name for member in human_members),
         )
         voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient, self_deaf=False, self_mute=True)
-        voice_client.listen(voice_recv.WaveSink(audio_path))
+        voice_client.listen(voice_recv.WaveSink(audio_path), after=after_recording)
         started_at = datetime.now(timezone.utc)
         self.recording = RecordingSession(
             recording_id=recording_id,
@@ -270,6 +281,7 @@ class MeetingClient(discord.Client):
             participant_ids={member.id for member in human_members},
             participant_names={member.id: member.name for member in human_members},
             voice_client=voice_client,
+            cleanup_future=cleanup_future,
         )
         await asyncio.to_thread(submit_recording_started, self.config, self.recording)
         LOGGER.info("Discord meeting recording %s registered in backend.", recording_id)
@@ -286,6 +298,7 @@ class MeetingClient(discord.Client):
             if hasattr(recording.voice_client, "stop_listening"):
                 recording.voice_client.stop_listening()
 
+            await asyncio.wait_for(recording.cleanup_future, timeout=10)
             await recording.voice_client.disconnect(force=force)
             LOGGER.info("Submitting Discord meeting recording %s for summary processing.", recording.recording_id)
             await asyncio.to_thread(submit_recording_finished, self.config, recording, ended_at)
@@ -331,6 +344,20 @@ def ensure_opus_loaded() -> None:
 
     discord.opus.load_opus(opus_library)
     LOGGER.info("Loaded Discord Opus library: %s", opus_library)
+
+
+def tolerate_corrupted_opus_packets() -> None:
+    original_decode_packet = PacketDecoder._decode_packet
+    silence = b"\x00" * (opus.Decoder.SAMPLES_PER_FRAME * opus.Decoder.SAMPLE_SIZE)
+
+    def decode_packet(self: PacketDecoder, packet: Any) -> tuple[Any, bytes]:
+        try:
+            return original_decode_packet(self, packet)
+        except opus.OpusError:
+            LOGGER.warning("Skipping corrupted Discord Opus packet during meeting recording.", exc_info=True)
+            return packet, silence
+
+    PacketDecoder._decode_packet = decode_packet
 
 
 def submit_voice_event(config: DiscordBotConfig, payload: dict[str, Any]) -> dict[str, Any]:
