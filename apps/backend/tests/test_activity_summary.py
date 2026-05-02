@@ -3087,6 +3087,91 @@ def test_activity_summary_author_source_uses_latest_report_row():
     assert author["lastRecordedAt"] == "2026-04-29T10:00:00+00:00"
 
 
+def test_activity_summary_clears_report_metadata_for_zero_activity_author():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "timeZoneId": "UTC"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "pluginVersion": "unity-plugin",
+            "author": "Igor Mats",
+            "projectId": "unity",
+            "date": "2026-04-29",
+            "lastRecordedAt": "2026-04-29T09:00:00+00:00",
+            "lastReceivedAt": dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "pluginVersion": "unity-plugin",
+            "author": "Igor Mats",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T09:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Igor Mats")
+
+    assert author["pluginDaySeconds"] == 0
+    assert author["activeSeconds"] == 0
+    assert author["idleSeconds"] == 0
+    assert author["source"] is None
+    assert author["pluginVersion"] is None
+    assert author["lastRecordedAt"] == ""
+    assert author["lastReceivedAt"] == ""
+
+
+def test_activity_summary_keeps_report_metadata_for_nonzero_activity_author():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "timeZoneId": "UTC"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "pluginVersion": "unity-plugin",
+            "author": "Igor Mats",
+            "projectId": "unity",
+            "date": "2026-04-29",
+            "lastRecordedAt": "2026-04-29T09:00:00+00:00",
+            "lastReceivedAt": dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "pluginVersion": "unity-plugin",
+            "author": "Igor Mats",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T09:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 120,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Igor Mats")
+
+    assert author["pluginDaySeconds"] == 120
+    assert author["source"] == "ual"
+    assert author["pluginVersion"] == "unity-plugin"
+    assert author["lastRecordedAt"] == "2026-04-29T09:00:00+00:00"
+
+
 def test_open_telegram_day_is_capped_at_ten_hours_and_alerted():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})

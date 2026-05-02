@@ -1466,6 +1466,7 @@ class Repository:
         )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_latest_report_metadata(authors_by_raw, start_date, end_date, date_mode, profiles, now)
+        _clear_inactive_author_report_metadata(authors_by_raw.values())
         presence_overrides = self._author_presence_overrides(authors_by_raw.keys())
         author_rows = [
             _with_alerts(
@@ -5764,6 +5765,17 @@ def _author_has_summary_activity(author: dict[str, Any]) -> bool:
             "overtimeActiveSeconds",
         )
     )
+
+
+def _clear_inactive_author_report_metadata(authors: Any) -> None:
+    for author in authors:
+        if _author_has_summary_activity(author):
+            continue
+
+        author["source"] = None
+        author["pluginVersion"] = None
+        author["lastRecordedAt"] = ""
+        author["lastReceivedAt"] = ""
 
 
 def _author_color(raw_author: Any) -> str:
