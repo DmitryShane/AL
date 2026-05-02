@@ -337,7 +337,7 @@ function App() {
         <header className="workspace-topbar">
           <div className="topbar-title-block">
             <h1>{pageTitle(page)}</h1>
-            {!authLoading && loading ? <span className="topbar-loading-popover">Loading dashboard data...</span> : null}
+            {!authLoading && loading && pageUsesDashboardSummary(page) ? <span className="topbar-loading-popover">Loading dashboard data...</span> : null}
             <p>{pageSubtitle(page)}</p>
           </div>
           {page === "authors" || page === "activity" || page === "alerts" ? (
@@ -406,6 +406,10 @@ function summaryViewForPage(page: Page) {
   }
 
   return "authors";
+}
+
+function pageUsesDashboardSummary(page: Page) {
+  return page === "authors" || page === "activity" || page === "alerts" || page === "settings";
 }
 
 function matchesAuthorSearch(author: AuthorRow, search: string) {

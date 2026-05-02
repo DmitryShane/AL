@@ -1407,6 +1407,14 @@ p {
   margin: 0;
 }
 
+.table-panel-filters {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 .table-panel-filter {
   display: inline-flex;
   align-items: center;
@@ -1424,6 +1432,10 @@ p {
   background: #fff;
   font-size: 13px;
   color: #2f3640;
+}
+
+.table-panel-time-filter select {
+  min-width: 92px;
 }
 
 .table {

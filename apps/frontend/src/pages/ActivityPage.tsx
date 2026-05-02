@@ -53,6 +53,7 @@ export function ActivityPage({
   const [reportsPageSize, setReportsPageSize] = useState(10);
   const [reportsPage, setReportsPageState] = useState(() => loadSavedReportsPage());
   const [reportSourceFilter, setReportSourceFilter] = useState("");
+  const [reportHourFilter, setReportHourFilter] = useState("");
   const reportsPageCacheRef = useRef<ReportsPageCache>({});
   const reportsResetKeyRef = useRef<string | null>(null);
   const reportsResetKey = useMemo(() => JSON.stringify({
@@ -61,17 +62,19 @@ export function ActivityPage({
     endDate: dateRange.endDate,
     dateMode: dateRange.preset === "live" ? "authorLocalToday" : "",
     source: reportSourceFilter,
+    hour: reportHourFilter,
     limit: reportsPageSize
-  }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportsPageSize]);
+  }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportHourFilter, reportsPageSize]);
   const reportsCacheKey = useMemo(() => JSON.stringify({
     author: author?.rawAuthor ?? "",
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
     dateMode: dateRange.preset === "live" ? "authorLocalToday" : "",
     source: reportSourceFilter,
+    hour: reportHourFilter,
     limit: reportsPageSize,
     page: reportsPage
-  }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportsPageSize, reportsPage]);
+  }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportHourFilter, reportsPageSize, reportsPage]);
 
   useEffect(() => {
     if (!author?.rawAuthor) {
@@ -139,6 +142,11 @@ export function ActivityPage({
         params.set("source", reportSourceFilter);
       }
 
+      if (reportHourFilter) {
+        params.set("hour", reportHourFilter);
+      }
+
+
       try {
         const response = await apiFetch(`/api/v1/reports/table?${params.toString()}`);
 
@@ -180,7 +188,7 @@ export function ActivityPage({
     return () => {
       ignore = true;
     };
-  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportsPage, reportsPageSize, reportSourceFilter, reportsCacheKey]);
+  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportsPage, reportsPageSize, reportSourceFilter, reportHourFilter, reportsCacheKey]);
 
   return (
     <section className="page-section">
@@ -263,11 +271,13 @@ export function ActivityPage({
             pageSize={reportsPageSize}
             sourceFilter={reportSourceFilter}
             sourceOptions={reportSources}
+            hourFilter={reportHourFilter}
             loading={reportsLoading}
             error={reportsError}
             setPage={setReportsPage}
             setPageSize={setReportsPageSize}
             setSourceFilter={setReportSourceFilter}
+            setHourFilter={setReportHourFilter}
           />
         </>
       ) : (

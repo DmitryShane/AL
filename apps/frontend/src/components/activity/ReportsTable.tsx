@@ -20,11 +20,13 @@ type ReportsTableProps = {
   pageSize: number;
   sourceFilter: string;
   sourceOptions: string[];
+  hourFilter: string;
   loading: boolean;
   error: string | null;
   setPage: (value: number | ((current: number) => number)) => void;
   setPageSize: (value: number) => void;
   setSourceFilter: (value: string) => void;
+  setHourFilter: (value: string) => void;
 };
 
 export function ReportsTable({
@@ -34,13 +36,16 @@ export function ReportsTable({
   pageSize,
   sourceFilter,
   sourceOptions,
+  hourFilter,
   loading,
   error,
   setPage,
   setPageSize,
-  setSourceFilter
+  setSourceFilter,
+  setHourFilter
 }: ReportsTableProps) {
   const pageSizeOptions = [10, 25, 50];
+  const hourOptions = Array.from({ length: 24 }, (_, hour) => String(hour));
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * pageSize;
@@ -63,17 +68,28 @@ export function ReportsTable({
     <section className="panel table-panel">
       <div className="table-panel-header">
         <h2>Plugin Reports</h2>
-        <label className="table-panel-filter">
-          <span>Source</span>
-          <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
-            <option value="">All sources</option>
-            {sourceOptions.map((key) => (
-              <option key={key || "__none__"} value={key}>
-                {key ? formatSource(key) : "Unknown"}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="table-panel-filters">
+          <label className="table-panel-filter table-panel-time-filter">
+            <span>Time</span>
+            <select value={hourFilter} onChange={(event) => setHourFilter(event.target.value)} aria-label="Reports hour">
+              <option value="">All hours</option>
+              {hourOptions.map((hour) => (
+                <option key={hour} value={hour}>{formatHourOption(hour)}</option>
+              ))}
+            </select>
+          </label>
+          <label className="table-panel-filter">
+            <span>Source</span>
+            <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+              <option value="">All sources</option>
+              {sourceOptions.map((key) => (
+                <option key={key || "__none__"} value={key}>
+                  {key ? formatSource(key) : "Unknown"}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
       <div className="table" style={{ "--reports-page-size": pageSize } as React.CSSProperties}>
         <div className="table-head">
@@ -126,6 +142,10 @@ export function ReportsTable({
       </div>
     </section>
   );
+}
+
+function formatHourOption(value: string) {
+  return `${value.padStart(2, "0")}:00`;
 }
 
 function preferredTimeZoneLabelsByAuthor(reports: Report[]) {
@@ -202,6 +222,14 @@ function isSpecificTimeZoneLabel(label: string) {
     "atlantic",
     "alaska",
     "hawaii",
+    "pst",
+    "pdt",
+    "est",
+    "edt",
+    "cst",
+    "cdt",
+    "mst",
+    "mdt",
     "local",
     "unknown"
   ]).has(normalized);

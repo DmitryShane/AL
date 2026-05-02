@@ -278,6 +278,98 @@ def test_date_query_uses_inclusive_range():
     assert _date_query("2026-04-01", "2026-04-30") == {"date": {"$gte": "2026-04-01", "$lte": "2026-04-30"}}
 
 
+def test_reports_page_filters_by_author_local_hour():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "Europe/Moscow"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T12:30:00Z",
+            "receivedAt": dt.datetime(2026, 5, 1, 12, 30, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T13:30:00Z",
+            "receivedAt": dt.datetime(2026, 5, 1, 13, 30, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+        }
+    )
+
+    page = repo.reports_page(
+        start_date="2026-05-01",
+        end_date="2026-05-01",
+        author="Future Artist",
+        hour=16,
+    )
+
+    assert page["total"] == 1
+    assert len(page["reports"]) == 1
+    assert page["reports"][0]["recordedAt"] == "2026-05-01T13:30:00Z"
+
+
+def test_reports_page_enriches_report_timezone_from_author_profile():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "timeZoneId": "America/Vancouver",
+            "timeZoneDisplayName": "PST",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Igor Mats",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T18:30:00Z",
+            "receivedAt": dt.datetime(2026, 5, 1, 18, 30, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+        }
+    )
+
+    page = repo.reports_page(start_date="2026-05-01", end_date="2026-05-01", author="Igor Mats")
+
+    assert page["reports"][0]["timeZoneId"] == "America/Vancouver"
+    assert page["reports"][0]["timeZoneDisplayName"] == "PST"
+
+
+def test_reports_page_prefers_author_profile_timezone_over_legacy_report_timezone():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "timeZoneId": "America/Vancouver",
+            "timeZoneDisplayName": "America/Vancouver",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T15:30:00-07:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 22, 30, tzinfo=dt.UTC),
+            "timeZoneId": "Canada/Pacific",
+            "timeZoneDisplayName": "PST",
+            "activeDeltaSeconds": 60,
+        }
+    )
+
+    page = repo.reports_page(start_date="2026-05-01", end_date="2026-05-01", author="Igor Mats")
+
+    assert page["reports"][0]["timeZoneId"] == "America/Vancouver"
+    assert page["reports"][0]["timeZoneDisplayName"] == "America/Vancouver"
+
+
 def test_telegram_username_is_normalized_for_mapping():
     assert _normalize_telegram_username(" @Dmitry_Shane ") == "dmitry_shane"
 
@@ -1463,6 +1555,68 @@ def test_stale_presence_reports_when_unity_reports_stop_without_telegram_signoff
     author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC))
     assert author["status"] == "stale"
     assert author["stalePresence"] == "reports"
+
+
+def test_historical_activity_summary_does_not_mark_stopped_reports_as_realtime_stale():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC))
+
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 29, 18, 30, tzinfo=dt.UTC))
+
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "telegram"
+    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
+
+
+def test_historical_activity_summary_keeps_selected_day_telegram_offline_gray():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC))
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-04-28T18:05:00Z")
+    repo.record_break_event("future_artist", "online", "2026-04-29T09:00:00Z")
+
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 29, 18, 30, tzinfo=dt.UTC))
+
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "telegram"
+    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
+
+
+def test_regular_date_still_applies_reports_stopped_when_it_is_author_local_today():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "lastReceivedAt": dt.datetime(2026, 4, 28, 20, 0, tzinfo=dt.UTC),
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "activityCounts": [{"type": "selection", "count": 1}],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 29, 1, 30, tzinfo=dt.UTC))
+
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "reports"
+    assert [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
 
 
 def test_with_alerts_stale_presence_telegram_without_reports_stopped():

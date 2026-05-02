@@ -836,11 +836,13 @@ class Repository:
         date_mode: str | None = None,
         author: str | None = None,
         source: str | None = None,
+        hour: int | None = None,
         limit: int = 25,
         offset: int = 0,
     ) -> dict[str, Any]:
         limit = max(1, min(int(limit), 200))
         offset = max(0, int(offset))
+        hour = _normalize_report_hour_filter(hour)
         query, profiles, now = self._reports_query_context(start_date, end_date, date_mode, author, source)
         source_query, _, _ = self._reports_query_context(start_date, end_date, date_mode, author)
         sources = sorted(
@@ -867,6 +869,9 @@ class Repository:
             ):
                 continue
 
+            if not _report_matches_hour_filter(item, profiles, hour):
+                continue
+
             if (
                 self._is_empty_plugin_report_without_signal(item)
                 or self._is_idle_report_during_meeting(item, meeting_lookup)
@@ -878,6 +883,8 @@ class Repository:
                 profile = profiles.get(item.get("author") or "Unknown User", {})
                 item["displayName"] = _display_name(item.get("author"), profile)
                 item["team"] = profile.get("team", "")
+                item["timeZoneId"] = profile.get("timeZoneId") or item.get("timeZoneId")
+                item["timeZoneDisplayName"] = profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName")
                 item["receivedAt"] = _iso(item.get("receivedAt"))
                 reports.append(item)
 
@@ -1497,16 +1504,36 @@ class Repository:
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_latest_report_metadata(authors_by_raw, start_date, end_date, date_mode, profiles, now)
         _clear_inactive_author_report_metadata(authors_by_raw.values())
-        presence_overrides = self._author_presence_overrides(authors_by_raw.keys())
-        author_rows = [
-            _with_alerts(
-                _with_activity_mix(_with_productivity(author)),
-                self.get_interval_for_author(author["rawAuthor"]),
+        presence_overrides = self._author_presence_overrides(
+            authors_by_raw.keys(),
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+        )
+        author_rows = []
+
+        for author in authors_by_raw.values():
+            raw_author = author["rawAuthor"]
+            include_report_stopped_alerts = _should_apply_realtime_presence_alerts(
+                raw_author,
+                profiles,
+                author.get("timeZoneId"),
+                start_date,
+                end_date,
+                date_mode,
                 now,
-                presence_overrides.get(author["rawAuthor"]),
             )
-            for author in authors_by_raw.values()
-        ]
+            author_rows.append(
+                _with_alerts(
+                    _with_activity_mix(_with_productivity(author)),
+                    self.get_interval_for_author(raw_author),
+                    now,
+                    presence_overrides.get(raw_author),
+                    include_report_stopped_alerts,
+                )
+            )
         hourly_author_rows = [
             {**item, "hourlyActivity": _public_hourly_activity(item.get("hourlyActivity", []))}
             for item in hourly_by_author.values()
@@ -1967,7 +1994,15 @@ class Repository:
             author_row["lastRecordedAt"] = report.get("lastRecordedAt") or report.get("recordedAt") or author_row.get("lastRecordedAt")
             author_row["lastReceivedAt"] = _iso(report.get("lastReceivedAt") or report.get("receivedAt")) or author_row.get("lastReceivedAt")
 
-    def _author_presence_overrides(self, raw_authors: Any) -> dict[str, dict[str, Any]]:
+    def _author_presence_overrides(
+        self,
+        raw_authors: Any,
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> dict[str, dict[str, Any]]:
         authors = [str(author or "") for author in raw_authors if str(author or "")]
 
         if not authors:
@@ -1980,6 +2015,11 @@ class Repository:
             timestamp = _coerce_datetime(event.get("timestamp"))
 
             if not raw_author or not timestamp:
+                continue
+
+            event_date = _local_date_for_time_zone(timestamp, _author_time_zone_id(raw_author, profiles, None))
+
+            if not _date_in_summary_scope(event_date, raw_author, profiles, None, now, start_date, end_date, date_mode):
                 continue
 
             current = latest_break_by_author.get(raw_author)
@@ -5464,6 +5504,32 @@ def _report_row_time(row: dict[str, Any]) -> dt.datetime | None:
     )
 
 
+def _normalize_report_hour_filter(value: int | None) -> int | None:
+    if value is None:
+        return None
+
+    return min(23, max(0, int(value)))
+
+
+def _report_matches_hour_filter(
+    report: dict[str, Any],
+    profiles: dict[str, dict[str, Any]],
+    hour: int | None,
+) -> bool:
+    if hour is None:
+        return True
+
+    recorded_at = _coerce_datetime(report.get("recordedAt") or report.get("lastRecordedAt") or report.get("receivedAt"))
+
+    if not recorded_at:
+        return False
+
+    raw_author = str(report.get("author") or "Unknown User")
+    time_zone_id = _author_time_zone_id(raw_author, profiles, report.get("timeZoneId"))
+    report_hour = _to_local_datetime(recorded_at, time_zone_id).hour
+    return report_hour == hour
+
+
 def _is_activity_event(event: dict[str, Any] | str) -> bool:
     if isinstance(event, dict):
         event_type = str(event.get("eventType") or "")
@@ -5848,6 +5914,22 @@ def _date_in_summary_scope(
     return _date_in_range(value, start_date, end_date)
 
 
+def _should_apply_realtime_presence_alerts(
+    raw_author: str,
+    profiles: dict[str, dict[str, Any]],
+    fallback_time_zone_id: Any,
+    start_date: str | None,
+    end_date: str | None,
+    date_mode: str | None,
+    now: dt.datetime,
+) -> bool:
+    if date_mode == "authorLocalToday":
+        return True
+
+    local_today = _local_date_for_time_zone(now, _author_time_zone_id(raw_author, profiles, fallback_time_zone_id))
+    return _date_in_range(local_today, start_date, end_date)
+
+
 def _author_time_zone_id(
     raw_author: Any, profiles: dict[str, dict[str, Any]], fallback_time_zone_id: Any = None
 ) -> str:
@@ -5937,6 +6019,7 @@ def _with_alerts(
     send_interval_seconds: int,
     now: dt.datetime,
     presence_override: dict[str, Any] | None = None,
+    include_report_stopped_alerts: bool = True,
 ) -> dict[str, Any]:
     item = dict(author)
     alerts = list(item.get("securityAlerts") or [])
@@ -5947,6 +6030,8 @@ def _with_alerts(
     forced_offline = False
 
     if active_meeting:
+        pass
+    elif not include_report_stopped_alerts:
         pass
     elif last_received_at:
         seconds_since_report = max(0, int((now - last_received_at).total_seconds()))
@@ -5983,6 +6068,9 @@ def _with_alerts(
         if overtime_received_at:
             seconds_since_overtime = max(0, int((now - overtime_received_at).total_seconds()))
             forced_offline = seconds_since_overtime > stale_threshold_seconds
+
+    if not include_report_stopped_alerts:
+        forced_offline = True
 
     if active_meeting:
         forced_offline = False

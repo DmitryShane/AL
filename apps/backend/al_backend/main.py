@@ -401,6 +401,7 @@ def reports_table(
     date_mode: str | None = Query(default=None, alias="dateMode"),
     author: str | None = Query(default=None),
     source: str | None = Query(default=None),
+    hour: int | None = Query(default=None, ge=0, le=23),
     limit: int = Query(default=25, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
@@ -410,6 +411,7 @@ def reports_table(
         date_mode=date_mode,
         author=author,
         source=source,
+        hour=hour,
         limit=limit,
         offset=offset,
     )
