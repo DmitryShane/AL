@@ -268,7 +268,7 @@ export function formatReportIdle(report: Report) {
 }
 
 export function isNonActivityReport(report: Report) {
-  return report.source === "telegram" || report.reportType === "telegram" || report.source === "discord" || report.reportType === "meeting";
+  return report.source === "telegram" || report.reportType === "telegram" || report.source === "discord" || report.reportType === "meeting" || report.source === "status" || report.reportType === "status";
 }
 
 export function formatDurationDelta(seconds: number) {
@@ -427,6 +427,10 @@ export function formatSource(source?: string) {
     return "Discord";
   }
 
+  if (source === "status") {
+    return "Status";
+  }
+
   return source ?? "-";
 }
 
@@ -457,6 +461,10 @@ export function sourceIcon(source?: string) {
 
   if (source === "discord") {
     return <DiscordIcon />;
+  }
+
+  if (source === "status") {
+    return <Activity size={16} />;
   }
 
   return <Activity size={16} />;
@@ -513,6 +521,10 @@ function DiscordIcon() {
 }
 
 export function formatReportType(report: Report) {
+  if (report.reportType === "status") {
+    return report.statusEventType ?? report.activityType ?? "status";
+  }
+
   if (report.reportType === "telegram") {
     return formatTelegramEvent(report.telegramEventType ?? report.activityType, report.telegramStatus);
   }
@@ -529,7 +541,7 @@ export function formatReportType(report: Report) {
 }
 
 export function reportTypeBadgeClassName(reportType?: string) {
-  if (reportType === "telegram" || reportType === "meeting") {
+  if (reportType === "telegram" || reportType === "meeting" || reportType === "status") {
     return "report-type-badge manual";
   }
 

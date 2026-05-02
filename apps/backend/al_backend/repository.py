@@ -71,7 +71,7 @@ WINDOWS_TIME_ZONE_IDS = {
 
 
 class Repository:
-    aggregates_version = 26
+    aggregates_version = 28
 
     def __init__(self, settings: Settings):
         self.client: MongoClient = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=1500)
@@ -102,6 +102,12 @@ class Repository:
         self.db.report_rows.create_index(
             [("source", ASCENDING), ("author", ASCENDING), ("sessionId", ASCENDING), ("date", ASCENDING)]
         )
+        self.db.status_events.create_index(
+            [("rawAuthor", ASCENDING), ("date", ASCENDING), ("statusEventType", ASCENDING), ("transitionAt", ASCENDING)],
+            unique=True,
+        )
+        self.db.status_events.create_index([("rawAuthor", ASCENDING), ("transitionAt", DESCENDING)])
+        self.db.status_states.create_index("rawAuthor", unique=True)
         self.db.daily_author_activity.create_index(
             [("source", ASCENDING), ("author", ASCENDING), ("projectId", ASCENDING), ("date", ASCENDING)],
             unique=True,
@@ -870,6 +876,9 @@ class Repository:
                 [("receivedAt", DESCENDING), ("recordedAt", DESCENDING), ("batchId", DESCENDING)]
             )
         )
+        status_rows = list(self.db.report_rows.find({**source_query, "source": "status"}, self._reports_projection()))
+        status_intervals = self._status_intervals_for_reports(status_rows)
+        candidate_rows.sort(key=lambda row: _report_table_sort_key(row, status_intervals), reverse=True)
         meeting_lookup = self._meeting_lookup_for_reports(candidate_rows)
         break_lookup = self._break_lookup_for_reports(candidate_rows)
         reports: list[dict[str, Any]] = []
@@ -886,6 +895,9 @@ class Repository:
                 continue
 
             if not _report_matches_hour_filter(item, profiles, hour):
+                continue
+
+            if self._is_report_inside_status_interval(item, status_intervals):
                 continue
 
             if (
@@ -913,6 +925,69 @@ class Repository:
             "offset": offset,
             "sources": sources,
         }
+
+    def _status_intervals_for_reports(self, status_rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]]:
+        intervals_by_key: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]] = {}
+        ordered_rows = sorted(status_rows, key=lambda row: _report_sort_datetime(row) or dt.datetime.min.replace(tzinfo=dt.UTC))
+        open_offline_by_key: dict[tuple[str, str], dt.datetime] = {}
+
+        for row in ordered_rows:
+            if row.get("source") != "status" and row.get("reportType") != "status":
+                continue
+
+            raw_author = str(row.get("author") or "Unknown User")
+            report_date = str(row.get("date") or "")
+            event_type = str(row.get("statusEventType") or row.get("activityType") or "")
+            sort_at = _report_sort_datetime(row)
+
+            if not report_date or not sort_at:
+                continue
+
+            key = (raw_author, report_date)
+
+            if event_type == "offline":
+                open_offline_by_key[key] = sort_at
+                continue
+
+            if event_type == "online":
+                opened_at = open_offline_by_key.pop(key, None)
+
+                if opened_at:
+                    intervals_by_key.setdefault(key, []).append((opened_at, sort_at))
+
+        for key, opened_at in open_offline_by_key.items():
+            intervals_by_key.setdefault(key, []).append((opened_at, None))
+
+        return intervals_by_key
+
+    def _is_report_inside_status_interval(
+        self,
+        report_row: dict[str, Any],
+        status_intervals: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]],
+    ) -> bool:
+        if report_row.get("source") == "status" or report_row.get("reportType") == "status":
+            return False
+
+        raw_author = str(report_row.get("author") or "Unknown User")
+        report_date = str(report_row.get("date") or "")
+        sort_at = _report_sort_datetime(report_row)
+
+        if not report_date or not sort_at:
+            return False
+
+        for opened_at, closed_at in status_intervals.get((raw_author, report_date), []):
+            if sort_at <= opened_at:
+                continue
+
+            if closed_at is None:
+                return True
+
+            if sort_at >= closed_at:
+                continue
+
+            return True
+
+        return False
 
     def _is_idle_report_during_break(
         self,
@@ -1123,7 +1198,7 @@ class Repository:
         return lookup
 
     def _is_empty_plugin_report_without_signal(self, report_row: dict[str, Any]) -> bool:
-        if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
+        if report_row.get("source") in {"discord", "telegram", "status"} or report_row.get("reportType") in {"meeting", "telegram", "status"}:
             return False
 
         if _has_time_delta(report_row):
@@ -1556,15 +1631,21 @@ class Repository:
             if presence_override and presence_override.get("offlineAt"):
                 include_report_stopped_alerts = False
 
-            author_rows.append(
-                _with_alerts(
-                    _with_activity_mix(_with_productivity(author)),
-                    self.get_interval_for_author(raw_author),
-                    now,
-                    presence_override,
-                    include_report_stopped_alerts,
-                )
+            send_interval_seconds = self.get_interval_for_author(raw_author)
+            summary_author = _with_alerts(
+                _with_activity_mix(_with_productivity(author)),
+                send_interval_seconds,
+                now,
+                presence_override,
+                include_report_stopped_alerts,
             )
+            self._record_status_transition_for_author(
+                summary_author,
+                send_interval_seconds,
+                now,
+                include_report_stopped_alerts,
+            )
+            author_rows.append(summary_author)
         hourly_author_rows = [
             {**item, "hourlyActivity": _public_hourly_activity(item.get("hourlyActivity", []))}
             for item in hourly_by_author.values()
@@ -1827,7 +1908,7 @@ class Repository:
                 "lastReceivedAt": 1,
             },
         ):
-            if report.get("source") in {"telegram", "discord"} or report.get("reportType") in {"telegram", "meeting"}:
+            if report.get("source") in {"telegram", "discord", "status"} or report.get("reportType") in {"telegram", "meeting", "status"}:
                 continue
 
             raw_author = str(report.get("author") or "Unknown User")
@@ -1921,7 +2002,7 @@ class Repository:
                 "overtimeActiveDeltaMicroseconds": 1,
             },
         ):
-            if report.get("source") in {"telegram", "discord"} or report.get("reportType") in {"telegram", "meeting"}:
+            if report.get("source") in {"telegram", "discord", "status"} or report.get("reportType") in {"telegram", "meeting", "status"}:
                 continue
 
             if _time_microseconds(report, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") <= 0:
@@ -1985,6 +2066,9 @@ class Repository:
                 report.get("timeZoneId"),
                 now,
             ):
+                continue
+
+            if report.get("source") == "status" or report.get("reportType") == "status":
                 continue
 
             if self._is_empty_plugin_report_without_signal(report) or self._is_idle_report_during_meeting(report, meeting_lookup):
@@ -4121,6 +4205,146 @@ class Repository:
             }
         )
 
+    def record_status_event(
+        self,
+        raw_author: str,
+        status_event_type: str,
+        transition_at: dt.datetime,
+        time_zone_id: str | None = None,
+        reason: str = "reports_stopped",
+        received_at: dt.datetime | None = None,
+    ) -> dict[str, Any]:
+        event_type = status_event_type if status_event_type in {"offline", "online"} else ""
+
+        if not raw_author or not event_type:
+            return {"ok": False, "error": "Status event requires author and offline/online type"}
+
+        transition_at = _coerce_datetime(transition_at) or dt.datetime.now(dt.UTC)
+        received_at = _coerce_datetime(received_at) or transition_at
+        normalized_time_zone_id = _valid_time_zone_id(time_zone_id) or _author_configured_time_zone_id(raw_author) or "UTC"
+        event_date = _telegram_event_date(transition_at, normalized_time_zone_id)
+        event = {
+            "rawAuthor": raw_author,
+            "date": event_date,
+            "statusEventType": event_type,
+            "transitionAt": transition_at,
+            "receivedAt": received_at,
+            "timeZoneId": normalized_time_zone_id,
+            "reason": reason,
+            "createdAt": dt.datetime.now(dt.UTC),
+        }
+        self.db.status_events.update_one(
+            {
+                "rawAuthor": raw_author,
+                "date": event_date,
+                "statusEventType": event_type,
+                "transitionAt": transition_at,
+            },
+            {"$setOnInsert": event},
+            upsert=True,
+        )
+        self._insert_status_report_row(event)
+        return {"ok": True, "event": event}
+
+    def _record_status_transition_for_author(
+        self,
+        author: dict[str, Any],
+        send_interval_seconds: int,
+        now: dt.datetime,
+        include_report_stopped_alerts: bool,
+    ) -> None:
+        raw_author = str(author.get("rawAuthor") or "")
+
+        if not raw_author:
+            return
+
+        previous_state = self.db.status_states.find_one({"rawAuthor": raw_author}, {"_id": 0}) or {}
+        previous_status = str(previous_state.get("status") or "online")
+        stale_presence = str(author.get("stalePresence") or "")
+        is_red_offline = (
+            include_report_stopped_alerts
+            and author.get("status") == "stale"
+            and stale_presence in {"reports", "both"}
+        )
+        time_zone_id = _valid_time_zone_id(author.get("timeZoneId")) or _author_configured_time_zone_id(raw_author) or "UTC"
+
+        if is_red_offline:
+            if previous_status == "offline":
+                self.db.status_states.update_one(
+                    {"rawAuthor": raw_author},
+                    {"$set": {"rawAuthor": raw_author, "status": "offline", "updatedAt": now}},
+                    upsert=True,
+                )
+                return
+
+            last_received_at = _coerce_datetime(author.get("lastReceivedAt")) or now
+            transition_at = last_received_at + dt.timedelta(seconds=max(0, send_interval_seconds * 2) + 1)
+            self.record_status_event(raw_author, "offline", transition_at, time_zone_id, "reports_stopped")
+            self.db.status_states.update_one(
+                {"rawAuthor": raw_author},
+                {"$set": {"rawAuthor": raw_author, "status": "offline", "updatedAt": now, "transitionAt": transition_at}},
+                upsert=True,
+            )
+            return
+
+        if author.get("status") == "online" and previous_status == "offline" and self.get_plugin_ingest_enabled():
+            transition_at = (_coerce_datetime(author.get("lastReceivedAt")) or now) + dt.timedelta(microseconds=1)
+            self.record_status_event(raw_author, "online", transition_at, time_zone_id, "reports_resumed")
+            self.db.status_states.update_one(
+                {"rawAuthor": raw_author},
+                {"$set": {"rawAuthor": raw_author, "status": "online", "updatedAt": now, "transitionAt": transition_at}},
+                upsert=True,
+            )
+
+    def _materialize_status_report_rows(self) -> None:
+        for event in self.db.status_events.find({}, {"_id": 0}).sort("transitionAt", ASCENDING):
+            self._insert_status_report_row(event)
+
+    def _insert_status_report_row(self, event: dict[str, Any]) -> None:
+        raw_author = str(event.get("rawAuthor") or "Unknown User")
+        transition_at = _coerce_datetime(event.get("transitionAt")) or dt.datetime.now(dt.UTC)
+        received_at = _coerce_datetime(event.get("receivedAt")) or transition_at
+        time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or _author_configured_time_zone_id(raw_author) or "UTC"
+        event_type = str(event.get("statusEventType") or "")
+        event_date = str(event.get("date") or _telegram_event_date(transition_at, time_zone_id))
+
+        if event_type not in {"offline", "online"}:
+            return
+
+        self.db.report_rows.delete_many(
+            {
+                "source": "status",
+                "author": raw_author,
+                "date": event_date,
+                "statusEventType": event_type,
+                "recordedAt": transition_at.isoformat(),
+            }
+        )
+        self.db.report_rows.insert_one(
+            {
+                "source": "status",
+                "pluginVersion": "status",
+                "author": raw_author,
+                "authorEmail": "",
+                "projectId": "status",
+                "sessionId": raw_author,
+                "deviceId": "",
+                "date": event_date,
+                "recordedAt": transition_at.isoformat(),
+                "receivedAt": received_at,
+                "lastRecordedAt": transition_at.isoformat(),
+                "lastReceivedAt": received_at,
+                "timeZoneId": time_zone_id,
+                "timeZoneDisplayName": time_zone_id,
+                "reportType": "status",
+                "activityType": event_type,
+                "statusEventType": event_type,
+                "statusReason": str(event.get("reason") or ""),
+                "metadata": {"reason": str(event.get("reason") or "")},
+                **_empty_event_deltas(),
+            }
+        )
+
     def _close_break_session(self, normalized_telegram: str, raw_author: str, event_time: dt.datetime) -> dict[str, Any]:
         session = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
 
@@ -4641,15 +4865,15 @@ class Repository:
 
         for event in raw_events:
             deltas = self._apply_raw_event_to_aggregates(event)
-            if not _has_time_delta(deltas):
-                continue
-
             batch_id = str(event.get("batchId") or "")
 
             if batch_id and batch_id in batch_ids:
                 batch_delta_items = batch_delta_items_by_batch_id.setdefault(batch_id, [])
                 batch_delta_items.append((event, deltas))
                 last_event_by_batch_id[batch_id] = event
+                continue
+
+            if not _has_time_delta(deltas):
                 continue
 
             resolved_author = self.resolve_author_alias(event.get("author") or "Unknown User")
@@ -4734,6 +4958,8 @@ class Repository:
                 str(event.get("guildId") or ""),
                 str(event.get("channelId") or ""),
             )
+
+        self._materialize_status_report_rows()
 
         self.db.aggregate_metadata.update_one(
             {"kind": "activity"},
@@ -4998,11 +5224,50 @@ class Repository:
         consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
         overtime_window = self._overtime_window_for_event(event)
         idle_threshold_seconds = self.get_idle_threshold_for_author(str(event.get("author") or "Unknown User"))
+        received_at = _coerce_datetime(event.get("receivedAt"))
+        status_context = self._status_interval_context_for_event(event, occurred_at, received_at)
+        status_offline_at = status_context.get("offlineAt") if status_context else None
+        status_online_at = status_context.get("onlineAt") if status_context else None
+        is_inside_status_offline = bool(status_context and status_context.get("insideOffline"))
+        status_idle_accounted_until = _coerce_datetime(author_state.get("statusIdleAccountedUntil"))
 
         if event_type == "focus":
             source_is_focused = True
         elif event_type == "blur":
             source_is_focused = False
+
+        if (
+            status_offline_at
+            and status_online_at
+            and received_at
+            and received_at >= status_online_at
+            and (not status_idle_accounted_until or status_idle_accounted_until < status_online_at)
+        ):
+            status_time_zone_id = (
+                _valid_time_zone_id((status_context or {}).get("timeZoneId"))
+                or _valid_time_zone_id(event.get("timeZoneId"))
+                or "UTC"
+            )
+            status_idle_deltas = _interval_deltas(
+                status_offline_at,
+                status_online_at,
+                _to_local_datetime(status_offline_at, status_time_zone_id),
+                _to_local_datetime(status_online_at, status_time_zone_id),
+                False,
+                consumed_normal_microseconds,
+                overtime_window,
+            )
+            _merge_batch_deltas(deltas, status_idle_deltas)
+            last_accounting_at = status_online_at
+            last_accounting_local_at = _to_local_datetime(status_online_at, status_time_zone_id)
+            last_accounting_source = current_source
+            author_last_accounting_at = status_online_at
+            author_last_accounting_local_at = _to_local_datetime(status_online_at, status_time_zone_id)
+            author_last_accounting_scope = current_scope
+            status_idle_accounted_until = status_online_at
+
+        if is_inside_status_offline:
+            is_activity = False
 
         if is_activity:
             if not first_activity_at:
@@ -5125,7 +5390,7 @@ class Repository:
 
             deltas[activity_delta_key].append({"type": activity_type, "count": 1})
 
-        saved_prefab = _saved_prefab_delta(event)
+        saved_prefab = None if is_inside_status_offline else _saved_prefab_delta(event)
 
         if saved_prefab:
             saved_prefab_delta_key = "savedPrefabDeltas"
@@ -5186,6 +5451,7 @@ class Repository:
                         "lastAccountingLocalAt": author_last_accounting_local_at.isoformat() if author_last_accounting_local_at else None,
                         "lastActivityScope": author_last_activity_scope or None,
                         "lastAccountingScope": author_last_accounting_scope or None,
+                        "statusIdleAccountedUntil": status_idle_accounted_until.isoformat() if status_idle_accounted_until else None,
                     },
                     "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
                 }
@@ -5248,6 +5514,79 @@ class Repository:
             return None
 
         return overtime_started_at, day_end_at
+
+    def _status_interval_context_for_event(
+        self,
+        event: dict[str, Any],
+        occurred_at: dt.datetime,
+        received_at: dt.datetime | None,
+    ) -> dict[str, Any] | None:
+        raw_author = str(event.get("author") or "Unknown User")
+        day_date = str(event.get("date") or "")
+
+        if not raw_author or not day_date or not occurred_at:
+            return None
+
+        status_events = sorted(
+            self.db.status_events.find(
+                {"rawAuthor": raw_author, "date": day_date},
+                {"_id": 0, "statusEventType": 1, "transitionAt": 1, "timeZoneId": 1},
+            ),
+            key=lambda item: _coerce_datetime(item.get("transitionAt")) or dt.datetime.min.replace(tzinfo=dt.UTC),
+        )
+        previous_closed_interval: dict[str, Any] | None = None
+        index = 0
+
+        while index < len(status_events):
+            status_event = status_events[index]
+            transition_at = _coerce_datetime(status_event.get("transitionAt"))
+
+            if not transition_at or str(status_event.get("statusEventType") or "") != "offline":
+                index += 1
+                continue
+
+            online_event: dict[str, Any] | None = None
+            next_index = index + 1
+
+            while next_index < len(status_events):
+                next_event = status_events[next_index]
+                next_transition_at = _coerce_datetime(next_event.get("transitionAt"))
+                next_type = str(next_event.get("statusEventType") or "")
+
+                if next_transition_at and next_transition_at > transition_at and next_type == "online":
+                    online_event = next_event
+                    break
+
+                if next_transition_at and next_transition_at > transition_at and next_type == "offline":
+                    break
+
+                next_index += 1
+
+            online_at = _coerce_datetime((online_event or {}).get("transitionAt"))
+            inside_offline = occurred_at > transition_at and (not online_at or occurred_at < online_at)
+
+            if inside_offline:
+                return {
+                    "offlineAt": transition_at,
+                    "onlineAt": online_at,
+                    "insideOffline": True,
+                    "timeZoneId": online_event.get("timeZoneId") if online_event else status_event.get("timeZoneId"),
+                }
+
+            if online_at and occurred_at >= online_at:
+                previous_closed_interval = {
+                    "offlineAt": transition_at,
+                    "onlineAt": online_at,
+                    "insideOffline": False,
+                    "timeZoneId": online_event.get("timeZoneId") if online_event else status_event.get("timeZoneId"),
+                }
+
+            index += 1
+
+        if previous_closed_interval and received_at and received_at >= previous_closed_interval["onlineAt"]:
+            return previous_closed_interval
+
+        return None
 
     def _update_daily_author_activity(self, snapshot: dict[str, Any], deltas: dict[str, Any]) -> None:
         key = {
@@ -5638,6 +5977,46 @@ def _report_matches_hour_filter(
     time_zone_id = _author_time_zone_id(raw_author, profiles, report.get("timeZoneId"))
     report_hour = _to_local_datetime(recorded_at, time_zone_id).hour
     return report_hour == hour
+
+
+def _report_sort_datetime(report: dict[str, Any]) -> dt.datetime | None:
+    return (
+        _coerce_datetime(report.get("receivedAt"))
+        or _coerce_datetime(report.get("lastReceivedAt"))
+        or _coerce_datetime(report.get("recordedAt"))
+        or _coerce_datetime(report.get("lastRecordedAt"))
+    )
+
+
+def _report_table_sort_key(
+    report: dict[str, Any],
+    status_intervals: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]] | None = None,
+) -> tuple[dt.datetime, int, dt.datetime]:
+    sort_at = _report_sort_datetime(report) or dt.datetime.min.replace(tzinfo=dt.UTC)
+    recorded_at = (
+        _coerce_datetime(report.get("recordedAt"))
+        or _coerce_datetime(report.get("lastRecordedAt"))
+        or dt.datetime.min.replace(tzinfo=dt.UTC)
+    )
+    is_status = report.get("source") == "status" or report.get("reportType") == "status"
+    event_type = str(report.get("statusEventType") or report.get("activityType") or "")
+    status_priority = 3
+
+    if is_status:
+        status_priority = 1
+
+    if is_status and event_type == "online":
+        status_priority = 2
+
+    if is_status and event_type == "offline" and status_intervals:
+        raw_author = str(report.get("author") or "Unknown User")
+        report_date = str(report.get("date") or "")
+
+        for opened_at, closed_at in status_intervals.get((raw_author, report_date), []):
+            if closed_at and opened_at == sort_at:
+                return closed_at, 1, recorded_at
+
+    return sort_at, status_priority, recorded_at
 
 
 def _is_activity_event(event: dict[str, Any] | str) -> bool:

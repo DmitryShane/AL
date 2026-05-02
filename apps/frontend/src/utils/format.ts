@@ -48,5 +48,9 @@ export function formatSource(source?: string) {
     return "Discord";
   }
 
+  if (source === "status") {
+    return "Status";
+  }
+
   return source ?? "-";
 }

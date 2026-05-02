@@ -25,6 +25,8 @@ export type Report = {
   telegramStatus?: string;
   discordEventType?: string;
   discordStatus?: string;
+  statusEventType?: string;
+  statusReason?: string;
   pluginVersion?: string;
 };
 

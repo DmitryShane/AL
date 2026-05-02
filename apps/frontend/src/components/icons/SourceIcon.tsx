@@ -34,6 +34,10 @@ export function SourceIcon({ source }: SourceIconProps) {
     return <DiscordIcon />;
   }
 
+  if (source === "status") {
+    return <Activity size={16} />;
+  }
+
   return <Activity size={16} />;
 }
 
