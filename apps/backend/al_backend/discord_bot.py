@@ -4,7 +4,9 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import tempfile
+import threading
 import urllib.error
 import urllib.request
 import uuid
@@ -25,6 +27,17 @@ LOGGER = logging.getLogger("al.discord_bot")
 DEFAULT_SOLO_TIMEOUT_SECONDS = 10 * 60
 SOLO_CHECK_SECONDS = 15
 SETTINGS_REFRESH_SECONDS = 60
+DAVE_READY_TIMEOUT_SECONDS = 2.0
+PCM_SAMPLE_RATE = 48000
+PCM_CHANNELS = 2
+PCM_SAMPLE_WIDTH = 2
+PCM_FRAME_BYTES = PCM_CHANNELS * PCM_SAMPLE_WIDTH
+PCM_FRAME_SAMPLES = opus.Decoder.SAMPLES_PER_FRAME
+PCM_FRAME_SIZE = PCM_FRAME_SAMPLES * PCM_FRAME_BYTES
+OUTPUT_SAMPLE_RATE = 16000
+CORRUPTED_PACKET_DEGRADED_RATIO = 0.05
+CORRUPTED_PACKET_SKIP_RATIO = 0.2
+MAX_TRACK_GAP_SECONDS = 30 * 60
 CORRUPTED_OPUS_PACKETS = 0
 
 
@@ -47,14 +60,29 @@ class RecordingSession:
     participant_ids: set[int]
     participant_names: dict[int, str]
     voice_client: Any
-    sink: "RecordingStatsSink"
+    sink: "MeetingAudioSink"
     cleanup_future: asyncio.Future[Exception | None]
+
+
+@dataclass
+class UserPcmTrack:
+    user_id: int
+    user_name: str
+    path: str
+    file: Any
+    bytes_written: int = 0
+    first_timestamp: int | None = None
+    first_position_samples: int = 0
+    frame_count: int = 0
+    non_silent_frame_count: int = 0
+    silence_padding_frames: int = 0
+    out_of_order_frames: int = 0
 
 
 def main() -> None:
     logging.basicConfig(level=os.getenv("AL_DISCORD_LOG_LEVEL", "INFO"))
     ensure_opus_loaded()
-    tolerate_corrupted_opus_packets()
+    skip_corrupted_opus_packets()
     config = load_config()
     asyncio.run(run_bot(config))
 
@@ -266,8 +294,12 @@ class MeetingClient(discord.Client):
         audio_path = str(Path(self.config.recording_temp_dir) / f"al-meeting-{recording_id}.m4a")
         loop = asyncio.get_running_loop()
         cleanup_future: asyncio.Future[Exception | None] = loop.create_future()
+        sink = MeetingAudioSink(audio_path=audio_path)
 
         def after_recording(error: Exception | None) -> None:
+            if error:
+                sink.record_listen_error(error)
+
             if not cleanup_future.done():
                 loop.call_soon_threadsafe(cleanup_future.set_result, error)
 
@@ -277,13 +309,8 @@ class MeetingClient(discord.Client):
             ", ".join(member.name for member in human_members),
         )
         reset_corrupted_opus_packet_count()
-        sink = RecordingStatsSink(
-            voice_recv.FFmpegSink(
-                filename=audio_path,
-                options="-vn -ac 1 -ar 16000 -b:a 32k -movflags +faststart",
-            )
-        )
         voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient, self_deaf=False, self_mute=True)
+        await wait_for_dave_ready(voice_client)
         voice_client.listen(sink, after=after_recording)
         started_at = datetime.now(timezone.utc)
         self.recording = RecordingSession(
@@ -314,12 +341,27 @@ class MeetingClient(discord.Client):
 
             await asyncio.wait_for(recording.cleanup_future, timeout=10)
             await recording.voice_client.disconnect(force=force)
+            await self.update_recording_status(recording.recording_id, "compressing_audio")
+            await asyncio.to_thread(recording.sink.finalize)
+            corruption_ratio = corrupted_packet_ratio(recording.sink.frames_written)
             LOGGER.info(
-                "Submitting Discord meeting recording %s for summary processing. frames=%s non_silent_frames=%s corrupted_packets=%s size=%.2f MB",
+                (
+                    "Submitting Discord meeting recording %s for summary processing. "
+                    "frames=%s non_silent_frames=%s corrupted_packets=%s corruption_ratio=%.3f "
+                    "unknown_source_frames=%s bot_frames=%s mixed_users=%s silence_padding_frames=%s "
+                    "listen_errors=%s per_user_frames=%s size=%.2f MB"
+                ),
                 recording.recording_id,
                 recording.sink.frames_written,
                 recording.sink.non_silent_frames,
                 CORRUPTED_OPUS_PACKETS,
+                corruption_ratio,
+                recording.sink.unknown_source_frames,
+                recording.sink.bot_frames,
+                recording.sink.mixed_user_count,
+                recording.sink.silence_padding_frames,
+                recording.sink.listen_error_count,
+                recording.sink.per_user_frame_counts(),
                 file_size_mb(recording.audio_path),
             )
             result = await asyncio.to_thread(submit_recording_finished, self.config, recording, ended_at)
@@ -327,6 +369,9 @@ class MeetingClient(discord.Client):
             if not result.get("ok"):
                 error = str(result.get("error") or "Meeting recording upload failed")
                 await asyncio.to_thread(submit_recording_failed, self.config, recording.recording_id, ended_at, error)
+        except Exception as exc:
+            LOGGER.exception("Discord meeting recording %s failed.", recording.recording_id)
+            await asyncio.to_thread(submit_recording_failed, self.config, recording.recording_id, ended_at, str(exc))
         finally:
             if self.meeting_audio_retention_seconds > 0:
                 retain_recording_audio(recording.audio_path, self.meeting_audio_retention_seconds)
@@ -381,19 +426,57 @@ def ensure_opus_loaded() -> None:
     LOGGER.info("Loaded Discord Opus library: %s", opus_library)
 
 
-def tolerate_corrupted_opus_packets() -> None:
+async def wait_for_dave_ready(voice_client: Any) -> None:
+    started_at = time.monotonic()
+    saw_dave_session = False
+
+    while True:
+        connection = getattr(voice_client, "_connection", None)
+        dave_session = getattr(connection, "dave_session", None)
+
+        if dave_session is not None:
+            saw_dave_session = True
+
+            if bool(getattr(dave_session, "ready", False)):
+                LOGGER.info("Discord DAVE session is ready for audio receive.")
+                return
+
+        if time.monotonic() - started_at >= DAVE_READY_TIMEOUT_SECONDS:
+            if saw_dave_session:
+                LOGGER.warning("Discord DAVE session was not ready before recording started.")
+
+            return
+
+        await asyncio.sleep(0.1)
+
+
+def skip_corrupted_opus_packets() -> None:
+    if getattr(PacketDecoder._decode_packet, "_al_corruption_patch", False):
+        return
+
     original_decode_packet = PacketDecoder._decode_packet
-    silence = b"\x00" * (opus.Decoder.SAMPLES_PER_FRAME * opus.Decoder.SAMPLE_SIZE)
+    silence = b"\x00" * PCM_FRAME_SIZE
 
     def decode_packet(self: PacketDecoder, packet: Any) -> tuple[Any, bytes]:
         global CORRUPTED_OPUS_PACKETS
 
         try:
             return original_decode_packet(self, packet)
-        except opus.OpusError:
+        except opus.OpusError as exc:
             CORRUPTED_OPUS_PACKETS += 1
+            LOGGER.debug("Skipped corrupted Discord Opus packet: %s", exc)
+
+            decoder = getattr(self, "_decoder", None)
+
+            if decoder is not None:
+                try:
+                    return packet, decoder.decode(None, fec=False)
+                except opus.OpusError:
+                    pass
+
             return packet, silence
 
+    setattr(decode_packet, "_al_corruption_patch", True)
     PacketDecoder._decode_packet = decode_packet
 
 
@@ -402,34 +485,247 @@ def reset_corrupted_opus_packet_count() -> None:
     CORRUPTED_OPUS_PACKETS = 0
 
 
-class RecordingStatsSink(voice_recv.AudioSink):
-    def __init__(self, destination: voice_recv.AudioSink):
-        super().__init__(destination)
+def corrupted_packet_ratio(frame_count: int) -> float:
+    if frame_count <= 0:
+        return 0.0
+
+    return CORRUPTED_OPUS_PACKETS / frame_count
+
+
+class MeetingAudioSink(voice_recv.AudioSink):
+    def __init__(self, *, audio_path: str):
+        super().__init__()
+        self.audio_path = audio_path
+        self.started_at = time.monotonic()
+        self.tracks: dict[int, UserPcmTrack] = {}
         self.frames_written = 0
         self.non_silent_frames = 0
+        self.unknown_source_frames = 0
+        self.bot_frames = 0
+        self.empty_pcm_frames = 0
+        self.silence_padding_frames = 0
+        self.out_of_order_frames = 0
+        self.listen_error_count = 0
+        self.listen_error = ""
+        self._lock = threading.RLock()
+        self._closed = False
 
     def wants_opus(self) -> bool:
-        return self.destination.wants_opus()
-
-    @property
-    def destination(self) -> voice_recv.AudioSink:
-        child = self.child
-
-        if child is None:
-            raise RuntimeError("RecordingStatsSink destination is missing")
-
-        return child
+        return False
 
     def write(self, user: discord.User | None, data: Any) -> None:
-        self.frames_written += 1
+        with self._lock:
+            self.frames_written += 1
 
-        if data.pcm and any(data.pcm):
-            self.non_silent_frames += 1
+            if user is None:
+                self.unknown_source_frames += 1
+                return
 
-        self.destination.write(user, data)
+            if bool(getattr(user, "bot", False)):
+                self.bot_frames += 1
+                return
+
+            pcm = bytes(getattr(data, "pcm", b"") or b"")
+
+            if not pcm:
+                self.empty_pcm_frames += 1
+                return
+
+            if any(pcm):
+                self.non_silent_frames += 1
+
+            track = self._track_for(user)
+            self._write_track_frame(track, data, pcm)
 
     def cleanup(self) -> None:
-        pass
+        self._close_tracks()
+
+    @property
+    def mixed_user_count(self) -> int:
+        return len(self.tracks)
+
+    def per_user_frame_counts(self) -> dict[str, int]:
+        return {track.user_name: track.frame_count for track in self.tracks.values()}
+
+    def per_user_non_silent_frame_counts(self) -> dict[str, int]:
+        return {track.user_name: track.non_silent_frame_count for track in self.tracks.values()}
+
+    def record_listen_error(self, error: Exception) -> None:
+        with self._lock:
+            self.listen_error_count += 1
+            self.listen_error = str(error)[:1000]
+
+    def audio_quality_status(self, corrupted_packets: int) -> str:
+        if self.frames_written <= 0:
+            return "unknown"
+
+        if self.non_silent_frames <= 0:
+            return "silent"
+
+        ratio = corrupted_packets / self.frames_written
+
+        if ratio >= CORRUPTED_PACKET_SKIP_RATIO:
+            return "corrupted"
+
+        if ratio >= CORRUPTED_PACKET_DEGRADED_RATIO or self.listen_error_count > 0:
+            return "degraded"
+
+        return "ok"
+
+    def finalize(self) -> None:
+        with self._lock:
+            self._close_tracks()
+            tracks = [track for track in self.tracks.values() if track.bytes_written > 0]
+
+        try:
+            if not tracks:
+                self._encode_silence()
+                return
+
+            self._mix_tracks(tracks)
+        finally:
+            self._delete_track_files()
+
+    def _track_for(self, user: discord.User) -> UserPcmTrack:
+        user_id = int(user.id)
+        track = self.tracks.get(user_id)
+
+        if track is not None:
+            return track
+
+        safe_user_id = str(user_id)
+        track_path = f"{self.audio_path}.{safe_user_id}.pcm"
+        track = UserPcmTrack(
+            user_id=user_id,
+            user_name=str(getattr(user, "display_name", None) or getattr(user, "name", None) or user_id),
+            path=track_path,
+            file=open(track_path, "wb"),
+        )
+        self.tracks[user_id] = track
+        return track
+
+    def _write_track_frame(self, track: UserPcmTrack, data: Any, pcm: bytes) -> None:
+        frame_samples = max(1, len(pcm) // PCM_FRAME_BYTES)
+        target_samples = self._target_position_samples(track, data, frame_samples)
+        current_samples = track.bytes_written // PCM_FRAME_BYTES
+
+        if target_samples > current_samples:
+            missing_samples = target_samples - current_samples
+            missing_bytes = missing_samples * PCM_FRAME_BYTES
+            track.file.write(b"\x00" * missing_bytes)
+            track.bytes_written += missing_bytes
+            missing_frames = max(1, round(missing_samples / PCM_FRAME_SAMPLES))
+            track.silence_padding_frames += missing_frames
+            self.silence_padding_frames += missing_frames
+        elif target_samples < current_samples:
+            overlap_samples = current_samples - target_samples
+            track.out_of_order_frames += 1
+            self.out_of_order_frames += 1
+
+            if overlap_samples >= frame_samples:
+                return
+
+            pcm = pcm[overlap_samples * PCM_FRAME_BYTES :]
+
+        track.file.write(pcm)
+        track.bytes_written += len(pcm)
+        track.frame_count += 1
+
+        if any(pcm):
+            track.non_silent_frame_count += 1
+
+    def _target_position_samples(self, track: UserPcmTrack, data: Any, frame_samples: int) -> int:
+        packet = getattr(data, "packet", None)
+        timestamp = getattr(packet, "timestamp", None)
+        wall_position_samples = max(0, round((time.monotonic() - self.started_at) * PCM_SAMPLE_RATE) - frame_samples)
+
+        if timestamp is None:
+            return wall_position_samples
+
+        timestamp = int(timestamp)
+
+        if track.first_timestamp is None:
+            track.first_timestamp = timestamp
+            track.first_position_samples = wall_position_samples
+            return wall_position_samples
+
+        timestamp_delta = (timestamp - track.first_timestamp) % (2**32)
+
+        if timestamp_delta > MAX_TRACK_GAP_SECONDS * PCM_SAMPLE_RATE:
+            track.first_timestamp = timestamp
+            track.first_position_samples = max(track.bytes_written // PCM_FRAME_BYTES, wall_position_samples)
+            return track.first_position_samples
+
+        return track.first_position_samples + timestamp_delta
+
+    def _close_tracks(self) -> None:
+        if self._closed:
+            return
+
+        for track in self.tracks.values():
+            try:
+                track.file.close()
+            except Exception:
+                LOGGER.warning("Failed to close Discord PCM track %s", track.path, exc_info=True)
+
+        self._closed = True
+
+    def _mix_tracks(self, tracks: list[UserPcmTrack]) -> None:
+        args = ["ffmpeg", "-hide_banner", "-y", "-loglevel", "warning"]
+
+        for track in tracks:
+            args.extend(["-f", "s16le", "-ar", str(PCM_SAMPLE_RATE), "-ac", str(PCM_CHANNELS), "-i", track.path])
+
+        if len(tracks) > 1:
+            args.extend(
+                [
+                    "-filter_complex",
+                    f"amix=inputs={len(tracks)}:duration=longest:dropout_transition=0:normalize=1[aout]",
+                    "-map",
+                    "[aout]",
+                ]
+            )
+
+        args.extend(["-vn", "-ac", "1", "-ar", str(OUTPUT_SAMPLE_RATE), "-b:a", "32k", "-movflags", "+faststart", self.audio_path])
+        self._run_ffmpeg(args)
+
+    def _encode_silence(self) -> None:
+        args = [
+            "ffmpeg",
+            "-hide_banner",
+            "-y",
+            "-loglevel",
+            "warning",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anullsrc=r={OUTPUT_SAMPLE_RATE}:cl=mono",
+            "-t",
+            "1",
+            "-b:a",
+            "32k",
+            "-movflags",
+            "+faststart",
+            self.audio_path,
+        ]
+        self._run_ffmpeg(args)
+
+    def _run_ffmpeg(self, args: list[str]) -> None:
+        try:
+            result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        except FileNotFoundError as exc:
+            raise RuntimeError("ffmpeg is required to create Discord meeting audio. Install ffmpeg on the bot host.") from exc
+
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"ffmpeg failed to create Discord meeting audio: {stderr}")
+
+    def _delete_track_files(self) -> None:
+        for track in self.tracks.values():
+            try:
+                os.remove(track.path)
+            except FileNotFoundError:
+                pass
 
 
 def submit_voice_event(config: DiscordBotConfig, payload: dict[str, Any]) -> dict[str, Any]:
@@ -464,6 +760,17 @@ def submit_recording_finished(config: DiscordBotConfig, recording: RecordingSess
         "audioFrameCount": str(recording.sink.frames_written),
         "nonSilentFrameCount": str(recording.sink.non_silent_frames),
         "corruptedPacketCount": str(CORRUPTED_OPUS_PACKETS),
+        "unknownSourceFrameCount": str(recording.sink.unknown_source_frames),
+        "botFrameCount": str(recording.sink.bot_frames),
+        "emptyPcmFrameCount": str(recording.sink.empty_pcm_frames),
+        "silencePaddingFrameCount": str(recording.sink.silence_padding_frames),
+        "outOfOrderFrameCount": str(recording.sink.out_of_order_frames),
+        "mixedUserCount": str(recording.sink.mixed_user_count),
+        "perUserFrameCounts": json.dumps(recording.sink.per_user_frame_counts()),
+        "perUserNonSilentFrameCounts": json.dumps(recording.sink.per_user_non_silent_frame_counts()),
+        "listenErrorCount": str(recording.sink.listen_error_count),
+        "listenError": recording.sink.listen_error,
+        "audioQualityStatus": recording.sink.audio_quality_status(CORRUPTED_OPUS_PACKETS),
         "audioSizeBytes": str(file_size_bytes(recording.audio_path)),
     }
     return submit_multipart_event(config, "/api/v1/discord/meeting-recordings/finish", fields, "audio", recording.audio_path)
@@ -591,6 +898,9 @@ def file_size_mb(path: str) -> float:
 
 
 def retain_recording_audio(path: str, retention_seconds: int) -> None:
+    if not os.path.exists(path):
+        return
+
     expires_at = int(time.time()) + max(0, retention_seconds)
     retained_path = f"{path}.keep-until-{expires_at}"
     os.replace(path, retained_path)

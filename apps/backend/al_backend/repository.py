@@ -2699,6 +2699,17 @@ class Repository:
         audio_frame_count: int = 0,
         non_silent_frame_count: int = 0,
         corrupted_packet_count: int = 0,
+        unknown_source_frame_count: int = 0,
+        bot_frame_count: int = 0,
+        empty_pcm_frame_count: int = 0,
+        silence_padding_frame_count: int = 0,
+        out_of_order_frame_count: int = 0,
+        mixed_user_count: int = 0,
+        per_user_frame_counts: dict[str, int] | None = None,
+        per_user_non_silent_frame_counts: dict[str, int] | None = None,
+        listen_error_count: int = 0,
+        listen_error: str = "",
+        audio_quality_status: str = "",
         audio_size_bytes: int = 0,
         audio_path: str,
         summary_generator: Any,
@@ -2712,8 +2723,19 @@ class Repository:
             "audioFrameCount": max(0, int(audio_frame_count or 0)),
             "nonSilentFrameCount": max(0, int(non_silent_frame_count or 0)),
             "corruptedPacketCount": max(0, int(corrupted_packet_count or 0)),
+            "unknownSourceFrameCount": max(0, int(unknown_source_frame_count or 0)),
+            "botFrameCount": max(0, int(bot_frame_count or 0)),
+            "emptyPcmFrameCount": max(0, int(empty_pcm_frame_count or 0)),
+            "silencePaddingFrameCount": max(0, int(silence_padding_frame_count or 0)),
+            "outOfOrderFrameCount": max(0, int(out_of_order_frame_count or 0)),
+            "mixedUserCount": max(0, int(mixed_user_count or 0)),
+            "perUserFrameCounts": per_user_frame_counts or {},
+            "perUserNonSilentFrameCounts": per_user_non_silent_frame_counts or {},
+            "listenErrorCount": max(0, int(listen_error_count or 0)),
+            "listenError": str(listen_error or "")[:1000],
             "audioSizeBytes": max(0, int(audio_size_bytes or 0)),
         }
+        audio_stats["audioQualityStatus"] = audio_quality_status or _meeting_audio_quality_status(audio_stats)
         self._update_meeting_recording_pipeline_status(
             recording_id,
             "uploading_audio",
@@ -2730,6 +2752,16 @@ class Repository:
 
         if duration_seconds < int(settings["meetingSummaryMinDurationSeconds"]):
             status = "skipped_too_short"
+            self._mark_meeting_recording_finished(recording_id, status, ended, duration_seconds, now)
+            return {"ok": True, "status": status}
+
+        if audio_stats["audioQualityStatus"] == "corrupted":
+            status = "skipped_corrupted_audio"
+            self._mark_meeting_recording_finished(recording_id, status, ended, duration_seconds, now)
+            return {"ok": True, "status": status}
+
+        if audio_stats["audioQualityStatus"] == "silent":
+            status = "skipped_silent_audio"
             self._mark_meeting_recording_finished(recording_id, status, ended, duration_seconds, now)
             return {"ok": True, "status": status}
 
@@ -2916,6 +2948,17 @@ class Repository:
                     "audioFrameCount": int(recording.get("audioFrameCount") or 0),
                     "nonSilentFrameCount": int(recording.get("nonSilentFrameCount") or 0),
                     "corruptedPacketCount": int(recording.get("corruptedPacketCount") or 0),
+                    "unknownSourceFrameCount": int(recording.get("unknownSourceFrameCount") or 0),
+                    "botFrameCount": int(recording.get("botFrameCount") or 0),
+                    "emptyPcmFrameCount": int(recording.get("emptyPcmFrameCount") or 0),
+                    "silencePaddingFrameCount": int(recording.get("silencePaddingFrameCount") or 0),
+                    "outOfOrderFrameCount": int(recording.get("outOfOrderFrameCount") or 0),
+                    "mixedUserCount": int(recording.get("mixedUserCount") or 0),
+                    "perUserFrameCounts": recording.get("perUserFrameCounts") or {},
+                    "perUserNonSilentFrameCounts": recording.get("perUserNonSilentFrameCounts") or {},
+                    "listenErrorCount": int(recording.get("listenErrorCount") or 0),
+                    "listenError": recording.get("listenError") or "",
+                    "audioQualityStatus": recording.get("audioQualityStatus") or "",
                     "audioSizeBytes": int(recording.get("audioSizeBytes") or 0),
                     "recipient": (summary or {}).get("recipient"),
                     "telegramSentAt": _iso((summary or {}).get("telegramSentAt") or (summary or {}).get("sentAt")),
@@ -4982,6 +5025,26 @@ def _looks_like_missing_transcript_summary(summary: str) -> bool:
         "no transcript",
     ]
     return any(marker in normalized for marker in markers)
+
+
+def _meeting_audio_quality_status(audio_stats: dict[str, Any]) -> str:
+    frame_count = int(audio_stats.get("audioFrameCount") or 0)
+
+    if frame_count <= 0:
+        return "unknown"
+
+    if int(audio_stats.get("nonSilentFrameCount") or 0) <= 0:
+        return "silent"
+
+    corrupted_ratio = int(audio_stats.get("corruptedPacketCount") or 0) / frame_count
+
+    if corrupted_ratio >= 0.2:
+        return "corrupted"
+
+    if corrupted_ratio >= 0.05 or int(audio_stats.get("listenErrorCount") or 0) > 0:
+        return "degraded"
+
+    return "ok"
 
 
 def _looks_like_no_work_content_summary(summary: str) -> bool:

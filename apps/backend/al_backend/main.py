@@ -238,6 +238,18 @@ def delete_site_user(email: str, current_user: dict = Depends(require_permission
     return app.state.repo.delete_site_user(email)
 
 
+def parse_json_object(value: str) -> dict:
+    try:
+        parsed = json.loads(value or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+    if isinstance(parsed, dict):
+        return parsed
+
+    return {}
+
+
 @app.get("/api/v1/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     try:
@@ -528,6 +540,17 @@ def record_discord_meeting_recording_finished(
     audio_frame_count: int = Form(default=0, alias="audioFrameCount"),
     non_silent_frame_count: int = Form(default=0, alias="nonSilentFrameCount"),
     corrupted_packet_count: int = Form(default=0, alias="corruptedPacketCount"),
+    unknown_source_frame_count: int = Form(default=0, alias="unknownSourceFrameCount"),
+    bot_frame_count: int = Form(default=0, alias="botFrameCount"),
+    empty_pcm_frame_count: int = Form(default=0, alias="emptyPcmFrameCount"),
+    silence_padding_frame_count: int = Form(default=0, alias="silencePaddingFrameCount"),
+    out_of_order_frame_count: int = Form(default=0, alias="outOfOrderFrameCount"),
+    mixed_user_count: int = Form(default=0, alias="mixedUserCount"),
+    per_user_frame_counts: str = Form(default="{}", alias="perUserFrameCounts"),
+    per_user_non_silent_frame_counts: str = Form(default="{}", alias="perUserNonSilentFrameCounts"),
+    listen_error_count: int = Form(default=0, alias="listenErrorCount"),
+    listen_error: str = Form(default="", alias="listenError"),
+    audio_quality_status: str = Form(default="", alias="audioQualityStatus"),
     audio_size_bytes: int = Form(default=0, alias="audioSizeBytes"),
     audio: UploadFile = File(),
 ) -> dict:
@@ -553,6 +576,17 @@ def record_discord_meeting_recording_finished(
             audio_frame_count=audio_frame_count,
             non_silent_frame_count=non_silent_frame_count,
             corrupted_packet_count=corrupted_packet_count,
+            unknown_source_frame_count=unknown_source_frame_count,
+            bot_frame_count=bot_frame_count,
+            empty_pcm_frame_count=empty_pcm_frame_count,
+            silence_padding_frame_count=silence_padding_frame_count,
+            out_of_order_frame_count=out_of_order_frame_count,
+            mixed_user_count=mixed_user_count,
+            per_user_frame_counts=parse_json_object(per_user_frame_counts),
+            per_user_non_silent_frame_counts=parse_json_object(per_user_non_silent_frame_counts),
+            listen_error_count=listen_error_count,
+            listen_error=listen_error,
+            audio_quality_status=audio_quality_status,
             audio_size_bytes=audio_size_bytes,
             audio_path=temp_path,
             summary_generator=lambda path, people, language, progress_callback=None: generate_meeting_summary(

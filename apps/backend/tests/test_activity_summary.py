@@ -2046,6 +2046,74 @@ def test_meeting_recording_finished_skips_empty_work_summary():
     assert repo.db.meeting_summaries.items == []
 
 
+def test_meeting_recording_finished_skips_corrupted_audio_before_openai():
+    repo = fake_repository()
+    repo.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=600,
+        meeting_summaries_enabled=True,
+        meeting_summary_min_participants=1,
+        meeting_summary_min_duration_seconds=10,
+        meeting_summary_language="English",
+        meeting_summary_recipient="work_chat",
+        meeting_audio_retention_seconds=0,
+    )
+    called = False
+
+    def fake_summary_generator(path, people, language, progress_callback=None):
+        nonlocal called
+        called = True
+
+    result = repo.process_meeting_recording_finished(
+        recording_id="recording-corrupted",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        ended_at="2026-04-29T10:01:00+00:00",
+        participant_discord_user_ids=["1"],
+        participant_names=["Dmitry"],
+        audio_frame_count=100,
+        non_silent_frame_count=80,
+        corrupted_packet_count=25,
+        audio_path="/tmp/missing.m4a",
+        summary_generator=fake_summary_generator,
+    )
+
+    recording = repo.db.meeting_recordings.find_one({"recordingId": "recording-corrupted"})
+    assert result["status"] == "skipped_corrupted_audio"
+    assert recording["audioQualityStatus"] == "corrupted"
+    assert recording["corruptedPacketCount"] == 25
+    assert called is False
+    assert repo.db.meeting_summaries.items == []
+
+
+def test_recent_meeting_recordings_include_audio_quality_stats():
+    repo = fake_repository()
+    repo.db.meeting_recordings.insert_one(
+        {
+            "recordingId": "recording-quality",
+            "startedAt": dt.datetime(2026, 5, 1, 10, 0, tzinfo=dt.UTC),
+            "status": "skipped_corrupted_audio",
+            "audioFrameCount": 100,
+            "nonSilentFrameCount": 80,
+            "corruptedPacketCount": 25,
+            "unknownSourceFrameCount": 2,
+            "silencePaddingFrameCount": 4,
+            "mixedUserCount": 2,
+            "perUserFrameCounts": {"Dmitry": 60, "Igor": 40},
+            "listenErrorCount": 1,
+            "listenError": "decode failed",
+            "audioQualityStatus": "corrupted",
+        }
+    )
+
+    recording = repo.recent_meeting_recordings()[0]
+
+    assert recording["audioQualityStatus"] == "corrupted"
+    assert recording["mixedUserCount"] == 2
+    assert recording["perUserFrameCounts"]["Dmitry"] == 60
+    assert recording["listenErrorCount"] == 1
+
+
 def test_discord_auto_afk_is_idempotent():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(

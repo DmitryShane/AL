@@ -252,6 +252,17 @@ type MeetingRecordingStatus = {
   audioFrameCount?: number;
   nonSilentFrameCount?: number;
   corruptedPacketCount?: number;
+  unknownSourceFrameCount?: number;
+  botFrameCount?: number;
+  emptyPcmFrameCount?: number;
+  silencePaddingFrameCount?: number;
+  outOfOrderFrameCount?: number;
+  mixedUserCount?: number;
+  perUserFrameCounts?: Record<string, number>;
+  perUserNonSilentFrameCounts?: Record<string, number>;
+  listenErrorCount?: number;
+  listenError?: string;
+  audioQualityStatus?: string;
   audioSizeBytes?: number;
   recipient?: { kind?: string; label?: string };
   telegramSentAt?: string;
@@ -3084,12 +3095,17 @@ function meetingRecordingRecipientLabel(recording: MeetingRecordingStatus) {
 }
 
 function meetingRecordingAudioStats(recording: MeetingRecordingStatus) {
-  if (!recording.audioFrameCount && !recording.audioSizeBytes && !recording.corruptedPacketCount) {
+  if (!recording.audioFrameCount && !recording.audioSizeBytes && !recording.corruptedPacketCount && !recording.audioQualityStatus) {
     return "";
   }
 
+  const quality = recording.audioQualityStatus ? `, quality ${recording.audioQualityStatus}` : "";
+  const mixedUsers = recording.mixedUserCount ? `, mixed users ${recording.mixedUserCount}` : "";
+  const padding = recording.silencePaddingFrameCount ? `, padded frames ${recording.silencePaddingFrameCount}` : "";
+  const unknown = recording.unknownSourceFrameCount ? `, unknown frames ${recording.unknownSourceFrameCount}` : "";
+  const listenErrors = recording.listenErrorCount ? `, listen errors ${recording.listenErrorCount}` : "";
   const sizeMb = recording.audioSizeBytes ? `, file ${(recording.audioSizeBytes / 1024 / 1024).toFixed(2)} MB` : "";
-  return ` Audio frames: ${recording.nonSilentFrameCount ?? 0}/${recording.audioFrameCount ?? 0}, corrupted packets: ${recording.corruptedPacketCount ?? 0}${sizeMb}.`;
+  return ` Audio frames: ${recording.nonSilentFrameCount ?? 0}/${recording.audioFrameCount ?? 0}, corrupted packets: ${recording.corruptedPacketCount ?? 0}${quality}${mixedUsers}${padding}${unknown}${listenErrors}${sizeMb}.`;
 }
 
 function emptyAuthorProfile(): AuthorProfile {
