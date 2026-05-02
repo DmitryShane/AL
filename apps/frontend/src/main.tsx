@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Activity, BarChart3, Bell, Box, CalendarDays, LogOut, RefreshCw, Search, Settings, ShieldCheck, UsersRound } from "lucide-react";
 import { AuthorsTable } from "./components/AuthorsTable";
@@ -12,6 +12,7 @@ const IS_LOCAL_DASHBOARD = LOCAL_HOSTNAMES.has(window.location.hostname);
 const API_URL = import.meta.env.VITE_API_URL ?? (IS_LOCAL_DASHBOARD ? "http://127.0.0.1:8000" : "https://activity.mempic.com");
 const REFRESH_INTERVAL_MS = 10000;
 const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
+const PAGE_SCROLL_STORAGE_PREFIX = "AL.Dashboard.PageScroll.";
 const ACTIVITY_AUTHOR_STORAGE_KEY = "AL.Dashboard.ActivityAuthor";
 const AUTH_HINT_STORAGE_KEY = "AL.Dashboard.Authenticated";
 const MEETING_SUMMARY_LANGUAGES = [
@@ -407,6 +408,9 @@ const emptyActivitySummary: ActivitySummary = {
 
 function App() {
   const [page, setPage] = useState<Page>(() => loadSavedPage());
+  const [isRestoringScroll, setIsRestoringScroll] = useState(() => getSavedPageScroll(loadSavedPage()) > 0);
+  const isRestoringScrollRef = useRef(isRestoringScroll);
+  const skipNextScrollRestoreRef = useRef(false);
   const [authUser, setAuthUser] = useState<SiteUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [hasAuthHint, setHasAuthHint] = useState(() => localStorage.getItem(AUTH_HINT_STORAGE_KEY) === "true");
@@ -419,6 +423,19 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [refreshingReports, setRefreshingReports] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    isRestoringScrollRef.current = isRestoringScroll;
+  }, [isRestoringScroll]);
+
+  useEffect(() => {
+    const previousScrollRestoration = window.history.scrollRestoration;
+    window.history.scrollRestoration = "manual";
+
+    return () => {
+      window.history.scrollRestoration = previousScrollRestoration;
+    };
+  }, []);
 
   useEffect(() => {
     async function loadAuth() {
@@ -555,14 +572,73 @@ function App() {
     }
   }, [activeAuthor, activitySummary.authors]);
 
+  useEffect(() => {
+    const savePageScroll = () => {
+      if (isRestoringScrollRef.current) {
+        return;
+      }
+
+      sessionStorage.setItem(pageScrollStorageKey(page), String(window.scrollY));
+    };
+
+    window.addEventListener("scroll", savePageScroll, { passive: true });
+    window.addEventListener("beforeunload", savePageScroll);
+
+    return () => {
+      savePageScroll();
+      window.removeEventListener("scroll", savePageScroll);
+      window.removeEventListener("beforeunload", savePageScroll);
+    };
+  }, [page]);
+
+  useEffect(() => {
+    if (authLoading || !authUser || loading) {
+      return;
+    }
+
+    if (skipNextScrollRestoreRef.current) {
+      skipNextScrollRestoreRef.current = false;
+      setIsRestoringScroll(false);
+      return;
+    }
+
+    const savedScroll = getSavedPageScroll(page);
+
+    if (savedScroll <= 0) {
+      setIsRestoringScroll(false);
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: savedScroll, left: 0, behavior: "auto" });
+      window.requestAnimationFrame(() => {
+        setIsRestoringScroll(false);
+      });
+    });
+  }, [authLoading, authUser?.email, loading, page]);
+
   function setSelectedAuthor(value: string) {
     setSelectedAuthorState(value);
     localStorage.setItem(ACTIVITY_AUTHOR_STORAGE_KEY, value);
   }
 
   function selectPage(nextPage: Page) {
+    const shouldResetScroll = nextPage !== page;
+
+    if (shouldResetScroll) {
+      skipNextScrollRestoreRef.current = true;
+      setIsRestoringScroll(false);
+      sessionStorage.setItem(pageScrollStorageKey(nextPage), "0");
+    }
+
     setPage(nextPage);
     localStorage.setItem(PAGE_STORAGE_KEY, nextPage);
+
+    if (shouldResetScroll) {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      });
+    }
   }
 
   async function handleLogout() {
@@ -585,7 +661,7 @@ function App() {
   const sessionUser = authUser ?? { email: "", displayName: "Activity Logger", role: "viewer" as const, active: true };
 
   return (
-    <div className="app-frame">
+    <div className={`app-frame${isRestoringScroll ? " restoring-scroll" : ""}`}>
       <aside className="sidebar">
         <div className="brand-mark">
           <img src="/favicon.svg" alt="" aria-hidden="true" />
@@ -4094,6 +4170,14 @@ function loadSavedPage(): Page {
   }
 
   return "authors";
+}
+
+function pageScrollStorageKey(page: Page) {
+  return `${PAGE_SCROLL_STORAGE_PREFIX}${page}`;
+}
+
+function getSavedPageScroll(page: Page) {
+  return Number(sessionStorage.getItem(pageScrollStorageKey(page)) ?? 0);
 }
 
 function loadSavedActivityAuthor() {
