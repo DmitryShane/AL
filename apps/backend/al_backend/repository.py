@@ -1811,6 +1811,7 @@ class Repository:
             ordered_reports = sorted(reports)
 
             _fill_overtime_hours_bracketed_by_reports(hourly_activity, ordered_reports)
+            _fill_normal_to_overtime_transition_hours(hourly_activity)
 
     def _apply_latest_report_metadata(
         self,
@@ -6370,6 +6371,17 @@ def _fill_visual_overtime_hour(hour: dict[str, Any]) -> None:
     hour["overtimeActiveMicroseconds"] = overtime_microseconds
     hour["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_microseconds)
     _remove_visual_missed_seconds(hour, overtime_seconds)
+
+
+def _fill_normal_to_overtime_transition_hours(hourly_activity: list[dict[str, Any]]) -> None:
+    for hour in hourly_activity:
+        if int(hour.get("activeSeconds", 0)) <= 0:
+            continue
+
+        if int(hour.get("overtimeActiveSeconds", 0)) <= 0:
+            continue
+
+        _fill_visual_overtime_hour(hour)
 
 
 def _remove_visual_missed_seconds(hour: dict[str, Any], seconds: int) -> None:

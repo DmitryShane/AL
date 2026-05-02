@@ -2642,6 +2642,53 @@ def test_overtime_hourly_graph_does_not_fill_from_reports_only_inside_hour():
     assert hour_14["overtimeActiveSeconds"] == 1665
 
 
+def test_overtime_hourly_graph_fills_normal_to_overtime_transition_gap():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[13]["activeSeconds"] = 125
+    hourly_activity[13]["activeMicroseconds"] = 125 * 1_000_000
+    hourly_activity[13]["overtimeActiveSeconds"] = 3250
+    hourly_activity[13]["overtimeActiveMicroseconds"] = 3250 * 1_000_000
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "projectId": "AL",
+            "date": "2026-05-01",
+            "activeSeconds": 125,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 3250,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T13:04:24.965-07:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 20, 7, 38, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 153,
+            "overtimeActiveDeltaSeconds": 173,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-01", end_date="2026-05-01")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Igor Mats")["hourlyActivity"]
+    hour_13 = next(item for item in hourly if item["hour"] == 13)
+
+    assert hour_13["activeSeconds"] == 125
+    assert hour_13["overtimeActiveSeconds"] == 3600 - 125
+
+
 def test_discord_voice_events_open_and_close_meeting_session():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
