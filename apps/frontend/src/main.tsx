@@ -3019,6 +3019,10 @@ function meetingRecordingStatusLabel(recording: MeetingRecordingStatus) {
     return "Summary failed";
   }
 
+  if (recording.status === "recording_failed") {
+    return "Recording upload failed";
+  }
+
   if (recording.status.startsWith("skipped_")) {
     return `Skipped: ${recording.status.replace("skipped_", "").replaceAll("_", " ")}`;
   }

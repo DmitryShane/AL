@@ -301,7 +301,11 @@ class MeetingClient(discord.Client):
             await asyncio.wait_for(recording.cleanup_future, timeout=10)
             await recording.voice_client.disconnect(force=force)
             LOGGER.info("Submitting Discord meeting recording %s for summary processing.", recording.recording_id)
-            await asyncio.to_thread(submit_recording_finished, self.config, recording, ended_at)
+            result = await asyncio.to_thread(submit_recording_finished, self.config, recording, ended_at)
+
+            if not result.get("ok"):
+                error = str(result.get("error") or "Meeting recording upload failed")
+                await asyncio.to_thread(submit_recording_failed, self.config, recording.recording_id, ended_at, error)
         finally:
             try:
                 os.remove(recording.audio_path)
@@ -391,6 +395,18 @@ def submit_recording_finished(config: DiscordBotConfig, recording: RecordingSess
         "participantNames": json.dumps([recording.participant_names[item] for item in sorted(recording.participant_names.keys())]),
     }
     return submit_multipart_event(config, "/api/v1/discord/meeting-recordings/finish", fields, "audio", recording.audio_path)
+
+
+def submit_recording_failed(config: DiscordBotConfig, recording_id: str, ended_at: datetime, error: str) -> dict[str, Any]:
+    return submit_backend_event(
+        config,
+        "/api/v1/discord/meeting-recordings/fail",
+        {
+            "recordingId": recording_id,
+            "endedAt": ended_at.isoformat(),
+            "error": error[:2000],
+        },
+    )
 
 
 def fetch_discord_settings(config: DiscordBotConfig) -> dict[str, Any]:

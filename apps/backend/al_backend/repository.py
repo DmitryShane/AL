@@ -2828,6 +2828,30 @@ class Repository:
             upsert=True,
         )
 
+    def mark_meeting_recording_failed(self, *, recording_id: str, ended_at: str, error: str) -> dict[str, Any]:
+        ended = _parse_timestamp(ended_at)
+        recording = self.db.meeting_recordings.find_one({"recordingId": recording_id}, {"_id": 0, "startedAt": 1}) or {}
+        started = _coerce_datetime(recording.get("startedAt"))
+        duration_seconds = 0
+
+        if started:
+            duration_seconds = max(0, int((ended - started).total_seconds()))
+
+        self.db.meeting_recordings.update_one(
+            {"recordingId": recording_id},
+            {
+                "$set": {
+                    "status": "recording_failed",
+                    "endedAt": ended,
+                    "durationSeconds": duration_seconds,
+                    "error": error,
+                    "updatedAt": dt.datetime.now(dt.UTC),
+                }
+            },
+            upsert=True,
+        )
+        return {"ok": True, "status": "recording_failed"}
+
     def recent_meeting_recordings(self, limit: int = 10) -> list[dict[str, Any]]:
         summaries_by_recording_id = {
             str(summary.get("recordingId") or ""): summary

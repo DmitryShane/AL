@@ -17,6 +17,7 @@ from .models import (
     CalendarReasonIn,
     DiscordSettingsIn,
     DiscordMeetingAutoAfkIn,
+    DiscordMeetingRecordingFailIn,
     DiscordMeetingRecordingStartIn,
     DiscordVoiceEventIn,
     HealthResponse,
@@ -490,6 +491,16 @@ def record_discord_meeting_recording_started(event: DiscordMeetingRecordingStart
         started_at=event.started_at,
         participant_discord_user_ids=event.participant_discord_user_ids,
         participant_names=event.participant_names,
+    )
+
+
+@app.post("/api/v1/discord/meeting-recordings/fail")
+def record_discord_meeting_recording_failed(event: DiscordMeetingRecordingFailIn, request: Request) -> dict:
+    require_discord_bot_secret(request)
+    return app.state.repo.mark_meeting_recording_failed(
+        recording_id=event.recording_id,
+        ended_at=event.ended_at,
+        error=event.error,
     )
 
 

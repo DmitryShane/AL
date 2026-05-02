@@ -115,6 +115,7 @@ server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name ${PUBLIC_HOST};
+    client_max_body_size 100m;
 
     ssl_certificate /etc/letsencrypt/live/${PUBLIC_HOST}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${PUBLIC_HOST}/privkey.pem;
