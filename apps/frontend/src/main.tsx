@@ -14,6 +14,7 @@ const REFRESH_INTERVAL_MS = 10000;
 const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
 const PAGE_SCROLL_STORAGE_PREFIX = "AL.Dashboard.PageScroll.";
 const ACTIVITY_AUTHOR_STORAGE_KEY = "AL.Dashboard.ActivityAuthor";
+const SETTINGS_TAB_STORAGE_KEY = "AL.Dashboard.SettingsTab";
 const AUTH_HINT_STORAGE_KEY = "AL.Dashboard.Authenticated";
 const MEETING_SUMMARY_LANGUAGES = [
   "English",
@@ -42,6 +43,7 @@ function apiFetch(path: string, init: RequestInit = {}) {
 }
 
 type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings";
+type SettingsTab = "general" | "authors" | "redirects" | "discord" | "meetingSummaries" | "users";
 
 type Health = {
   ok: boolean;
@@ -695,6 +697,13 @@ function App() {
             <div className="topbar-actions">
               <DateRangePicker value={dateRange} onChange={setDateRange} />
             </div>
+          ) : page === "settings" ? (
+            <div className="topbar-actions">
+              <span className={health?.ok ? "status-pill online" : "status-pill"}>
+                <span className="status-pill-dot" aria-hidden="true" />
+                {health?.ok ? "Backend online" : "Backend offline"}
+              </span>
+            </div>
           ) : null}
         </header>
 
@@ -723,7 +732,7 @@ function App() {
         {page === "analytics" ? <AnalyticsPage /> : null}
         {page === "calendar" ? <CalendarPage /> : null}
         {page === "alerts" ? <AlertsPage authors={activitySummary.authors} /> : null}
-        {page === "settings" ? <SettingsPage summary={summary} health={health} currentUser={sessionUser} onSaved={() => void load(false)} /> : null}
+        {page === "settings" ? <SettingsPage summary={summary} currentUser={sessionUser} onSaved={() => void load(false)} /> : null}
       </main>
     </div>
   );
@@ -1886,18 +1895,16 @@ function ActivityPage({
 
 function SettingsPage({
   summary,
-  health,
   currentUser,
   onSaved
 }: {
   summary: Summary | null;
-  health: Health | null;
   currentUser: SiteUser;
   onSaved: () => void;
 }) {
   const profiles = summary?.activitySummary.profiles ?? [];
   const aliases = summary?.activitySummary.authorAliases ?? [];
-  const [settingsTab, setSettingsTab] = useState<"authors" | "discord" | "meetingSummaries" | "users">("authors");
+  const [settingsTab, setSettingsTabState] = useState<SettingsTab>(() => loadSavedSettingsTab());
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
   const [discordAutoAfkTimeout, setDiscordAutoAfkTimeout] = useState(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
@@ -1981,6 +1988,11 @@ function SettingsPage({
     };
   }, [settingsTab]);
 
+  function setSettingsTab(tab: SettingsTab) {
+    setSettingsTabState(tab);
+    localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, tab);
+  }
+
   const meetingSummarySettingsDirty =
     meetingSummariesEnabled !== Boolean(summary?.discordSettings.meetingSummariesEnabled) ||
     meetingSummaryMinParticipants !== String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2) ||
@@ -1989,6 +2001,7 @@ function SettingsPage({
     meetingSummaryRecipient !== (summary?.discordSettings.meetingSummaryRecipient ?? "work_chat") ||
     meetingAudioRetention !== String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0) ||
     meetingSummaryPrompt !== (summary?.discordSettings.meetingSummaryPrompt ?? "");
+  const discordSettingsDirty = discordAutoAfkTimeout !== String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600);
 
   async function saveProfile(rawAuthor: string) {
     const profile = drafts[rawAuthor];
@@ -2258,22 +2271,20 @@ function SettingsPage({
     );
   }
 
+  const savedGlobalInterval = String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300);
+  const isGlobalIntervalDirty = globalInterval !== savedGlobalInterval;
+
   return (
     <section className="page-section settings-layout">
       <div className="settings-tabs">
+        <button className={settingsTab === "general" ? "active" : ""} onClick={() => setSettingsTab("general")}>General</button>
         <button className={settingsTab === "authors" ? "active" : ""} onClick={() => setSettingsTab("authors")}>Author Profiles</button>
+        <button className={settingsTab === "redirects" ? "active" : ""} onClick={() => setSettingsTab("redirects")}>Author Redirects</button>
         <button className={settingsTab === "discord" ? "active" : ""} onClick={() => setSettingsTab("discord")}>Discord</button>
         <button className={settingsTab === "meetingSummaries" ? "active" : ""} onClick={() => setSettingsTab("meetingSummaries")}>Meeting Summaries</button>
         <button className={settingsTab === "users" ? "active" : ""} onClick={() => setSettingsTab("users")}>Site Users</button>
       </div>
-      {settingsTab === "authors" ? (
-        <>
-      <div className="panel">
-        <h2>System Status</h2>
-        <span className={health?.ok ? "status-pill online" : "status-pill"}>{health?.ok ? "Backend online" : "Backend offline"}</span>
-      </div>
-
-      <div className="settings-card-row">
+      {settingsTab === "general" ? (
         <div className="panel">
           <h2>Send Interval</h2>
           <div className="settings-row">
@@ -2281,12 +2292,12 @@ function SettingsPage({
               Global interval, sec
               <input value={globalInterval} onChange={(event) => setGlobalInterval(event.target.value)} type="number" min="30" />
             </label>
-            <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval"}>
+            <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval" || !isGlobalIntervalDirty}>
               {settingsSaveButtonLabel("interval", saving, saveStatus)}
             </button>
           </div>
         </div>
-
+      ) : settingsTab === "redirects" ? (
         <div className="panel">
           <h2>Author Redirects</h2>
           <p className="settings-caption">
@@ -2347,8 +2358,8 @@ function SettingsPage({
             )}
           </div>
         </div>
-      </div>
-
+      ) : settingsTab === "authors" ? (
+        <>
       <div className="panel">
         <h2>Author Profiles</h2>
         <p className="settings-caption">
@@ -2562,7 +2573,7 @@ function SettingsPage({
                 step="30"
               />
             </label>
-            <button className={settingsSaveButtonClassName(saveStatus.discord)} onClick={() => void saveDiscordSettings()} disabled={saving === "discord"}>
+            <button className={settingsSaveButtonClassName(saveStatus.discord)} onClick={() => void saveDiscordSettings()} disabled={saving === "discord" || !discordSettingsDirty}>
               {settingsSaveButtonLabel("discord", saving, saveStatus)}
             </button>
           </div>
@@ -2794,6 +2805,21 @@ function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
     }
   }
 
+  function isUserDirty(user: SiteUser) {
+    const draft = drafts[user.email] as SiteUser & { password?: string } | undefined;
+
+    if (!draft) {
+      return false;
+    }
+
+    return (
+      (draft.displayName ?? "") !== (user.displayName ?? "") ||
+      draft.role !== user.role ||
+      Boolean(draft.active) !== Boolean(user.active) ||
+      Boolean(draft.password)
+    );
+  }
+
   if (!canManageUsers) {
     return (
       <div className="panel">
@@ -2853,6 +2879,7 @@ function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
         {users.map((user) => {
           const draft = drafts[user.email] ?? user;
           const deleteKey = `delete:${user.email}`;
+          const userDirty = isUserDirty(user);
           return (
             <div className="site-user-row" key={user.email}>
               <strong>{user.email}</strong>
@@ -2885,7 +2912,7 @@ function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
                 <button
                   className={settingsSaveButtonClassName(status[user.email], true)}
                   onClick={() => void saveUser(user.email, (draft as SiteUser & { password?: string }).password)}
-                  disabled={saving === user.email}
+                  disabled={saving === user.email || !userDirty}
                 >
                   {settingsSaveButtonLabel(user.email, saving, status)}
                 </button>
@@ -3616,6 +3643,10 @@ function breakClassName(seconds: number) {
 }
 
 function breakTone(seconds: number) {
+  if (seconds <= 0) {
+    return "neutral";
+  }
+
   return seconds > 61 * 60 ? "bad" : "good";
 }
 
@@ -4170,6 +4201,23 @@ function loadSavedPage(): Page {
   }
 
   return "authors";
+}
+
+function loadSavedSettingsTab(): SettingsTab {
+  const savedTab = localStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
+
+  if (
+    savedTab === "general" ||
+    savedTab === "authors" ||
+    savedTab === "redirects" ||
+    savedTab === "discord" ||
+    savedTab === "meetingSummaries" ||
+    savedTab === "users"
+  ) {
+    return savedTab;
+  }
+
+  return "general";
 }
 
 function pageScrollStorageKey(page: Page) {

@@ -67,7 +67,7 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
           <span>{formatDuration(author.meetingSeconds ?? 0)}</span>
           <span>{formatDuration(author.overtimeActiveSeconds)}</span>
           <span className={breakClassName(author.breakSeconds)}>{formatMinutes(author.breakSeconds)}</span>
-          <strong className={productivityClassName(author.productivity)}>{author.productivity.toFixed(2)}%</strong>
+          <strong className={productivityClassName(author)}>{author.productivity.toFixed(2)}%</strong>
           <span className="author-status-stack">
             <span className={statusBadgeClassName(author.status, author.stalePresence)}>{formatStatus(author)}</span>
           </span>
@@ -249,7 +249,19 @@ function isTelegramSignedOff(stalePresence?: AuthorsTableRow["stalePresence"]) {
   return stalePresence === "telegram" || stalePresence === "both";
 }
 
-function productivityClassName(value: number) {
+function productivityClassName(author: AuthorsTableRow) {
+  const value = author.productivity;
+  const measuredSeconds =
+    author.activeSeconds +
+    author.idleSeconds +
+    author.meetingSeconds +
+    author.overtimeActiveSeconds +
+    author.breakSeconds;
+
+  if (value <= 0 && measuredSeconds <= 0) {
+    return "metric-value neutral";
+  }
+
   if (value > 100) {
     return "metric-value overdrive";
   }
@@ -266,5 +278,9 @@ function productivityClassName(value: number) {
 }
 
 function breakClassName(seconds: number) {
+  if (seconds <= 0) {
+    return "metric-value neutral";
+  }
+
   return seconds > 61 * 60 ? "metric-value bad" : "metric-value good";
 }

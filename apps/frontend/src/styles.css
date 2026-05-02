@@ -259,22 +259,23 @@ p {
 
 .date-presets button {
   min-height: 38px;
-  border: 1px solid #7a70ff;
+  border: 1px solid #d8e0e8;
   border-radius: 8px;
   background: #ffffff;
-  color: #5b4dff;
+  color: #202a36;
   padding: 8px 14px;
 }
 
 .date-presets button.active {
-  background: #5b4dff;
+  border-color: #202a36;
+  background: #202a36;
   color: #ffffff;
 }
 
 .date-presets .live-preset-button {
   border-color: #d8e0e8;
   background: #ffffff;
-  color: #64748b;
+  color: #202a36;
   box-shadow: 0 6px 18px rgb(100 116 139 / 8%);
 }
 
@@ -302,32 +303,42 @@ p {
 .icon-button {
   width: 44px;
   height: 44px;
-  border: 1px solid #d9ddff;
+  border: 1px solid #d8e0e8;
   background: #ffffff;
-  color: #5b4dff;
+  color: #202a36;
 }
 
 .primary-outline-button,
 .primary-button {
   min-height: 38px;
-  border: 1px solid #7a70ff;
+  border: 1px solid #d8e0e8;
   padding: 8px 14px;
 }
 
 .primary-outline-button {
   background: #ffffff;
-  color: #5b4dff;
+  color: #202a36;
+}
+
+.primary-outline-button:not(:disabled) {
+  border-color: #202a36;
+  background: #202a36;
+  color: #ffffff;
 }
 
 .primary-button {
-  background: #5b4dff;
+  border-color: #202a36;
+  background: #202a36;
   color: #ffffff;
 }
 
 .primary-button:disabled,
 .primary-outline-button:disabled {
   cursor: default;
-  opacity: 0.72;
+  border-color: #d8e0e8;
+  background: #ffffff;
+  color: #718093;
+  opacity: 1;
 }
 
 .primary-button.save-success,
@@ -507,6 +518,9 @@ p {
 }
 
 .status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border-radius: 999px;
   background: #f1f5f9;
   color: #718093;
@@ -520,6 +534,19 @@ p {
   color: #15803d;
 }
 
+.status-pill-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #94a3b8;
+  box-shadow: 0 0 0 3px rgb(148 163 184 / 14%);
+}
+
+.status-pill.online .status-pill-dot {
+  background: #22c55e;
+  animation: authorOnlinePulse 1.8s ease-out infinite;
+}
+
 .metric-value.good {
   color: #16834a;
 }
@@ -530,6 +557,10 @@ p {
 
 .metric-value.bad {
   color: #dc2626;
+}
+
+.metric-value.neutral {
+  color: #718093;
 }
 
 .metric-value.overdrive {
@@ -1188,6 +1219,10 @@ p {
 
 .break-duration.good {
   --duration-accent: #16834a;
+}
+
+.break-duration.neutral {
+  --duration-accent: #d8e0e8;
 }
 
 .break-duration.bad {
@@ -2093,15 +2128,16 @@ p {
 }
 
 .settings-tabs button {
-  border: 0;
+  border: 1px solid #d8e0e8;
   border-radius: 999px;
-  background: transparent;
-  color: #718093;
+  background: #ffffff;
+  color: #202a36;
   padding: 9px 14px;
 }
 
 .settings-tabs button.active {
-  background: #5b4dff;
+  border-color: #202a36;
+  background: #202a36;
   color: #ffffff;
 }
 
@@ -2468,10 +2504,10 @@ p {
 
 .reason-list span,
 .reason-chip-button {
+  border: 1px solid #d8e0e8;
   border-radius: 999px;
-  background: #eef3f7;
-  border: 0;
-  color: #425466;
+  background: #ffffff;
+  color: #202a36;
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
