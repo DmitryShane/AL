@@ -60,6 +60,7 @@ class DiscordSettingsIn(ApiModel):
     meeting_summary_min_duration_seconds: int = Field(default=120, alias="meetingSummaryMinDurationSeconds", ge=1)
     meeting_summary_language: str = Field(default="English", alias="meetingSummaryLanguage", min_length=2)
     meeting_summary_recipient: str = Field(default="work_chat", alias="meetingSummaryRecipient", min_length=1)
+    meeting_audio_retention_seconds: int = Field(default=0, alias="meetingAudioRetentionSeconds", ge=0)
 
 
 class TelegramPrivateChatIn(ApiModel):

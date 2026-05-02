@@ -8,6 +8,7 @@ import tempfile
 import urllib.error
 import urllib.request
 import uuid
+import time
 from ctypes.util import find_library
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -104,6 +105,7 @@ class MeetingClient(discord.Client):
         self.solo_timeout_seconds = DEFAULT_SOLO_TIMEOUT_SECONDS
         self.meeting_summaries_enabled = False
         self.meeting_summary_min_participants = 2
+        self.meeting_audio_retention_seconds = 0
         self.settings_loaded_at: datetime | None = None
         self.recording: RecordingSession | None = None
 
@@ -231,6 +233,7 @@ class MeetingClient(discord.Client):
             self.solo_timeout_seconds = timeout_seconds
         self.meeting_summaries_enabled = bool(settings.get("meetingSummariesEnabled", False))
         self.meeting_summary_min_participants = int(settings.get("meetingSummaryMinParticipants") or 2)
+        self.meeting_audio_retention_seconds = int(settings.get("meetingAudioRetentionSeconds") or 0)
 
         self.settings_loaded_at = now
 
@@ -305,6 +308,7 @@ class MeetingClient(discord.Client):
         ended_at = datetime.now(timezone.utc)
 
         try:
+            cleanup_old_retained_recordings(self.config.recording_temp_dir)
             if hasattr(recording.voice_client, "stop_listening"):
                 recording.voice_client.stop_listening()
 
@@ -324,10 +328,13 @@ class MeetingClient(discord.Client):
                 error = str(result.get("error") or "Meeting recording upload failed")
                 await asyncio.to_thread(submit_recording_failed, self.config, recording.recording_id, ended_at, error)
         finally:
-            try:
-                os.remove(recording.audio_path)
-            except FileNotFoundError:
-                pass
+            if self.meeting_audio_retention_seconds > 0:
+                retain_recording_audio(recording.audio_path, self.meeting_audio_retention_seconds)
+            else:
+                try:
+                    os.remove(recording.audio_path)
+                except FileNotFoundError:
+                    pass
 
     async def submit_voice_event(self, member: discord.Member, event_type: str) -> None:
         payload = {
@@ -581,6 +588,30 @@ def file_size_bytes(path: str) -> int:
 
 def file_size_mb(path: str) -> float:
     return file_size_bytes(path) / 1024 / 1024
+
+
+def retain_recording_audio(path: str, retention_seconds: int) -> None:
+    expires_at = int(time.time()) + max(0, retention_seconds)
+    retained_path = f"{path}.keep-until-{expires_at}"
+    os.replace(path, retained_path)
+    LOGGER.info("Retained Discord meeting recording for debugging until %s: %s", expires_at, retained_path)
+
+
+def cleanup_old_retained_recordings(recording_temp_dir: str) -> None:
+    now = int(time.time())
+
+    for path in Path(recording_temp_dir).glob("al-meeting-*.m4a.keep-until-*"):
+        try:
+            expires_at = int(str(path).rsplit(".keep-until-", 1)[1])
+        except (IndexError, ValueError):
+            continue
+
+        if expires_at <= now:
+            try:
+                path.unlink()
+                LOGGER.info("Deleted expired retained Discord meeting recording: %s", path)
+            except FileNotFoundError:
+                pass
 
 
 if __name__ == "__main__":

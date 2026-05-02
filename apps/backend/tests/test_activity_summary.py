@@ -1944,6 +1944,7 @@ def test_discord_settings_default_and_save():
         meeting_summary_min_duration_seconds=120,
         meeting_summary_language="English",
         meeting_summary_recipient="work_chat",
+        meeting_audio_retention_seconds=0,
     )
 
     assert result["meetingAutoAfkTimeoutSeconds"] == 900
@@ -1960,6 +1961,7 @@ def test_meeting_recording_finished_creates_summary_notification():
         meeting_summary_min_duration_seconds=60,
         meeting_summary_language="English",
         meeting_summary_recipient="work_chat",
+        meeting_audio_retention_seconds=0,
     )
 
     class FakeSummary:
@@ -1993,6 +1995,7 @@ def test_meeting_recording_finished_skips_solo_recording():
         meeting_summary_min_duration_seconds=60,
         meeting_summary_language="English",
         meeting_summary_recipient="work_chat",
+        meeting_audio_retention_seconds=0,
     )
 
     result = repo.process_meeting_recording_finished(
@@ -2145,6 +2148,7 @@ def test_meeting_recording_tracks_openai_pipeline_status():
         meeting_summary_min_duration_seconds=60,
         meeting_summary_language="English",
         meeting_summary_recipient="work_chat",
+        meeting_audio_retention_seconds=0,
     )
 
     class FakeSummary:

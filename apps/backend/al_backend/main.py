@@ -384,6 +384,7 @@ def update_discord_settings(settings_in: DiscordSettingsIn, _: dict = Depends(re
         meeting_summary_min_duration_seconds=settings_in.meeting_summary_min_duration_seconds,
         meeting_summary_language=settings_in.meeting_summary_language,
         meeting_summary_recipient=settings_in.meeting_summary_recipient,
+        meeting_audio_retention_seconds=settings_in.meeting_audio_retention_seconds,
     )
 
 

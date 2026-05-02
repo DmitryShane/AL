@@ -409,6 +409,7 @@ class Repository:
                     "meetingSummaryMinDurationSeconds": current["meetingSummaryMinDurationSeconds"],
                     "meetingSummaryLanguage": current["meetingSummaryLanguage"],
                     "meetingSummaryRecipient": current["meetingSummaryRecipient"],
+                    "meetingAudioRetentionSeconds": current["meetingAudioRetentionSeconds"],
                     "updatedAt": now,
                 }
             },
@@ -425,6 +426,7 @@ class Repository:
         meeting_summary_min_duration_seconds: int,
         meeting_summary_language: str,
         meeting_summary_recipient: str,
+        meeting_audio_retention_seconds: int,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         self.db.system_settings.update_one(
@@ -438,6 +440,7 @@ class Repository:
                     "meetingSummaryMinDurationSeconds": meeting_summary_min_duration_seconds,
                     "meetingSummaryLanguage": meeting_summary_language.strip() or "English",
                     "meetingSummaryRecipient": meeting_summary_recipient.strip() or "work_chat",
+                    "meetingAudioRetentionSeconds": meeting_audio_retention_seconds,
                     "updatedAt": now,
                 }
             },
@@ -456,6 +459,7 @@ class Repository:
             "meetingSummaryMinDurationSeconds": int(settings.get("meetingSummaryMinDurationSeconds", 120)),
             "meetingSummaryLanguage": str(settings.get("meetingSummaryLanguage") or "English"),
             "meetingSummaryRecipient": str(settings.get("meetingSummaryRecipient") or "work_chat"),
+            "meetingAudioRetentionSeconds": int(settings.get("meetingAudioRetentionSeconds", 0)),
         }
 
     def create_report_challenge(self, challenge_in: Any, keys: Any) -> dict[str, Any]:

@@ -26,6 +26,15 @@ const MEETING_SUMMARY_LANGUAGES = [
   "Japanese",
   "Korean"
 ];
+const MEETING_AUDIO_RETENTION_OPTIONS = [
+  { label: "Do not keep recordings", value: 0 },
+  { label: "1 hour", value: 3600 },
+  { label: "2 hours", value: 7200 },
+  { label: "6 hours", value: 21600 },
+  { label: "1 day", value: 86400 },
+  { label: "3 days", value: 259200 },
+  { label: "7 days", value: 604800 }
+];
 
 function apiFetch(path: string, init: RequestInit = {}) {
   return fetch(`${API_URL}${path}`, { ...init, credentials: "include" });
@@ -205,6 +214,7 @@ type Summary = {
     meetingSummaryMinDurationSeconds: number;
     meetingSummaryLanguage: string;
     meetingSummaryRecipient: string;
+    meetingAudioRetentionSeconds: number;
   };
   activitySummary: ActivitySummary;
 };
@@ -1808,6 +1818,7 @@ function SettingsPage({
   const [meetingSummaryMinDuration, setMeetingSummaryMinDuration] = useState(String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120));
   const [meetingSummaryLanguage, setMeetingSummaryLanguage] = useState(summary?.discordSettings.meetingSummaryLanguage ?? "English");
   const [meetingSummaryRecipient, setMeetingSummaryRecipient] = useState(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
+  const [meetingAudioRetention, setMeetingAudioRetention] = useState(String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0));
   const [saving, setSaving] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
   const [aliasError, setAliasError] = useState("");
@@ -1834,6 +1845,7 @@ function SettingsPage({
     setMeetingSummaryMinDuration(String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120));
     setMeetingSummaryLanguage(summary?.discordSettings.meetingSummaryLanguage ?? "English");
     setMeetingSummaryRecipient(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
+    setMeetingAudioRetention(String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0));
   }, [summary]);
 
   useEffect(() => {
@@ -1994,7 +2006,8 @@ function SettingsPage({
           meetingSummaryMinParticipants: Number(meetingSummaryMinParticipants),
           meetingSummaryMinDurationSeconds: Number(meetingSummaryMinDuration),
           meetingSummaryLanguage,
-          meetingSummaryRecipient
+          meetingSummaryRecipient,
+          meetingAudioRetentionSeconds: Number(meetingAudioRetention)
         })
       });
 
@@ -2511,6 +2524,14 @@ function SettingsPage({
                       {profile.telegramPrivateChatId ? "" : " (send /start first)"}
                     </option>
                   ))}
+              </select>
+            </label>
+            <label>
+              Keep audio on server
+              <select value={meetingAudioRetention} onChange={(event) => setMeetingAudioRetention(event.target.value)}>
+                {MEETING_AUDIO_RETENTION_OPTIONS.map((option) => (
+                  <option value={String(option.value)} key={option.value}>{option.label}</option>
+                ))}
               </select>
             </label>
             <button className={settingsSaveButtonClassName(saveStatus.discord)} onClick={() => void saveDiscordSettings()} disabled={saving === "discord"}>
