@@ -89,6 +89,7 @@ When code changes need local verification, decide whether rebuild/restart is act
 ## Communication With The Repo Owner
 
 - Default to **short, direct answers** unless the user asks for depth, a tutorial, or a formal write-up. Skip long preamble and filler.
+- In chat, always answer the owner briefly and concisely. Do not add broad context, extra details, optional explanations, or implementation notes unless the owner explicitly asks for them.
 - The owner may write in Russian in chat; **repository and product text stay English** per the rule above.
 - Write implementation plans for the owner in Russian, because plans are part of chat communication. Keep repository and product text in English unless explicitly asked otherwise.
 
