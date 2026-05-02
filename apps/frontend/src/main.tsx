@@ -14,6 +14,7 @@ const REFRESH_INTERVAL_MS = 10000;
 const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
 const PAGE_SCROLL_STORAGE_PREFIX = "AL.Dashboard.PageScroll.";
 const ACTIVITY_AUTHOR_STORAGE_KEY = "AL.Dashboard.ActivityAuthor";
+const REPORTS_PAGE_STORAGE_KEY = "AL.Dashboard.PluginReportsPage";
 const SETTINGS_TAB_STORAGE_KEY = "AL.Dashboard.SettingsTab";
 const AUTH_HINT_STORAGE_KEY = "AL.Dashboard.Authenticated";
 const MEETING_SUMMARY_LANGUAGES = [
@@ -1663,9 +1664,18 @@ function ActivityPage({
   const [reportsLoading, setReportsLoading] = useState(false);
   const [reportsError, setReportsError] = useState<string | null>(null);
   const [reportsPageSize, setReportsPageSize] = useState(10);
-  const [reportsPage, setReportsPage] = useState(1);
+  const [reportsPage, setReportsPageState] = useState(() => loadSavedReportsPage());
   const [reportSourceFilter, setReportSourceFilter] = useState("");
   const [reportsPageCache, setReportsPageCache] = useState<ReportsPageCache>({});
+  const reportsResetKeyRef = useRef<string | null>(null);
+  const reportsResetKey = useMemo(() => JSON.stringify({
+    author: author?.rawAuthor ?? "",
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+    dateMode: dateRange.preset === "live" ? "authorLocalToday" : "",
+    source: reportSourceFilter,
+    limit: reportsPageSize
+  }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportsPageSize]);
   const reportsCacheKey = useMemo(() => JSON.stringify({
     author: author?.rawAuthor ?? "",
     startDate: dateRange.startDate,
@@ -1677,8 +1687,29 @@ function ActivityPage({
   }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportsPageSize, reportsPage]);
 
   useEffect(() => {
-    setReportsPage(1);
-  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportsPageSize, reportSourceFilter]);
+    if (!author?.rawAuthor) {
+      return;
+    }
+
+    if (reportsResetKeyRef.current === null) {
+      reportsResetKeyRef.current = reportsResetKey;
+      return;
+    }
+
+    if (reportsResetKeyRef.current !== reportsResetKey) {
+      reportsResetKeyRef.current = reportsResetKey;
+      setReportsPage(1);
+    }
+  }, [author?.rawAuthor, reportsResetKey]);
+
+  function setReportsPage(page: number | ((value: number) => number)) {
+    setReportsPageState((current) => {
+      const nextPage = typeof page === "function" ? page(current) : page;
+      const normalizedPage = Math.max(1, nextPage);
+      localStorage.setItem(REPORTS_PAGE_STORAGE_KEY, String(normalizedPage));
+      return normalizedPage;
+    });
+  }
 
   useEffect(() => {
     let ignore = false;
@@ -3101,7 +3132,7 @@ function ReportsTable({
           <button className="primary-outline-button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>
             Prev
           </button>
-          <span>{currentPage} / {totalPages}</span>
+          <span className="pagination-counter">{currentPage} / {totalPages}</span>
           <button className="primary-outline-button" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={currentPage === totalPages}>
             Next
           </button>
@@ -4218,6 +4249,16 @@ function loadSavedSettingsTab(): SettingsTab {
   }
 
   return "general";
+}
+
+function loadSavedReportsPage() {
+  const savedPage = Number(localStorage.getItem(REPORTS_PAGE_STORAGE_KEY) ?? 1);
+
+  if (Number.isInteger(savedPage) && savedPage > 0) {
+    return savedPage;
+  }
+
+  return 1;
 }
 
 function pageScrollStorageKey(page: Page) {

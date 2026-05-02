@@ -1633,6 +1633,14 @@ p {
   gap: 8px;
 }
 
+.pagination-counter {
+  display: inline-flex;
+  min-width: 56px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
 .alerts-page {
   gap: 14px;
 }
