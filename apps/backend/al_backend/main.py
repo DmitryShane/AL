@@ -422,6 +422,7 @@ def upsert_author_profile(profile: AuthorProfileIn, _: dict = Depends(require_pe
         discord_user_id=profile.discord_user_id,
         discord_username=profile.discord_username,
         plugin_enabled=profile.plugin_enabled,
+        auto_break_enabled=profile.auto_break_enabled,
         author_color=profile.author_color,
     )
 

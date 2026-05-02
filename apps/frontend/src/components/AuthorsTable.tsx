@@ -16,6 +16,7 @@ export type AuthorsTableRow = {
   meetingSeconds: number;
   overtimeActiveSeconds: number;
   breakSeconds: number;
+  autoBreakEnabled?: boolean;
   productivity: number;
   authorColor?: string;
   status?: "online" | "stale";

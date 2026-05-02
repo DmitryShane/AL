@@ -22,6 +22,7 @@ TELEGRAM_ONLINE_PROMPT_DELAY_SECONDS = 15 * 60
 TELEGRAM_BREAK_ACTIVITY_PROMPT_DELAY_SECONDS = 60 * 60
 DEFAULT_DISCORD_MEETING_AUTO_AFK_TIMEOUT_SECONDS = 10 * 60
 DEFAULT_PLUGIN_WORK_WINDOW_SECONDS = 32400
+AUTO_BREAK_SECONDS = 60 * 60
 MICROSECONDS_PER_SECOND = 1_000_000
 MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS = 10
 # When a heartbeat is ingested far after its occurred time (buffered uploads / offline queues),
@@ -1181,6 +1182,8 @@ class Repository:
                     "telegramPrivateChatId": profile.get("telegramPrivateChatId"),
                     "discordUserId": profile.get("discordUserId", ""),
                     "discordUsername": profile.get("discordUsername", ""),
+                    "autoBreakEnabled": profile.get("autoBreakEnabled", False),
+                    "autoBreakEffectiveDate": profile.get("autoBreakEffectiveDate", ""),
                     "authorColor": profile.get("authorColor") or _author_color(raw_author),
                     "source": item.get("source"),
                     "pluginVersion": item.get("pluginVersion"),
@@ -1974,6 +1977,8 @@ class Repository:
                     "discordUserId": profile.get("discordUserId", ""),
                     "discordUsername": profile.get("discordUsername", ""),
                     "pluginEnabled": profile.get("pluginEnabled", True),
+                    "autoBreakEnabled": profile.get("autoBreakEnabled", False),
+                    "autoBreakEffectiveDate": profile.get("autoBreakEffectiveDate", ""),
                     "authorColor": profile.get("authorColor") or _author_color(raw_author),
                     "timeZoneId": profile.get("timeZoneId") or (author_activity or {}).get("timeZoneId", ""),
                     "timeZoneDisplayName": profile.get("timeZoneDisplayName")
@@ -2125,11 +2130,15 @@ class Repository:
         discord_user_id: str | None = None,
         discord_username: str | None = None,
         plugin_enabled: bool = True,
+        auto_break_enabled: bool = False,
         author_color: str | None = None,
         time_zone_id: str | None = None,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         raw_author = _normalize_author(raw_author)
+        existing_profile = self.db.author_profiles.find_one(
+            {"rawAuthor": raw_author}, {"_id": 0, "autoBreakEnabled": 1, "autoBreakEffectiveDate": 1, "timeZoneId": 1}
+        ) or {}
         normalized_telegram = _normalize_telegram_username(telegram_username)
         normalized_discord_user_id = _normalize_discord_user_id(discord_user_id)
         normalized_discord_username = str(discord_username or "").strip()
@@ -2138,6 +2147,7 @@ class Repository:
             "displayName": (display_name or raw_author).strip(),
             "team": (team or "").strip(),
             "pluginEnabled": plugin_enabled,
+            "autoBreakEnabled": auto_break_enabled,
             "authorColor": _valid_color(author_color) or _author_color(raw_author),
             "updatedAt": now,
         }
@@ -2145,6 +2155,16 @@ class Repository:
 
         if normalized_time_zone:
             update["timeZoneId"] = normalized_time_zone
+
+        existing_auto_break_enabled = bool(existing_profile.get("autoBreakEnabled", False))
+
+        if auto_break_enabled:
+            if existing_auto_break_enabled and existing_profile.get("autoBreakEffectiveDate"):
+                update["autoBreakEffectiveDate"] = existing_profile.get("autoBreakEffectiveDate")
+            else:
+                update["autoBreakEffectiveDate"] = _next_author_local_date(
+                    normalized_time_zone or existing_profile.get("timeZoneId")
+                )
 
         operation: dict[str, Any] = {"$set": update}
 
@@ -2162,6 +2182,9 @@ class Repository:
             update["discordUsername"] = normalized_discord_username
         else:
             operation.setdefault("$unset", {})["discordUsername"] = ""
+
+        if not auto_break_enabled:
+            operation.setdefault("$unset", {})["autoBreakEffectiveDate"] = ""
 
         self.db.author_profiles.update_one({"rawAuthor": raw_author}, operation, upsert=True)
         return {"ok": True, "profile": {k: v for k, v in update.items() if k != "updatedAt"}}
@@ -4747,6 +4770,7 @@ class Repository:
             "projectId": snapshot.get("projectId") or "",
             "date": snapshot.get("date") or "",
         }
+        self._apply_auto_break_to_deltas(key["author"], key["date"], deltas)
         current = self.db.daily_author_activity.find_one(key, {"_id": 0}) or {}
         hourly_activity = current.get("hourlyActivity") or _empty_hourly_activity()
         _merge_hourly_activity(hourly_activity, deltas.get("hourlyActivityDelta", []))
@@ -4764,6 +4788,8 @@ class Repository:
         idle_microseconds = _time_microseconds(current, "idleSeconds", "idleMicroseconds") + _time_microseconds(
             deltas, "idleDeltaSeconds", "idleDeltaMicroseconds"
         )
+        break_seconds = int(current.get("breakSeconds", 0)) + int(deltas.get("breakDeltaSeconds", 0))
+        auto_break_seconds = int(current.get("autoBreakSeconds", 0)) + int(deltas.get("autoBreakDeltaSeconds", 0))
         overtime_active_microseconds = _time_microseconds(
             current, "overtimeActiveSeconds", "overtimeActiveMicroseconds"
         ) + _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds")
@@ -4787,6 +4813,8 @@ class Repository:
                     "hourlyActivity": hourly_activity,
                     "activeMicroseconds": active_microseconds,
                     "idleMicroseconds": idle_microseconds,
+                    "breakSeconds": break_seconds,
+                    "autoBreakSeconds": auto_break_seconds,
                     "overtimeActiveMicroseconds": overtime_active_microseconds,
                     "activeSeconds": _seconds_from_microseconds(active_microseconds),
                     "idleSeconds": _seconds_from_microseconds(idle_microseconds),
@@ -4796,19 +4824,73 @@ class Repository:
             upsert=True,
         )
 
+    def _apply_auto_break_to_deltas(self, raw_author: str, day_date: str, deltas: dict[str, Any]) -> None:
+        if not raw_author or not day_date:
+            return
+
+        profile = self.db.author_profiles.find_one(
+            {"rawAuthor": raw_author}, {"_id": 0, "autoBreakEnabled": 1, "autoBreakEffectiveDate": 1}
+        ) or {}
+
+        if not profile.get("autoBreakEnabled"):
+            return
+
+        effective_date = str(profile.get("autoBreakEffectiveDate") or "")
+
+        if not effective_date or day_date < effective_date:
+            return
+
+        idle_microseconds = _time_microseconds(deltas, "idleDeltaSeconds", "idleDeltaMicroseconds")
+
+        if idle_microseconds <= 0:
+            return
+
+        existing_break_seconds = 0
+
+        for item in self.db.daily_author_activity.find({"author": raw_author, "date": day_date}, {"_id": 0, "breakSeconds": 1}):
+            existing_break_seconds += int(item.get("breakSeconds", 0))
+
+        remaining_seconds = max(0, AUTO_BREAK_SECONDS - existing_break_seconds)
+
+        if remaining_seconds <= 0:
+            return
+
+        transfer_microseconds = min(idle_microseconds, remaining_seconds * MICROSECONDS_PER_SECOND)
+        transfer_seconds = _seconds_from_microseconds(transfer_microseconds)
+
+        if transfer_seconds <= 0:
+            return
+
+        deltas["idleDeltaMicroseconds"] = max(0, idle_microseconds - transfer_microseconds)
+        deltas["idleDeltaSeconds"] = _seconds_from_microseconds(deltas["idleDeltaMicroseconds"])
+        deltas["breakDeltaMicroseconds"] = _time_microseconds(
+            deltas, "breakDeltaSeconds", "breakDeltaMicroseconds"
+        ) + transfer_microseconds
+        deltas["breakDeltaSeconds"] = _seconds_from_microseconds(deltas["breakDeltaMicroseconds"])
+        deltas["autoBreakDeltaSeconds"] = int(deltas.get("autoBreakDeltaSeconds", 0)) + transfer_seconds
+        _move_hourly_idle_to_break(deltas.get("hourlyActivityDelta", []), transfer_seconds)
+
 
 def _new_id() -> str:
     return uuid.uuid4().hex
+
+
+def _next_author_local_date(time_zone_id: Any) -> str:
+    normalized_time_zone = _valid_time_zone_id(time_zone_id) or "UTC"
+    return (dt.datetime.now(ZoneInfo(normalized_time_zone)).date() + dt.timedelta(days=1)).isoformat()
 
 
 def _empty_event_deltas() -> dict[str, Any]:
     return {
         "activeDeltaSeconds": 0,
         "idleDeltaSeconds": 0,
+        "breakDeltaSeconds": 0,
         "overtimeActiveDeltaSeconds": 0,
         "activeDeltaMicroseconds": 0,
         "idleDeltaMicroseconds": 0,
+        "breakDeltaMicroseconds": 0,
         "overtimeActiveDeltaMicroseconds": 0,
+        "autoBreakDeltaSeconds": 0,
         "activityCountDeltas": [],
         "savedPrefabDeltas": [],
         "overtimeActivityCountDeltas": [],
@@ -4831,12 +4913,18 @@ def _merge_batch_deltas(target: dict[str, Any], source: dict[str, Any]) -> None:
     overtime_active_microseconds = _time_microseconds(
         target, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds"
     ) + _time_microseconds(source, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds")
+    break_microseconds = _time_microseconds(target, "breakDeltaSeconds", "breakDeltaMicroseconds") + _time_microseconds(
+        source, "breakDeltaSeconds", "breakDeltaMicroseconds"
+    )
     target["activeDeltaMicroseconds"] = active_microseconds
     target["idleDeltaMicroseconds"] = idle_microseconds
+    target["breakDeltaMicroseconds"] = break_microseconds
     target["overtimeActiveDeltaMicroseconds"] = overtime_active_microseconds
     target["activeDeltaSeconds"] = _seconds_from_microseconds(active_microseconds)
     target["idleDeltaSeconds"] = _seconds_from_microseconds(idle_microseconds)
+    target["breakDeltaSeconds"] = _seconds_from_microseconds(break_microseconds)
     target["overtimeActiveDeltaSeconds"] = _seconds_from_microseconds(overtime_active_microseconds)
+    target["autoBreakDeltaSeconds"] = int(target.get("autoBreakDeltaSeconds", 0)) + int(source.get("autoBreakDeltaSeconds", 0))
     _merge_hourly_activity(target["hourlyActivityDelta"], source.get("hourlyActivityDelta", []))
     target["activityCountDeltas"] = _merge_count_list(
         target.get("activityCountDeltas", []), source.get("activityCountDeltas", []), "type", "count"
@@ -4885,6 +4973,7 @@ def _has_time_delta(deltas: dict[str, Any]) -> bool:
     return (
         _time_microseconds(deltas, "activeDeltaSeconds", "activeDeltaMicroseconds") > 0
         or _time_microseconds(deltas, "idleDeltaSeconds", "idleDeltaMicroseconds") > 0
+        or _time_microseconds(deltas, "breakDeltaSeconds", "breakDeltaMicroseconds") > 0
         or _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") > 0
     )
 
@@ -5084,6 +5173,8 @@ def _add_interval_to_hourly(target: list[dict[str, Any]], start: dt.datetime, en
                 idle_microseconds = _time_microseconds(item, "idleSeconds", "idleMicroseconds") + microseconds
                 item["idleMicroseconds"] = idle_microseconds
                 item["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
+            elif bucket == "break":
+                item["breakSeconds"] = int(item.get("breakSeconds", 0)) + _seconds_from_microseconds(microseconds)
             elif bucket == "overtime":
                 overtime_active_microseconds = (
                     _time_microseconds(item, "overtimeActiveSeconds", "overtimeActiveMicroseconds") + microseconds
@@ -5092,6 +5183,29 @@ def _add_interval_to_hourly(target: list[dict[str, Any]], start: dt.datetime, en
                 item["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_active_microseconds)
 
         cursor = segment_end
+
+
+def _move_hourly_idle_to_break(hourly_activity: list[dict[str, Any]], transfer_seconds: int) -> None:
+    remaining_seconds = max(0, transfer_seconds)
+
+    for item in sorted(hourly_activity, key=lambda value: int(value.get("hour", 0))):
+        if remaining_seconds <= 0:
+            return
+
+        idle_seconds = int(item.get("idleSeconds", 0))
+
+        if idle_seconds <= 0:
+            continue
+
+        moved_seconds = min(idle_seconds, remaining_seconds)
+        idle_microseconds = max(
+            0,
+            _time_microseconds(item, "idleSeconds", "idleMicroseconds") - (moved_seconds * MICROSECONDS_PER_SECOND),
+        )
+        item["idleMicroseconds"] = idle_microseconds
+        item["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
+        item["breakSeconds"] = int(item.get("breakSeconds", 0)) + moved_seconds
+        remaining_seconds -= moved_seconds
 
 
 def _iso(value: Any) -> Any:

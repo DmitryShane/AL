@@ -1724,6 +1724,162 @@ def test_rebuild_restores_raw_event_batches_as_single_report_rows():
     assert rebuilt_rows[0]["lastRecordedAt"] == original_rows[0]["lastRecordedAt"]
 
 
+def test_auto_break_disabled_keeps_idle_as_idle():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "autoBreakEnabled": False})
+    repo._save_event_batch(
+        "cur",
+        "1.0.0",
+        {
+            "author": "Future Artist",
+            "projectId": "AL",
+            "sessionId": "session-1",
+            "deviceId": "mac-mini",
+            "timeZoneId": "UTC",
+            "events": [
+                {"eventId": "focus-1", "eventType": "focus", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
+                {"eventId": "heartbeat-1", "eventType": "heartbeat", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T10:00:00Z"},
+            ],
+        },
+        "raw-1",
+        "auto",
+        dt.datetime(2026, 5, 2, 10, 0, tzinfo=dt.UTC),
+        "challenge-1",
+        None,
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
+    assert daily["idleSeconds"] == 7200
+    assert daily.get("breakSeconds", 0) == 0
+
+
+def test_auto_break_moves_first_idle_hour_to_break():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-05-02",
+        }
+    )
+    repo._save_event_batch(
+        "cur",
+        "1.0.0",
+        {
+            "author": "Future Artist",
+            "projectId": "AL",
+            "sessionId": "session-1",
+            "deviceId": "mac-mini",
+            "timeZoneId": "UTC",
+            "events": [
+                {"eventId": "focus-1", "eventType": "focus", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
+                {"eventId": "heartbeat-1", "eventType": "heartbeat", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T10:00:00Z"},
+            ],
+        },
+        "raw-1",
+        "auto",
+        dt.datetime(2026, 5, 2, 10, 0, tzinfo=dt.UTC),
+        "challenge-1",
+        None,
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
+    assert daily["idleSeconds"] == 3600
+    assert daily["breakSeconds"] == 3600
+    assert daily["autoBreakSeconds"] == 3600
+    assert sum(hour["idleSeconds"] for hour in daily["hourlyActivity"]) == 3600
+    assert sum(hour["breakSeconds"] for hour in daily["hourlyActivity"]) == 3600
+
+    repo.rebuild_aggregates_if_needed(force=True)
+    rebuilt = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
+    assert rebuilt["idleSeconds"] == 3600
+    assert rebuilt["breakSeconds"] == 3600
+    assert rebuilt["autoBreakSeconds"] == 3600
+
+
+def test_auto_break_only_fills_remaining_legal_break():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-05-02",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "telegram",
+            "author": "Future Artist",
+            "projectId": "",
+            "date": "2026-05-02",
+            "breakSeconds": 1800,
+        }
+    )
+    repo._save_event_batch(
+        "cur",
+        "1.0.0",
+        {
+            "author": "Future Artist",
+            "projectId": "AL",
+            "sessionId": "session-1",
+            "deviceId": "mac-mini",
+            "timeZoneId": "UTC",
+            "events": [
+                {"eventId": "focus-1", "eventType": "focus", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
+                {"eventId": "heartbeat-1", "eventType": "heartbeat", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T10:00:00Z"},
+            ],
+        },
+        "raw-1",
+        "auto",
+        dt.datetime(2026, 5, 2, 10, 0, tzinfo=dt.UTC),
+        "challenge-1",
+        None,
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
+    assert daily["idleSeconds"] == 5400
+    assert daily["breakSeconds"] == 1800
+    assert daily["autoBreakSeconds"] == 1800
+
+
+def test_auto_break_waits_until_effective_date():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-05-03",
+        }
+    )
+    repo._save_event_batch(
+        "cur",
+        "1.0.0",
+        {
+            "author": "Future Artist",
+            "projectId": "AL",
+            "sessionId": "session-1",
+            "deviceId": "mac-mini",
+            "timeZoneId": "UTC",
+            "events": [
+                {"eventId": "focus-1", "eventType": "focus", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
+                {"eventId": "heartbeat-1", "eventType": "heartbeat", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T10:00:00Z"},
+            ],
+        },
+        "raw-1",
+        "auto",
+        dt.datetime(2026, 5, 2, 10, 0, tzinfo=dt.UTC),
+        "challenge-1",
+        None,
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
+    assert daily["idleSeconds"] == 7200
+    assert daily.get("breakSeconds", 0) == 0
+
+
 def test_overtime_activity_after_telegram_offline_is_allowed():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})

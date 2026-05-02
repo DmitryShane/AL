@@ -90,6 +90,8 @@ class AuthorProfileIn(ApiModel):
     discord_user_id: str | None = Field(default=None, alias="discordUserId")
     discord_username: str | None = Field(default=None, alias="discordUsername")
     plugin_enabled: bool = Field(default=True, alias="pluginEnabled")
+    auto_break_enabled: bool = Field(default=False, alias="autoBreakEnabled")
+    auto_break_effective_date: str | None = Field(default=None, alias="autoBreakEffectiveDate")
     author_color: str | None = Field(default=None, alias="authorColor")
 
 

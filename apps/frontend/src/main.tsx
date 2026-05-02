@@ -44,7 +44,7 @@ function apiFetch(path: string, init: RequestInit = {}) {
 }
 
 type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings";
-type SettingsTab = "general" | "authors" | "redirects" | "discord" | "meetingSummaries" | "users";
+type SettingsTab = "general" | "authors" | "autoBreak" | "redirects" | "discord" | "meetingSummaries" | "users";
 
 type Health = {
   ok: boolean;
@@ -83,6 +83,7 @@ type AuthorRow = {
   discordUserId?: string;
   discordUsername?: string;
   authorColor?: string;
+  autoBreakEnabled?: boolean;
   source?: string;
   pluginVersion?: string;
   timeZoneId?: string;
@@ -169,6 +170,8 @@ type AuthorProfile = {
   discordUserId?: string;
   discordUsername?: string;
   pluginEnabled?: boolean;
+  autoBreakEnabled?: boolean;
+  autoBreakEffectiveDate?: string;
   authorColor?: string;
   timeZoneId?: string;
   timeZoneDisplayName?: string;
@@ -1849,7 +1852,7 @@ function ActivityPage({
             <Duration label="Idle" seconds={author.idleSeconds} />
             <Duration label="Overtime" seconds={author.overtimeActiveSeconds} />
             <Duration
-              label="Break"
+              label={author.autoBreakEnabled ? "Break (auto)" : "Break"}
               seconds={author.breakSeconds}
               className={`break-duration ${breakTone(author.breakSeconds)}`}
               valueClassName={breakClassName(author.breakSeconds)}
@@ -2298,7 +2301,8 @@ function SettingsPage({
       (draft.discordUserId ?? "") !== (profile.discordUserId ?? "") ||
       (draft.discordUsername ?? "") !== (profile.discordUsername ?? "") ||
       (draft.authorColor ?? "") !== (profile.authorColor ?? "") ||
-      (draft.pluginEnabled ?? true) !== (profile.pluginEnabled ?? true)
+      (draft.pluginEnabled ?? true) !== (profile.pluginEnabled ?? true) ||
+      (draft.autoBreakEnabled ?? false) !== (profile.autoBreakEnabled ?? false)
     );
   }
 
@@ -2310,6 +2314,7 @@ function SettingsPage({
       <div className="settings-tabs">
         <button className={settingsTab === "general" ? "active" : ""} onClick={() => setSettingsTab("general")}>General</button>
         <button className={settingsTab === "authors" ? "active" : ""} onClick={() => setSettingsTab("authors")}>Author Profiles</button>
+        <button className={settingsTab === "autoBreak" ? "active" : ""} onClick={() => setSettingsTab("autoBreak")}>Auto Break</button>
         <button className={settingsTab === "redirects" ? "active" : ""} onClick={() => setSettingsTab("redirects")}>Author Redirects</button>
         <button className={settingsTab === "discord" ? "active" : ""} onClick={() => setSettingsTab("discord")}>Discord</button>
         <button className={settingsTab === "meetingSummaries" ? "active" : ""} onClick={() => setSettingsTab("meetingSummaries")}>Meeting Summaries</button>
@@ -2326,6 +2331,45 @@ function SettingsPage({
             <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval" || !isGlobalIntervalDirty}>
               {settingsSaveButtonLabel("interval", saving, saveStatus)}
             </button>
+          </div>
+        </div>
+      ) : settingsTab === "autoBreak" ? (
+        <div className="panel">
+          <h2>Auto Break</h2>
+          <p className="settings-caption">
+            Assign authors whose first idle time during a work day should count as break time until the legal 60 minute break is filled.
+          </p>
+          <div className="auto-break-list">
+            {profiles.map((profile) => {
+              const draft = drafts[profile.rawAuthor] ?? profile;
+              const profileDirty = isProfileDirty(profile);
+              return (
+                <div className="auto-break-row" key={profile.rawAuthor}>
+                  <div>
+                    <strong>{profile.displayName || profile.rawAuthor}</strong>
+                    <small>{profile.rawAuthor}</small>
+                    <small>{autoBreakScheduleLabel(draft)}</small>
+                  </div>
+                  <label className="checkbox-cell">
+                    <input
+                      type="checkbox"
+                      checked={draft.autoBreakEnabled ?? false}
+                      onChange={(event) =>
+                        setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, autoBreakEnabled: event.target.checked } }))
+                      }
+                    />
+                    Auto break
+                  </label>
+                  <button
+                    className={settingsSaveButtonClassName(saveStatus[profile.rawAuthor], true)}
+                    onClick={() => void saveProfile(profile.rawAuthor)}
+                    disabled={saving === profile.rawAuthor || !profileDirty}
+                  >
+                    {settingsSaveButtonLabel(profile.rawAuthor, saving, saveStatus)}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       ) : settingsTab === "redirects" ? (
@@ -3287,6 +3331,8 @@ function emptyAuthorProfile(): AuthorProfile {
     discordUserId: "",
     discordUsername: "",
     pluginEnabled: true,
+    autoBreakEnabled: false,
+    autoBreakEffectiveDate: "",
     authorColor: "#13a37b"
   };
 }
@@ -3300,8 +3346,22 @@ function authorProfilePayload(profile: AuthorProfile) {
     discordUserId: profile.discordUserId ?? "",
     discordUsername: profile.discordUsername ?? "",
     pluginEnabled: profile.pluginEnabled ?? true,
+    autoBreakEnabled: profile.autoBreakEnabled ?? false,
+    autoBreakEffectiveDate: profile.autoBreakEffectiveDate ?? "",
     authorColor: profile.authorColor ?? "#13a37b"
   };
+}
+
+function autoBreakScheduleLabel(profile: AuthorProfile) {
+  if (!profile.autoBreakEnabled) {
+    return "Auto break is off";
+  }
+
+  if (profile.autoBreakEffectiveDate) {
+    return `Starts ${profile.autoBreakEffectiveDate}`;
+  }
+
+  return "Starts next work day after save";
 }
 
 function normalizeAuthorInput(value: string) {
@@ -4240,6 +4300,7 @@ function loadSavedSettingsTab(): SettingsTab {
   if (
     savedTab === "general" ||
     savedTab === "authors" ||
+    savedTab === "autoBreak" ||
     savedTab === "redirects" ||
     savedTab === "discord" ||
     savedTab === "meetingSummaries" ||
