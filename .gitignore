@@ -37,3 +37,6 @@ al-prod-sync/
 backend.env
 telegram-bot.env
 discord-bot.env
+
+# Local meeting audio downloads
+audio-meetings/
