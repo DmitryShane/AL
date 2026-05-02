@@ -1,3 +1,6 @@
+import { avatarStyle, initials } from "../utils/author";
+import { formatDuration, formatMinutes, formatSource } from "../utils/format";
+
 export type AuthorsTableRow = {
   rawAuthor: string;
   authorEmail?: string;
@@ -82,72 +85,6 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
       {!authors.length ? <p className="empty-table">{emptyMessage}</p> : null}
     </div>
   );
-}
-
-function initials(value: string) {
-  return value
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("");
-}
-
-function avatarStyle(authorColor?: string) {
-  return authorColor ? { backgroundColor: authorColor } : undefined;
-}
-
-function formatDuration(seconds: number) {
-  const rounded = Math.max(0, Math.round(seconds));
-  const hours = Math.floor(rounded / 3600);
-  const minutes = Math.floor((rounded % 3600) / 60);
-  return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-}
-
-function formatMinutes(seconds: number) {
-  const rounded = Math.max(0, Math.round(seconds));
-
-  if (rounded < 3600) {
-    return `${Math.round(rounded / 60)}m`;
-  }
-
-  return formatDuration(rounded);
-}
-
-function formatSource(source?: string) {
-  if (source === "ual") {
-    return "Unity";
-  }
-
-  if (source === "bal") {
-    return "Blender";
-  }
-
-  if (source === "fch") {
-    return "FigmaWeb";
-  }
-
-  if (source === "fig") {
-    return "FigmaApp";
-  }
-
-  if (source === "vsc") {
-    return "VS Code";
-  }
-
-  if (source === "cur") {
-    return "Cursor";
-  }
-
-  if (source === "telegram") {
-    return "Telegram";
-  }
-
-  if (source === "discord") {
-    return "Discord";
-  }
-
-  return source ?? "unknown";
 }
 
 function formatTimestamp(value?: string) {
