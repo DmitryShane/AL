@@ -2014,6 +2014,38 @@ def test_meeting_recording_finished_skips_solo_recording():
     assert repo.db.meeting_summaries.items == []
 
 
+def test_meeting_recording_finished_skips_empty_work_summary():
+    repo = fake_repository()
+    repo.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=600,
+        meeting_summaries_enabled=True,
+        meeting_summary_min_participants=1,
+        meeting_summary_min_duration_seconds=10,
+        meeting_summary_language="Russian",
+        meeting_summary_recipient="work_chat",
+        meeting_audio_retention_seconds=0,
+    )
+
+    class FakeSummary:
+        transcript = "garbled text that is long enough but has no usable work content"
+        summary = "Участники:\nДмитрий\n\nОбсудили:\nНет\n\nРешения:\nНет\n\nЗадачи:\nНет\n\nОткрытые вопросы:\nНет"
+
+    result = repo.process_meeting_recording_finished(
+        recording_id="recording-empty-work",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        ended_at="2026-04-29T10:01:00+00:00",
+        participant_discord_user_ids=["1"],
+        participant_names=["Dmitry"],
+        audio_path="/tmp/missing.m4a",
+        summary_generator=lambda path, people, language, progress_callback=None: FakeSummary(),
+    )
+
+    assert result["status"] == "skipped_empty_transcript"
+    assert repo.db.meeting_summaries.items == []
+
+
 def test_discord_auto_afk_is_idempotent():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(

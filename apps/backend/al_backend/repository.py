@@ -2757,7 +2757,13 @@ class Repository:
         transcript = str(getattr(result, "transcript", "") or "").strip()
         summary = str(getattr(result, "summary", "") or "").strip()
 
-        if not transcript or len(transcript) < 20 or not summary or _looks_like_missing_transcript_summary(summary):
+        if (
+            not transcript
+            or len(transcript) < 20
+            or not summary
+            or _looks_like_missing_transcript_summary(summary)
+            or _looks_like_no_work_content_summary(summary)
+        ):
             status = "skipped_empty_transcript"
             self._mark_meeting_recording_finished(recording_id, status, ended, duration_seconds, now)
             return {"ok": True, "status": status}
@@ -4976,6 +4982,59 @@ def _looks_like_missing_transcript_summary(summary: str) -> bool:
         "no transcript",
     ]
     return any(marker in normalized for marker in markers)
+
+
+def _looks_like_no_work_content_summary(summary: str) -> bool:
+    normalized_lines = [line.strip().strip("-*").strip().lower() for line in summary.splitlines()]
+    content_lines = [line for line in normalized_lines if line]
+    if not content_lines:
+        return True
+
+    empty_markers = {"none", "нет", "n/a", "not applicable"}
+    optional_prefixes = ("participants:", "участники:")
+    content_section_prefixes = {
+        "discussed:",
+        "decisions:",
+        "action items:",
+        "open questions:",
+        "обсудили:",
+        "решения:",
+        "задачи:",
+        "открытые вопросы:",
+    }
+
+    found_empty_content_section = False
+    found_meaningful_content_section = False
+    current_section = ""
+
+    for line in content_lines:
+        if line.startswith(optional_prefixes):
+            current_section = "participants"
+            continue
+
+        matched_content_section = False
+        for prefix in content_section_prefixes:
+            if line.startswith(prefix):
+                matched_content_section = True
+                current_section = "content"
+                value = line.removeprefix(prefix).strip()
+                if not value or value in empty_markers:
+                    found_empty_content_section = True
+                else:
+                    found_meaningful_content_section = True
+                break
+
+        if matched_content_section:
+            continue
+
+        if line in empty_markers:
+            found_empty_content_section = True
+            continue
+
+        if current_section == "content":
+            found_meaningful_content_section = True
+
+    return found_empty_content_section and not found_meaningful_content_section
 
 
 def _date_query(start_date: str | None, end_date: str | None) -> dict[str, Any]:
