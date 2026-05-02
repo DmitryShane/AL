@@ -1628,7 +1628,8 @@ class Repository:
 
             started_at = _coerce_datetime(session.get("startedAt"))
             ended_at = _coerce_datetime(session.get("lastOfflineAt"))
-            latest_signal_at = _latest_datetime(ended_at, latest_report_by_author_date.get((raw_author, day_date))) if ended_at else None
+            latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
+            latest_signal_at = (latest_report_at or ended_at) if ended_at else None
 
             if not started_at and not latest_signal_at:
                 continue
@@ -1648,7 +1649,7 @@ class Repository:
 
             hourly_activity = hourly_author.get("hourlyActivity", [])
             self._add_visual_missed_start(hourly_activity, started_at, time_zone_id)
-            self._add_visual_missed_end(hourly_activity, latest_signal_at, time_zone_id)
+            self._add_visual_missed_end(hourly_activity, latest_signal_at, time_zone_id, fill_to_hour=latest_report_at is not None)
 
     def _latest_report_times_by_author_date(
         self,
@@ -1721,13 +1722,27 @@ class Repository:
         hourly_activity: list[dict[str, Any]],
         ended_at: dt.datetime | None,
         time_zone_id: str,
+        fill_to_hour: bool = False,
     ) -> None:
         if not ended_at:
             return
 
         local_end = _to_local_datetime(ended_at, time_zone_id)
-        hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
-        missed_seconds = max(0, int((hour_end - local_end).total_seconds()))
+
+        if fill_to_hour:
+            hour = hourly_activity[local_end.hour] if 0 <= local_end.hour < len(hourly_activity) else {}
+            occupied_seconds = (
+                int(hour.get("activeSeconds", 0))
+                + int(hour.get("idleSeconds", 0))
+                + int(hour.get("breakSeconds", 0))
+                + int(hour.get("meetingSeconds", 0))
+                + int(hour.get("overtimeActiveSeconds", 0))
+            )
+            missed_seconds = max(0, 3600 - occupied_seconds)
+        else:
+            hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+            missed_seconds = max(0, int((hour_end - local_end).total_seconds()))
+
         _add_visual_missed_seconds(hourly_activity, local_end.hour, missed_seconds, "missedEndSeconds")
 
     def _apply_visual_overtime_hour_gaps(
@@ -1793,8 +1808,7 @@ class Repository:
             hourly_activity = hourly_author.get("hourlyActivity", [])
             ordered_reports = sorted(reports)
 
-            for previous_report, next_report in zip(ordered_reports, ordered_reports[1:]):
-                _add_visual_overtime_interval_to_hourly(hourly_activity, previous_report, next_report)
+            _fill_overtime_hours_bracketed_by_reports(hourly_activity, ordered_reports)
 
     def _apply_latest_report_metadata(
         self,
@@ -6288,37 +6302,43 @@ def _add_visual_missed_seconds(hourly_activity: list[dict[str, Any]], hour: int,
     hourly_activity[hour][segment_key] = int(hourly_activity[hour].get(segment_key, 0)) + seconds
 
 
-def _add_visual_overtime_interval_to_hourly(hourly_activity: list[dict[str, Any]], start: dt.datetime, end: dt.datetime) -> None:
-    if end <= start:
+def _fill_overtime_hours_bracketed_by_reports(hourly_activity: list[dict[str, Any]], reports: list[dt.datetime]) -> None:
+    if len(reports) < 2:
         return
 
-    cursor = start
+    earliest_report = reports[0]
+    latest_report = reports[-1]
 
-    while cursor < end:
-        hour_end = cursor.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
-        segment_end = min(hour_end, end)
+    for hour in hourly_activity:
+        hour_index = int(hour.get("hour", 0))
+        hour_start = earliest_report.replace(hour=hour_index, minute=0, second=0, microsecond=0)
+        hour_end = hour_start + dt.timedelta(hours=1)
 
-        if 0 <= cursor.hour < len(hourly_activity):
-            hour = hourly_activity[cursor.hour]
-            segment_seconds = max(0, int((segment_end - cursor).total_seconds()))
-            occupied_seconds = (
-                int(hour.get("activeSeconds", 0))
-                + int(hour.get("idleSeconds", 0))
-                + int(hour.get("breakSeconds", 0))
-                + int(hour.get("meetingSeconds", 0))
-                + int(hour.get("overtimeActiveSeconds", 0))
-            )
-            overtime_seconds = min(segment_seconds, max(0, 3600 - occupied_seconds))
+        if earliest_report >= hour_start or latest_report <= hour_end:
+            continue
 
-            if overtime_seconds > 0:
-                overtime_microseconds = _time_microseconds(
-                    hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds"
-                ) + (overtime_seconds * MICROSECONDS_PER_SECOND)
-                hour["overtimeActiveMicroseconds"] = overtime_microseconds
-                hour["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_microseconds)
-                _remove_visual_missed_seconds(hour, overtime_seconds)
+        _fill_visual_overtime_hour(hour)
 
-        cursor = segment_end
+
+def _fill_visual_overtime_hour(hour: dict[str, Any]) -> None:
+    occupied_seconds = (
+        int(hour.get("activeSeconds", 0))
+        + int(hour.get("idleSeconds", 0))
+        + int(hour.get("breakSeconds", 0))
+        + int(hour.get("meetingSeconds", 0))
+        + int(hour.get("overtimeActiveSeconds", 0))
+    )
+    overtime_seconds = max(0, 3600 - occupied_seconds)
+
+    if overtime_seconds <= 0:
+        return
+
+    overtime_microseconds = _time_microseconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds") + (
+        overtime_seconds * MICROSECONDS_PER_SECOND
+    )
+    hour["overtimeActiveMicroseconds"] = overtime_microseconds
+    hour["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_microseconds)
+    _remove_visual_missed_seconds(hour, overtime_seconds)
 
 
 def _remove_visual_missed_seconds(hour: dict[str, Any], seconds: int) -> None:

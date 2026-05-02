@@ -885,6 +885,93 @@ def test_activity_summary_marks_visual_missed_time_after_latest_plugin_report():
     assert author["telegramToFirstActivitySeconds"] == 12 * 3600 + 37 * 60
 
 
+def test_activity_summary_uses_offline_only_as_visual_missed_end_trigger():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-04-28T21:30:00Z")
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-04-28",
+            "recordedAt": "2026-04-28T20:10:00Z",
+            "receivedAt": dt.datetime(2026, 4, 28, 20, 10, 5, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert hourly_by_hour[20]["missedEndSeconds"] == 50 * 60
+    assert hourly_by_hour[21]["missedEndSeconds"] == 0
+
+
+def test_activity_summary_visual_missed_end_fills_last_report_hour_to_sixty_minutes():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "timeZoneId": "America/Vancouver"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "date": "2026-05-01",
+            "startedAt": dt.datetime(2026, 5, 1, 15, 0, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 5, 1, 22, 30, tzinfo=dt.UTC),
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T14:27:35-07:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 21, 27, 35, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 60,
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[14]["overtimeActiveSeconds"] = 21 * 60 + 31
+    hourly_activity[14]["overtimeActiveMicroseconds"] = (21 * 60 + 31) * 1_000_000
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "projectId": "AL",
+            "date": "2026-05-01",
+            "activeSeconds": 32400,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 21 * 60 + 31,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-01", end_date="2026-05-01")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Igor Mats")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert hourly_by_hour[14]["overtimeActiveSeconds"] == 21 * 60 + 31
+    assert hourly_by_hour[14]["missedEndSeconds"] == 3600 - (21 * 60 + 31)
+
+
 def test_activity_summary_does_not_mark_visual_end_missed_before_offline():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
@@ -2371,8 +2458,8 @@ def test_overtime_hourly_graph_fills_gap_when_overtime_continues_next_hour():
             "source": "ual",
             "author": "Denis Ostrovskiy",
             "date": "2026-05-01",
-            "recordedAt": "2026-05-01T19:52:00+00:00",
-            "receivedAt": dt.datetime(2026, 5, 1, 19, 52, tzinfo=dt.UTC),
+            "recordedAt": "2026-05-01T18:58:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 18, 58, tzinfo=dt.UTC),
             "overtimeActiveDeltaSeconds": 60,
         }
     )
@@ -2450,6 +2537,59 @@ def test_overtime_hourly_graph_does_not_fill_gap_without_next_overtime_report():
 
     assert hour_19["meetingSeconds"] == 4 * 60
     assert hour_19["overtimeActiveSeconds"] == 52 * 60
+
+
+def test_overtime_hourly_graph_does_not_fill_from_reports_only_inside_hour():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[14]["overtimeActiveSeconds"] = 1665
+    hourly_activity[14]["overtimeActiveMicroseconds"] = 1_665_473_000
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Igor Mats",
+            "projectId": "unity",
+            "date": "2026-05-01",
+            "activeSeconds": 32400,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 1665,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Igor Mats",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T14:00:29.6226620-07:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 21, 0, 29, tzinfo=dt.UTC),
+            "overtimeActiveDeltaSeconds": 137,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T14:27:35.5434240-07:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 21, 27, 35, tzinfo=dt.UTC),
+            "overtimeActiveDeltaSeconds": 56,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-01", end_date="2026-05-01")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Igor Mats")["hourlyActivity"]
+    hour_14 = next(item for item in hourly if item["hour"] == 14)
+
+    assert hour_14["overtimeActiveSeconds"] == 1665
 
 
 def test_discord_voice_events_open_and_close_meeting_session():
