@@ -1432,6 +1432,199 @@ def test_rebuild_suppresses_stored_heartbeat_idle_after_telegram_offline():
     assert daily["idleSeconds"] == 0
 
 
+def test_raw_event_state_isolated_by_source_project_and_device():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "deviceId": "mac-mini",
+            "date": "2026-05-02",
+            "eventType": "focus",
+            "occurredAtUtc": "2026-05-02T01:19:47.078Z",
+            "occurredAtLocal": "2026-05-02T03:19:47.078+02:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 1, 20, 2, tzinfo=dt.UTC),
+        }
+    )
+
+    unity_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "bike-rush-2",
+            "deviceId": "mac-mini",
+            "date": "2026-05-02",
+            "eventType": "focus",
+            "occurredAtUtc": "2026-05-02T02:08:31.280916Z",
+            "occurredAtLocal": "2026-05-02T04:08:31.280916+02:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 2, 8, 31, 816000, tzinfo=dt.UTC),
+        }
+    )
+
+    assert unity_deltas["idleDeltaSeconds"] == 0
+    assert unity_deltas["activeDeltaSeconds"] == 0
+    aggregate_state_items = getattr(repo.db.aggregate_session_state, "items")
+    assert len(aggregate_state_items) == 2
+    assert {
+        item["_id"] for item in aggregate_state_items
+    } == {
+        "author_source_project_device_day_v2|Future Artist|2026-05-02|cur|al|mac-mini",
+        "author_source_project_device_day_v2|Future Artist|2026-05-02|ual|bike-rush-2|mac-mini",
+    }
+
+    unity_daily = repo.db.daily_author_activity.find_one(
+        {"author": "Future Artist", "date": "2026-05-02", "source": "ual", "projectId": "bike-rush-2"}
+    )
+    assert unity_daily is not None
+    assert unity_daily["idleSeconds"] == 0
+
+
+def test_late_activity_event_does_not_roll_back_raw_event_state():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "deviceId": "mac-mini",
+            "date": "2026-05-02",
+            "eventType": "focus",
+            "occurredAtUtc": "2026-05-02T02:00:00Z",
+            "occurredAtLocal": "2026-05-02T04:00:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 2, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "deviceId": "mac-mini",
+            "date": "2026-05-02",
+            "eventType": "focus",
+            "occurredAtUtc": "2026-05-02T02:10:00Z",
+            "occurredAtLocal": "2026-05-02T04:10:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 2, 10, tzinfo=dt.UTC),
+        }
+    )
+
+    late_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "deviceId": "mac-mini",
+            "date": "2026-05-02",
+            "eventType": "focus",
+            "occurredAtUtc": "2026-05-02T02:05:00Z",
+            "occurredAtLocal": "2026-05-02T04:05:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 2, 12, tzinfo=dt.UTC),
+        }
+    )
+
+    assert late_deltas["activeDeltaSeconds"] == 0
+    assert late_deltas["idleDeltaSeconds"] == 0
+    assert late_deltas["activityCountDeltas"] == [{"type": "focus", "count": 1}]
+
+    state = repo.db.aggregate_session_state.find_one(
+        {"_id": "author_source_project_device_day_v2|Future Artist|2026-05-02|cur|al|mac-mini"}
+    )
+    assert state is not None
+    state_values = state["state"]
+    assert state_values["lastActivityAt"] == "2026-05-02T02:10:00+00:00"
+    assert state_values["lastAccountingAt"] == "2026-05-02T02:10:00+00:00"
+
+
+def test_heartbeat_idle_still_counts_within_same_raw_event_source_state():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "deviceId": "mac-mini",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-04-28T18:00:00Z",
+            "occurredAtLocal": "2026-04-28T18:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "deviceId": "mac-mini",
+            "date": "2026-04-28",
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-04-28T18:10:00Z",
+            "occurredAtLocal": "2026-04-28T18:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC),
+        }
+    )
+
+    assert deltas["idleDeltaSeconds"] == 600
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-28", "source": "ual"})
+    assert daily is not None
+    assert daily["idleSeconds"] == 600
+
+
+def test_rebuild_keeps_cross_source_idle_out_of_unity_rows():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "cursor-focus",
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "deviceId": "mac-mini",
+            "date": "2026-05-02",
+            "eventType": "focus",
+            "occurredAtUtc": dt.datetime(2026, 5, 2, 1, 19, 47, 78000, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-05-02T03:19:47.078+02:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 1, 20, 2, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "unity-focus",
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "bike-rush-2",
+            "deviceId": "mac-mini",
+            "date": "2026-05-02",
+            "eventType": "focus",
+            "occurredAtUtc": dt.datetime(2026, 5, 2, 2, 8, 31, 280916, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-05-02T04:08:31.280916+02:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 2, 8, 31, 816000, tzinfo=dt.UTC),
+        }
+    )
+
+    repo.rebuild_aggregates_if_needed(force=True)
+
+    report_rows = getattr(repo.db.report_rows, "items")
+    assert not [
+        row
+        for row in report_rows
+        if row.get("source") == "ual" and row.get("idleDeltaSeconds", 0) > 0
+    ]
+    unity_daily = repo.db.daily_author_activity.find_one(
+        {"author": "Future Artist", "date": "2026-05-02", "source": "ual", "projectId": "bike-rush-2"}
+    )
+    assert unity_daily is not None
+    assert unity_daily["idleSeconds"] == 0
+
+
 def test_overtime_activity_after_telegram_offline_is_allowed():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
@@ -3570,7 +3763,7 @@ def test_author_day_consumption_includes_figma_source():
     assert consumed == 9 * 3600 * 1_000_000
 
 
-def test_raw_event_state_spans_unity_and_blender_sources():
+def test_raw_event_state_isolated_between_unity_and_blender_sources():
     repo = fake_repository()
     unity_event = {
         "source": "ual",
@@ -3611,12 +3804,12 @@ def test_raw_event_state_spans_unity_and_blender_sources():
     blender_deltas = repo._apply_raw_event_to_aggregates(blender_event)
     heartbeat_deltas = repo._apply_raw_event_to_aggregates(unity_heartbeat)
 
-    assert blender_deltas["activeDeltaSeconds"] == 30
-    assert heartbeat_deltas["idleDeltaSeconds"] == 0
+    assert blender_deltas["activeDeltaSeconds"] == 0
+    assert heartbeat_deltas["idleDeltaSeconds"] == 80
     assert heartbeat_deltas["activeDeltaSeconds"] == 0
 
 
-def test_raw_event_state_spans_unity_blender_and_figma_sources():
+def test_raw_event_state_isolated_between_unity_blender_and_figma_sources():
     repo = fake_repository()
     unity_event = {
         "source": "ual",
@@ -3671,10 +3864,10 @@ def test_raw_event_state_spans_unity_blender_and_figma_sources():
     figma_heartbeat_deltas = repo._apply_raw_event_to_aggregates(figma_heartbeat)
     unity_heartbeat_deltas = repo._apply_raw_event_to_aggregates(unity_heartbeat)
 
-    assert blender_deltas["activeDeltaSeconds"] == 30
-    assert figma_deltas["activeDeltaSeconds"] == 30
+    assert blender_deltas["activeDeltaSeconds"] == 0
+    assert figma_deltas["activeDeltaSeconds"] == 0
     assert figma_heartbeat_deltas["idleDeltaSeconds"] == 80
-    assert unity_heartbeat_deltas["idleDeltaSeconds"] == 0
+    assert unity_heartbeat_deltas["idleDeltaSeconds"] == 144
     assert unity_heartbeat_deltas["activeDeltaSeconds"] == 0
 
 
@@ -3718,7 +3911,7 @@ def test_second_plugin_heartbeat_does_not_create_tiny_duplicate_idle_row():
     assert blender_deltas["activeDeltaSeconds"] == 0
 
 
-def test_idle_is_accounted_by_last_activity_source_not_unrelated_heartbeat():
+def test_idle_is_accounted_by_each_activity_source_state():
     repo = fake_repository()
     unity_event = {
         "source": "ual",
@@ -3762,7 +3955,7 @@ def test_idle_is_accounted_by_last_activity_source_not_unrelated_heartbeat():
     unity_deltas = repo._apply_raw_event_to_aggregates(unity_heartbeat)
     blender_deltas = repo._apply_raw_event_to_aggregates(blender_heartbeat)
 
-    assert unity_deltas["idleDeltaSeconds"] == 0
+    assert unity_deltas["idleDeltaSeconds"] == 80
     assert unity_deltas["activeDeltaSeconds"] == 0
     assert blender_deltas["idleDeltaSeconds"] == 65
     assert blender_deltas["activeDeltaSeconds"] == 0

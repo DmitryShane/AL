@@ -60,7 +60,7 @@ WINDOWS_TIME_ZONE_IDS = {
 
 
 class Repository:
-    aggregates_version = 18
+    aggregates_version = 19
 
     def __init__(self, settings: Settings):
         self.client: MongoClient = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=1500)
@@ -4540,9 +4540,10 @@ class Repository:
                 last_accounting_local_at = occurred_local_at
                 last_accounting_source = current_source
 
-            last_activity_at = occurred_at
-            last_activity_local_at = occurred_local_at
-            last_activity_source = current_source
+            if not last_activity_at or occurred_at > last_activity_at:
+                last_activity_at = occurred_at
+                last_activity_local_at = occurred_local_at
+                last_activity_source = current_source
         elif (
             event_type == "heartbeat"
             and first_activity_at
@@ -4877,9 +4878,12 @@ def _normalize_raw_event(
 def _raw_event_session_key(event: dict[str, Any]) -> str:
     return "|".join(
         [
-            "author_day_v1",
+            "author_source_project_device_day_v2",
             str(event.get("author") or "Unknown User"),
             str(event.get("date") or ""),
+            str(event.get("source") or ""),
+            str(event.get("projectId") or ""),
+            str(event.get("deviceId") or ""),
         ]
     )
 
