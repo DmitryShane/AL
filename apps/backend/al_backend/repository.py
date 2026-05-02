@@ -2852,6 +2852,10 @@ class Repository:
         )
         return {"ok": True, "status": "recording_failed"}
 
+    def update_meeting_recording_status(self, *, recording_id: str, status: str) -> dict[str, Any]:
+        self._update_meeting_recording_pipeline_status(recording_id, status)
+        return {"ok": True, "status": status}
+
     def recent_meeting_recordings(self, limit: int = 10) -> list[dict[str, Any]]:
         summaries_by_recording_id = {
             str(summary.get("recordingId") or ""): summary

@@ -163,6 +163,11 @@ class DiscordMeetingRecordingFailIn(ApiModel):
     error: str = Field(min_length=1)
 
 
+class DiscordMeetingRecordingStatusIn(ApiModel):
+    recording_id: str = Field(alias="recordingId", min_length=1)
+    status: str = Field(min_length=1)
+
+
 class SubmitReportResponse(ApiModel):
     ok: bool
     report_id: str = Field(alias="reportId")

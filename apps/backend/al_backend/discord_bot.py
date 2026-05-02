@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import subprocess
 import tempfile
 import urllib.error
 import urllib.request
@@ -42,6 +44,7 @@ class RecordingSession:
     recording_id: str
     started_at: datetime
     audio_path: str
+    upload_path: str | None
     participant_ids: set[int]
     participant_names: dict[int, str]
     voice_client: Any
@@ -278,6 +281,7 @@ class MeetingClient(discord.Client):
             recording_id=recording_id,
             started_at=started_at,
             audio_path=audio_path,
+            upload_path=None,
             participant_ids={member.id for member in human_members},
             participant_names={member.id: member.name for member in human_members},
             voice_client=voice_client,
@@ -300,6 +304,8 @@ class MeetingClient(discord.Client):
 
             await asyncio.wait_for(recording.cleanup_future, timeout=10)
             await recording.voice_client.disconnect(force=force)
+            await self.update_recording_status(recording.recording_id, "compressing_audio")
+            recording.upload_path = await asyncio.to_thread(compress_recording_audio, recording.audio_path)
             LOGGER.info("Submitting Discord meeting recording %s for summary processing.", recording.recording_id)
             result = await asyncio.to_thread(submit_recording_finished, self.config, recording, ended_at)
 
@@ -311,6 +317,11 @@ class MeetingClient(discord.Client):
                 os.remove(recording.audio_path)
             except FileNotFoundError:
                 pass
+            if recording.upload_path and recording.upload_path != recording.audio_path:
+                try:
+                    os.remove(recording.upload_path)
+                except FileNotFoundError:
+                    pass
 
     async def submit_voice_event(self, member: discord.Member, event_type: str) -> None:
         payload = {
@@ -335,6 +346,13 @@ class MeetingClient(discord.Client):
             "thresholdSeconds": self.solo_timeout_seconds,
         }
         await asyncio.to_thread(submit_auto_afk_event, self.config, payload)
+
+    async def update_recording_status(self, recording_id: str, status: str) -> None:
+        payload = {
+            "recordingId": recording_id,
+            "status": status,
+        }
+        await asyncio.to_thread(submit_backend_event, self.config, "/api/v1/discord/meeting-recordings/status", payload)
 
 
 def ensure_opus_loaded() -> None:
@@ -394,7 +412,37 @@ def submit_recording_finished(config: DiscordBotConfig, recording: RecordingSess
         "participantDiscordUserIds": json.dumps([str(item) for item in sorted(recording.participant_ids)]),
         "participantNames": json.dumps([recording.participant_names[item] for item in sorted(recording.participant_names.keys())]),
     }
-    return submit_multipart_event(config, "/api/v1/discord/meeting-recordings/finish", fields, "audio", recording.audio_path)
+    return submit_multipart_event(config, "/api/v1/discord/meeting-recordings/finish", fields, "audio", recording.upload_path or recording.audio_path)
+
+
+def compress_recording_audio(audio_path: str) -> str:
+    ffmpeg_path = shutil.which("ffmpeg")
+
+    if not ffmpeg_path:
+        raise RuntimeError("ffmpeg is required to compress meeting recordings")
+
+    compressed_path = str(Path(audio_path).with_suffix(".m4a"))
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        audio_path,
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-b:a",
+        "32k",
+        compressed_path,
+    ]
+    subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    LOGGER.info(
+        "Compressed Discord meeting recording from %.1f MB to %.1f MB.",
+        os.path.getsize(audio_path) / 1024 / 1024,
+        os.path.getsize(compressed_path) / 1024 / 1024,
+    )
+    return compressed_path
 
 
 def submit_recording_failed(config: DiscordBotConfig, recording_id: str, ended_at: datetime, error: str) -> dict[str, Any]:
@@ -447,7 +495,8 @@ def submit_multipart_event(
     filename = os.path.basename(file_path)
     body.extend(f"--{boundary}\r\n".encode("utf-8"))
     body.extend(f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'.encode("utf-8"))
-    body.extend(b"Content-Type: audio/wav\r\n\r\n")
+    content_type = "audio/mp4" if file_path.endswith(".m4a") else "audio/wav"
+    body.extend(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
 
     with open(file_path, "rb") as audio_file:
         body.extend(audio_file.read())

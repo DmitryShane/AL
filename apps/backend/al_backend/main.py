@@ -19,6 +19,7 @@ from .models import (
     DiscordMeetingAutoAfkIn,
     DiscordMeetingRecordingFailIn,
     DiscordMeetingRecordingStartIn,
+    DiscordMeetingRecordingStatusIn,
     DiscordVoiceEventIn,
     HealthResponse,
     IntervalSettingsIn,
@@ -501,6 +502,15 @@ def record_discord_meeting_recording_failed(event: DiscordMeetingRecordingFailIn
         recording_id=event.recording_id,
         ended_at=event.ended_at,
         error=event.error,
+    )
+
+
+@app.post("/api/v1/discord/meeting-recordings/status")
+def update_discord_meeting_recording_status(event: DiscordMeetingRecordingStatusIn, request: Request) -> dict:
+    require_discord_bot_secret(request)
+    return app.state.repo.update_meeting_recording_status(
+        recording_id=event.recording_id,
+        status=event.status,
     )
 
 

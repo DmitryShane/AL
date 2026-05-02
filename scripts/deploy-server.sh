@@ -58,6 +58,11 @@ if ! ldconfig -p | grep -q "libopus"; then
   apt-get install -y libopus0
 fi
 
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y ffmpeg
+fi
+
 install -d -o "${APP_USER}" -g "${APP_USER}" "${APP_ROOT}" "${APP_ROOT}/python" "${APP_ROOT}/.cache" "${APP_ROOT}/.cache/uv" "${APP_ROOT}/.config"
 
 if [[ ! -d "${APP_DIR}/.git" ]]; then

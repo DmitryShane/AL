@@ -2995,6 +2995,10 @@ function meetingRecordingStatusLabel(recording: MeetingRecordingStatus) {
     return "Uploading audio to backend";
   }
 
+  if (recording.status === "compressing_audio") {
+    return "Compressing audio";
+  }
+
   if (recording.status === "transcribing_openai") {
     return "Transcribing with OpenAI";
   }
