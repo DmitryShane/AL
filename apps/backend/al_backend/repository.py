@@ -1465,6 +1465,7 @@ class Repository:
             now,
         )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now)
+        self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_latest_report_metadata(authors_by_raw, start_date, end_date, date_mode, profiles, now)
         _clear_inactive_author_report_metadata(authors_by_raw.values())
         presence_overrides = self._author_presence_overrides(authors_by_raw.keys())
@@ -1728,6 +1729,72 @@ class Repository:
         hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
         missed_seconds = max(0, int((hour_end - local_end).total_seconds()))
         _add_visual_missed_seconds(hourly_activity, local_end.hour, missed_seconds, "missedEndSeconds")
+
+    def _apply_visual_overtime_hour_gaps(
+        self,
+        hourly_by_author: dict[str, dict[str, Any]],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+        overtime_reports_by_key: dict[tuple[str, str], list[dt.datetime]] = {}
+
+        for report in self.db.report_rows.find(
+            query,
+            {
+                "_id": 0,
+                "author": 1,
+                "date": 1,
+                "source": 1,
+                "reportType": 1,
+                "timeZoneId": 1,
+                "recordedAt": 1,
+                "lastRecordedAt": 1,
+                "receivedAt": 1,
+                "lastReceivedAt": 1,
+                "overtimeActiveDeltaSeconds": 1,
+                "overtimeActiveDeltaMicroseconds": 1,
+            },
+        ):
+            if report.get("source") in {"telegram", "discord"} or report.get("reportType") in {"telegram", "meeting"}:
+                continue
+
+            if _time_microseconds(report, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") <= 0:
+                continue
+
+            raw_author = str(report.get("author") or "Unknown User")
+            report_date = str(report.get("date") or "")
+            time_zone_id = _author_time_zone_id(raw_author, profiles, report.get("timeZoneId"))
+
+            if not report_date or not _date_in_summary_scope(report_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            occurred_at = (
+                _coerce_datetime(report.get("recordedAt"))
+                or _coerce_datetime(report.get("lastRecordedAt"))
+                or _coerce_datetime(report.get("receivedAt"))
+                or _coerce_datetime(report.get("lastReceivedAt"))
+            )
+
+            if not occurred_at:
+                continue
+
+            overtime_reports_by_key.setdefault((raw_author, report_date), []).append(_to_local_datetime(occurred_at, time_zone_id))
+
+        for (raw_author, _report_date), reports in overtime_reports_by_key.items():
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not hourly_author:
+                continue
+
+            hourly_activity = hourly_author.get("hourlyActivity", [])
+            ordered_reports = sorted(reports)
+
+            for previous_report, next_report in zip(ordered_reports, ordered_reports[1:]):
+                _add_visual_overtime_interval_to_hourly(hourly_activity, previous_report, next_report)
 
     def _apply_latest_report_metadata(
         self,
@@ -6219,6 +6286,57 @@ def _add_visual_missed_seconds(hourly_activity: list[dict[str, Any]], hour: int,
 
     hourly_activity[hour]["missedSeconds"] = int(hourly_activity[hour].get("missedSeconds", 0)) + seconds
     hourly_activity[hour][segment_key] = int(hourly_activity[hour].get(segment_key, 0)) + seconds
+
+
+def _add_visual_overtime_interval_to_hourly(hourly_activity: list[dict[str, Any]], start: dt.datetime, end: dt.datetime) -> None:
+    if end <= start:
+        return
+
+    cursor = start
+
+    while cursor < end:
+        hour_end = cursor.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+        segment_end = min(hour_end, end)
+
+        if 0 <= cursor.hour < len(hourly_activity):
+            hour = hourly_activity[cursor.hour]
+            segment_seconds = max(0, int((segment_end - cursor).total_seconds()))
+            occupied_seconds = (
+                int(hour.get("activeSeconds", 0))
+                + int(hour.get("idleSeconds", 0))
+                + int(hour.get("breakSeconds", 0))
+                + int(hour.get("meetingSeconds", 0))
+                + int(hour.get("overtimeActiveSeconds", 0))
+            )
+            overtime_seconds = min(segment_seconds, max(0, 3600 - occupied_seconds))
+
+            if overtime_seconds > 0:
+                overtime_microseconds = _time_microseconds(
+                    hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds"
+                ) + (overtime_seconds * MICROSECONDS_PER_SECOND)
+                hour["overtimeActiveMicroseconds"] = overtime_microseconds
+                hour["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_microseconds)
+                _remove_visual_missed_seconds(hour, overtime_seconds)
+
+        cursor = segment_end
+
+
+def _remove_visual_missed_seconds(hour: dict[str, Any], seconds: int) -> None:
+    remaining_seconds = max(0, seconds)
+
+    for key in ("missedEndSeconds", "missedStartSeconds"):
+        if remaining_seconds <= 0:
+            return
+
+        current_seconds = int(hour.get(key, 0))
+        removed_seconds = min(current_seconds, remaining_seconds)
+
+        if removed_seconds <= 0:
+            continue
+
+        hour[key] = current_seconds - removed_seconds
+        hour["missedSeconds"] = max(0, int(hour.get("missedSeconds", 0)) - removed_seconds)
+        remaining_seconds -= removed_seconds
 
 
 def _hourly_deltas(current: list[dict[str, Any]], previous: list[dict[str, Any]]) -> list[dict[str, int]]:

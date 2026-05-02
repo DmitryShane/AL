@@ -2331,6 +2331,127 @@ def test_discord_meeting_graph_uses_full_interval_bucket_over_active_time():
     assert author["meetingSeconds"] == 2645
 
 
+def test_overtime_hourly_graph_fills_gap_when_overtime_continues_next_hour():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "displayName": "Denis Ostrovskiy",
+            "timeZoneId": "UTC",
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[19]["overtimeActiveSeconds"] = 52 * 60
+    hourly_activity[19]["overtimeActiveMicroseconds"] = 52 * 60 * 1_000_000
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Denis Ostrovskiy",
+            "projectId": "unity",
+            "date": "2026-05-01",
+            "activeSeconds": 32400,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 52 * 60,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "startedAt": dt.datetime(2026, 5, 1, 19, 10, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 1, 19, 14, tzinfo=dt.UTC),
+            "date": "2026-05-01",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 4 * 60,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Denis Ostrovskiy",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T19:52:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 19, 52, tzinfo=dt.UTC),
+            "overtimeActiveDeltaSeconds": 60,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Denis Ostrovskiy",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T20:03:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 20, 3, tzinfo=dt.UTC),
+            "overtimeActiveDeltaSeconds": 60,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-01", end_date="2026-05-01")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Denis Ostrovskiy")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Denis Ostrovskiy")["hourlyActivity"]
+    hour_19 = next(item for item in hourly if item["hour"] == 19)
+
+    assert hour_19["meetingSeconds"] == 4 * 60
+    assert hour_19["overtimeActiveSeconds"] == 56 * 60
+    assert author["overtimeActiveSeconds"] == 52 * 60
+    assert summary["totals"]["overtimeActiveSeconds"] == 52 * 60
+
+
+def test_overtime_hourly_graph_does_not_fill_gap_without_next_overtime_report():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "displayName": "Denis Ostrovskiy",
+            "timeZoneId": "UTC",
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[19]["overtimeActiveSeconds"] = 52 * 60
+    hourly_activity[19]["overtimeActiveMicroseconds"] = 52 * 60 * 1_000_000
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Denis Ostrovskiy",
+            "projectId": "unity",
+            "date": "2026-05-01",
+            "activeSeconds": 32400,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 52 * 60,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "startedAt": dt.datetime(2026, 5, 1, 19, 10, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 1, 19, 14, tzinfo=dt.UTC),
+            "date": "2026-05-01",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 4 * 60,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Denis Ostrovskiy",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T19:52:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 19, 52, tzinfo=dt.UTC),
+            "overtimeActiveDeltaSeconds": 60,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-01", end_date="2026-05-01")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Denis Ostrovskiy")["hourlyActivity"]
+    hour_19 = next(item for item in hourly if item["hour"] == 19)
+
+    assert hour_19["meetingSeconds"] == 4 * 60
+    assert hour_19["overtimeActiveSeconds"] == 52 * 60
+
+
 def test_discord_voice_events_open_and_close_meeting_session():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
