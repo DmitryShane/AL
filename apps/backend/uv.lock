@@ -97,7 +97,7 @@ dev = [
 requires-dist = [
     { name = "cryptography", specifier = ">=42.0.0" },
     { name = "discord-ext-voice-recv", specifier = ">=0.5.2a179" },
-    { name = "discord-py", specifier = "<2.7" },
+    { name = "discord-py", specifier = "==2.7.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },
     { name = "openai", specifier = ">=2.33.0" },
     { name = "pymongo", specifier = ">=4.10.0" },
@@ -303,6 +303,16 @@ wheels = [
 ]
 
 [[package]]
+name = "davey"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e3/1c/c083fd977688f0a5afadd51a4e9abbaf967be92700f5336a79469ffd9251/davey-0.1.0.tar.gz", hash = "sha256:4a0acd4ae1bd54c25bc2171b17745593bd15b25ffb5351fffb191f5902467f4d", size = 60422, upload-time = "2025-09-08T20:36:11.53Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/93/d80ab88d5253440c5e20fdc778ecdd066c9d0c6bd66107a630dda1171cce/davey-0.1.0-cp314-cp314-manylinux_2_12_i686.manylinux2010_i686.whl", hash = "sha256:9970eac743ff25cdc3039d74d744f95ef3e545eaa7c3335d12bc7a846430529a", size = 823928, upload-time = "2025-09-08T20:34:32.391Z" },
+    { url = "https://files.pythonhosted.org/packages/55/e0/7177e2d5e3ea31d9ac78264b1235bd2784eaaf3dc2a334b14345c78de5c9/davey-0.1.0-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c986c8df026aca336de55ced67582a7503076426d947f7bbc0c45a3358675dd8", size = 799361, upload-time = "2025-09-08T20:34:43.139Z" },
+]
+
+[[package]]
 name = "discord-ext-voice-recv"
 version = "0.5.2a179"
 source = { registry = "https://pypi.org/simple" }
@@ -316,19 +326,20 @@ wheels = [
 
 [[package]]
 name = "discord-py"
-version = "2.6.4"
+version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "audioop-lts" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ce/e7/9b1dbb9b2fc07616132a526c05af23cfd420381793968a189ee08e12e35f/discord_py-2.6.4.tar.gz", hash = "sha256:44384920bae9b7a073df64ae9b14c8cf85f9274b5ad5d1d07bd5a67539de2da9", size = 1092623, upload-time = "2025-10-08T21:45:43.593Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3b/6e/8c6ceba65e2c832fd00906bbfa3801c3a175eafc3039b47a7f587978e01f/discord_py-2.7.0.tar.gz", hash = "sha256:b40a36fd09232c958cef0640c7830f3cdc9b1d476e63355b91728576ac7dd1ba", size = 1106358, upload-time = "2026-02-27T18:53:17.074Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/ae/3d3a89b06f005dc5fa8618528dde519b3ba7775c365750f7932b9831ef05/discord_py-2.6.4-py3-none-any.whl", hash = "sha256:2783b7fb7f8affa26847bfc025144652c294e8fe6e0f8877c67ed895749eb227", size = 1209284, upload-time = "2025-10-08T21:45:41.679Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/92/eb023fe59414e179e17e3b20d4708da5248714c2832b4af55b8c0386bedd/discord_py-2.7.0-py3-none-any.whl", hash = "sha256:6abe8392d8127213b02ef714be41f843dd053775500bb2e7c596abb77e802b9b", size = 1227558, upload-time = "2026-02-27T18:53:15.381Z" },
 ]
 
 [package.optional-dependencies]
 voice = [
+    { name = "davey" },
     { name = "pynacl" },
 ]
 

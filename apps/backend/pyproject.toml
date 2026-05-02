@@ -6,7 +6,7 @@ requires-python = ">=3.14"
 dependencies = [
     "cryptography>=42.0.0",
     "discord-ext-voice-recv>=0.5.2a179",
-    "discord-py<2.7",
+    "discord-py==2.7.0",
     "fastapi[standard]>=0.115.0",
     "openai>=2.33.0",
     "pymongo>=4.10.0",
