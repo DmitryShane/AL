@@ -397,6 +397,7 @@ def update_discord_settings(settings_in: DiscordSettingsIn, _: dict = Depends(re
         meeting_summary_language=settings_in.meeting_summary_language,
         meeting_summary_recipient=settings_in.meeting_summary_recipient,
         meeting_audio_retention_seconds=settings_in.meeting_audio_retention_seconds,
+        meeting_summary_prompt=settings_in.meeting_summary_prompt,
     )
 
 
@@ -589,11 +590,12 @@ def record_discord_meeting_recording_finished(
             audio_quality_status=audio_quality_status,
             audio_size_bytes=audio_size_bytes,
             audio_path=temp_path,
-            summary_generator=lambda path, people, language, progress_callback=None: generate_meeting_summary(
+            summary_generator=lambda path, people, language, prompt_template, progress_callback=None: generate_meeting_summary(
                 settings,
                 path,
                 participant_names=people,
                 language=language,
+                prompt_template=prompt_template,
                 progress_callback=progress_callback,
             ),
         )

@@ -215,6 +215,7 @@ type Summary = {
     meetingSummaryLanguage: string;
     meetingSummaryRecipient: string;
     meetingAudioRetentionSeconds: number;
+    meetingSummaryPrompt: string;
   };
   activitySummary: ActivitySummary;
 };
@@ -1830,6 +1831,7 @@ function SettingsPage({
   const [meetingSummaryLanguage, setMeetingSummaryLanguage] = useState(summary?.discordSettings.meetingSummaryLanguage ?? "English");
   const [meetingSummaryRecipient, setMeetingSummaryRecipient] = useState(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
   const [meetingAudioRetention, setMeetingAudioRetention] = useState(String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0));
+  const [meetingSummaryPrompt, setMeetingSummaryPrompt] = useState(summary?.discordSettings.meetingSummaryPrompt ?? "");
   const [saving, setSaving] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
   const [aliasError, setAliasError] = useState("");
@@ -1857,6 +1859,7 @@ function SettingsPage({
     setMeetingSummaryLanguage(summary?.discordSettings.meetingSummaryLanguage ?? "English");
     setMeetingSummaryRecipient(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
     setMeetingAudioRetention(String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0));
+    setMeetingSummaryPrompt(summary?.discordSettings.meetingSummaryPrompt ?? "");
   }, [summary]);
 
   useEffect(() => {
@@ -1901,6 +1904,15 @@ function SettingsPage({
       window.clearInterval(intervalId);
     };
   }, [settingsTab]);
+
+  const meetingSummarySettingsDirty =
+    meetingSummariesEnabled !== Boolean(summary?.discordSettings.meetingSummariesEnabled) ||
+    meetingSummaryMinParticipants !== String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2) ||
+    meetingSummaryMinDuration !== String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120) ||
+    meetingSummaryLanguage !== (summary?.discordSettings.meetingSummaryLanguage ?? "English") ||
+    meetingSummaryRecipient !== (summary?.discordSettings.meetingSummaryRecipient ?? "work_chat") ||
+    meetingAudioRetention !== String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0) ||
+    meetingSummaryPrompt !== (summary?.discordSettings.meetingSummaryPrompt ?? "");
 
   async function saveProfile(rawAuthor: string) {
     const profile = drafts[rawAuthor];
@@ -2018,7 +2030,8 @@ function SettingsPage({
           meetingSummaryMinDurationSeconds: Number(meetingSummaryMinDuration),
           meetingSummaryLanguage,
           meetingSummaryRecipient,
-          meetingAudioRetentionSeconds: Number(meetingAudioRetention)
+          meetingAudioRetentionSeconds: Number(meetingAudioRetention),
+          meetingSummaryPrompt
         })
       });
 
@@ -2479,98 +2492,121 @@ function SettingsPage({
           </div>
         </div>
       ) : settingsTab === "meetingSummaries" ? (
-        <div className="panel">
-          <h2>Meeting Summaries</h2>
-          <p className="settings-caption">
-            Configure automatic Discord meeting summaries sent to the work Telegram chat.
-          </p>
-          <div className="settings-row">
-            <label>
-              Meeting summaries
-              <span className="checkbox-cell">
-                <input
-                  type="checkbox"
-                  checked={meetingSummariesEnabled}
-                  onChange={(event) => setMeetingSummariesEnabled(event.target.checked)}
-                />
-                Enabled
-              </span>
-            </label>
-            <label>
-              Min participants
-              <input
-                value={meetingSummaryMinParticipants}
-                onChange={(event) => setMeetingSummaryMinParticipants(event.target.value)}
-                type="number"
-                min="1"
-              />
-            </label>
-            <label>
-              Min duration, sec
-              <input
-                value={meetingSummaryMinDuration}
-                onChange={(event) => setMeetingSummaryMinDuration(event.target.value)}
-                type="number"
-                min="1"
-                step="30"
-              />
-            </label>
-            <label>
-              Summary language
-              <select value={meetingSummaryLanguage} onChange={(event) => setMeetingSummaryLanguage(event.target.value)}>
-                {MEETING_SUMMARY_LANGUAGES.map((language) => (
-                  <option value={language} key={language}>{language}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Send summaries to
-              <select value={meetingSummaryRecipient} onChange={(event) => setMeetingSummaryRecipient(event.target.value)}>
-                <option value="work_chat">Work chat</option>
-                {profiles
-                  .filter((profile) => profile.telegramUsername)
-                  .map((profile) => (
-                    <option value={profile.rawAuthor} key={profile.rawAuthor}>
-                      {profile.displayName || profile.rawAuthor}
-                      {profile.telegramPrivateChatId ? "" : " (send /start first)"}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <label>
-              Keep audio on server
-              <select value={meetingAudioRetention} onChange={(event) => setMeetingAudioRetention(event.target.value)}>
-                {MEETING_AUDIO_RETENTION_OPTIONS.map((option) => (
-                  <option value={String(option.value)} key={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-            <button className={settingsSaveButtonClassName(saveStatus.discord)} onClick={() => void saveDiscordSettings()} disabled={saving === "discord"}>
-              {settingsSaveButtonLabel("discord", saving, saveStatus)}
-            </button>
-          </div>
-          <div className="settings-section">
-            <h3>Recent meeting summary activity</h3>
+        <>
+          <div className="panel">
+            <h2>Meeting Summaries</h2>
             <p className="settings-caption">
-              Live status for the Discord recording, OpenAI summary, and Telegram delivery pipeline.
+              Configure automatic Discord meeting summaries sent to the work Telegram chat.
             </p>
-            {meetingRecordingsError ? (
-              <p className="empty">{meetingRecordingsError}</p>
-            ) : meetingRecordings.length ? (
-              <div className="settings-list">
-                {meetingRecordings.map((recording) => (
-                  <div className="settings-list-item" key={recording.recordingId}>
-                    <strong>{meetingRecordingStatusLabel(recording)}</strong>
-                    <span>{meetingRecordingDetail(recording)}</span>
-                    {recording.error ? <span className="alert-text">{recording.error}</span> : null}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="empty">No meeting summary activity yet.</p>
-            )}
+            <div className="settings-row meeting-summary-settings-row">
+              <label>
+                Meeting summaries
+                <span className="checkbox-cell">
+                  <input
+                    type="checkbox"
+                    checked={meetingSummariesEnabled}
+                    onChange={(event) => setMeetingSummariesEnabled(event.target.checked)}
+                  />
+                  Enabled
+                </span>
+              </label>
+              <label>
+                Min participants
+                <input
+                  value={meetingSummaryMinParticipants}
+                  onChange={(event) => setMeetingSummaryMinParticipants(event.target.value)}
+                  type="number"
+                  min="1"
+                />
+              </label>
+              <label>
+                Min duration, sec
+                <input
+                  value={meetingSummaryMinDuration}
+                  onChange={(event) => setMeetingSummaryMinDuration(event.target.value)}
+                  type="number"
+                  min="1"
+                  step="30"
+                />
+              </label>
+              <label>
+                Summary language
+                <select value={meetingSummaryLanguage} onChange={(event) => setMeetingSummaryLanguage(event.target.value)}>
+                  {MEETING_SUMMARY_LANGUAGES.map((language) => (
+                    <option value={language} key={language}>{language}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Send summaries to
+                <select value={meetingSummaryRecipient} onChange={(event) => setMeetingSummaryRecipient(event.target.value)}>
+                  <option value="work_chat">Work chat</option>
+                  {profiles
+                    .filter((profile) => profile.telegramUsername)
+                    .map((profile) => (
+                      <option value={profile.rawAuthor} key={profile.rawAuthor}>
+                        {profile.displayName || profile.rawAuthor}
+                        {profile.telegramPrivateChatId ? "" : " (send /start first)"}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
+                Keep audio on server
+                <select value={meetingAudioRetention} onChange={(event) => setMeetingAudioRetention(event.target.value)}>
+                  {MEETING_AUDIO_RETENTION_OPTIONS.map((option) => (
+                    <option value={String(option.value)} key={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </div>
-        </div>
+          <div className="meeting-summary-workspace">
+            <div className="panel">
+              <h3>Recent meeting summary activity</h3>
+              <p className="settings-caption">
+                Live status for the Discord recording, OpenAI summary, and Telegram delivery pipeline.
+              </p>
+              {meetingRecordingsError ? (
+                <p className="empty">{meetingRecordingsError}</p>
+              ) : meetingRecordings.length ? (
+                <div className="settings-list">
+                  {meetingRecordings.map((recording) => (
+                    <div className="settings-list-item" key={recording.recordingId}>
+                      <strong>{meetingRecordingStatusLabel(recording)}</strong>
+                      <span>{meetingRecordingDetail(recording)}</span>
+                      {recording.error ? <span className="alert-text">{recording.error}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="empty">No meeting summary activity yet.</p>
+              )}
+            </div>
+            <div className="panel meeting-summary-prompt-panel">
+              <h3>Summary instructions</h3>
+              <p className="settings-caption">
+                Prompt text used before the backend adds participants, required sections, language, and transcript automatically.
+              </p>
+              <label className="meeting-summary-prompt-field">
+                Prompt
+                <textarea
+                  value={meetingSummaryPrompt}
+                  onChange={(event) => setMeetingSummaryPrompt(event.target.value)}
+                  rows={12}
+                  placeholder="Instructions for turning a meeting transcript into a Telegram summary. The backend adds participants, required sections, language, and transcript automatically."
+                />
+              </label>
+              <button
+                className={settingsSaveButtonClassName(saveStatus.discord)}
+                onClick={() => void saveDiscordSettings()}
+                disabled={saving === "discord" || !meetingSummarySettingsDirty}
+              >
+                {settingsSaveButtonLabel("discord", saving, saveStatus)}
+              </button>
+            </div>
+          </div>
+        </>
       ) : (
         <SiteUsersPanel currentUser={currentUser} />
       )}

@@ -7,5 +7,7 @@
 			"path": "../unity-bike-rush-2/Packages/com.al.ual"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"python.defaultInterpreterPath": "${workspaceFolder:AL}/apps/backend/.venv/bin/python"
+	}
 }

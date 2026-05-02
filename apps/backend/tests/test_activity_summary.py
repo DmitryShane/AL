@@ -3,6 +3,7 @@ import re
 import unicodedata
 
 from al_backend.discord_author_mappings import apply_discord_author_mappings
+from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, meeting_summary_sections, render_meeting_summary_prompt
 from al_backend.repository import (
     Repository,
     _add_break_interval_to_buckets,
@@ -1945,11 +1946,36 @@ def test_discord_settings_default_and_save():
         meeting_summary_language="English",
         meeting_summary_recipient="work_chat",
         meeting_audio_retention_seconds=0,
+        meeting_summary_prompt="Custom summary prompt.",
     )
 
     assert result["meetingAutoAfkTimeoutSeconds"] == 900
     assert result["meetingSummariesEnabled"] is True
+    assert result["meetingSummaryPrompt"] == "Custom summary prompt."
     assert repo.get_discord_settings()["meetingAutoAfkTimeoutSeconds"] == 900
+
+
+def test_discord_settings_include_default_meeting_summary_prompt():
+    repo = fake_repository()
+
+    prompt = repo.get_discord_settings()["meetingSummaryPrompt"]
+
+    assert prompt == DEFAULT_MEETING_SUMMARY_PROMPT
+    assert "{transcript}" not in prompt
+
+
+def test_default_meeting_summary_prompt_renders_sections():
+    prompt = render_meeting_summary_prompt(
+        DEFAULT_MEETING_SUMMARY_PROMPT,
+        language="English",
+        participants="Dmitry, Igor",
+        sections=meeting_summary_sections("English"),
+        transcript="We agreed to fix Discord recordings.",
+    )
+
+    assert "Expected participants: Dmitry, Igor" in prompt
+    assert "Action items:" in prompt
+    assert "Transcript:\nWe agreed to fix Discord recordings." in prompt
 
 
 def test_meeting_recording_finished_creates_summary_notification():
@@ -1962,6 +1988,7 @@ def test_meeting_recording_finished_creates_summary_notification():
         meeting_summary_language="English",
         meeting_summary_recipient="work_chat",
         meeting_audio_retention_seconds=0,
+        meeting_summary_prompt="",
     )
 
     class FakeSummary:
@@ -1977,7 +2004,7 @@ def test_meeting_recording_finished_creates_summary_notification():
         participant_discord_user_ids=["1", "2"],
         participant_names=["Dmitry", "Igor"],
         audio_path="/tmp/missing.wav",
-        summary_generator=lambda path, people, language, progress_callback=None: FakeSummary(),
+        summary_generator=lambda path, people, language, prompt_template, progress_callback=None: FakeSummary(),
     )
     notifications = repo.claim_due_telegram_meeting_summary_notifications()
 
@@ -1996,6 +2023,7 @@ def test_meeting_recording_finished_skips_solo_recording():
         meeting_summary_language="English",
         meeting_summary_recipient="work_chat",
         meeting_audio_retention_seconds=0,
+        meeting_summary_prompt="",
     )
 
     result = repo.process_meeting_recording_finished(
@@ -2007,7 +2035,7 @@ def test_meeting_recording_finished_skips_solo_recording():
         participant_discord_user_ids=["1"],
         participant_names=["Dmitry"],
         audio_path="/tmp/missing.wav",
-        summary_generator=lambda path, people, language, progress_callback=None: None,
+        summary_generator=lambda path, people, language, prompt_template, progress_callback=None: None,
     )
 
     assert result["status"] == "skipped_not_enough_participants"
@@ -2024,6 +2052,7 @@ def test_meeting_recording_finished_skips_empty_work_summary():
         meeting_summary_language="Russian",
         meeting_summary_recipient="work_chat",
         meeting_audio_retention_seconds=0,
+        meeting_summary_prompt="",
     )
 
     class FakeSummary:
@@ -2039,7 +2068,7 @@ def test_meeting_recording_finished_skips_empty_work_summary():
         participant_discord_user_ids=["1"],
         participant_names=["Dmitry"],
         audio_path="/tmp/missing.m4a",
-        summary_generator=lambda path, people, language, progress_callback=None: FakeSummary(),
+        summary_generator=lambda path, people, language, prompt_template, progress_callback=None: FakeSummary(),
     )
 
     assert result["status"] == "skipped_empty_transcript"
@@ -2056,10 +2085,11 @@ def test_meeting_recording_finished_skips_corrupted_audio_before_openai():
         meeting_summary_language="English",
         meeting_summary_recipient="work_chat",
         meeting_audio_retention_seconds=0,
+        meeting_summary_prompt="",
     )
     called = False
 
-    def fake_summary_generator(path, people, language, progress_callback=None):
+    def fake_summary_generator(path, people, language, prompt_template, progress_callback=None):
         nonlocal called
         called = True
 
@@ -2249,13 +2279,14 @@ def test_meeting_recording_tracks_openai_pipeline_status():
         meeting_summary_language="English",
         meeting_summary_recipient="work_chat",
         meeting_audio_retention_seconds=0,
+        meeting_summary_prompt="",
     )
 
     class FakeSummary:
         transcript = "Dmitry agreed to create a task."
         summary = "Participants:\n- Dmitry\n\nDecisions:\n- Create a task.\n\nAction items:\n- Create a task.\n\nOpen questions:\n- None."
 
-    def fake_summary_generator(path, people, language, progress_callback=None):
+    def fake_summary_generator(path, people, language, prompt_template, progress_callback=None):
         progress_callback("transcribing_openai")
         progress_callback("summarizing_openai")
         return FakeSummary()

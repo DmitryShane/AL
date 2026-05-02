@@ -2120,6 +2120,7 @@ p {
 }
 
 .settings-row input,
+.settings-row textarea,
 .profile-create-card input,
 .profile-create-card select,
 .profile-row input,
@@ -2129,6 +2130,59 @@ p {
   border: 1px solid #d8e0e8;
   border-radius: 8px;
   padding: 8px 10px;
+}
+
+.settings-row textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.settings-row .wide-field {
+  flex-basis: 100%;
+}
+
+.meeting-summary-settings-row {
+  flex-wrap: wrap;
+}
+
+.meeting-summary-workspace {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(460px, 1.1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.meeting-summary-workspace > .panel {
+  min-width: 0;
+}
+
+.meeting-summary-workspace h3 {
+  margin: 0;
+}
+
+.meeting-summary-prompt-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.meeting-summary-prompt-field {
+  display: grid;
+  gap: 6px;
+  color: #718093;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.meeting-summary-prompt-field textarea {
+  min-height: 300px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  padding: 10px;
+  resize: vertical;
+}
+
+.meeting-summary-prompt-panel button {
+  justify-self: end;
 }
 
 .settings-caption {
@@ -3187,6 +3241,10 @@ p {
   }
 
   .settings-card-row {
+    grid-template-columns: 1fr;
+  }
+
+  .meeting-summary-workspace {
     grid-template-columns: 1fr;
   }
 

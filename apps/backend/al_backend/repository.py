@@ -11,6 +11,7 @@ from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from pymongo.database import Database
 
+from .meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT
 from .settings import Settings
 from .auth import hash_password, new_session_token, session_token_hash, verify_password
 
@@ -410,6 +411,7 @@ class Repository:
                     "meetingSummaryLanguage": current["meetingSummaryLanguage"],
                     "meetingSummaryRecipient": current["meetingSummaryRecipient"],
                     "meetingAudioRetentionSeconds": current["meetingAudioRetentionSeconds"],
+                    "meetingSummaryPrompt": current["meetingSummaryPrompt"],
                     "updatedAt": now,
                 }
             },
@@ -427,6 +429,7 @@ class Repository:
         meeting_summary_language: str,
         meeting_summary_recipient: str,
         meeting_audio_retention_seconds: int,
+        meeting_summary_prompt: str,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         self.db.system_settings.update_one(
@@ -441,6 +444,7 @@ class Repository:
                     "meetingSummaryLanguage": meeting_summary_language.strip() or "English",
                     "meetingSummaryRecipient": meeting_summary_recipient.strip() or "work_chat",
                     "meetingAudioRetentionSeconds": meeting_audio_retention_seconds,
+                    "meetingSummaryPrompt": meeting_summary_prompt.strip() or DEFAULT_MEETING_SUMMARY_PROMPT,
                     "updatedAt": now,
                 }
             },
@@ -460,6 +464,9 @@ class Repository:
             "meetingSummaryLanguage": str(settings.get("meetingSummaryLanguage") or "English"),
             "meetingSummaryRecipient": str(settings.get("meetingSummaryRecipient") or "work_chat"),
             "meetingAudioRetentionSeconds": int(settings.get("meetingAudioRetentionSeconds", 0)),
+            "meetingSummaryPrompt": str(
+                settings.get("meetingSummaryPrompt") or settings.get("meetingAudioEditPrompt") or DEFAULT_MEETING_SUMMARY_PROMPT
+            ),
         }
 
     def create_report_challenge(self, challenge_in: Any, keys: Any) -> dict[str, Any]:
@@ -2775,6 +2782,7 @@ class Repository:
                 audio_path,
                 participant_names,
                 str(settings["meetingSummaryLanguage"]),
+                str(settings["meetingSummaryPrompt"]),
                 progress_callback=lambda status: self._update_meeting_recording_pipeline_status(recording_id, status),
             )
         except Exception as exc:
