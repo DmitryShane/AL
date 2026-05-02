@@ -421,31 +421,28 @@ def meeting_summary_chat_id(default_chat_id: int, notification: dict[str, Any]) 
 
 
 def format_meeting_summary_message(notification: dict[str, Any], summary_text: str) -> str:
-    started_at = format_meeting_summary_timestamp(str(notification.get("startedAt") or ""))
-    duration_seconds = int(notification.get("durationSeconds") or 0)
-    duration = format_duration_label(duration_seconds) if duration_seconds else "unknown duration"
+    started_at = format_meeting_summary_date(str(notification.get("startedAt") or ""))
     participants = notification.get("participantNames") if isinstance(notification.get("participantNames"), list) else []
     participants_text = ", ".join(str(item) for item in participants if str(item).strip()) or "Unknown participants"
 
     return (
         "Meeting summary\n"
         f"Date: {started_at}\n"
-        f"Duration: {duration}\n"
         f"Participants: {participants_text}\n\n"
         f"{summary_text}"
     )
 
 
-def format_meeting_summary_timestamp(value: str) -> str:
+def format_meeting_summary_date(value: str) -> str:
     if not value:
-        return "unknown time"
+        return "unknown date"
 
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return value
 
-    return parsed.astimezone().strftime("%Y-%m-%d %H:%M")
+    return parsed.astimezone().strftime("%Y-%m-%d")
 
 
 def mark_reminder_sent(

@@ -45,22 +45,23 @@ def generate_meeting_summary(
         progress_callback("summarizing_openai")
 
     participants = ", ".join(participant_names) if participant_names else "Unknown participants"
+    sections = meeting_summary_sections(language)
     prompt = (
-        f"Write a concise work-only meeting summary in {language}.\n"
+        f"Write a concise work-only meeting summary in {language}. All section titles and all content must be in {language}.\n"
         "Use only facts explicitly present in the transcript. Do not invent tasks, owners, deadlines, decisions, or context.\n"
         "Ignore greetings, jokes, small talk, filler, repeated phrases, and off-topic conversation.\n"
         "Include only work-relevant discussion: goals, problems discussed, decisions, action items, blockers, and open questions.\n"
-        "If a section has no real content, write 'None'.\n"
-        "Never apologize or ask for a transcript. If the transcript has no usable work content, return the required sections with 'None'.\n"
+        f"If a section has no real content, write '{sections['none']}'.\n"
+        f"Never apologize or ask for a transcript. If the transcript has no usable work content, return the required sections with '{sections['none']}'.\n"
         "For action items, include an owner or deadline only if explicitly mentioned.\n"
         "Keep every bullet short and practical for a work Telegram chat.\n\n"
         f"Expected participants: {participants}\n\n"
-        "Return exactly these sections:\n"
-        "Participants:\n"
-        "Discussed:\n"
-        "Decisions:\n"
-        "Action items:\n"
-        "Open questions:\n\n"
+        f"Return exactly these sections:\n"
+        f"{sections['participants']}:\n"
+        f"{sections['discussed']}:\n"
+        f"{sections['decisions']}:\n"
+        f"{sections['action_items']}:\n"
+        f"{sections['open_questions']}:\n\n"
         f"Transcript:\n{transcript}"
     )
     response = client.responses.create(
@@ -69,3 +70,24 @@ def generate_meeting_summary(
     )
     summary = str(getattr(response, "output_text", "") or "").strip()
     return MeetingSummaryResult(transcript=transcript, summary=summary)
+
+
+def meeting_summary_sections(language: str) -> dict[str, str]:
+    if language.strip().lower() == "russian":
+        return {
+            "participants": "Участники",
+            "discussed": "Обсудили",
+            "decisions": "Решения",
+            "action_items": "Задачи",
+            "open_questions": "Открытые вопросы",
+            "none": "Нет",
+        }
+
+    return {
+        "participants": "Participants",
+        "discussed": "Discussed",
+        "decisions": "Decisions",
+        "action_items": "Action items",
+        "open_questions": "Open questions",
+        "none": "None",
+    }

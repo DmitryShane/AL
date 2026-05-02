@@ -2103,8 +2103,8 @@ def test_meeting_summary_message_includes_meeting_metadata():
     )
 
     assert "Date: 2026-05-01" in message
-    assert "Duration: 3 minutes" in message
     assert "Participants: Dmitry, Igor" in message
+    assert "Duration:" not in message
     assert "Discussed:" in message
 
 
