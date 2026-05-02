@@ -71,7 +71,7 @@ WINDOWS_TIME_ZONE_IDS = {
 
 
 class Repository:
-    aggregates_version = 25
+    aggregates_version = 26
 
     def __init__(self, settings: Settings):
         self.client: MongoClient = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=1500)
@@ -294,7 +294,14 @@ class Repository:
 
         return DEFAULT_IDLE_THRESHOLD_SECONDS
 
+    def get_plugin_ingest_enabled(self) -> bool:
+        settings = self.db.system_settings.find_one({"kind": "plugins"}, {"_id": 0, "pluginIngestEnabled": 1}) or {}
+        return settings.get("pluginIngestEnabled") is not False
+
     def is_plugin_enabled_for_author(self, author: str) -> bool:
+        if not self.get_plugin_ingest_enabled():
+            return False
+
         author = self.resolve_author_alias(_normalize_author(author))
         profile = self.db.author_profiles.find_one({"rawAuthor": author}, {"pluginEnabled": 1})
 
@@ -378,6 +385,7 @@ class Repository:
         self,
         default_send_interval_seconds: int | None,
         idle_threshold_seconds: int | None,
+        plugin_ingest_enabled: bool | None,
         author: str | None,
         author_send_interval_seconds: int | None,
     ) -> dict[str, Any]:
@@ -395,6 +403,13 @@ class Repository:
             self.db.interval_settings.update_one(
                 {"kind": "global"},
                 {"$set": global_update},
+                upsert=True,
+            )
+
+        if plugin_ingest_enabled is not None:
+            self.db.system_settings.update_one(
+                {"kind": "plugins"},
+                {"$set": {"kind": "plugins", "pluginIngestEnabled": plugin_ingest_enabled, "updatedAt": now}},
                 upsert=True,
             )
 
@@ -425,6 +440,7 @@ class Repository:
                 global_setting.get("sendIntervalSeconds", self.default_send_interval_seconds)
             ),
             "idleThresholdSeconds": int(global_setting.get("idleThresholdSeconds", DEFAULT_IDLE_THRESHOLD_SECONDS)),
+            "pluginIngestEnabled": self.get_plugin_ingest_enabled(),
             "authors": author_settings,
         }
 
@@ -1592,37 +1608,29 @@ class Repository:
                 continue
 
             local_latest_report_at = _to_local_datetime(latest_report_at, time_zone_id)
-            hour_start = local_latest_report_at.replace(minute=0, second=0, microsecond=0)
-            elapsed_seconds = max(0, int((local_latest_report_at - hour_start).total_seconds()))
-
-            if elapsed_seconds <= 0:
-                continue
-
             hourly_activity = hourly_author.get("hourlyActivity", [])
 
-            if local_latest_report_at.hour < 0 or local_latest_report_at.hour >= len(hourly_activity):
+            if not hourly_activity:
                 continue
 
-            hour = hourly_activity[local_latest_report_at.hour]
-            accounted_seconds = (
-                int(hour.get("activeSeconds", 0))
-                + int(hour.get("idleSeconds", 0))
-                + int(hour.get("breakSeconds", 0))
-                + int(hour.get("meetingSeconds", 0))
-                + int(hour.get("overtimeActiveSeconds", 0))
-            )
-            gap_seconds = max(0, elapsed_seconds - accounted_seconds)
-            remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - int(author_row.get("pluginDaySeconds", 0)))
-            idle_seconds = min(gap_seconds, remaining_plugin_seconds)
+            visual_plugin_seconds = int(author_row.get("pluginDaySeconds", 0))
 
-            if idle_seconds <= 0:
-                continue
+            for hour_index in range(0, min(local_latest_report_at.hour, len(hourly_activity))):
+                hour = hourly_activity[hour_index]
+                accounted_seconds = _visual_hour_occupied_seconds(hour)
 
-            _add_idle_seconds_to_hour(hour, idle_seconds)
-            author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) + idle_seconds
-            author_row["pluginDaySeconds"] = int(author_row.get("pluginDaySeconds", 0)) + idle_seconds
-            totals["idleSeconds"] = int(totals.get("idleSeconds", 0)) + idle_seconds
-            totals["pluginDaySeconds"] = int(totals.get("pluginDaySeconds", 0)) + idle_seconds
+                if accounted_seconds <= 0:
+                    continue
+
+                gap_seconds = max(0, 3600 - min(3600, accounted_seconds))
+                remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - visual_plugin_seconds)
+                idle_seconds = min(gap_seconds, remaining_plugin_seconds)
+
+                if idle_seconds <= 0:
+                    continue
+
+                _add_idle_seconds_to_hour(hour, idle_seconds)
+                visual_plugin_seconds += idle_seconds
 
     def _apply_offline_idle_gaps(
         self,
@@ -1669,11 +1677,6 @@ class Repository:
             hourly_activity = _empty_hourly_activity()
             _add_idle_interval_to_buckets(hourly_activity, latest_report_at, idle_end, time_zone_id)
             _merge_hourly_activity(hourly_author["hourlyActivity"], hourly_activity)
-
-            author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) + idle_seconds
-            author_row["pluginDaySeconds"] = int(author_row.get("pluginDaySeconds", 0)) + idle_seconds
-            totals["idleSeconds"] = int(totals.get("idleSeconds", 0)) + idle_seconds
-            totals["pluginDaySeconds"] = int(totals.get("pluginDaySeconds", 0)) + idle_seconds
 
     def _apply_workday_hour_idle_gaps(
         self,
@@ -1726,7 +1729,11 @@ class Repository:
                     hour_start = current_hour
                     hour_end = current_hour + dt.timedelta(hours=1)
                     expected_start = max(local_start, hour_start)
-                    expected_end = min(local_end, hour_end)
+                    if hour_end > local_end:
+                        current_hour += dt.timedelta(hours=1)
+                        continue
+
+                    expected_end = hour_end
                     expected_seconds = max(0, int((expected_end - expected_start).total_seconds()))
                     occupied_seconds = _visual_hour_occupied_seconds(hourly_activity[hour_index])
 
@@ -1741,10 +1748,6 @@ class Repository:
 
                     if idle_seconds > 0:
                         _add_idle_seconds_to_hour(hourly_activity[hour_index], idle_seconds)
-                        author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) + idle_seconds
-                        author_row["pluginDaySeconds"] = int(author_row.get("pluginDaySeconds", 0)) + idle_seconds
-                        totals["idleSeconds"] = int(totals.get("idleSeconds", 0)) + idle_seconds
-                        totals["pluginDaySeconds"] = int(totals.get("pluginDaySeconds", 0)) + idle_seconds
 
                 current_hour += dt.timedelta(hours=1)
 
@@ -4679,10 +4682,9 @@ class Repository:
             batch_id = str(batch.get("batchId") or "")
             author = str(batch.get("author") or "Unknown User")
             cutoff = last_report_time_by_author.get(author)
-            batch_deltas, last_event = _merge_event_delta_items(batch_delta_items_by_batch_id.get(batch_id, []), cutoff)
-            row = self._build_event_batch_report_row(batch, batch_deltas, last_event)
+            rows = self._build_event_batch_report_rows(batch, batch_delta_items_by_batch_id.get(batch_id, []), cutoff)
 
-            if row:
+            for row in rows:
                 self.db.report_rows.insert_one(row)
                 row_time = _report_row_time(row)
 
@@ -4792,6 +4794,9 @@ class Repository:
         if _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") > 0:
             return False
 
+        if deltas.get("overtimeActivityCountDeltas") or deltas.get("overtimeSavedPrefabDeltas"):
+            return False
+
         received_at = _coerce_datetime(item.get("receivedAt") or item.get("lastReceivedAt"))
 
         if not received_at:
@@ -4839,8 +4844,7 @@ class Repository:
         session_id = str(payload.get("sessionId") or "")
         resolved_device_id = str(device_id or payload.get("deviceId") or "")
         batch_id = _new_id()
-        batch_deltas = _empty_batch_deltas()
-        last_event: dict[str, Any] | None = None
+        batch_delta_items: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
         self.update_author_email(author, author_email)
         batch = {
@@ -4902,47 +4906,60 @@ class Repository:
                 continue
 
             deltas = self._apply_raw_event_to_aggregates(event)
-            _merge_batch_deltas(batch_deltas, deltas)
-            last_event = event
+            batch_delta_items.append((event, deltas))
 
-        row = self._build_event_batch_report_row(batch, batch_deltas, last_event)
+        rows = self._build_event_batch_report_rows(batch, batch_delta_items)
 
-        if not row:
+        if not rows:
             return
 
-        self.db.report_rows.insert_one(row)
-        report_time = _coerce_datetime(last_event.get("occurredAtUtc") or last_event.get("occurredAtLocal")) or received_at
-        if _has_active_or_overtime_delta(batch_deltas):
-            self._schedule_telegram_break_activity_prompt_if_needed(author, str(last_event.get("date") or ""), source, report_time)
-        self._schedule_telegram_online_prompt_if_needed(author, str(last_event.get("date") or ""), source, received_at)
+        for row in rows:
+            self.db.report_rows.insert_one(row)
+            report_time = _report_row_time(row) or received_at
 
-    def _build_event_batch_report_row(
-        self, batch: dict[str, Any], batch_deltas: dict[str, Any] | None, last_event: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
-        if not last_event or not batch_deltas or not _has_time_delta(batch_deltas):
-            return None
+            if _has_active_or_overtime_delta(row):
+                self._schedule_telegram_break_activity_prompt_if_needed(author, str(row.get("date") or ""), source, report_time)
 
-        return {
-            "source": batch.get("source"),
-            "pluginVersion": batch.get("pluginVersion"),
-            "author": batch.get("author") or "Unknown User",
-            "authorEmail": batch.get("authorEmail", ""),
-            "projectId": batch.get("projectId") or "",
-            "sessionId": batch.get("sessionId") or "",
-            "deviceId": batch.get("deviceId") or "",
-            "date": last_event.get("date"),
-            "recordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
-            "receivedAt": batch.get("receivedAt"),
-            "lastRecordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
-            "lastReceivedAt": batch.get("receivedAt"),
-            "timeZoneId": last_event.get("timeZoneId"),
-            "timeZoneDisplayName": last_event.get("timeZoneDisplayName"),
-            "rawReportId": batch.get("rawReportId"),
-            "batchId": batch.get("batchId"),
-            "challengeId": batch.get("challengeId"),
-            "reportType": batch.get("reportType", "auto"),
-            **batch_deltas,
-        }
+            self._schedule_telegram_online_prompt_if_needed(author, str(row.get("date") or ""), source, received_at)
+
+    def _build_event_batch_report_rows(
+        self,
+        batch: dict[str, Any],
+        delta_items: list[tuple[dict[str, Any], dict[str, Any]]],
+        cutoff: dt.datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        merged_items = _merge_event_delta_items_by_date(delta_items, cutoff)
+
+        for batch_deltas, last_event in merged_items:
+            if not last_event or not _has_time_delta(batch_deltas):
+                continue
+
+            rows.append(
+                {
+                    "source": batch.get("source"),
+                    "pluginVersion": batch.get("pluginVersion"),
+                    "author": batch.get("author") or "Unknown User",
+                    "authorEmail": batch.get("authorEmail", ""),
+                    "projectId": batch.get("projectId") or "",
+                    "sessionId": batch.get("sessionId") or "",
+                    "deviceId": batch.get("deviceId") or "",
+                    "date": last_event.get("date"),
+                    "recordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
+                    "receivedAt": batch.get("receivedAt"),
+                    "lastRecordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
+                    "lastReceivedAt": batch.get("receivedAt"),
+                    "timeZoneId": last_event.get("timeZoneId"),
+                    "timeZoneDisplayName": last_event.get("timeZoneDisplayName"),
+                    "rawReportId": batch.get("rawReportId"),
+                    "batchId": batch.get("batchId"),
+                    "challengeId": batch.get("challengeId"),
+                    "reportType": batch.get("reportType", "auto"),
+                    **batch_deltas,
+                }
+            )
+
+        return rows
 
     def _apply_raw_event_to_aggregates(self, event: dict[str, Any]) -> dict[str, Any]:
         event = dict(event)
@@ -4979,6 +4996,7 @@ class Repository:
         raw_is_activity = _is_activity_event(event)
         is_activity = raw_is_activity and (source_is_focused is not False or event_type == "focus")
         consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
+        overtime_window = self._overtime_window_for_event(event)
         idle_threshold_seconds = self.get_idle_threshold_for_author(str(event.get("author") or "Unknown User"))
 
         if event_type == "focus":
@@ -5014,6 +5032,7 @@ class Repository:
                         occurred_local_at,
                         interval_is_active,
                         consumed_normal_microseconds,
+                        overtime_window,
                     )
                     _merge_batch_deltas(deltas, interval_deltas)
 
@@ -5085,6 +5104,7 @@ class Repository:
                     heartbeat_local_end,
                     False,
                     consumed_normal_microseconds,
+                    overtime_window,
                 )
                 _merge_batch_deltas(deltas, interval_deltas)
                 last_accounting_at = heartbeat_end
@@ -5100,7 +5120,7 @@ class Repository:
             activity_type = _activity_count_type(event_type)
             activity_delta_key = "activityCountDeltas"
 
-            if _is_overtime_event_delta(consumed_normal_microseconds, deltas):
+            if _is_overtime_event_delta(consumed_normal_microseconds, deltas, overtime_window):
                 activity_delta_key = "overtimeActivityCountDeltas"
 
             deltas[activity_delta_key].append({"type": activity_type, "count": 1})
@@ -5110,7 +5130,7 @@ class Repository:
         if saved_prefab:
             saved_prefab_delta_key = "savedPrefabDeltas"
 
-            if _is_overtime_event_delta(consumed_normal_microseconds, deltas):
+            if _is_overtime_event_delta(consumed_normal_microseconds, deltas, overtime_window):
                 saved_prefab_delta_key = "overtimeSavedPrefabDeltas"
 
             deltas[saved_prefab_delta_key].append(saved_prefab)
@@ -5176,25 +5196,8 @@ class Repository:
 
     def _normal_microseconds_consumed_for_event(self, event: dict[str, Any]) -> int:
         work_window_microseconds = DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
-        event_time = _coerce_datetime(event.get("occurredAtUtc")) or event.get("occurredAt")
-        day_session = self.db.day_sessions.find_one(
-            {
-                "rawAuthor": event.get("author") or "Unknown User",
-                "date": event.get("date") or "",
-                "reminderAction": "overtime",
-            },
-            {"_id": 0, "daySeconds": 1, "lastOfflineAt": 1},
-        )
 
-        overtime_started_at = _coerce_datetime((day_session or {}).get("lastOfflineAt"))
-
-        if (
-            day_session
-            and int(day_session.get("daySeconds", 0)) >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS
-            and isinstance(event_time, dt.datetime)
-            and overtime_started_at
-            and event_time >= overtime_started_at
-        ):
+        if self._overtime_window_for_event(event):
             return work_window_microseconds
 
         consumed_microseconds = 0
@@ -5210,6 +5213,41 @@ class Repository:
             consumed_microseconds += _time_microseconds(current, "idleSeconds", "idleMicroseconds")
 
         return min(work_window_microseconds, max(0, consumed_microseconds))
+
+    def _overtime_window_for_event(self, event: dict[str, Any]) -> tuple[dt.datetime, dt.datetime] | None:
+        raw_author = str(event.get("author") or "Unknown User")
+        day_date = str(event.get("date") or "")
+        event_time = _coerce_datetime(event.get("occurredAtUtc")) or _coerce_datetime(event.get("occurredAt"))
+
+        if not raw_author or not day_date or not event_time:
+            return None
+
+        if not self._is_author_offline_after_latest_telegram_state(raw_author, day_date, event_time):
+            return None
+
+        day_session = self.db.day_sessions.find_one(
+            {"rawAuthor": raw_author, "date": day_date},
+            {"_id": 0, "lastOfflineAt": 1, "timeZoneId": 1},
+        )
+        overtime_started_at = _coerce_datetime((day_session or {}).get("lastOfflineAt"))
+
+        if not overtime_started_at:
+            return None
+
+        time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or _valid_time_zone_id((day_session or {}).get("timeZoneId")) or "UTC"
+
+        try:
+            day = dt.date.fromisoformat(day_date)
+            day_end_local = dt.datetime.combine(day + dt.timedelta(days=1), dt.time.min, ZoneInfo(time_zone_id))
+        except ValueError:
+            return None
+
+        day_end_at = day_end_local.astimezone(dt.UTC)
+
+        if event_time < overtime_started_at or event_time >= day_end_at:
+            return None
+
+        return overtime_started_at, day_end_at
 
     def _update_daily_author_activity(self, snapshot: dict[str, Any], deltas: dict[str, Any]) -> None:
         key = {
@@ -5536,6 +5574,34 @@ def _merge_event_delta_items(
     return batch_deltas, last_event
 
 
+def _merge_event_delta_items_by_date(
+    items: list[tuple[dict[str, Any], dict[str, Any]]], cutoff: dt.datetime | None
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    merged_by_date: dict[str, dict[str, Any]] = {}
+    last_event_by_date: dict[str, dict[str, Any]] = {}
+
+    for event, deltas in items:
+        event_time = _raw_event_time(event)
+
+        if cutoff and event_time and event_time <= cutoff:
+            continue
+
+        event_date = str(event.get("date") or "")
+
+        if not event_date:
+            continue
+
+        batch_deltas = merged_by_date.setdefault(event_date, _empty_batch_deltas())
+        _merge_batch_deltas(batch_deltas, deltas)
+        last_event_by_date[event_date] = event
+
+    return [
+        (batch_deltas, last_event_by_date[event_date])
+        for event_date, batch_deltas in merged_by_date.items()
+        if event_date in last_event_by_date
+    ]
+
+
 def _raw_event_time(event: dict[str, Any]) -> dt.datetime | None:
     return _coerce_datetime(event.get("occurredAtUtc")) or _parse_local_datetime(event.get("occurredAtLocal"))
 
@@ -5628,10 +5694,15 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
     return saved_file
 
 
-def _is_overtime_event_delta(consumed_normal_microseconds: int, deltas: dict[str, Any]) -> bool:
+def _is_overtime_event_delta(
+    consumed_normal_microseconds: int,
+    deltas: dict[str, Any],
+    overtime_window: tuple[dt.datetime, dt.datetime] | None = None,
+) -> bool:
     work_window_microseconds = DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
     return (
-        consumed_normal_microseconds >= work_window_microseconds
+        overtime_window is not None
+        and consumed_normal_microseconds >= work_window_microseconds
         or _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") > 0
     )
 
@@ -5643,6 +5714,7 @@ def _interval_deltas(
     local_end: dt.datetime,
     is_active: bool,
     consumed_normal_microseconds: int,
+    overtime_window: tuple[dt.datetime, dt.datetime] | None = None,
 ) -> dict[str, Any]:
     deltas = _empty_event_deltas()
 
@@ -5650,30 +5722,56 @@ def _interval_deltas(
         return deltas
 
     interval_microseconds = _duration_microseconds(start, end)
-    remaining_normal_microseconds = max(
-        0,
-        (DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND) - consumed_normal_microseconds,
-    )
-    normal_microseconds = min(interval_microseconds, remaining_normal_microseconds)
 
-    if normal_microseconds > 0:
-        local_normal_end = local_start + dt.timedelta(microseconds=normal_microseconds)
+    if not is_active and overtime_window:
+        overtime_start, _ = overtime_window
+        idle_end = min(end, overtime_start)
 
-        if is_active:
-            deltas["activeDeltaMicroseconds"] += normal_microseconds
-            deltas["activeDeltaSeconds"] = _seconds_from_microseconds(deltas["activeDeltaMicroseconds"])
-            _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_normal_end, "active")
-        else:
-            deltas["idleDeltaMicroseconds"] += normal_microseconds
+        if idle_end > start:
+            idle_microseconds = _duration_microseconds(start, idle_end)
+            local_idle_end = local_start + (idle_end - start)
+            deltas["idleDeltaMicroseconds"] += idle_microseconds
             deltas["idleDeltaSeconds"] = _seconds_from_microseconds(deltas["idleDeltaMicroseconds"])
-            _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_normal_end, "idle")
+            _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_idle_end, "idle")
 
-    if is_active and interval_microseconds > normal_microseconds:
-        local_overtime_start = local_start + dt.timedelta(microseconds=normal_microseconds)
-        overtime_microseconds = interval_microseconds - normal_microseconds
+        return deltas
+
+    if not is_active or not overtime_window:
+        bucket = "active" if is_active else "idle"
+        delta_microseconds_key = "activeDeltaMicroseconds" if is_active else "idleDeltaMicroseconds"
+        delta_seconds_key = "activeDeltaSeconds" if is_active else "idleDeltaSeconds"
+        deltas[delta_microseconds_key] += interval_microseconds
+        deltas[delta_seconds_key] = _seconds_from_microseconds(deltas[delta_microseconds_key])
+        _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_end, bucket)
+        return deltas
+
+    overtime_start, overtime_end = overtime_window
+    normal_end = min(end, overtime_start)
+
+    if normal_end > start:
+        normal_microseconds = _duration_microseconds(start, normal_end)
+        local_normal_end = local_start + (normal_end - start)
+        deltas["activeDeltaMicroseconds"] += normal_microseconds
+        deltas["activeDeltaSeconds"] = _seconds_from_microseconds(deltas["activeDeltaMicroseconds"])
+        _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_normal_end, "active")
+
+    overtime_segment_start = max(start, overtime_start)
+    overtime_segment_end = min(end, overtime_end)
+
+    if overtime_segment_end > overtime_segment_start:
+        overtime_microseconds = _duration_microseconds(overtime_segment_start, overtime_segment_end)
+        local_overtime_start = local_start + (overtime_segment_start - start)
+        local_overtime_end = local_start + (overtime_segment_end - start)
         deltas["overtimeActiveDeltaMicroseconds"] += overtime_microseconds
         deltas["overtimeActiveDeltaSeconds"] = _seconds_from_microseconds(deltas["overtimeActiveDeltaMicroseconds"])
-        _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_overtime_start, local_end, "overtime")
+        _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_overtime_start, local_overtime_end, "overtime")
+
+    if end > overtime_end:
+        local_after_overtime_start = local_start + (overtime_end - start)
+        after_overtime_microseconds = _duration_microseconds(overtime_end, end)
+        deltas["activeDeltaMicroseconds"] += after_overtime_microseconds
+        deltas["activeDeltaSeconds"] = _seconds_from_microseconds(deltas["activeDeltaMicroseconds"])
+        _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_after_overtime_start, local_end, "active")
 
     return deltas
 

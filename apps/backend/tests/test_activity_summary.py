@@ -247,12 +247,52 @@ def test_interval_settings_include_independent_idle_threshold():
     result = repo.upsert_interval_settings(
         default_send_interval_seconds=120,
         idle_threshold_seconds=450,
+        plugin_ingest_enabled=None,
         author=None,
         author_send_interval_seconds=None,
     )
 
     assert result["defaultSendIntervalSeconds"] == 120
     assert result["idleThresholdSeconds"] == 450
+    assert result["pluginIngestEnabled"] is True
+
+
+def test_interval_settings_include_global_plugin_ingest_toggle():
+    repo = fake_repository()
+
+    result = repo.upsert_interval_settings(
+        default_send_interval_seconds=None,
+        idle_threshold_seconds=None,
+        plugin_ingest_enabled=False,
+        author=None,
+        author_send_interval_seconds=None,
+    )
+
+    assert result["pluginIngestEnabled"] is False
+    assert repo.get_plugin_ingest_enabled() is False
+    assert repo.is_plugin_enabled_for_author("Future Artist") is False
+
+
+def test_submit_report_ignores_without_writes_when_global_plugin_ingest_disabled(monkeypatch):
+    from al_backend import main as backend_main
+    from al_backend.models import ReportIn
+
+    repo = fake_repository()
+    repo.db.system_settings.insert_one({"kind": "plugins", "pluginIngestEnabled": False})
+    monkeypatch.setattr(backend_main.app.state, "repo", repo, raising=False)
+
+    result = backend_main.submit_report(
+        ReportIn(source="cur", pluginVersion="1.0.0", challengeId="challenge-1", encryptedPacket="not-decoded")
+    )
+
+    assert result.ok
+    assert result.ignored
+    assert result.report_id == ""
+    assert repo.db.raw_reports.items == []
+    assert repo.db.raw_event_batches.items == []
+    assert repo.db.raw_activity_events.items == []
+    assert repo.db.activity_snapshots.items == []
+    assert repo.db.report_rows.items == []
 
 
 def test_productivity_penalizes_break_time_after_first_hour():
@@ -1003,8 +1043,99 @@ def test_activity_summary_fills_intraday_partial_hour_gap_as_idle_not_missed():
     assert hour_16["idleSeconds"] == 921
     assert hour_16["missedSeconds"] == 0
     assert hour_16["activeSeconds"] + hour_16["idleSeconds"] == 3600
-    assert author["idleSeconds"] == 921
-    assert author["pluginDaySeconds"] == 3600
+    assert author["idleSeconds"] == 837
+    assert author["pluginDaySeconds"] == 3516
+    assert summary["totals"]["idleSeconds"] == 837
+    assert summary["totals"]["pluginDaySeconds"] == 3516
+
+
+def test_activity_summary_current_plugin_hour_gap_is_not_filled():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "timeZoneId": "UTC"})
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[10]["activeSeconds"] = 60
+    hourly_activity[10]["activeMicroseconds"] = 60 * 1_000_000
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Dmitry Shane",
+            "projectId": "AL",
+            "date": "2026-05-03",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "cur",
+            "author": "Dmitry Shane",
+            "date": "2026-05-03",
+            "recordedAt": "2026-05-03T10:02:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 3, 10, 2, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+            "idleDeltaSeconds": 0,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-03", end_date="2026-05-03")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Dmitry Shane")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Dmitry Shane")["hourlyActivity"]
+    hour_10 = next(item for item in hourly if item["hour"] == 10)
+
+    assert hour_10["idleSeconds"] == 0
+    assert author["idleSeconds"] == 0
+    assert author["pluginDaySeconds"] == 60
+    assert summary["totals"]["idleSeconds"] == 0
+    assert summary["totals"]["pluginDaySeconds"] == 60
+
+
+def test_activity_summary_previous_plugin_hour_gap_is_visual_only_after_next_hour_report():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "timeZoneId": "UTC"})
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[10]["activeSeconds"] = 60
+    hourly_activity[10]["activeMicroseconds"] = 60 * 1_000_000
+    hourly_activity[11]["activeSeconds"] = 30
+    hourly_activity[11]["activeMicroseconds"] = 30 * 1_000_000
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Dmitry Shane",
+            "projectId": "AL",
+            "date": "2026-05-03",
+            "activeSeconds": 90,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "cur",
+            "author": "Dmitry Shane",
+            "date": "2026-05-03",
+            "recordedAt": "2026-05-03T11:02:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 3, 11, 2, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 30,
+            "idleDeltaSeconds": 0,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-03", end_date="2026-05-03")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Dmitry Shane")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Dmitry Shane")["hourlyActivity"]
+    hour_10 = next(item for item in hourly if item["hour"] == 10)
+    hour_11 = next(item for item in hourly if item["hour"] == 11)
+
+    assert hour_10["idleSeconds"] == 3540
+    assert hour_10["activeSeconds"] + hour_10["idleSeconds"] == 3600
+    assert hour_11["idleSeconds"] == 0
+    assert author["idleSeconds"] == 0
+    assert author["pluginDaySeconds"] == 90
+    assert summary["totals"]["idleSeconds"] == 0
+    assert summary["totals"]["pluginDaySeconds"] == 90
 
 
 def test_activity_summary_marks_visual_missed_time_after_latest_plugin_report():
@@ -1082,7 +1213,7 @@ def test_activity_summary_uses_offline_only_as_visual_missed_end_trigger():
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[20]["missedEndSeconds"] == 50 * 60
+    assert hourly_by_hour[20]["missedEndSeconds"] == 51 * 60
     assert hourly_by_hour[21]["missedEndSeconds"] == 0
 
 
@@ -1272,10 +1403,10 @@ def test_activity_summary_counts_latest_report_to_offline_gap_as_idle():
     assert hourly_by_hour[20]["idleSeconds"] == 10 * 60
     assert hourly_by_hour[20]["missedEndSeconds"] == 50 * 60
     assert hourly_by_hour[20]["missedSeconds"] == 50 * 60
-    assert author["idleSeconds"] == 10 * 60
-    assert author["pluginDaySeconds"] == 10 * 60
-    assert summary["totals"]["idleSeconds"] == 10 * 60
-    assert summary["totals"]["pluginDaySeconds"] == 10 * 60
+    assert author["idleSeconds"] == 7 * 60
+    assert author["pluginDaySeconds"] == 7 * 60
+    assert summary["totals"]["idleSeconds"] == 7 * 60
+    assert summary["totals"]["pluginDaySeconds"] == 7 * 60
 
 
 def test_activity_summary_counts_unaccounted_latest_report_hour_gap_as_idle():
@@ -1325,12 +1456,12 @@ def test_activity_summary_counts_unaccounted_latest_report_hour_gap_as_idle():
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[20]["idleSeconds"] == 10 * 60
-    assert hourly_by_hour[20]["missedEndSeconds"] == 50 * 60
-    assert author["idleSeconds"] == 10 * 60
-    assert author["pluginDaySeconds"] == 10 * 60
-    assert summary["totals"]["idleSeconds"] == 10 * 60
-    assert summary["totals"]["pluginDaySeconds"] == 10 * 60
+    assert hourly_by_hour[20]["idleSeconds"] == 9 * 60
+    assert hourly_by_hour[20]["missedEndSeconds"] == 51 * 60
+    assert author["idleSeconds"] == 6 * 60
+    assert author["pluginDaySeconds"] == 6 * 60
+    assert summary["totals"]["idleSeconds"] == 6 * 60
+    assert summary["totals"]["pluginDaySeconds"] == 6 * 60
 
 
 def test_telegram_to_first_activity_gap_counts_as_idle_hourly_activity():
@@ -2110,6 +2241,73 @@ def test_rebuild_restores_raw_event_batches_as_single_report_rows():
     assert rebuilt_rows[0]["lastRecordedAt"] == original_rows[0]["lastRecordedAt"]
 
 
+def test_cross_midnight_raw_event_batch_splits_report_rows_by_local_date():
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.record_break_event("future_artist", "online", "2026-05-02T09:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-05-02T23:59:40Z")
+    payload = {
+        "author": "Future Artist",
+        "authorEmail": "future@example.com",
+        "projectId": "AL",
+        "sessionId": "session-1",
+        "deviceId": "mac-mini",
+        "timeZoneId": "UTC",
+        "timeZoneDisplayName": "UTC",
+        "events": [
+            {
+                "eventId": "focus-before-midnight",
+                "eventType": "focus",
+                "date": "2026-05-02",
+                "occurredAtUtc": "2026-05-02T23:59:30Z",
+                "occurredAtLocal": "2026-05-02T23:59:30+00:00",
+            },
+            {
+                "eventId": "save-before-midnight",
+                "eventType": "file_saved",
+                "date": "2026-05-02",
+                "occurredAtUtc": "2026-05-02T23:59:50Z",
+                "occurredAtLocal": "2026-05-02T23:59:50+00:00",
+            },
+            {
+                "eventId": "focus-after-midnight",
+                "eventType": "focus",
+                "date": "2026-05-03",
+                "occurredAtUtc": "2026-05-03T00:00:10Z",
+                "occurredAtLocal": "2026-05-03T00:00:10+00:00",
+            },
+            {
+                "eventId": "save-after-midnight",
+                "eventType": "file_saved",
+                "date": "2026-05-03",
+                "occurredAtUtc": "2026-05-03T00:00:20Z",
+                "occurredAtLocal": "2026-05-03T00:00:20+00:00",
+            },
+        ],
+    }
+
+    repo._save_event_batch("cur", "1.0.0", payload, "raw-1", "auto", dt.datetime(2026, 5, 3, 0, 0, 30, tzinfo=dt.UTC), "challenge-1", None)
+
+    rows_by_date = {row["date"]: row for row in repo.db.report_rows.items if row.get("source") == "cur"}
+    assert sorted(rows_by_date) == ["2026-05-02", "2026-05-03"]
+    assert rows_by_date["2026-05-02"]["overtimeActiveDeltaSeconds"] == 10
+    assert rows_by_date["2026-05-03"]["overtimeActiveDeltaSeconds"] == 0
+    assert rows_by_date["2026-05-03"]["activeDeltaSeconds"] == 10
+
+    repo.rebuild_aggregates_if_needed(force=True)
+
+    rebuilt_rows_by_date = {row["date"]: row for row in repo.db.report_rows.items if row.get("source") == "cur"}
+    assert rebuilt_rows_by_date["2026-05-03"]["overtimeActiveDeltaSeconds"] == 0
+
+
 def test_auto_break_disabled_keeps_idle_as_idle():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "autoBreakEnabled": False})
@@ -2317,9 +2515,104 @@ def test_overtime_activity_after_telegram_offline_is_allowed():
         }
     )
 
-    assert deltas["overtimeActiveDeltaSeconds"] == 30
+    assert deltas["activeDeltaSeconds"] == 15
+    assert deltas["overtimeActiveDeltaSeconds"] == 15
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-28", "source": "ual"})
-    assert daily["overtimeActiveSeconds"] == 30
+    assert daily["activeSeconds"] == 32415
+    assert daily["overtimeActiveSeconds"] == 15
+
+
+def test_activity_after_work_window_without_offline_stays_normal():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "activeSeconds": 32400,
+            "activeMicroseconds": 32400 * 1_000_000,
+            "idleSeconds": 0,
+            "idleMicroseconds": 0,
+            "workWindowSeconds": 32400,
+            "activityCounts": [],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-04-28T18:00:00Z",
+            "occurredAtLocal": "2026-04-28T18:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-04-28T18:00:30Z",
+            "occurredAtLocal": "2026-04-28T18:00:30+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 0, 30, tzinfo=dt.UTC),
+        }
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-28", "source": "ual"})
+    assert deltas["activeDeltaSeconds"] == 0
+    assert deltas["overtimeActiveDeltaSeconds"] == 0
+    assert daily["activeSeconds"] == 32430
+    assert daily["overtimeActiveSeconds"] == 0
+
+
+def test_overtime_window_stops_at_author_local_midnight():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-04-28T23:59:30Z")
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-04-28T23:59:45Z",
+            "occurredAtLocal": "2026-04-28T23:59:45+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 23, 59, 45, tzinfo=dt.UTC),
+        }
+    )
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-04-29T00:00:15Z",
+            "occurredAtLocal": "2026-04-29T00:00:15+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 0, 0, 15, tzinfo=dt.UTC),
+        }
+    )
+
+    assert deltas["activeDeltaSeconds"] == 0
+    assert deltas["overtimeActiveDeltaSeconds"] == 0
 
 
 def test_telegram_online_after_offline_restores_normal_presence():
@@ -4515,6 +4808,7 @@ def test_analytics_summary_includes_day_hourly_activity():
 
 def test_overtime_activity_summary_splits_mix_and_saved_files():
     repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "telegramUsername": "dmitryshane"})
     base_event = {
         "source": "ual",
         "author": "Dmitry Shane",
@@ -4551,6 +4845,8 @@ def test_overtime_activity_summary_splits_mix_and_saved_files():
             "hourlyActivity": _empty_hourly_activity(),
         }
     )
+    repo.record_break_event("dmitryshane", "online", "2026-04-29T09:00:00Z")
+    repo.record_break_event("dmitryshane", "offline", "2026-04-29T18:59:00Z")
 
     overtime_activity = {
         **base_event,

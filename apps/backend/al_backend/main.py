@@ -305,13 +305,14 @@ def plugin_config(
     project_id: str = Query(default="", alias="projectId"),
 ) -> PluginConfig:
     app.state.repo.update_author_email(author, author_email)
-    submit_report_now = app.state.repo.should_submit_report_now(author)
+    enabled = app.state.repo.is_plugin_enabled_for_author(author)
+    submit_report_now = enabled and app.state.repo.should_submit_report_now(author)
 
     return PluginConfig(
         source=source,
         author=author,
         projectId=project_id,
-        enabled=app.state.repo.is_plugin_enabled_for_author(author),
+        enabled=enabled,
         sendIntervalSeconds=app.state.repo.get_interval_for_author(author),
         submitReportNow=submit_report_now,
     )
@@ -319,6 +320,9 @@ def plugin_config(
 
 @app.post("/api/v1/reports", response_model=SubmitReportResponse)
 def submit_report(report: ReportIn) -> SubmitReportResponse:
+    if not app.state.repo.get_plugin_ingest_enabled():
+        return SubmitReportResponse(ok=True, reportId="", ignored=True)
+
     challenge = app.state.repo.claim_report_challenge(report.challenge_id, report.source, report.device_id)
 
     if not challenge:
@@ -422,6 +426,7 @@ def update_intervals(settings_in: IntervalSettingsIn, _: dict = Depends(require_
     return app.state.repo.upsert_interval_settings(
         default_send_interval_seconds=settings_in.default_send_interval_seconds,
         idle_threshold_seconds=settings_in.idle_threshold_seconds,
+        plugin_ingest_enabled=settings_in.plugin_ingest_enabled,
         author=settings_in.author,
         author_send_interval_seconds=settings_in.author_send_interval_seconds,
     )

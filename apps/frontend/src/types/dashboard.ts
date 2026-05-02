@@ -168,6 +168,7 @@ export type Summary = {
   intervalSettings: {
     defaultSendIntervalSeconds: number;
     idleThresholdSeconds: number;
+    pluginIngestEnabled: boolean;
     authors: Array<{ author: string; sendIntervalSeconds: number }>;
   };
   discordSettings: {

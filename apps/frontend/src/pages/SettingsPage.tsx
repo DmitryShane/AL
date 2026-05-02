@@ -19,6 +19,7 @@ export function SettingsPage({
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
   const [idleThreshold, setIdleThreshold] = useState(String(intervalSettingsIdleThreshold(summary)));
+  const [pluginIngestEnabled, setPluginIngestEnabled] = useState(summary?.intervalSettings.pluginIngestEnabled ?? true);
   const [discordAutoAfkTimeout, setDiscordAutoAfkTimeout] = useState(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
   const [meetingSummariesEnabled, setMeetingSummariesEnabled] = useState(Boolean(summary?.discordSettings.meetingSummariesEnabled));
   const [meetingSummaryMinParticipants, setMeetingSummaryMinParticipants] = useState(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
@@ -48,6 +49,7 @@ export function SettingsPage({
     setDrafts(nextDrafts);
     setGlobalInterval(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
     setIdleThreshold(String(intervalSettingsIdleThreshold(summary)));
+    setPluginIngestEnabled(summary?.intervalSettings.pluginIngestEnabled ?? true);
     setDiscordAutoAfkTimeout(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
     setMeetingSummariesEnabled(Boolean(summary?.discordSettings.meetingSummariesEnabled));
     setMeetingSummaryMinParticipants(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
@@ -200,7 +202,8 @@ export function SettingsPage({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           defaultSendIntervalSeconds: Number(globalInterval),
-          idleThresholdSeconds: Number(idleThreshold)
+          idleThresholdSeconds: Number(idleThreshold),
+          pluginIngestEnabled
         })
       });
 
@@ -390,7 +393,11 @@ export function SettingsPage({
 
   const savedGlobalInterval = String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300);
   const savedIdleThreshold = String(intervalSettingsIdleThreshold(summary));
-  const isIntervalSettingsDirty = globalInterval !== savedGlobalInterval || idleThreshold !== savedIdleThreshold;
+  const savedPluginIngestEnabled = summary?.intervalSettings.pluginIngestEnabled ?? true;
+  const isIntervalSettingsDirty =
+    globalInterval !== savedGlobalInterval ||
+    idleThreshold !== savedIdleThreshold ||
+    pluginIngestEnabled !== savedPluginIngestEnabled;
 
   return (
     <section className="page-section settings-layout">
@@ -414,6 +421,14 @@ export function SettingsPage({
             <label>
               Idle threshold, sec
               <input value={idleThreshold} onChange={(event) => setIdleThreshold(event.target.value)} type="number" min="30" />
+            </label>
+            <label className="checkbox-cell plugin-ingest-toggle">
+              <input
+                type="checkbox"
+                checked={pluginIngestEnabled}
+                onChange={(event) => setPluginIngestEnabled(event.target.checked)}
+              />
+              Plugin reports: {pluginIngestEnabled ? "On" : "Off"}
             </label>
             <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval" || !isIntervalSettingsDirty}>
               {settingsSaveButtonLabel("interval", saving, saveStatus)}
