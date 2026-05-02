@@ -1649,7 +1649,13 @@ class Repository:
 
             hourly_activity = hourly_author.get("hourlyActivity", [])
             self._add_visual_missed_start(hourly_activity, started_at, time_zone_id)
-            self._add_visual_missed_end(hourly_activity, latest_signal_at, time_zone_id, fill_to_hour=latest_report_at is not None)
+            self._add_visual_missed_end(
+                hourly_activity,
+                latest_signal_at,
+                time_zone_id,
+                fill_to_hour=latest_report_at is not None,
+                offline_at=ended_at,
+            )
 
     def _latest_report_times_by_author_date(
         self,
@@ -1723,6 +1729,7 @@ class Repository:
         ended_at: dt.datetime | None,
         time_zone_id: str,
         fill_to_hour: bool = False,
+        offline_at: dt.datetime | None = None,
     ) -> None:
         if not ended_at:
             return
@@ -1730,20 +1737,15 @@ class Repository:
         local_end = _to_local_datetime(ended_at, time_zone_id)
 
         if fill_to_hour:
-            hour = hourly_activity[local_end.hour] if 0 <= local_end.hour < len(hourly_activity) else {}
-            occupied_seconds = (
-                int(hour.get("activeSeconds", 0))
-                + int(hour.get("idleSeconds", 0))
-                + int(hour.get("breakSeconds", 0))
-                + int(hour.get("meetingSeconds", 0))
-                + int(hour.get("overtimeActiveSeconds", 0))
-            )
-            missed_seconds = max(0, 3600 - occupied_seconds)
+            target_hour = _visual_missed_end_hour(hourly_activity, local_end.hour, _to_local_datetime(offline_at, time_zone_id) if offline_at else None)
+            missed_seconds = _visual_hour_available_seconds(target_hour)
+            target_hour_index = int(target_hour.get("hour", local_end.hour))
         else:
             hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
             missed_seconds = max(0, int((hour_end - local_end).total_seconds()))
+            target_hour_index = local_end.hour
 
-        _add_visual_missed_seconds(hourly_activity, local_end.hour, missed_seconds, "missedEndSeconds")
+        _add_visual_missed_seconds(hourly_activity, target_hour_index, missed_seconds, "missedEndSeconds")
 
     def _apply_visual_overtime_hour_gaps(
         self,
@@ -6302,6 +6304,42 @@ def _add_visual_missed_seconds(hourly_activity: list[dict[str, Any]], hour: int,
     hourly_activity[hour][segment_key] = int(hourly_activity[hour].get(segment_key, 0)) + seconds
 
 
+def _visual_missed_end_hour(
+    hourly_activity: list[dict[str, Any]], start_hour: int, local_offline_at: dt.datetime | None
+) -> dict[str, Any]:
+    if not hourly_activity:
+        return {}
+
+    clamped_start = min(max(0, start_hour), len(hourly_activity) - 1)
+
+    if _visual_hour_available_seconds(hourly_activity[clamped_start]) > 0:
+        return hourly_activity[clamped_start]
+
+    end_hour = local_offline_at.hour if local_offline_at else clamped_start
+
+    for hour_index in range(clamped_start + 1, min(end_hour, len(hourly_activity) - 1) + 1):
+        hour = hourly_activity[hour_index]
+
+        if _visual_hour_occupied_seconds(hour) > 0 and _visual_hour_available_seconds(hour) > 0:
+            return hour
+
+    return hourly_activity[clamped_start]
+
+
+def _visual_hour_occupied_seconds(hour: dict[str, Any]) -> int:
+    return (
+        int(hour.get("activeSeconds", 0))
+        + int(hour.get("idleSeconds", 0))
+        + int(hour.get("breakSeconds", 0))
+        + int(hour.get("meetingSeconds", 0))
+        + int(hour.get("overtimeActiveSeconds", 0))
+    )
+
+
+def _visual_hour_available_seconds(hour: dict[str, Any]) -> int:
+    return max(0, 3600 - _visual_hour_occupied_seconds(hour))
+
+
 def _fill_overtime_hours_bracketed_by_reports(hourly_activity: list[dict[str, Any]], reports: list[dt.datetime]) -> None:
     if len(reports) < 2:
         return
@@ -6321,14 +6359,7 @@ def _fill_overtime_hours_bracketed_by_reports(hourly_activity: list[dict[str, An
 
 
 def _fill_visual_overtime_hour(hour: dict[str, Any]) -> None:
-    occupied_seconds = (
-        int(hour.get("activeSeconds", 0))
-        + int(hour.get("idleSeconds", 0))
-        + int(hour.get("breakSeconds", 0))
-        + int(hour.get("meetingSeconds", 0))
-        + int(hour.get("overtimeActiveSeconds", 0))
-    )
-    overtime_seconds = max(0, 3600 - occupied_seconds)
+    overtime_seconds = _visual_hour_available_seconds(hour)
 
     if overtime_seconds <= 0:
         return

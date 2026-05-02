@@ -972,6 +972,56 @@ def test_activity_summary_visual_missed_end_fills_last_report_hour_to_sixty_minu
     assert hourly_by_hour[14]["missedEndSeconds"] == 3600 - (21 * 60 + 31)
 
 
+def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_report_hour_is_full():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Евгений Доценко", "displayName": "Evgeniy Dotsenko", "timeZoneId": "Europe/Sofia"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Евгений Доценко",
+            "date": "2026-05-01",
+            "startedAt": dt.datetime(2026, 5, 1, 8, 0, 49, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 5, 1, 16, 3, 53, tzinfo=dt.UTC),
+            "timeZoneId": "Europe/Sofia",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Евгений Доценко",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T18:36:36.5849075+03:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 15, 36, 41, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 300,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[18]["idleSeconds"] = 3372
+    hourly_activity[18]["meetingSeconds"] = 228
+    hourly_activity[19]["idleSeconds"] = 232
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Евгений Доценко",
+            "projectId": "unity",
+            "date": "2026-05-01",
+            "activeSeconds": 3877,
+            "idleSeconds": 23875,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-01", end_date="2026-05-01")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Евгений Доценко")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert hourly_by_hour[18]["missedEndSeconds"] == 0
+    assert hourly_by_hour[19]["idleSeconds"] == 464
+    assert hourly_by_hour[19]["missedEndSeconds"] == 3600 - 464
+
+
 def test_activity_summary_does_not_mark_visual_end_missed_before_offline():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
