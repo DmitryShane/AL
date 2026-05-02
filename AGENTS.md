@@ -87,6 +87,12 @@ On the hourly activity chart, the black `missed` fill is visual-only and has a n
 
 Do not use, suggest, or preserve black `missed` fill for holes inside an active work day. In-workday gaps must be explained by real tracked categories such as active, idle, break/AFK, meeting, or overtime; if a normal working-hour column is visually incomplete, investigate missing accounting data instead of filling it with `missed`.
 
+### Activity Card Status Semantics
+
+On Activity author cards, red offline is reserved for an active workday failure: the author has started their workday, reports are expected, and plugin reports have stopped.
+
+Use grey offline for authors who have not started their current workday yet, authors after an explicit Telegram offline/sign-off, and historical snapshots. Do not mark those states as red `reports_stopped`.
+
 ## Terminology
 
 - **AL (Activity Logger)** — the product and service as a whole: this repository (FastAPI backend, web dashboard, Telegram/Discord bots, and how data is stored and summarized).

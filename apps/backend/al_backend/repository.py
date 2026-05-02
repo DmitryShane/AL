@@ -1516,6 +1516,16 @@ class Repository:
 
         for author in authors_by_raw.values():
             raw_author = author["rawAuthor"]
+            presence_override = presence_overrides.get(raw_author)
+            workday_started = self._author_workday_started_for_summary(
+                raw_author,
+                author,
+                profiles,
+                start_date,
+                end_date,
+                date_mode,
+                now,
+            )
             include_report_stopped_alerts = _should_apply_realtime_presence_alerts(
                 raw_author,
                 profiles,
@@ -1524,13 +1534,18 @@ class Repository:
                 end_date,
                 date_mode,
                 now,
+                workday_started,
             )
+
+            if presence_override and presence_override.get("offlineAt"):
+                include_report_stopped_alerts = False
+
             author_rows.append(
                 _with_alerts(
                     _with_activity_mix(_with_productivity(author)),
                     self.get_interval_for_author(raw_author),
                     now,
-                    presence_overrides.get(raw_author),
+                    presence_override,
                     include_report_stopped_alerts,
                 )
             )
@@ -2051,6 +2066,35 @@ class Repository:
             }
 
         return overrides
+
+    def _author_workday_started_for_summary(
+        self,
+        raw_author: str,
+        author: dict[str, Any],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> bool:
+        if bool(author.get("activeMeeting")):
+            return True
+
+        if _author_has_summary_activity(author):
+            return True
+
+        time_zone_id = _author_time_zone_id(raw_author, profiles, author.get("timeZoneId"))
+        local_today = _local_date_for_time_zone(now, time_zone_id)
+
+        if not _date_in_summary_scope(local_today, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+            return False
+
+        for session in self.db.day_sessions.find({"rawAuthor": raw_author, "date": local_today}, {"_id": 0, "startedAt": 1}):
+            if _coerce_datetime(session.get("startedAt")):
+                return True
+
+        report_query = {"author": raw_author, "date": local_today, "source": {"$nin": ["telegram", "discord"]}}
+        return bool(self.db.report_rows.find_one(report_query, {"_id": 0}))
 
     def analytics_summary(self, period: str = "7d") -> dict[str, Any]:
         year = dt.date.today().year
@@ -5922,12 +5966,13 @@ def _should_apply_realtime_presence_alerts(
     end_date: str | None,
     date_mode: str | None,
     now: dt.datetime,
+    workday_started: bool,
 ) -> bool:
     if date_mode == "authorLocalToday":
-        return True
+        return workday_started
 
     local_today = _local_date_for_time_zone(now, _author_time_zone_id(raw_author, profiles, fallback_time_zone_id))
-    return _date_in_range(local_today, start_date, end_date)
+    return workday_started and _date_in_range(local_today, start_date, end_date)
 
 
 def _author_time_zone_id(

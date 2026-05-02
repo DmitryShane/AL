@@ -1619,6 +1619,24 @@ def test_regular_date_still_applies_reports_stopped_when_it_is_author_local_toda
     assert [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
 
 
+def test_regular_date_author_local_today_before_workday_start_is_gray_offline():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 29, 1, 30, tzinfo=dt.UTC))
+
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "telegram"
+    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
+
+
 def test_with_alerts_stale_presence_telegram_without_reports_stopped():
     frozen_now = dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC)
     author = {
@@ -1687,7 +1705,7 @@ def test_non_overtime_report_after_telegram_offline_keeps_author_stale():
     assert _author_status(repo, dt.datetime(2026, 4, 28, 18, 11, tzinfo=dt.UTC)) == "stale"
 
 
-def test_fresh_overtime_report_after_telegram_offline_marks_author_online_temporarily():
+def test_overtime_report_after_telegram_offline_keeps_author_gray_offline():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
     _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC))
@@ -1702,7 +1720,10 @@ def test_fresh_overtime_report_after_telegram_offline_marks_author_online_tempor
         }
     )
 
-    assert _author_status(repo, dt.datetime(2026, 4, 28, 18, 11, tzinfo=dt.UTC)) == "online"
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 11, tzinfo=dt.UTC))
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "telegram"
+    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
 
 
 def test_overtime_report_after_telegram_offline_expires_with_stale_threshold():
@@ -4341,6 +4362,11 @@ def test_author_local_today_summary_includes_authors_on_different_local_dates():
     assert authors["Utc Author"]["activeSeconds"] == 120
     assert authors["No Activity Author"]["activeSeconds"] == 0
     assert authors["No Activity Author"]["status"] == "stale"
+    assert authors["No Activity Author"]["stalePresence"] == "telegram"
+    assert not [alert for alert in authors["No Activity Author"]["alerts"] if alert["type"] == "reports_stopped"]
+    assert authors["Utc Author"]["status"] == "stale"
+    assert authors["Utc Author"]["stalePresence"] == "reports"
+    assert [alert for alert in authors["Utc Author"]["alerts"] if alert["type"] == "reports_stopped"]
 
 
 def test_activity_summary_regular_date_keeps_calendar_filter_and_all_authors():
