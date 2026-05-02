@@ -56,6 +56,19 @@ stop
 
 `start` launches the backend and frontend. `stop` shuts them down.
 
+### Backend Tests
+
+The backend uses `uv` from `apps/backend`; do not run backend tests with the system `python` or `python3`.
+
+Use this pattern for backend tests:
+
+```bash
+cd apps/backend
+uv run pytest tests/test_activity_summary.py
+```
+
+For a narrower check, still run it through `uv run` from `apps/backend`, for example `uv run pytest tests/test_activity_summary.py -k idle`.
+
 ### Local Rebuild And Restart
 
 When code changes need local verification, decide whether rebuild/restart is actually required and perform it yourself only when necessary.

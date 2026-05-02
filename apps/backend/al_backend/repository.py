@@ -24,6 +24,15 @@ DEFAULT_DISCORD_MEETING_AUTO_AFK_TIMEOUT_SECONDS = 10 * 60
 DEFAULT_PLUGIN_WORK_WINDOW_SECONDS = 32400
 MICROSECONDS_PER_SECOND = 1_000_000
 MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS = 10
+# When a heartbeat is ingested far after its occurred time (buffered uploads / offline queues),
+# cap heartbeat idle attribution so delivery lag does not create multi-hour idle in one bucket.
+MAX_STALE_HEARTBEAT_IDLE_MULTIPLIER = 2
+
+# Require receivedAt skew vs occurredAtUtc before treating a heartbeat as "stale" for capping.
+STALE_HEARTBEAT_RECEIVE_SKEW_MULTIPLIER = 2
+
+# Minimal skew (seconds) before capping stale heartbeats, even if idle_threshold is very small.
+STALE_HEARTBEAT_RECEIVE_SKEW_SECONDS_FLOOR = 120
 SELECT_HEAVY_THRESHOLD_PERCENT = 90
 SELECT_HEAVY_MIN_EVENTS = 20
 AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS = 300
@@ -60,7 +69,7 @@ WINDOWS_TIME_ZONE_IDS = {
 
 
 class Repository:
-    aggregates_version = 19
+    aggregates_version = 21
 
     def __init__(self, settings: Settings):
         self.client: MongoClient = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=1500)
@@ -711,7 +720,11 @@ class Repository:
         if source:
             query["source"] = source
 
-        report_rows = list(self.db.report_rows.find(query, projection).sort("receivedAt", DESCENDING))
+        report_rows = list(
+            self.db.report_rows.find(query, projection).sort(
+                [("receivedAt", DESCENDING), ("recordedAt", DESCENDING), ("batchId", DESCENDING)]
+            )
+        )
         meeting_lookup = self._meeting_lookup_for_reports(report_rows)
         break_lookup = self._break_lookup_for_reports(report_rows)
 
@@ -4553,22 +4566,47 @@ class Repository:
             and (not last_activity_source or current_source == last_activity_source)
         ):
             if (occurred_at - last_activity_at).total_seconds() >= idle_threshold_seconds:
-                interval_seconds = int((occurred_at - last_accounting_at).total_seconds())
+                heartbeat_end = occurred_at
+                heartbeat_local_end = occurred_local_at
+
+                received_at = _coerce_datetime(event.get("receivedAt"))
+                skew_floor = idle_threshold_seconds * STALE_HEARTBEAT_RECEIVE_SKEW_MULTIPLIER
+
+                if skew_floor < STALE_HEARTBEAT_RECEIVE_SKEW_SECONDS_FLOOR:
+                    skew_floor = STALE_HEARTBEAT_RECEIVE_SKEW_SECONDS_FLOOR
+
+                if (
+                    received_at is not None
+                    and received_at > occurred_at
+                    and (received_at - occurred_at).total_seconds() >= skew_floor
+                ):
+                    max_accounting_seconds = idle_threshold_seconds * MAX_STALE_HEARTBEAT_IDLE_MULTIPLIER
+
+                    if max_accounting_seconds > 0:
+                        capped_end = last_accounting_at + dt.timedelta(seconds=max_accounting_seconds)
+
+                        if heartbeat_end > capped_end:
+                            heartbeat_end = capped_end
+                            heartbeat_local_end = (
+                                last_accounting_local_at or last_accounting_at
+                            ) + dt.timedelta(seconds=max_accounting_seconds)
+
+                interval_seconds = int((heartbeat_end - last_accounting_at).total_seconds())
 
                 if interval_seconds < MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS:
                     return deltas
 
                 interval_deltas = _interval_deltas(
                     last_accounting_at,
-                    occurred_at,
+                    heartbeat_end,
                     last_accounting_local_at or last_accounting_at,
-                    occurred_local_at,
+                    heartbeat_local_end,
                     False,
                     consumed_normal_microseconds,
                 )
                 _merge_batch_deltas(deltas, interval_deltas)
-                last_accounting_at = occurred_at
-                last_accounting_local_at = occurred_local_at
+                last_accounting_at = heartbeat_end
+                last_accounting_local_at = heartbeat_local_end
                 last_accounting_source = current_source
 
         if is_activity:

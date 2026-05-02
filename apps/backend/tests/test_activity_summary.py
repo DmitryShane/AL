@@ -1,6 +1,7 @@
 import datetime as dt
 import re
 import unicodedata
+from typing import Any
 
 from al_backend.discord_author_mappings import apply_discord_author_mappings
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, meeting_summary_sections, render_meeting_summary_prompt
@@ -40,7 +41,19 @@ from al_backend.telegram_bot import (
 )
 
 
-class FakeCursor(list):
+class FakeCursor:
+    def __init__(self, items):
+        self.items = items
+
+    def __iter__(self):
+        return iter(self.items)
+
+    def __getitem__(self, index):
+        return self.items[index]
+
+    def __len__(self):
+        return len(self.items)
+
     def sort(self, *args, **kwargs):
         return self
 
@@ -203,8 +216,8 @@ class FakeDb:
         self.system_settings = FakeCollection()
 
 
-def fake_repository():
-    repo = Repository.__new__(Repository)
+def fake_repository() -> Any:
+    repo: Any = Repository.__new__(Repository)
     repo.db = FakeDb()
     repo.default_send_interval_seconds = 60
     return repo
@@ -1578,6 +1591,40 @@ def test_heartbeat_idle_still_counts_within_same_raw_event_source_state():
     assert daily["idleSeconds"] == 600
 
 
+def test_heartbeat_idle_does_not_account_entire_delivery_gap_when_huge():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one({"kind": "global", "sendIntervalSeconds": 120})
+
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "AL",
+            "deviceId": "mac-mini",
+            "date": "2026-05-02",
+            "eventType": "focus",
+            "occurredAtUtc": "2026-05-02T01:18:47Z",
+            "occurredAtLocal": "2026-05-02T03:18:47+02:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 1, 18, 47, tzinfo=dt.UTC),
+        }
+    )
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "AL",
+            "deviceId": "mac-mini",
+            "date": "2026-05-02",
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-05-02T02:06:53Z",
+            "occurredAtLocal": "2026-05-02T04:06:53+02:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 2, 10, 54, tzinfo=dt.UTC),
+        }
+    )
+
+    assert deltas["idleDeltaSeconds"] == 240
+    assert deltas["activeDeltaSeconds"] == 0
+
 def test_rebuild_keeps_cross_source_idle_out_of_unity_rows():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
@@ -2480,8 +2527,9 @@ def test_meeting_recording_tracks_openai_pipeline_status():
         summary = "Participants:\n- Dmitry\n\nDecisions:\n- Create a task.\n\nAction items:\n- Create a task.\n\nOpen questions:\n- None."
 
     def fake_summary_generator(path, people, language, prompt_template, progress_callback=None):
-        progress_callback("transcribing_openai")
-        progress_callback("summarizing_openai")
+        if progress_callback:
+            progress_callback("transcribing_openai")
+            progress_callback("summarizing_openai")
         return FakeSummary()
 
     result = repo.process_meeting_recording_finished(
