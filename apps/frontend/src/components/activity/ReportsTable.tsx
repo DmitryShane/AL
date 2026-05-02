@@ -1,5 +1,5 @@
 import type React from "react";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { Report } from "../../types/dashboard";
 import { formatSource } from "../../utils/format";
 import {
@@ -45,6 +45,7 @@ export function ReportsTable({
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * pageSize;
   const pageEnd = Math.min(pageStart + reports.length, total);
+  const timeZoneLabelByAuthor = useMemo(() => preferredTimeZoneLabelsByAuthor(reports), [reports]);
 
   useEffect(() => {
     if (!sourceFilter) {
@@ -100,7 +101,7 @@ export function ReportsTable({
               <span>{formatReportOvertime(report.overtimeActiveDeltaSeconds ?? 0)}</span>
               <span>{formatAuthorTime(report)}</span>
               <span className={reportTypeBadgeClassName(report.reportType)}>{formatReportType(report)}</span>
-              <span>{formatTimeZoneLabel(report) ?? "-"}</span>
+              <span>{timeZoneLabelByAuthor.get(reportAuthorKey(report)) ?? formatTimeZoneLabel(report) ?? "-"}</span>
             </div>
           )) : null}
         </div>
@@ -125,4 +126,83 @@ export function ReportsTable({
       </div>
     </section>
   );
+}
+
+function preferredTimeZoneLabelsByAuthor(reports: Report[]) {
+  const labelsByAuthor = new Map<string, string>();
+  const scoresByAuthor = new Map<string, number>();
+
+  for (const report of reports) {
+    const authorKey = reportAuthorKey(report);
+    const candidates = timeZoneLabelCandidates(report);
+
+    for (const candidate of candidates) {
+      const score = timeZoneLabelScore(candidate);
+      const currentScore = scoresByAuthor.get(authorKey) ?? -1;
+
+      if (score > currentScore) {
+        labelsByAuthor.set(authorKey, candidate);
+        scoresByAuthor.set(authorKey, score);
+      }
+    }
+  }
+
+  return labelsByAuthor;
+}
+
+function reportAuthorKey(report: Report) {
+  return report.author ?? report.displayName ?? "Unknown User";
+}
+
+function timeZoneLabelCandidates(report: Report) {
+  const candidates: string[] = [];
+  const ianaCity = report.timeZoneId?.split("/").pop()?.replace(/_/g, " ").trim();
+
+  if (ianaCity) {
+    candidates.push(ianaCity);
+  }
+
+  if (report.timeZoneDisplayName?.trim()) {
+    candidates.push(report.timeZoneDisplayName.trim());
+  }
+
+  const formatted = formatTimeZoneLabel(report)?.trim();
+
+  if (formatted) {
+    candidates.push(formatted);
+  }
+
+  return candidates;
+}
+
+function timeZoneLabelScore(label: string) {
+  if (isSpecificTimeZoneLabel(label)) {
+    return 2;
+  }
+
+  return 1;
+}
+
+function isSpecificTimeZoneLabel(label: string) {
+  const normalized = label.trim().toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  if (/^(utc|gmt)([+-]\d{1,2}(:?\d{2})?)?$/.test(normalized)) {
+    return false;
+  }
+
+  return !new Set([
+    "pacific",
+    "eastern",
+    "central",
+    "mountain",
+    "atlantic",
+    "alaska",
+    "hawaii",
+    "local",
+    "unknown"
+  ]).has(normalized);
 }
