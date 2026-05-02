@@ -69,7 +69,7 @@ WINDOWS_TIME_ZONE_IDS = {
 
 
 class Repository:
-    aggregates_version = 21
+    aggregates_version = 22
 
     def __init__(self, settings: Settings):
         self.client: MongoClient = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=1500)
@@ -4232,15 +4232,31 @@ class Repository:
         for snapshot in snapshots:
             self._apply_snapshot_to_aggregates(snapshot)
 
+        batch_ids = {
+            str(batch.get("batchId") or "")
+            for batch in self.db.raw_event_batches.find({}, {"_id": 0, "batchId": 1})
+            if batch.get("batchId")
+        }
+        batch_deltas_by_batch_id: dict[str, dict[str, Any]] = {}
+        last_event_by_batch_id: dict[str, dict[str, Any]] = {}
+        orphan_report_rows: list[dict[str, Any]] = []
         raw_events = self.db.raw_activity_events.find({}).sort("occurredAtUtc", ASCENDING)
 
         for event in raw_events:
             deltas = self._apply_raw_event_to_aggregates(event)
             if not _has_time_delta(deltas):
                 continue
-            resolved_author = self.resolve_author_alias(event.get("author") or "Unknown User")
 
-            self.db.report_rows.insert_one(
+            batch_id = str(event.get("batchId") or "")
+
+            if batch_id and batch_id in batch_ids:
+                batch_deltas = batch_deltas_by_batch_id.setdefault(batch_id, _empty_batch_deltas())
+                _merge_batch_deltas(batch_deltas, deltas)
+                last_event_by_batch_id[batch_id] = event
+                continue
+
+            resolved_author = self.resolve_author_alias(event.get("author") or "Unknown User")
+            orphan_report_rows.append(
                 {
                     "source": event.get("source"),
                     "pluginVersion": event.get("pluginVersion"),
@@ -4262,6 +4278,18 @@ class Repository:
                     **deltas,
                 }
             )
+
+        for batch in self.db.raw_event_batches.find({}).sort("receivedAt", ASCENDING):
+            batch_id = str(batch.get("batchId") or "")
+            batch_deltas = batch_deltas_by_batch_id.get(batch_id)
+            last_event = last_event_by_batch_id.get(batch_id)
+            row = self._build_event_batch_report_row(batch, batch_deltas, last_event)
+
+            if row:
+                self.db.report_rows.insert_one(row)
+
+        for row in orphan_report_rows:
+            self.db.report_rows.insert_one(row)
 
         for event in self.db.break_events.find({}).sort("timestamp", ASCENDING):
             event_time = _coerce_datetime(event.get("timestamp"))
@@ -4414,24 +4442,23 @@ class Repository:
         last_event: dict[str, Any] | None = None
 
         self.update_author_email(author, author_email)
-        self.db.raw_event_batches.insert_one(
-            {
-                "batchId": batch_id,
-                "rawReportId": raw_report_id,
-                "challengeId": challenge_id,
-                "source": source,
-                "pluginVersion": plugin_version,
-                "author": author,
-                "authorEmail": author_email,
-                "projectId": project_id,
-                "sessionId": session_id,
-                "deviceId": resolved_device_id,
-                "receivedAt": received_at,
-                "sentAt": payload.get("sentAt"),
-                "eventCount": len(payload.get("events") or []),
-                "reportType": report_type,
-            }
-        )
+        batch = {
+            "batchId": batch_id,
+            "rawReportId": raw_report_id,
+            "challengeId": challenge_id,
+            "source": source,
+            "pluginVersion": plugin_version,
+            "author": author,
+            "authorEmail": author_email,
+            "projectId": project_id,
+            "sessionId": session_id,
+            "deviceId": resolved_device_id,
+            "receivedAt": received_at,
+            "sentAt": payload.get("sentAt"),
+            "eventCount": len(payload.get("events") or []),
+            "reportType": report_type,
+        }
+        self.db.raw_event_batches.insert_one(batch)
 
         events = sorted(payload.get("events") or [], key=lambda item: str(item.get("occurredAtUtc") or item.get("occurredAtLocal") or ""))
 
@@ -4477,38 +4504,44 @@ class Repository:
             _merge_batch_deltas(batch_deltas, deltas)
             last_event = event
 
-        if not last_event:
+        row = self._build_event_batch_report_row(batch, batch_deltas, last_event)
+
+        if not row:
             return
 
-        if not _has_time_delta(batch_deltas):
-            return
-
-        row = {
-            "source": source,
-            "pluginVersion": plugin_version,
-            "author": author,
-            "authorEmail": author_email,
-            "projectId": project_id,
-            "sessionId": session_id,
-            "deviceId": resolved_device_id,
-            "date": last_event.get("date"),
-            "recordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
-            "receivedAt": received_at,
-            "lastRecordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
-            "lastReceivedAt": received_at,
-            "timeZoneId": payload.get("timeZoneId"),
-            "timeZoneDisplayName": payload.get("timeZoneDisplayName"),
-            "rawReportId": raw_report_id,
-            "batchId": batch_id,
-            "challengeId": challenge_id,
-            "reportType": report_type,
-            **batch_deltas,
-        }
         self.db.report_rows.insert_one(row)
         report_time = _coerce_datetime(last_event.get("occurredAtUtc") or last_event.get("occurredAtLocal")) or received_at
         if _has_active_or_overtime_delta(batch_deltas):
             self._schedule_telegram_break_activity_prompt_if_needed(author, str(last_event.get("date") or ""), source, report_time)
         self._schedule_telegram_online_prompt_if_needed(author, str(last_event.get("date") or ""), source, received_at)
+
+    def _build_event_batch_report_row(
+        self, batch: dict[str, Any], batch_deltas: dict[str, Any] | None, last_event: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if not last_event or not batch_deltas or not _has_time_delta(batch_deltas):
+            return None
+
+        return {
+            "source": batch.get("source"),
+            "pluginVersion": batch.get("pluginVersion"),
+            "author": batch.get("author") or "Unknown User",
+            "authorEmail": batch.get("authorEmail", ""),
+            "projectId": batch.get("projectId") or "",
+            "sessionId": batch.get("sessionId") or "",
+            "deviceId": batch.get("deviceId") or "",
+            "date": last_event.get("date"),
+            "recordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
+            "receivedAt": batch.get("receivedAt"),
+            "lastRecordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
+            "lastReceivedAt": batch.get("receivedAt"),
+            "timeZoneId": last_event.get("timeZoneId"),
+            "timeZoneDisplayName": last_event.get("timeZoneDisplayName"),
+            "rawReportId": batch.get("rawReportId"),
+            "batchId": batch.get("batchId"),
+            "challengeId": batch.get("challengeId"),
+            "reportType": batch.get("reportType", "auto"),
+            **batch_deltas,
+        }
 
     def _apply_raw_event_to_aggregates(self, event: dict[str, Any]) -> dict[str, Any]:
         event = dict(event)

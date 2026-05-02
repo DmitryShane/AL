@@ -1672,6 +1672,58 @@ def test_rebuild_keeps_cross_source_idle_out_of_unity_rows():
     assert unity_daily["idleSeconds"] == 0
 
 
+def test_rebuild_restores_raw_event_batches_as_single_report_rows():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    received_at = dt.datetime(2026, 5, 2, 8, 6, tzinfo=dt.UTC)
+    payload = {
+        "author": "Future Artist",
+        "authorEmail": "future@example.com",
+        "projectId": "AL",
+        "sessionId": "session-1",
+        "deviceId": "mac-mini",
+        "timeZoneId": "UTC",
+        "timeZoneDisplayName": "UTC",
+        "events": [
+            {
+                "eventId": "focus-1",
+                "eventType": "focus",
+                "date": "2026-05-02",
+                "occurredAtUtc": "2026-05-02T08:00:00Z",
+                "occurredAtLocal": "2026-05-02T08:00:00+00:00",
+            },
+            {
+                "eventId": "save-1",
+                "eventType": "file_saved",
+                "date": "2026-05-02",
+                "occurredAtUtc": "2026-05-02T08:00:30Z",
+                "occurredAtLocal": "2026-05-02T08:00:30+00:00",
+            },
+            {
+                "eventId": "heartbeat-1",
+                "eventType": "heartbeat",
+                "date": "2026-05-02",
+                "occurredAtUtc": "2026-05-02T08:05:00Z",
+                "occurredAtLocal": "2026-05-02T08:05:00+00:00",
+            },
+        ],
+    }
+    repo._save_event_batch("cur", "1.0.0", payload, "raw-1", "auto", received_at, "challenge-1", None)
+    original_rows = list(repo.db.report_rows.items)
+
+    assert len(original_rows) == 1
+    assert len(repo.db.raw_activity_events.items) == 3
+
+    repo.rebuild_aggregates_if_needed(force=True)
+
+    rebuilt_rows = repo.db.report_rows.items
+    assert len(rebuilt_rows) == 1
+    assert rebuilt_rows[0]["batchId"] == original_rows[0]["batchId"]
+    assert rebuilt_rows[0]["activeDeltaSeconds"] == original_rows[0]["activeDeltaSeconds"]
+    assert rebuilt_rows[0]["idleDeltaSeconds"] == original_rows[0]["idleDeltaSeconds"]
+    assert rebuilt_rows[0]["lastRecordedAt"] == original_rows[0]["lastRecordedAt"]
+
+
 def test_overtime_activity_after_telegram_offline_is_allowed():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
