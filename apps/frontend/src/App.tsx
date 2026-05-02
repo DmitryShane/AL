@@ -7,6 +7,7 @@ import { apiFetch, IS_LOCAL_DASHBOARD } from "./api/client";
 import {
   ACTIVITY_AUTHOR_STORAGE_KEY,
   AUTH_HINT_STORAGE_KEY,
+  DATE_RANGE_STORAGE_KEY,
   MEETING_AUDIO_RETENTION_OPTIONS,
   MEETING_SUMMARY_LANGUAGES,
   PAGE_SCROLL_STORAGE_PREFIX,
@@ -59,8 +60,8 @@ function App() {
   const [hasAuthHint, setHasAuthHint] = useState(() => localStorage.getItem(AUTH_HINT_STORAGE_KEY) === "true");
   const [health, setHealth] = useState<Health | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [dateRange, setDateRange] = useState<DateRange>(() => todayRange());
-  const [appliedDateRange, setAppliedDateRange] = useState<DateRange>(() => todayRange());
+  const [dateRange, setDateRange] = useState<DateRange>(() => loadSavedDateRange());
+  const [appliedDateRange, setAppliedDateRange] = useState<DateRange>(() => loadSavedDateRange());
   const [search, setSearch] = useState("");
   const [selectedAuthor, setSelectedAuthorState] = useState<string | null>(() => loadSavedActivityAuthor());
   const [loading, setLoading] = useState(true);
@@ -164,6 +165,10 @@ function App() {
   useEffect(() => {
     void load();
   }, [authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset, page]);
+
+  useEffect(() => {
+    localStorage.setItem(DATE_RANGE_STORAGE_KEY, JSON.stringify(dateRange));
+  }, [dateRange]);
 
   async function requestReportRefresh(author?: string | null) {
     setRefreshingReports(true);
@@ -538,6 +543,38 @@ function loadSavedActivityAuthor() {
   return null;
 }
 
+function loadSavedDateRange(): DateRange {
+  const savedRange = localStorage.getItem(DATE_RANGE_STORAGE_KEY);
+
+  if (!savedRange) {
+    return todayRange();
+  }
+
+  try {
+    const parsed = JSON.parse(savedRange) as Partial<DateRange>;
+
+    if (parsed.preset === "live") {
+      return todayRange();
+    }
+
+    if (
+      (parsed.preset === "yesterday" || parsed.preset === "custom") &&
+      isDateInputValue(parsed.startDate) &&
+      isDateInputValue(parsed.endDate)
+    ) {
+      return {
+        startDate: parsed.startDate,
+        endDate: parsed.endDate,
+        preset: parsed.preset
+      };
+    }
+  } catch {
+    return todayRange();
+  }
+
+  return todayRange();
+}
+
 function todayRange(): DateRange {
   const today = toDateInputValue(new Date());
   return { startDate: today, endDate: today, preset: "live" };
@@ -555,6 +592,10 @@ function toDateInputValue(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function isDateInputValue(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 export default App;
