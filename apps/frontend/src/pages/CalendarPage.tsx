@@ -1,15 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Box, RefreshCw, Search, ShieldCheck } from "lucide-react";
-import { AuthorsTable } from "../components/AuthorsTable";
-import { AnalyticsActivityOverview } from "../components/AnalyticsActivityOverview";
-import { HourlyActivityChart } from "../components/HourlyActivityChart";
-import { ActivityMetricsGrid } from "../components/activity/ActivityMetricsGrid";
-import { BreakdownPanel, OvertimeBreakdownPanel } from "../components/activity/BreakdownPanels";
-import { ReportsTable } from "../components/activity/ReportsTable";
+import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api/client";
-import { MEETING_AUDIO_RETENTION_OPTIONS, MEETING_SUMMARY_LANGUAGES, REFRESH_INTERVAL_MS, REPORTS_PAGE_STORAGE_KEY, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
-import type { ActivitySummary, AlertStats, AnalyticsSummary, AuthorAlert, AuthorProfile, AuthorRow, CalendarAuthor, CalendarAuthorStats, CalendarMark, CalendarReason, CalendarSummary, DateRange, MeetingRecordingStatus, Report, ReportsPage, ReportsPageCache, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
-import { activityColor, alertAuthorCardClassName, alertCardClassName, alertCountBadgeClassName, alertKey, alertSeverityBadgeClassName, authorCardClassName, authorCardProductivityTone, authorStatusBadgeClassName, autoBreakScheduleLabel, avatarStyle, breakClassName, breakTone, calendarDayClassName, compareAlertAuthors, compareAuthorCardStatus, compareAuthorsByStatusAndProductivity, dateRangeList, emptyAuthorProfile, formatActivityType, formatAlertThreshold, formatAlertValue, formatAuthorStatus, formatAuthorTime, formatDelta, formatDiscordEvent, formatDuration, formatDurationDelta, formatMinutes, formatProfileTimeZoneLabel, formatProfileTimeZoneTitle, formatReportActive, formatReportIdle, formatReportOvertime, formatReportType, formatSiteRole, formatSource, formatTelegramEvent, formatTimeZoneLabel, formatTimestamp, initials, loadSavedReportsPage, loadSavedSettingsTab, meetingRecordingAudioStats, meetingRecordingDetail, meetingRecordingRecipientLabel, meetingRecordingStatusLabel, monthIndexes, normalizeAuthorInput, paletteColor, productivityClassName, productivityTone, reportTypeBadgeClassName, savedFileLabel, settingsSaveButtonClassName, settingsSaveButtonLabel, sourceIcon, toCalendarDate, toDateInputValue, uniqueDates, authorProfilePayload } from "./pageHelpers";
+import type { CalendarMark, CalendarSummary } from "../types/dashboard";
+import { dateRangeList, initials, monthIndexes, uniqueDates } from "./pageHelpers";
 import { CalendarClearEditor, CalendarLegend, CalendarMarkEditor, CalendarStats, MonthCalendar, ReasonEditor } from "../components/calendar/CalendarComponents";
 export function CalendarPage() {
   const year = new Date().getFullYear();
@@ -55,19 +47,28 @@ export function CalendarPage() {
 
   useEffect(() => {
     void loadCalendar();
-    const intervalId = window.setInterval(() => void loadCalendar(false), REFRESH_INTERVAL_MS);
+    const intervalId = window.setInterval(() => void loadCalendar(false), 5 * 60 * 1000);
 
     return () => {
       window.clearInterval(intervalId);
     };
   }, []);
 
-  const visibleMarks = (calendar?.marks ?? []).filter((mark) => selectedAuthor === "all" || mark.rawAuthor === selectedAuthor);
-  const visibleStats = (calendar?.stats ?? []).filter((stat) => selectedAuthor === "all" || stat.rawAuthor === selectedAuthor);
-  const marksByDate = visibleMarks.reduce<Record<string, CalendarMark[]>>((items, mark) => {
-    items[mark.date] = [...(items[mark.date] ?? []), mark];
-    return items;
-  }, {});
+  const visibleMarks = useMemo(
+    () => (calendar?.marks ?? []).filter((mark) => selectedAuthor === "all" || mark.rawAuthor === selectedAuthor),
+    [calendar?.marks, selectedAuthor]
+  );
+  const visibleStats = useMemo(
+    () => (calendar?.stats ?? []).filter((stat) => selectedAuthor === "all" || stat.rawAuthor === selectedAuthor),
+    [calendar?.stats, selectedAuthor]
+  );
+  const marksByDate = useMemo(
+    () => visibleMarks.reduce<Record<string, CalendarMark[]>>((items, mark) => {
+      items[mark.date] = [...(items[mark.date] ?? []), mark];
+      return items;
+    }, {}),
+    [visibleMarks]
+  );
 
   function toggleDate(date: string, shiftKey = false) {
     if ((rangeMode || shiftKey) && rangeStart) {
@@ -148,16 +149,15 @@ export function CalendarPage() {
       return;
     }
 
-    for (const author of clearAuthors) {
-      for (const date of selectedDates) {
-        const params = new URLSearchParams({ author, date });
-        const response = await apiFetch(`/api/v1/calendar/marks?${params.toString()}`, { method: "DELETE" });
+    const response = await apiFetch(`/api/v1/calendar/marks/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ authors: clearAuthors, dates: selectedDates })
+    });
 
-        if (!response.ok) {
-          setError("Calendar mark delete failed.");
-          return;
-        }
-      }
+    if (!response.ok) {
+      setError("Calendar mark delete failed.");
+      return;
     }
 
     setShowClearEditor(false);

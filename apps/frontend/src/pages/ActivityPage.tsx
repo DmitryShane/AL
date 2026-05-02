@@ -1,16 +1,15 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Box, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { AuthorsTable } from "../components/AuthorsTable";
-import { AnalyticsActivityOverview } from "../components/AnalyticsActivityOverview";
 import { HourlyActivityChart } from "../components/HourlyActivityChart";
 import { ActivityCard } from "../components/activity/ActivityCard";
 import { ActivityMetricsGrid } from "../components/activity/ActivityMetricsGrid";
 import { BreakdownPanel, OvertimeBreakdownPanel } from "../components/activity/BreakdownPanels";
 import { ReportsTable } from "../components/activity/ReportsTable";
 import { apiFetch } from "../api/client";
-import { MEETING_AUDIO_RETENTION_OPTIONS, MEETING_SUMMARY_LANGUAGES, REFRESH_INTERVAL_MS, REPORTS_PAGE_STORAGE_KEY, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
-import type { ActivitySummary, AlertStats, AnalyticsSummary, AuthorAlert, AuthorProfile, AuthorRow, CalendarAuthor, CalendarAuthorStats, CalendarMark, CalendarReason, CalendarSummary, DateRange, MeetingRecordingStatus, Report, ReportsPage, ReportsPageCache, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
-import { activityColor, alertAuthorCardClassName, alertCardClassName, alertCountBadgeClassName, alertKey, alertSeverityBadgeClassName, authorCardClassName, authorCardProductivityTone, authorStatusBadgeClassName, autoBreakScheduleLabel, avatarStyle, breakClassName, breakTone, calendarDayClassName, compareAlertAuthors, compareAuthorCardStatus, compareAuthorsByStatusAndProductivity, dateRangeList, emptyAuthorProfile, formatActivityType, formatAlertThreshold, formatAlertValue, formatAuthorStatus, formatAuthorTime, formatDelta, formatDiscordEvent, formatDuration, formatDurationDelta, formatMinutes, formatProfileTimeZoneLabel, formatProfileTimeZoneTitle, formatReportActive, formatReportIdle, formatReportOvertime, formatReportType, formatSiteRole, formatSource, formatTelegramEvent, formatTimeZoneLabel, formatTimestamp, initials, loadSavedReportsPage, loadSavedSettingsTab, meetingRecordingAudioStats, meetingRecordingDetail, meetingRecordingRecipientLabel, meetingRecordingStatusLabel, monthIndexes, normalizeAuthorInput, paletteColor, productivityClassName, productivityTone, reportTypeBadgeClassName, savedFileLabel, settingsSaveButtonClassName, settingsSaveButtonLabel, sourceIcon, toCalendarDate, toDateInputValue, uniqueDates, authorProfilePayload } from "./pageHelpers";
+import { REPORTS_PAGE_STORAGE_KEY } from "../constants/dashboard";
+import type { ActivitySummary, DateRange, Report, ReportsPage, ReportsPageCache } from "../types/dashboard";
+import { activityColor, compareAuthorCardStatus, formatActivityType, loadSavedReportsPage, paletteColor, savedFileLabel } from "./pageHelpers";
 export function ActivityPage({
   summary,
   dateRange,
@@ -27,17 +26,25 @@ export function ActivityPage({
   onRefreshAuthor: (author: string) => void;
 }) {
   const author = summary.authors.find((item) => item.rawAuthor === selectedAuthor) ?? summary.authors[0];
-  const hourly = summary.hourlyActivityByAuthor
-    .filter((item) => item.rawAuthor === author?.rawAuthor)
-    .map((item) => ({ ...item, status: author?.status }));
-  const authorHourly = hourly.length || !author
-    ? hourly
-    : [{ author: author.displayName, rawAuthor: author.rawAuthor, status: author.status, hourlyActivity: [] }];
+  const authorHourly = useMemo(() => {
+    const hourly = summary.hourlyActivityByAuthor
+      .filter((item) => item.rawAuthor === author?.rawAuthor)
+      .map((item) => ({ ...item, status: author?.status }));
+
+    if (hourly.length || !author) {
+      return hourly;
+    }
+
+    return [{ author: author.displayName, rawAuthor: author.rawAuthor, status: author.status, hourlyActivity: [] }];
+  }, [author, summary.hourlyActivityByAuthor]);
   const activityMix = author?.activityMix ?? [];
   const savedPrefabs = author?.savedPrefabs ?? [];
   const overtimeActivityMix = author?.overtimeActivityMix ?? [];
   const overtimeSavedPrefabs = author?.overtimeSavedPrefabs ?? [];
-  const cardAuthors = [...summary.authors].sort((left, right) => compareAuthorCardStatus(left, right, dateRange));
+  const cardAuthors = useMemo(
+    () => [...summary.authors].sort((left, right) => compareAuthorCardStatus(left, right, dateRange)),
+    [summary.authors, dateRange]
+  );
   const [reports, setReports] = useState<Report[]>([]);
   const [reportsTotal, setReportsTotal] = useState(0);
   const [reportSources, setReportSources] = useState<string[]>([]);
@@ -46,7 +53,7 @@ export function ActivityPage({
   const [reportsPageSize, setReportsPageSize] = useState(10);
   const [reportsPage, setReportsPageState] = useState(() => loadSavedReportsPage());
   const [reportSourceFilter, setReportSourceFilter] = useState("");
-  const [reportsPageCache, setReportsPageCache] = useState<ReportsPageCache>({});
+  const reportsPageCacheRef = useRef<ReportsPageCache>({});
   const reportsResetKeyRef = useRef<string | null>(null);
   const reportsResetKey = useMemo(() => JSON.stringify({
     author: author?.rawAuthor ?? "",
@@ -102,7 +109,7 @@ export function ActivityPage({
         return;
       }
 
-      const cachedPage = reportsPageCache[reportsCacheKey];
+      const cachedPage = reportsPageCacheRef.current[reportsCacheKey];
 
       if (cachedPage) {
         setReports(cachedPage.reports);
@@ -148,10 +155,10 @@ export function ActivityPage({
         setReports(payload.reports);
         setReportsTotal(payload.total);
         setReportSources(payload.sources);
-        setReportsPageCache((current) => ({
-          ...current,
+        reportsPageCacheRef.current = {
+          ...reportsPageCacheRef.current,
           [reportsCacheKey]: payload
-        }));
+        };
       } catch (requestError) {
         if (ignore) {
           return;
@@ -173,7 +180,7 @@ export function ActivityPage({
     return () => {
       ignore = true;
     };
-  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportsPage, reportsPageSize, reportSourceFilter, reportsCacheKey, reportsPageCache]);
+  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportsPage, reportsPageSize, reportSourceFilter, reportsCacheKey]);
 
   return (
     <section className="page-section">

@@ -97,6 +97,7 @@ class Repository:
         self.db.report_rows.create_index([("receivedAt", DESCENDING)])
         self.db.report_rows.create_index([("date", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.report_rows.create_index([("author", ASCENDING), ("date", ASCENDING), ("receivedAt", DESCENDING)])
+        self.db.report_rows.create_index([("author", ASCENDING), ("date", ASCENDING), ("source", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.report_rows.create_index(
             [("source", ASCENDING), ("author", ASCENDING), ("sessionId", ASCENDING), ("date", ASCENDING)]
         )
@@ -136,6 +137,8 @@ class Repository:
         self.db.calendar_marks.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
         self.db.calendar_marks.create_index("date")
         self.db.calendar_reasons.create_index("id", unique=True)
+        self.db.day_sessions.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)])
+        self.db.day_sessions.create_index("date")
         self.db.site_users.create_index("email", unique=True)
         self.db.site_sessions.create_index("tokenHash", unique=True)
         self.db.site_sessions.create_index("expiresAt", expireAfterSeconds=0)
@@ -757,6 +760,56 @@ class Repository:
 
         return reports
 
+    def _reports_query_context(
+        self,
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        author: str | None = None,
+        source: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dt.datetime]:
+        profiles = self._profiles_by_raw_author()
+        now = dt.datetime.now(dt.UTC)
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        if author:
+            query["author"] = self.resolve_author_alias(author)
+
+        if source:
+            query["source"] = source
+
+        return query, profiles, now
+
+    def _reports_projection(self) -> dict[str, int]:
+        return {
+            "_id": 0,
+            "rawReportId": 0,
+            "encryptedPacket": 0,
+            "activityCounts": 0,
+            "savedPrefabs": 0,
+            "overtimeActivityCounts": 0,
+            "overtimeSavedPrefabs": 0,
+            "hourlyActivity": 0,
+            "activityCountDeltas": 0,
+            "savedPrefabDeltas": 0,
+            "overtimeActivityCountDeltas": 0,
+            "overtimeSavedPrefabDeltas": 0,
+            "hourlyActivityDelta": 0,
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "activeMicroseconds": 0,
+            "idleMicroseconds": 0,
+            "overtimeActiveMicroseconds": 0,
+            "activeDeltaMicroseconds": 0,
+            "idleDeltaMicroseconds": 0,
+            "overtimeActiveDeltaMicroseconds": 0,
+            "firstActivity": 0,
+            "lastActivity": 0,
+            "idleThresholdSeconds": 0,
+            "workWindowSeconds": 0,
+        }
+
     def reports_page(
         self,
         start_date: str | None = None,
@@ -769,21 +822,51 @@ class Repository:
     ) -> dict[str, Any]:
         limit = max(1, min(int(limit), 200))
         offset = max(0, int(offset))
-        all_reports = self.latest_reports(
-            start_date=start_date,
-            end_date=end_date,
-            date_mode=date_mode,
-            author=author,
-        )
+        query, profiles, now = self._reports_query_context(start_date, end_date, date_mode, author, source)
+        source_query, _, _ = self._reports_query_context(start_date, end_date, date_mode, author)
         sources = sorted(
-            {str(item.get("source") or "") for item in all_reports},
+            {str(item or "") for item in self.db.report_rows.distinct("source", source_query)},
             key=lambda value: value.lower(),
         )
-        reports = [item for item in all_reports if not source or str(item.get("source") or "") == source]
+        candidate_rows = list(
+            self.db.report_rows.find(query, self._reports_projection()).sort(
+                [("receivedAt", DESCENDING), ("recordedAt", DESCENDING), ("batchId", DESCENDING)]
+            )
+        )
+        meeting_lookup = self._meeting_lookup_for_reports(candidate_rows)
+        break_lookup = self._break_lookup_for_reports(candidate_rows)
+        reports: list[dict[str, Any]] = []
+        total = 0
+
+        for item in candidate_rows:
+            if date_mode == "authorLocalToday" and not _is_author_local_today(
+                item.get("date"),
+                item.get("author") or "Unknown User",
+                profiles,
+                item.get("timeZoneId"),
+                now,
+            ):
+                continue
+
+            if (
+                self._is_empty_plugin_report_without_signal(item)
+                or self._is_idle_report_during_meeting(item, meeting_lookup)
+                or self._is_idle_report_during_break(item, break_lookup)
+            ):
+                continue
+
+            if total >= offset and len(reports) < limit:
+                profile = profiles.get(item.get("author") or "Unknown User", {})
+                item["displayName"] = _display_name(item.get("author"), profile)
+                item["team"] = profile.get("team", "")
+                item["receivedAt"] = _iso(item.get("receivedAt"))
+                reports.append(item)
+
+            total += 1
 
         return {
-            "reports": reports[offset : offset + limit],
-            "total": len(reports),
+            "reports": reports,
+            "total": total,
             "limit": limit,
             "offset": offset,
             "sources": sources,
@@ -1017,6 +1100,9 @@ class Repository:
         end_date: str | None = None,
         date_mode: str | None = None,
         now: dt.datetime | None = None,
+        include_profiles: bool = True,
+        include_hourly: bool = True,
+        include_breakdowns: bool = True,
     ) -> dict[str, Any]:
         totals = {
             "daySeconds": 0,
@@ -1397,14 +1483,14 @@ class Repository:
 
         return {
             "totals": totals,
-            "activityMix": sorted(activity_mix, key=lambda item: item["count"], reverse=True),
-            "savedPrefabs": sorted(saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True),
-            "overtimeActivityMix": sorted(overtime_activity_mix, key=lambda item: item["count"], reverse=True),
-            "overtimeSavedPrefabs": sorted(overtime_saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True),
+            "activityMix": sorted(activity_mix, key=lambda item: item["count"], reverse=True) if include_breakdowns else [],
+            "savedPrefabs": sorted(saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True) if include_breakdowns else [],
+            "overtimeActivityMix": sorted(overtime_activity_mix, key=lambda item: item["count"], reverse=True) if include_breakdowns else [],
+            "overtimeSavedPrefabs": sorted(overtime_saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True) if include_breakdowns else [],
             "authors": sorted(author_rows, key=lambda item: item["displayName"].lower()),
-            "profiles": self.author_profiles(),
-            "authorAliases": self.author_aliases(),
-            "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]),
+            "profiles": self.author_profiles() if include_profiles else [],
+            "authorAliases": self.author_aliases() if include_profiles else [],
+            "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]) if include_hourly else [],
         }
 
     def _apply_plugin_hour_idle_gaps(
@@ -1479,8 +1565,9 @@ class Repository:
         now: dt.datetime,
     ) -> None:
         latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+        session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
-        for session in self.db.day_sessions.find({}, {"_id": 0}):
+        for session in self.db.day_sessions.find(session_query, {"_id": 0}):
             raw_author = str(session.get("rawAuthor") or "Unknown User")
             day_date = str(session.get("date") or "")
             time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
@@ -1527,8 +1614,9 @@ class Repository:
         now: dt.datetime,
     ) -> None:
         latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+        session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
-        for session in self.db.day_sessions.find({}, {"_id": 0}):
+        for session in self.db.day_sessions.find(session_query, {"_id": 0}):
             raw_author = str(session.get("rawAuthor") or "Unknown User")
             day_date = str(session.get("date") or "")
             time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
@@ -1746,16 +1834,20 @@ class Repository:
         end_date = dt.date(year, 12, 31).isoformat()
         docs = list(self.db.daily_author_activity.find(_date_query(start_date, end_date), {"_id": 0}))
         authors = set(self.list_authors())
+        docs_by_author: dict[str, list[dict[str, Any]]] = {}
 
         for item in docs:
-            if item.get("author"):
-                authors.add(str(item.get("author")))
+            raw_author = str(item.get("author") or "")
+
+            if raw_author:
+                authors.add(raw_author)
+                docs_by_author.setdefault(raw_author, []).append(item)
 
         author_summaries = []
 
         for raw_author in sorted(authors):
             profile = profiles.get(raw_author, {})
-            author_docs = [item for item in docs if item.get("author") == raw_author]
+            author_docs = docs_by_author.get(raw_author, [])
             author_summaries.append(
                 {
                     "rawAuthor": raw_author,
@@ -1940,6 +2032,16 @@ class Repository:
     def delete_calendar_mark(self, raw_author: str, date: str) -> dict[str, Any]:
         self.db.calendar_marks.delete_one({"rawAuthor": raw_author, "date": date})
         return {"ok": True}
+
+    def delete_calendar_marks(self, raw_authors: list[str], dates: list[str]) -> dict[str, Any]:
+        if not raw_authors or not dates:
+            return {"ok": False, "error": "Authors and dates are required"}
+
+        for date in dates:
+            _parse_date(date)
+
+        result = self.db.calendar_marks.delete_many({"rawAuthor": {"$in": raw_authors}, "date": {"$in": dates}})
+        return {"ok": True, "deletedCount": result.deleted_count}
 
     def _ensure_calendar_reasons(self) -> None:
         if self.db.calendar_reasons.count_documents({}):

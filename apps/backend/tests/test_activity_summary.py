@@ -127,8 +127,9 @@ class FakeCollection:
 
         return Result(len(matching))
 
-    def distinct(self, key):
-        return sorted({item.get(key) for item in self.items if item.get(key)})
+    def distinct(self, key, query=None):
+        query = query or {}
+        return sorted({item.get(key) for item in self.items if item.get(key) and self._matches(item, query)})
 
     def count_documents(self, query):
         return len([item for item in self.items if self._matches(item, query)])

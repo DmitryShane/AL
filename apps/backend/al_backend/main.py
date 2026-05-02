@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
@@ -14,6 +16,7 @@ from .models import (
     AuthorProfileIn,
     BreakEventIn,
     CalendarMarkIn,
+    CalendarMarksDeleteIn,
     CalendarReasonIn,
     DiscordSettingsIn,
     DiscordMeetingAutoAfkIn,
@@ -43,6 +46,7 @@ from .meeting_summary import generate_meeting_summary
 
 
 settings = load_settings()
+logger = logging.getLogger("al_backend")
 
 
 @asynccontextmanager
@@ -93,6 +97,13 @@ PUBLIC_API_PATHS = {
     "/api/v1/auth/me",
     "/api/v1/auth/dev-login",
 }
+DASHBOARD_METRIC_PATHS = {
+    "/api/v1/health",
+    "/api/v1/reports/summary",
+    "/api/v1/reports/table",
+    "/api/v1/analytics/summary",
+    "/api/v1/calendar/summary",
+}
 
 
 def is_local_dev_request(request: Request) -> bool:
@@ -112,11 +123,14 @@ def set_session_cookie(response: Response, token: str) -> None:
 
 @app.middleware("http")
 async def site_auth_middleware(request: Request, call_next):
+    started_at = time.perf_counter()
     if request.method == "OPTIONS" or request.url.path not in PUBLIC_API_PATHS and not request.url.path.startswith("/api/v1/"):
-        return await call_next(request)
+        response = await call_next(request)
+        return _with_dashboard_metrics(request, response, started_at)
 
     if request.url.path in PUBLIC_API_PATHS:
-        return await call_next(request)
+        response = await call_next(request)
+        return _with_dashboard_metrics(request, response, started_at)
 
     user = request.app.state.repo.site_user_for_session(request.cookies.get(SESSION_COOKIE_NAME))
 
@@ -124,7 +138,30 @@ async def site_auth_middleware(request: Request, call_next):
         return JSONResponse({"detail": "Authentication required"}, status_code=401)
 
     request.state.site_user = user
-    return await call_next(request)
+    response = await call_next(request)
+    return _with_dashboard_metrics(request, response, started_at)
+
+
+def _with_dashboard_metrics(request: Request, response: Response, started_at: float) -> Response:
+    if request.url.path not in DASHBOARD_METRIC_PATHS:
+        return response
+
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+    response.headers["X-AL-Response-Time-Ms"] = str(elapsed_ms)
+    content_length = response.headers.get("content-length", "")
+
+    if content_length:
+        response.headers["X-AL-Response-Bytes"] = content_length
+
+    logger.info(
+        "dashboard_endpoint path=%s status=%s duration_ms=%.2f bytes=%s",
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+        content_length or "unknown",
+    )
+
+    return response
 
 
 def current_site_user(request: Request) -> dict:
@@ -696,6 +733,11 @@ def delete_calendar_mark(
     return app.state.repo.delete_calendar_mark(raw_author=author, date=date)
 
 
+@app.post("/api/v1/calendar/marks/delete")
+def delete_calendar_marks(mark: CalendarMarksDeleteIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
+    return app.state.repo.delete_calendar_marks(raw_authors=mark.authors, dates=mark.dates)
+
+
 @app.put("/api/v1/calendar/reasons")
 def upsert_calendar_reason(reason: CalendarReasonIn, _: dict = Depends(require_permission("manageSettings"))) -> dict:
     return app.state.repo.upsert_calendar_reason(reason_id=reason.id or reason.label, label=reason.label)
@@ -711,11 +753,23 @@ def reports_summary(
     start_date: str | None = Query(default=None, alias="startDate"),
     end_date: str | None = Query(default=None, alias="endDate"),
     date_mode: str | None = Query(default=None, alias="dateMode"),
+    view: str = Query(default="activity", pattern="^(authors|activity|alerts|settings)$"),
 ) -> SummaryResponse:
+    include_profiles = view == "settings"
+    include_hourly = view == "activity"
+    include_breakdowns = view == "activity"
+
     return SummaryResponse(
         authors=app.state.repo.list_authors(),
         reports=[],
         intervalSettings=app.state.repo.get_interval_settings(),
         discordSettings=app.state.repo.get_discord_settings(),
-        activitySummary=app.state.repo.activity_summary(start_date=start_date, end_date=end_date, date_mode=date_mode),
+        activitySummary=app.state.repo.activity_summary(
+            start_date=start_date,
+            end_date=end_date,
+            date_mode=date_mode,
+            include_profiles=include_profiles,
+            include_hourly=include_hourly,
+            include_breakdowns=include_breakdowns,
+        ),
     )

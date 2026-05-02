@@ -1,13 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, BarChart3, Bell, Box, CalendarDays, LogOut, RefreshCw, Search, Settings, ShieldCheck, UsersRound } from "lucide-react";
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, BarChart3, Bell, CalendarDays, LogOut, Settings, UsersRound } from "lucide-react";
 import { DateRangePicker } from "./components/layout/DateRangePicker";
-import { ActivityPage } from "./pages/ActivityPage";
-import { AlertsPage } from "./pages/AlertsPage";
-import { AnalyticsPage } from "./pages/AnalyticsPage";
-import { AuthorsPage } from "./pages/AuthorsPage";
-import { CalendarPage } from "./pages/CalendarPage";
 import { LoginPage } from "./pages/LoginPage";
-import { SettingsPage } from "./pages/SettingsPage";
 import { NavButton } from "./components/layout/NavButton";
 import { apiFetch, IS_LOCAL_DASHBOARD } from "./api/client";
 import {
@@ -24,6 +18,13 @@ import {
 import "./styles.css";
 
 import type { ActivitySummary, AuthorRow, DateRange, Health, Page, SettingsTab, SiteUser, SiteUserRole, Summary } from "./types/dashboard";
+
+const ActivityPage = lazy(() => import("./pages/ActivityPage").then((module) => ({ default: module.ActivityPage })));
+const AlertsPage = lazy(() => import("./pages/AlertsPage").then((module) => ({ default: module.AlertsPage })));
+const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
+const AuthorsPage = lazy(() => import("./pages/AuthorsPage").then((module) => ({ default: module.AuthorsPage })));
+const CalendarPage = lazy(() => import("./pages/CalendarPage").then((module) => ({ default: module.CalendarPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 
 const emptyActivitySummary: ActivitySummary = {
   totals: {
@@ -126,7 +127,8 @@ function App() {
     try {
       const params = new URLSearchParams({
         startDate: requestedDateRange.startDate,
-        endDate: requestedDateRange.endDate
+        endDate: requestedDateRange.endDate,
+        view: summaryViewForPage(page)
       });
 
       if (requestedDateRange.preset === "live") {
@@ -161,7 +163,7 @@ function App() {
 
   useEffect(() => {
     void load();
-  }, [authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset]);
+  }, [authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset, page]);
 
   async function requestReportRefresh(author?: string | null) {
     setRefreshingReports(true);
@@ -200,7 +202,7 @@ function App() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset, dashboardRefreshMs]);
+  }, [authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset, dashboardRefreshMs, page]);
 
   const activitySummary = summary?.activitySummary ?? emptyActivitySummary;
   const authors = useMemo(() => activitySummary.authors.filter((author) => matchesAuthorSearch(author, search)), [activitySummary, search]);
@@ -350,29 +352,31 @@ function App() {
         {authLoading ? <p className="notice">Restoring dashboard session...</p> : null}
         {error ? <p className="notice error">{error}</p> : null}
 
-        {page === "authors" ? (
-          <AuthorsPage
-            authors={authors}
-            search={search}
-            setSearch={setSearch}
-            refreshing={refreshingReports}
-            onRefresh={() => void requestReportRefresh()}
-          />
-        ) : null}
-        {page === "activity" ? (
-              <ActivityPage
-                summary={activitySummary}
-                dateRange={appliedDateRange}
-                selectedAuthor={activeAuthor}
-                setSelectedAuthor={setSelectedAuthor}
-                refreshing={refreshingReports}
-            onRefreshAuthor={(author) => void requestReportRefresh(author)}
-          />
-        ) : null}
-        {page === "analytics" ? <AnalyticsPage /> : null}
-        {page === "calendar" ? <CalendarPage /> : null}
-        {page === "alerts" ? <AlertsPage authors={activitySummary.authors} /> : null}
-        {page === "settings" ? <SettingsPage summary={summary} currentUser={sessionUser} onSaved={() => void load(false)} /> : null}
+        <Suspense fallback={<p className="notice">Loading page...</p>}>
+          {page === "authors" ? (
+            <AuthorsPage
+              authors={authors}
+              search={search}
+              setSearch={setSearch}
+              refreshing={refreshingReports}
+              onRefresh={() => void requestReportRefresh()}
+            />
+          ) : null}
+          {page === "activity" ? (
+            <ActivityPage
+              summary={activitySummary}
+              dateRange={appliedDateRange}
+              selectedAuthor={activeAuthor}
+              setSelectedAuthor={setSelectedAuthor}
+              refreshing={refreshingReports}
+              onRefreshAuthor={(author) => void requestReportRefresh(author)}
+            />
+          ) : null}
+          {page === "analytics" ? <AnalyticsPage /> : null}
+          {page === "calendar" ? <CalendarPage /> : null}
+          {page === "alerts" ? <AlertsPage authors={activitySummary.authors} /> : null}
+          {page === "settings" ? <SettingsPage summary={summary} currentUser={sessionUser} onSaved={() => void load(false)} /> : null}
+        </Suspense>
       </main>
     </div>
   );
@@ -381,6 +385,22 @@ function App() {
 function dashboardRefreshIntervalMs(summary: Summary | null) {
   const seconds = summary?.intervalSettings.defaultSendIntervalSeconds ?? REFRESH_INTERVAL_MS / 1000;
   return Math.max(1000, seconds * 1000);
+}
+
+function summaryViewForPage(page: Page) {
+  if (page === "settings") {
+    return "settings";
+  }
+
+  if (page === "alerts") {
+    return "alerts";
+  }
+
+  if (page === "activity") {
+    return "activity";
+  }
+
+  return "authors";
 }
 
 function matchesAuthorSearch(author: AuthorRow, search: string) {

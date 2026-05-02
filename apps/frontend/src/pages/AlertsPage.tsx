@@ -1,15 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Box, RefreshCw, Search, ShieldCheck } from "lucide-react";
-import { AuthorsTable } from "../components/AuthorsTable";
-import { AnalyticsActivityOverview } from "../components/AnalyticsActivityOverview";
-import { HourlyActivityChart } from "../components/HourlyActivityChart";
-import { ActivityMetricsGrid } from "../components/activity/ActivityMetricsGrid";
-import { BreakdownPanel, OvertimeBreakdownPanel } from "../components/activity/BreakdownPanels";
-import { ReportsTable } from "../components/activity/ReportsTable";
-import { apiFetch } from "../api/client";
-import { MEETING_AUDIO_RETENTION_OPTIONS, MEETING_SUMMARY_LANGUAGES, REFRESH_INTERVAL_MS, REPORTS_PAGE_STORAGE_KEY, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
-import type { ActivitySummary, AlertStats, AnalyticsSummary, AuthorAlert, AuthorProfile, AuthorRow, CalendarAuthor, CalendarAuthorStats, CalendarMark, CalendarReason, CalendarSummary, DateRange, MeetingRecordingStatus, Report, ReportsPage, ReportsPageCache, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
-import { activityColor, alertAuthorCardClassName, alertCardClassName, alertCountBadgeClassName, alertKey, alertSeverityBadgeClassName, authorCardClassName, authorCardProductivityTone, authorStatusBadgeClassName, autoBreakScheduleLabel, avatarStyle, breakClassName, breakTone, calendarDayClassName, compareAlertAuthors, compareAuthorCardStatus, compareAuthorsByStatusAndProductivity, dateRangeList, emptyAuthorProfile, formatActivityType, formatAlertThreshold, formatAlertValue, formatAuthorStatus, formatAuthorTime, formatDelta, formatDiscordEvent, formatDuration, formatDurationDelta, formatMinutes, formatProfileTimeZoneLabel, formatProfileTimeZoneTitle, formatReportActive, formatReportIdle, formatReportOvertime, formatReportType, formatSiteRole, formatSource, formatTelegramEvent, formatTimeZoneLabel, formatTimestamp, initials, loadSavedReportsPage, loadSavedSettingsTab, meetingRecordingAudioStats, meetingRecordingDetail, meetingRecordingRecipientLabel, meetingRecordingStatusLabel, monthIndexes, normalizeAuthorInput, paletteColor, productivityClassName, productivityTone, reportTypeBadgeClassName, savedFileLabel, settingsSaveButtonClassName, settingsSaveButtonLabel, sourceIcon, toCalendarDate, toDateInputValue, uniqueDates, authorProfilePayload } from "./pageHelpers";
+import type { AuthorAlert, AuthorRow } from "../types/dashboard";
+import { alertAuthorCardClassName, alertCardClassName, alertCountBadgeClassName, alertKey, alertSeverityBadgeClassName, authorStatusBadgeClassName, avatarStyle, compareAlertAuthors, formatAlertValue, formatAuthorStatus, initials } from "./pageHelpers";
 import { AlertSummaryMetric } from "../components/alerts/AlertSummaryMetric";
 export function AlertsPage({ authors }: { authors: AuthorRow[] }) {
   const sortedAuthors = [...authors].sort(compareAlertAuthors);
