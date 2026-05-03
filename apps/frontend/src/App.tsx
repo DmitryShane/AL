@@ -21,6 +21,7 @@ import {
   PAGE_STORAGE_KEY,
   REFRESH_INTERVAL_MS,
   REPORTS_PAGE_STORAGE_KEY,
+  SESSION_USER_PREVIEW_STORAGE_KEY,
   SETTINGS_TAB_STORAGE_KEY
 } from "./constants/dashboard";
 import "./styles.css";
@@ -50,6 +51,60 @@ const emptyActivitySummary: ActivitySummary = {
   hourlyActivityByAuthor: []
 };
 
+function readStoredSessionUserPreview(): SiteUser | null {
+  if (typeof window === "undefined" || localStorage.getItem(AUTH_HINT_STORAGE_KEY) !== "true") {
+    return null;
+  }
+
+  try {
+    const raw = sessionStorage.getItem(SESSION_USER_PREVIEW_STORAGE_KEY);
+
+    if (!raw) {
+      return null;
+    }
+
+    const data = JSON.parse(raw) as Partial<SiteUser>;
+
+    if (typeof data.email !== "string" || typeof data.displayName !== "string" || typeof data.role !== "string") {
+      return null;
+    }
+
+    return {
+      email: data.email,
+      displayName: data.displayName,
+      role: data.role as SiteUserRole,
+      active: data.active !== false
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSessionUserPreview(user: SiteUser | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (!user) {
+    sessionStorage.removeItem(SESSION_USER_PREVIEW_STORAGE_KEY);
+    return;
+  }
+
+  try {
+    sessionStorage.setItem(
+      SESSION_USER_PREVIEW_STORAGE_KEY,
+      JSON.stringify({
+        email: user.email,
+        displayName: user.displayName,
+        role: user.role,
+        active: user.active
+      })
+    );
+  } catch {
+    //
+  }
+}
+
 function App() {
   const [page, setPage] = useState<Page>(() => loadSavedPage());
   const [isRestoringScroll, setIsRestoringScroll] = useState(() => getSavedPageScroll(loadSavedPage()) > 0);
@@ -58,6 +113,7 @@ function App() {
   const [authUser, setAuthUser] = useState<SiteUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [hasAuthHint, setHasAuthHint] = useState(() => localStorage.getItem(AUTH_HINT_STORAGE_KEY) === "true");
+  const [sessionUserPreview, setSessionUserPreview] = useState<SiteUser | null>(() => readStoredSessionUserPreview());
   const [health, setHealth] = useState<Health | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>(() => loadSavedDateRange());
   const [appliedDateRange, setAppliedDateRange] = useState<DateRange>(() => loadSavedDateRange());
@@ -96,13 +152,18 @@ function App() {
           setHasAuthHint(true);
           localStorage.setItem(AUTH_HINT_STORAGE_KEY, "true");
         } else {
+          setAuthUser(null);
           setHasAuthHint(false);
           localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
+          setSessionUserPreview(null);
+          writeStoredSessionUserPreview(null);
         }
       } catch {
         setAuthUser(null);
         setHasAuthHint(false);
         localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
+        setSessionUserPreview(null);
+        writeStoredSessionUserPreview(null);
       } finally {
         setAuthLoading(false);
       }
@@ -110,6 +171,13 @@ function App() {
 
     void loadAuth();
   }, []);
+
+  useEffect(() => {
+    if (authUser) {
+      writeStoredSessionUserPreview(authUser);
+      setSessionUserPreview(authUser);
+    }
+  }, [authUser]);
 
   async function load(showLoading = true) {
     if (!authUser) {
@@ -150,6 +218,8 @@ function App() {
 
       if (summaryResponse.status === 401) {
         setAuthUser(null);
+        setSessionUserPreview(null);
+        writeStoredSessionUserPreview(null);
         setHasAuthHint(false);
         localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
         return;
@@ -299,12 +369,16 @@ function App() {
   async function handleLogout() {
     await apiFetch("/api/v1/auth/logout", { method: "POST" });
     setAuthUser(null);
+    setSessionUserPreview(null);
+    writeStoredSessionUserPreview(null);
     setHasAuthHint(false);
     localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
     clearDashboardSessionCaches();
     setSummary(null);
     setHealth(null);
   }
+
+  const displaySessionUser = authUser ?? sessionUserPreview;
 
   if (authLoading && !hasAuthHint) {
     return <LoginPage checkingSession onLogin={setAuthUser} />;
@@ -313,8 +387,6 @@ function App() {
   if (!authLoading && !authUser) {
     return <LoginPage onLogin={setAuthUser} />;
   }
-
-  const sessionUser = authUser ?? { email: "", displayName: "Activity Logger", role: "viewer" as const, active: true };
 
   return (
     <div className={`app-frame${isRestoringScroll ? " restoring-scroll" : ""}`}>
@@ -332,9 +404,26 @@ function App() {
           <NavButton icon={<Settings size={20} />} label="Settings" active={page === "settings"} onClick={() => selectPage("settings")} />
         </nav>
         <div className="session-card sidebar-session-card">
-          <span>{sessionUser.displayName}</span>
-          <small>{formatSiteRole(sessionUser.role)}</small>
-          <button className="icon-button" onClick={() => void handleLogout()} title="Log out">
+          {displaySessionUser ? (
+            <>
+              <span>{displaySessionUser.displayName}</span>
+              <small>{formatSiteRole(displaySessionUser.role)}</small>
+            </>
+          ) : (
+            <>
+              <span className="session-card-restoring">Loading account…</span>
+              <small className="session-card-restoring-role" aria-hidden="true">
+                {"\u00a0"}
+              </small>
+            </>
+          )}
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => void handleLogout()}
+            title="Log out"
+            disabled={!displaySessionUser}
+          >
             <LogOut size={16} />
           </button>
         </div>
@@ -385,7 +474,9 @@ function App() {
         {page === "analytics" ? <AnalyticsPage /> : null}
         {page === "calendar" ? <CalendarPage /> : null}
         {page === "alerts" ? <AlertsPage authors={activitySummary.authors} /> : null}
-        {page === "settings" ? <SettingsPage summary={canShowCachedDashboard ? summary : null} currentUser={sessionUser} onSaved={() => void load(false)} /> : null}
+        {page === "settings" && displaySessionUser ? (
+          <SettingsPage summary={canShowCachedDashboard ? summary : null} currentUser={displaySessionUser} onSaved={() => void load(false)} />
+        ) : null}
       </main>
     </div>
   );

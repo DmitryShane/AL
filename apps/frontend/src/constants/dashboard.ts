@@ -6,6 +6,8 @@ export const DATE_RANGE_STORAGE_KEY = "AL.Dashboard.DateRange";
 export const REPORTS_PAGE_STORAGE_KEY = "AL.Dashboard.PluginReportsPage";
 export const SETTINGS_TAB_STORAGE_KEY = "AL.Dashboard.SettingsTab";
 export const AUTH_HINT_STORAGE_KEY = "AL.Dashboard.Authenticated";
+/** Short-lived display snapshot (sessionStorage) so sidebar/settings stay stable until /auth/me returns after reload. */
+export const SESSION_USER_PREVIEW_STORAGE_KEY = "AL.Session.UserPreview";
 export const DASHBOARD_SUMMARY_CACHE_PREFIX = "AL.Dashboard.Summary.";
 export const ANALYTICS_SUMMARY_CACHE_KEY = "AL.Dashboard.AnalyticsSummary";
 export const CALENDAR_SUMMARY_CACHE_KEY = "AL.Dashboard.CalendarSummary";

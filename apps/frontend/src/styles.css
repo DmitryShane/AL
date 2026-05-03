@@ -193,6 +193,15 @@ p {
   font-size: 11px;
 }
 
+.session-card-restoring {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.session-card-restoring-role {
+  visibility: hidden;
+}
+
 .session-card .icon-button {
   grid-row: 1 / span 2;
   grid-column: 2;

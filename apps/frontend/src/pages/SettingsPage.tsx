@@ -893,6 +893,9 @@ export function SettingsPage({
               value={newProfile.rawAuthor}
               onChange={(event) => setNewProfile((profile) => ({ ...profile, rawAuthor: event.target.value }))}
               placeholder="Git user.name"
+              autoComplete="off"
+              data-1p-ignore
+              data-lpignore="true"
             />
           </label>
           <label>
@@ -901,6 +904,9 @@ export function SettingsPage({
               value={newProfile.displayName}
               onChange={(event) => setNewProfile((profile) => ({ ...profile, displayName: event.target.value }))}
               placeholder="Shown on dashboard"
+              autoComplete="off"
+              data-1p-ignore
+              data-lpignore="true"
             />
           </label>
           <label>
@@ -909,6 +915,9 @@ export function SettingsPage({
               value={newProfile.team ?? ""}
               onChange={(event) => setNewProfile((profile) => ({ ...profile, team: event.target.value }))}
               placeholder="Team"
+              autoComplete="off"
+              data-1p-ignore
+              data-lpignore="true"
             />
           </label>
           <label>
@@ -917,6 +926,9 @@ export function SettingsPage({
               value={newProfile.githubUsername ?? ""}
               onChange={(event) => setNewProfile((profile) => ({ ...profile, githubUsername: event.target.value }))}
               placeholder="username"
+              autoComplete="off"
+              data-1p-ignore
+              data-lpignore="true"
             />
           </label>
           <label>
@@ -925,6 +937,9 @@ export function SettingsPage({
               value={newProfile.telegramUsername ?? ""}
               onChange={(event) => setNewProfile((profile) => ({ ...profile, telegramUsername: event.target.value }))}
               placeholder="@username"
+              autoComplete="off"
+              data-1p-ignore
+              data-lpignore="true"
             />
           </label>
           <label>
@@ -933,6 +948,9 @@ export function SettingsPage({
               value={newProfile.discordUserId ?? ""}
               onChange={(event) => setNewProfile((profile) => ({ ...profile, discordUserId: event.target.value }))}
               placeholder="User ID"
+              autoComplete="off"
+              data-1p-ignore
+              data-lpignore="true"
             />
           </label>
           <label>
@@ -941,6 +959,9 @@ export function SettingsPage({
               value={newProfile.discordUsername ?? ""}
               onChange={(event) => setNewProfile((profile) => ({ ...profile, discordUsername: event.target.value }))}
               placeholder="username"
+              autoComplete="off"
+              data-1p-ignore
+              data-lpignore="true"
             />
           </label>
           <label>
@@ -1006,10 +1027,16 @@ export function SettingsPage({
                 <input
                   value={draft.displayName}
                   onChange={(event) => setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, displayName: event.target.value } }))}
+                  autoComplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
                 />
                 <input
                   value={draft.team ?? ""}
                   onChange={(event) => setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, team: event.target.value } }))}
+                  autoComplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
                 />
                 <input
                   value={draft.githubUsername ?? ""}
@@ -1017,6 +1044,9 @@ export function SettingsPage({
                     setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, githubUsername: event.target.value } }))
                   }
                   placeholder="username"
+                  autoComplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
                 />
                 <input
                   value={draft.telegramUsername ?? ""}
@@ -1024,6 +1054,9 @@ export function SettingsPage({
                     setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, telegramUsername: event.target.value } }))
                   }
                   placeholder="@username"
+                  autoComplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
                 />
                 <input
                   value={draft.discordUserId ?? ""}
@@ -1031,6 +1064,9 @@ export function SettingsPage({
                     setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, discordUserId: event.target.value } }))
                   }
                   placeholder="User ID"
+                  autoComplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
                 />
                 <input
                   value={draft.discordUsername ?? ""}
@@ -1038,6 +1074,9 @@ export function SettingsPage({
                     setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, discordUsername: event.target.value } }))
                   }
                   placeholder="username"
+                  autoComplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
                 />
                 <span className="profile-readonly-cell" title={formatProfileTimeZoneTitle(profile)}>{formatProfileTimeZoneLabel(profile)}</span>
                 <input
