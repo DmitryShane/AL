@@ -2,7 +2,7 @@ import React from "react";
 import { Activity, Box } from "lucide-react";
 import cursorIconUrl from "../assets/cursor-icon.png";
 import { REFRESH_INTERVAL_MS, REPORTS_PAGE_STORAGE_KEY, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
-import type { AlertStats, AuthorAlert, AuthorProfile, AuthorRow, DateRange, MeetingRecordingStatus, Report, SavedPrefab, SettingsTab, SiteUserRole, Summary } from "../types/dashboard";
+import type { AlertStats, AuthorAlert, AuthorProfile, AuthorRow, DateRange, MeetingRecordingStatus, Report, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
 export function settingsSaveButtonLabel(key: string, saving: string | null, statuses: Record<string, "saved" | "error" | undefined>) {
   if (saving === key) {
     return "Saving...";
@@ -34,6 +34,33 @@ export function formatSiteRole(role: SiteUserRole) {
   }
 
   return "Viewer";
+}
+
+function humanizeSiteUserEmailLocalPart(email: string): string {
+  const trimmed = email.trim();
+  const local = trimmed.split("@")[0] || trimmed;
+
+  if (!local) {
+    return "User";
+  }
+
+  return local
+    .replace(/[._-]+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
+export function formatSiteUserSidebarLabel(user: SiteUser): string {
+  const email = user.email.trim();
+  const display = user.displayName.trim();
+
+  if (display && display.toLowerCase() !== email.toLowerCase()) {
+    return display;
+  }
+
+  return humanizeSiteUserEmailLocalPart(email);
 }
 
 export function settingsSaveButtonClassName(status: "saved" | "error" | undefined, outline = false) {

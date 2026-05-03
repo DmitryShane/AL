@@ -26,6 +26,8 @@ import {
 } from "./constants/dashboard";
 import "./styles.css";
 
+import { AuthorAvatar } from "./components/AuthorAvatar";
+import { formatSiteRole, formatSiteUserSidebarLabel } from "./pages/pageHelpers";
 import type { ActivitySummary, AuthorRow, DateRange, Health, Page, SettingsTab, SiteUser, SiteUserRole, Summary } from "./types/dashboard";
 
 const emptyActivitySummary: ActivitySummary = {
@@ -69,11 +71,14 @@ function readStoredSessionUserPreview(): SiteUser | null {
       return null;
     }
 
+    const avatarUrl = typeof data.avatarUrl === "string" && data.avatarUrl.trim() ? data.avatarUrl.trim() : undefined;
+
     return {
       email: data.email,
       displayName: data.displayName,
       role: data.role as SiteUserRole,
-      active: data.active !== false
+      active: data.active !== false,
+      ...(avatarUrl ? { avatarUrl } : {})
     };
   } catch {
     return null;
@@ -406,15 +411,30 @@ function App() {
         <div className="session-card sidebar-session-card">
           {displaySessionUser ? (
             <>
-              <span>{displaySessionUser.displayName}</span>
-              <small>{formatSiteRole(displaySessionUser.role)}</small>
+              <div className="session-card-figure" aria-hidden="true">
+                <AuthorAvatar
+                  displayName={formatSiteUserSidebarLabel(displaySessionUser)}
+                  avatarUrl={displaySessionUser.avatarUrl}
+                  variant="mini"
+                  className="session-card-avatar-figure"
+                />
+              </div>
+              <div className="session-card-text">
+                <span>{formatSiteUserSidebarLabel(displaySessionUser)}</span>
+                <small>{formatSiteRole(displaySessionUser.role)}</small>
+              </div>
             </>
           ) : (
             <>
-              <span className="session-card-restoring">Loading account…</span>
-              <small className="session-card-restoring-role" aria-hidden="true">
-                {"\u00a0"}
-              </small>
+              <div className="session-card-figure" aria-hidden="true">
+                <span className="session-card-avatar session-card-avatar-pending">…</span>
+              </div>
+              <div className="session-card-text">
+                <span className="session-card-restoring">Loading account…</span>
+                <small className="session-card-restoring-role" aria-hidden="true">
+                  {"\u00a0"}
+                </small>
+              </div>
             </>
           )}
           <button
@@ -574,18 +594,6 @@ function matchesAuthorSearch(author: AuthorRow, search: string) {
   return [author.displayName, author.authorEmail, author.rawAuthor, author.team, author.source]
     .filter(Boolean)
     .some((value) => value!.toLowerCase().includes(query));
-}
-
-function formatSiteRole(role: SiteUserRole) {
-  if (role === "admin") {
-    return "Admin";
-  }
-
-  if (role === "editor") {
-    return "Editor";
-  }
-
-  return "Viewer";
 }
 
 function pageTitle(page: Page) {

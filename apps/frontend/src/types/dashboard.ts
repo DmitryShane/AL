@@ -228,6 +228,8 @@ export type SiteUser = {
   displayName: string;
   role: SiteUserRole;
   active: boolean;
+  /** Linked author profile avatar (GitHub-backed), when site email matches author_profiles. */
+  avatarUrl?: string;
 };
 
 export type MeetingRecordingStatus = {

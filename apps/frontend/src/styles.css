@@ -159,23 +159,61 @@ p {
 .session-card {
   display: grid;
   min-width: 180px;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 2px 10px;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   background: #ffffff;
-  padding: 8px 10px 8px 14px;
+  padding: 8px 10px 8px 12px;
   box-shadow: 0 2px 8px rgb(15 23 42 / 5%);
 }
 
-.sidebar-session-card {
-  width: 100%;
-  min-width: 0;
-  margin-top: auto;
+.session-card-figure {
+  grid-row: 1 / span 2;
+  grid-column: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.session-card span {
+.session-card-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #13a37b;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  flex: 0 0 auto;
+}
+
+.session-card-figure .session-card-avatar-figure.author-avatar-image-mini,
+.session-card-figure .session-card-avatar-figure.avatar.mini-avatar {
+  width: 36px;
+  height: 36px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.session-card-figure .session-card-avatar-figure.author-avatar-image-mini {
+  border: none;
+  box-shadow: none;
+}
+
+.session-card-text {
+  grid-column: 2;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-card-text span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -184,13 +222,33 @@ p {
   font-weight: 700;
 }
 
-.session-card small {
+.session-card-text small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #718093;
   font-size: 11px;
+}
+
+.sidebar-session-card {
+  width: 100%;
+  min-width: 0;
+  margin-top: auto;
+  padding: 11px 10px 11px 12px;
+}
+
+.sidebar-session-card .session-card-text {
+  grid-row: 1 / span 2;
+  justify-content: center;
+  align-items: stretch;
+  text-align: left;
+}
+
+.sidebar-session-card .session-card-text span,
+.sidebar-session-card .session-card-text small {
+  text-align: left;
+  width: 100%;
 }
 
 .session-card-restoring {
@@ -204,7 +262,7 @@ p {
 
 .session-card .icon-button {
   grid-row: 1 / span 2;
-  grid-column: 2;
+  grid-column: 3;
   width: 34px;
   height: 34px;
 }

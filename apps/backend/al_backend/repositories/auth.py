@@ -28,6 +28,35 @@ class AuthRepository:
         update["createdAt"] = now
         self.db.site_users.update_one({"email": normalized_email}, {"$set": update}, upsert=True)
 
+    def _author_profile_for_site_user_email(self, email: str) -> dict[str, Any] | None:
+        normalized = _normalize_email(email)
+
+        if not normalized:
+            return None
+
+        profile = self.db.author_profiles.find_one({"authorEmail": normalized})
+
+        if profile:
+            return profile
+
+        return self.db.author_profiles.find_one({"rawAuthor": normalized})
+
+    def _public_site_user_with_avatar(self, user: dict[str, Any]) -> dict[str, Any]:
+        public = _public_site_user(user)
+        profile = self._author_profile_for_site_user_email(public.get("email", ""))
+
+        if not profile:
+            return public
+
+        raw_author = str(profile.get("rawAuthor") or "").strip()
+        gh_user = _github_username_for_avatar_fetch(raw_author, profile)
+        url = _cached_author_avatar_api_url(raw_author, gh_user, profile)
+
+        if url:
+            public["avatarUrl"] = url
+
+        return public
+
     def authenticate_site_user(self, email: str, password: str) -> dict[str, Any] | None:
         normalized_email = _normalize_email(email)
 
@@ -39,7 +68,7 @@ class AuthRepository:
         if not user or not verify_password(password, user.get("passwordHash", "")):
             return None
 
-        return _public_site_user(user)
+        return self._public_site_user_with_avatar(user)
 
     def create_site_session(self, email: str) -> str:
         token = new_session_token()
@@ -70,14 +99,14 @@ class AuthRepository:
         if not user:
             return None
 
-        return _public_site_user(user)
+        return self._public_site_user_with_avatar(user)
 
     def delete_site_session(self, token: str | None) -> None:
         if token:
             self.db.site_sessions.delete_one({"tokenHash": session_token_hash(token)})
 
     def site_users(self) -> list[dict[str, Any]]:
-        return [_public_site_user(user) for user in self.db.site_users.find({}, {"passwordHash": 0}).sort("email", ASCENDING)]
+        return [self._public_site_user_with_avatar(user) for user in self.db.site_users.find({}, {"passwordHash": 0}).sort("email", ASCENDING)]
 
     def upsert_site_user(
         self,
@@ -119,7 +148,7 @@ class AuthRepository:
 
         self.db.site_users.update_one({"email": normalized_email}, operation, upsert=True)
         user = self.db.site_users.find_one({"email": normalized_email}) or update
-        return {"ok": True, "user": _public_site_user(user)}
+        return {"ok": True, "user": self._public_site_user_with_avatar(user)}
 
     def delete_site_user(self, email: str) -> dict[str, Any]:
         normalized_email = _normalize_email(email)
