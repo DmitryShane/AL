@@ -63,26 +63,33 @@ export function SettingsPage({
       return;
     }
 
-    const workspace = meetingSummaryWorkspaceRef.current;
-    const promptPanel = meetingSummaryPromptPanelRef.current;
+    function syncPromptPanelHeight() {
+      const workspaceEl = meetingSummaryWorkspaceRef.current;
+      const promptPanelEl = meetingSummaryPromptPanelRef.current;
 
-    if (!workspace || !promptPanel) {
-      return;
+      if (!workspaceEl || !promptPanelEl) {
+        return;
+      }
+
+      const height = promptPanelEl.getBoundingClientRect().height;
+      workspaceEl.style.setProperty("--meeting-summary-prompt-panel-height", `${Math.round(height)}px`);
     }
 
-    function syncPromptPanelHeight() {
-      const height = promptPanel.getBoundingClientRect().height;
-      workspace.style.setProperty("--meeting-summary-prompt-panel-height", `${Math.round(height)}px`);
+    const workspaceEl = meetingSummaryWorkspaceRef.current;
+    const promptPanelEl = meetingSummaryPromptPanelRef.current;
+
+    if (!workspaceEl || !promptPanelEl) {
+      return;
     }
 
     syncPromptPanelHeight();
 
     const observer = new ResizeObserver(syncPromptPanelHeight);
-    observer.observe(promptPanel);
+    observer.observe(promptPanelEl);
 
     return () => {
       observer.disconnect();
-      workspace.style.removeProperty("--meeting-summary-prompt-panel-height");
+      meetingSummaryWorkspaceRef.current?.style.removeProperty("--meeting-summary-prompt-panel-height");
     };
   }, [settingsTab]);
 
