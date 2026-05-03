@@ -27,7 +27,7 @@ _BACKEND = os.path.join(os.path.dirname(__file__), "..", "apps", "backend")
 if os.path.isdir(_BACKEND):
     sys.path.insert(0, _BACKEND)
 
-from al_backend.repository import Repository
+from al_backend.container import BackendContainer
 from al_backend.settings import load_settings
 
 
@@ -84,7 +84,8 @@ def main() -> None:
         _apply_env_file(args.env_file, frozenset({"AL_MONGO_URI", "AL_MONGO_DATABASE"}))
 
     settings = load_settings()
-    repo = Repository(settings)
+    container = BackendContainer(settings)
+    repo = container.services
     now_utc = dt.datetime.now(dt.UTC)
     deleted_raw = 0
     deleted_snapshots = 0
@@ -158,7 +159,7 @@ def main() -> None:
         else:
             print("strip_activity_before_online: nothing deleted; skip rebuild")
     finally:
-        repo.client.close()
+        container.close()
 
 
 if __name__ == "__main__":
