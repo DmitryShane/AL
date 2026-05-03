@@ -9,6 +9,12 @@
 	.st3{fill:#2185DA;}
 	.st4{fill:#FF6258;}
 </style>
+<defs>
+	<clipPath id="faviconRounded">
+		<rect width="1024" height="1024" rx="200" ry="200"/>
+	</clipPath>
+</defs>
+<g clip-path="url(#faviconRounded)">
 <rect class="st0" width="1024" height="1024"/>
 <g>
 	<g>
@@ -27,5 +33,6 @@
 		<polygon class="st1" points="230.27,546.15 872.53,560.07 229.06,594.55 		"/>
 		<circle class="st1" cx="250.43" cy="568.88" r="54.49"/>
 	</g>
+</g>
 </g>
 </svg>
