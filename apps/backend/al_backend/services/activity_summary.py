@@ -1,0 +1,1555 @@
+from __future__ import annotations
+
+from ..activity_math import *
+
+
+class ActivitySummaryServiceMixin:
+    def latest_reports(
+        self,
+        limit: int | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_mode: str | None = None,
+        author: str | None = None,
+        source: str | None = None,
+    ) -> list[dict[str, Any]]:
+        reports = []
+        projection = {
+            "_id": 0,
+            "rawReportId": 0,
+            "encryptedPacket": 0,
+            "activityCounts": 0,
+            "savedPrefabs": 0,
+            "overtimeActivityCounts": 0,
+            "overtimeSavedPrefabs": 0,
+            "hourlyActivity": 0,
+            "activityCountDeltas": 0,
+            "savedPrefabDeltas": 0,
+            "overtimeActivityCountDeltas": 0,
+            "overtimeSavedPrefabDeltas": 0,
+            "hourlyActivityDelta": 0,
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "activeMicroseconds": 0,
+            "idleMicroseconds": 0,
+            "overtimeActiveMicroseconds": 0,
+            "activeDeltaMicroseconds": 0,
+            "idleDeltaMicroseconds": 0,
+            "overtimeActiveDeltaMicroseconds": 0,
+            "firstActivity": 0,
+            "lastActivity": 0,
+            "idleThresholdSeconds": 0,
+            "workWindowSeconds": 0,
+        }
+
+        profiles = self._profiles_by_raw_author()
+        now = dt.datetime.now(dt.UTC)
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        if author:
+            query["author"] = self.resolve_author_alias(author)
+
+        if source:
+            query["source"] = source
+
+        report_rows = list(
+            self.db.report_rows.find(query, projection).sort(
+                [("receivedAt", DESCENDING), ("recordedAt", DESCENDING), ("batchId", DESCENDING)]
+            )
+        )
+        meeting_lookup = self._meeting_lookup_for_reports(report_rows)
+        break_lookup = self._break_lookup_for_reports(report_rows)
+
+        for item in report_rows:
+            if date_mode == "authorLocalToday" and not _is_author_local_today(
+                item.get("date"),
+                item.get("author") or "Unknown User",
+                profiles,
+                item.get("timeZoneId"),
+                now,
+            ):
+                continue
+
+            if (
+                self._is_empty_plugin_report_without_signal(item)
+                or self._is_idle_report_during_meeting(item, meeting_lookup)
+                or self._is_idle_report_during_break(item, break_lookup)
+            ):
+                continue
+
+            profile = profiles.get(item.get("author") or "Unknown User", {})
+            item["displayName"] = _display_name(item.get("author"), profile)
+            item["team"] = profile.get("team", "")
+            item["receivedAt"] = _iso(item.get("receivedAt"))
+            reports.append(item)
+
+            if limit is not None and len(reports) >= limit:
+                break
+
+        return reports
+
+    def _reports_query_context(
+        self,
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        author: str | None = None,
+        source: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dt.datetime]:
+        profiles = self._profiles_by_raw_author()
+        now = dt.datetime.now(dt.UTC)
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        if author:
+            query["author"] = self.resolve_author_alias(author)
+
+        if source:
+            query["source"] = source
+
+        return query, profiles, now
+
+    def _reports_projection(self) -> dict[str, int]:
+        return {
+            "_id": 0,
+            "rawReportId": 0,
+            "encryptedPacket": 0,
+            "activityCounts": 0,
+            "savedPrefabs": 0,
+            "overtimeActivityCounts": 0,
+            "overtimeSavedPrefabs": 0,
+            "hourlyActivity": 0,
+            "activityCountDeltas": 0,
+            "savedPrefabDeltas": 0,
+            "overtimeActivityCountDeltas": 0,
+            "overtimeSavedPrefabDeltas": 0,
+            "hourlyActivityDelta": 0,
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "activeMicroseconds": 0,
+            "idleMicroseconds": 0,
+            "overtimeActiveMicroseconds": 0,
+            "activeDeltaMicroseconds": 0,
+            "idleDeltaMicroseconds": 0,
+            "overtimeActiveDeltaMicroseconds": 0,
+            "firstActivity": 0,
+            "lastActivity": 0,
+            "idleThresholdSeconds": 0,
+            "workWindowSeconds": 0,
+        }
+
+    def reports_page(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_mode: str | None = None,
+        author: str | None = None,
+        source: str | None = None,
+        hour: int | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        hour = _normalize_report_hour_filter(hour)
+        query, profiles, now = self._reports_query_context(start_date, end_date, date_mode, author, source)
+        source_query, _, _ = self._reports_query_context(start_date, end_date, date_mode, author)
+        sources = sorted(
+            {str(item or "") for item in self.db.report_rows.distinct("source", source_query)},
+            key=lambda value: value.lower(),
+        )
+        candidate_rows = list(
+            self.db.report_rows.find(query, self._reports_projection()).sort(
+                [("receivedAt", DESCENDING), ("recordedAt", DESCENDING), ("batchId", DESCENDING)]
+            )
+        )
+        status_rows = list(self.db.report_rows.find({**source_query, "source": "status"}, self._reports_projection()))
+        status_intervals = self._status_intervals_for_reports(status_rows)
+        candidate_rows.sort(key=lambda row: _report_table_sort_key(row, status_intervals), reverse=True)
+        meeting_lookup = self._meeting_lookup_for_reports(candidate_rows)
+        break_lookup = self._break_lookup_for_reports(candidate_rows)
+        reports: list[dict[str, Any]] = []
+        total = 0
+
+        for item in candidate_rows:
+            if date_mode == "authorLocalToday" and not _is_author_local_today(
+                item.get("date"),
+                item.get("author") or "Unknown User",
+                profiles,
+                item.get("timeZoneId"),
+                now,
+            ):
+                continue
+
+            if not _report_matches_hour_filter(item, profiles, hour):
+                continue
+
+            if self._is_report_inside_status_interval(item, status_intervals):
+                continue
+
+            if (
+                self._is_empty_plugin_report_without_signal(item)
+                or self._is_idle_report_during_meeting(item, meeting_lookup)
+                or self._is_idle_report_during_break(item, break_lookup)
+            ):
+                continue
+
+            if total >= offset and len(reports) < limit:
+                profile = profiles.get(item.get("author") or "Unknown User", {})
+                item["displayName"] = _display_name(item.get("author"), profile)
+                item["team"] = profile.get("team", "")
+                item["timeZoneId"] = profile.get("timeZoneId") or item.get("timeZoneId")
+                item["timeZoneDisplayName"] = profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName")
+                item["receivedAt"] = _iso(item.get("receivedAt"))
+                reports.append(item)
+
+            total += 1
+
+        return {
+            "reports": reports,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "sources": sources,
+        }
+
+    def _status_intervals_for_reports(self, status_rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]]:
+        intervals_by_key: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]] = {}
+        ordered_rows = sorted(status_rows, key=lambda row: _report_sort_datetime(row) or dt.datetime.min.replace(tzinfo=dt.UTC))
+        open_offline_by_key: dict[tuple[str, str], dt.datetime] = {}
+
+        for row in ordered_rows:
+            if row.get("source") != "status" and row.get("reportType") != "status":
+                continue
+
+            raw_author = str(row.get("author") or "Unknown User")
+            report_date = str(row.get("date") or "")
+            event_type = str(row.get("statusEventType") or row.get("activityType") or "")
+            sort_at = _report_sort_datetime(row)
+
+            if not report_date or not sort_at:
+                continue
+
+            key = (raw_author, report_date)
+
+            if event_type == "offline":
+                open_offline_by_key[key] = sort_at
+                continue
+
+            if event_type == "online":
+                opened_at = open_offline_by_key.pop(key, None)
+
+                if opened_at:
+                    intervals_by_key.setdefault(key, []).append((opened_at, sort_at))
+
+        for key, opened_at in open_offline_by_key.items():
+            intervals_by_key.setdefault(key, []).append((opened_at, None))
+
+        return intervals_by_key
+
+    def _is_report_inside_status_interval(
+        self,
+        report_row: dict[str, Any],
+        status_intervals: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]],
+    ) -> bool:
+        if report_row.get("source") == "status" or report_row.get("reportType") == "status":
+            return False
+
+        raw_author = str(report_row.get("author") or "Unknown User")
+        report_date = str(report_row.get("date") or "")
+        sort_at = _report_sort_datetime(report_row)
+
+        if not report_date or not sort_at:
+            return False
+
+        for opened_at, closed_at in status_intervals.get((raw_author, report_date), []):
+            if sort_at <= opened_at:
+                continue
+
+            if closed_at is None:
+                return True
+
+            if sort_at >= closed_at:
+                continue
+
+            return True
+
+        return False
+
+    def _is_idle_report_during_break(
+        self,
+        report_row: dict[str, Any],
+        break_lookup: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
+    ) -> bool:
+        if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
+            return False
+
+        raw_author = report_row.get("author") or "Unknown User"
+        recorded_at = _coerce_datetime(report_row.get("recordedAt") or report_row.get("lastRecordedAt") or report_row.get("receivedAt"))
+
+        if not recorded_at:
+            return False
+
+        if break_lookup is not None:
+            author_lookup = break_lookup.get(raw_author, {})
+
+            for interval in author_lookup.get("intervals", []):
+                started_at = interval.get("startedAt")
+                ended_at = interval.get("endedAt")
+
+                if started_at and ended_at and started_at <= recorded_at <= ended_at:
+                    return True
+
+            for session in author_lookup.get("sessions", []):
+                started_at = session.get("startedAt")
+
+                if started_at and started_at <= recorded_at:
+                    return True
+
+            return False
+
+        if self.db.break_intervals.find_one(
+            {"rawAuthor": raw_author, "startedAt": {"$lte": recorded_at}, "endedAt": {"$gte": recorded_at}},
+            {"_id": 1},
+        ):
+            return True
+
+        return bool(
+            self.db.break_sessions.find_one(
+                {"rawAuthor": raw_author, "startedAt": {"$lte": recorded_at}},
+                {"_id": 1},
+            )
+        )
+
+    def _is_idle_report_during_meeting(
+        self,
+        report_row: dict[str, Any],
+        meeting_lookup: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
+    ) -> bool:
+        if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
+            return False
+
+        idle_seconds = int(report_row.get("idleDeltaSeconds", 0))
+        active_seconds = int(report_row.get("activeDeltaSeconds", 0))
+        overtime_seconds = int(report_row.get("overtimeActiveDeltaSeconds", 0))
+
+        if idle_seconds <= 0 or active_seconds > 0 or overtime_seconds > 0:
+            return False
+
+        raw_author = report_row.get("author") or "Unknown User"
+        recorded_at = _coerce_datetime(report_row.get("recordedAt") or report_row.get("lastRecordedAt") or report_row.get("receivedAt"))
+
+        if not recorded_at:
+            return False
+
+        if meeting_lookup is not None:
+            author_lookup = meeting_lookup.get(raw_author, {})
+
+            for interval in author_lookup.get("intervals", []):
+                started_at = interval.get("startedAt")
+                ended_at = interval.get("endedAt")
+
+                if started_at and ended_at and started_at <= recorded_at <= ended_at:
+                    return True
+
+            for session in author_lookup.get("sessions", []):
+                started_at = session.get("startedAt")
+
+                if started_at and started_at <= recorded_at:
+                    return True
+
+            return False
+
+        if self.db.meeting_intervals.find_one(
+            {"rawAuthor": raw_author, "startedAt": {"$lte": recorded_at}, "endedAt": {"$gte": recorded_at}},
+            {"_id": 1},
+        ):
+            return True
+
+        return bool(
+            self.db.meeting_sessions.find_one(
+                {"rawAuthor": raw_author, "startedAt": {"$lte": recorded_at}},
+                {"_id": 1},
+            )
+        )
+
+    def _meeting_lookup_for_reports(self, report_rows: list[dict[str, Any]]) -> dict[str, dict[str, list[dict[str, Any]]]]:
+        candidate_times_by_author: dict[str, list[dt.datetime]] = {}
+
+        for report_row in report_rows:
+            if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
+                continue
+
+            idle_seconds = int(report_row.get("idleDeltaSeconds", 0))
+            active_seconds = int(report_row.get("activeDeltaSeconds", 0))
+            overtime_seconds = int(report_row.get("overtimeActiveDeltaSeconds", 0))
+
+            if idle_seconds <= 0 or active_seconds > 0 or overtime_seconds > 0:
+                continue
+
+            recorded_at = _coerce_datetime(
+                report_row.get("recordedAt") or report_row.get("lastRecordedAt") or report_row.get("receivedAt")
+            )
+
+            if not recorded_at:
+                continue
+
+            raw_author = str(report_row.get("author") or "Unknown User")
+            candidate_times_by_author.setdefault(raw_author, []).append(recorded_at)
+
+        if not candidate_times_by_author:
+            return {}
+
+        authors = sorted(candidate_times_by_author)
+        min_recorded_at = min(min(values) for values in candidate_times_by_author.values())
+        max_recorded_at = max(max(values) for values in candidate_times_by_author.values())
+        lookup = {author: {"intervals": [], "sessions": []} for author in authors}
+
+        for interval in self.db.meeting_intervals.find(
+            {
+                "rawAuthor": {"$in": authors},
+                "startedAt": {"$lte": max_recorded_at},
+                "endedAt": {"$gte": min_recorded_at},
+            },
+            {"_id": 0},
+        ):
+            raw_author = str(interval.get("rawAuthor") or "")
+            started_at = _coerce_datetime(interval.get("startedAt"))
+            ended_at = _coerce_datetime(interval.get("endedAt"))
+
+            if raw_author in lookup and started_at and ended_at:
+                lookup[raw_author]["intervals"].append({"startedAt": started_at, "endedAt": ended_at})
+
+        for session in self.db.meeting_sessions.find(
+            {"rawAuthor": {"$in": authors}, "startedAt": {"$lte": max_recorded_at}},
+            {"_id": 0},
+        ):
+            raw_author = str(session.get("rawAuthor") or "")
+            started_at = _coerce_datetime(session.get("startedAt"))
+
+            if raw_author in lookup and started_at:
+                lookup[raw_author]["sessions"].append({"startedAt": started_at})
+
+        return lookup
+
+    def _break_lookup_for_reports(self, report_rows: list[dict[str, Any]]) -> dict[str, dict[str, list[dict[str, Any]]]]:
+        candidate_times_by_author: dict[str, list[dt.datetime]] = {}
+
+        for report_row in report_rows:
+            if report_row.get("source") in {"discord", "telegram"} or report_row.get("reportType") in {"meeting", "telegram"}:
+                continue
+
+            recorded_at = _coerce_datetime(
+                report_row.get("recordedAt") or report_row.get("lastRecordedAt") or report_row.get("receivedAt")
+            )
+
+            if not recorded_at:
+                continue
+
+            raw_author = str(report_row.get("author") or "Unknown User")
+            candidate_times_by_author.setdefault(raw_author, []).append(recorded_at)
+
+        if not candidate_times_by_author:
+            return {}
+
+        authors = sorted(candidate_times_by_author)
+        min_recorded_at = min(min(values) for values in candidate_times_by_author.values())
+        max_recorded_at = max(max(values) for values in candidate_times_by_author.values())
+        lookup = {author: {"intervals": [], "sessions": []} for author in authors}
+
+        for interval in self.db.break_intervals.find(
+            {
+                "rawAuthor": {"$in": authors},
+                "startedAt": {"$lte": max_recorded_at},
+                "endedAt": {"$gte": min_recorded_at},
+            },
+            {"_id": 0},
+        ):
+            raw_author = str(interval.get("rawAuthor") or "")
+            started_at = _coerce_datetime(interval.get("startedAt"))
+            ended_at = _coerce_datetime(interval.get("endedAt"))
+
+            if raw_author in lookup and started_at and ended_at:
+                lookup[raw_author]["intervals"].append({"startedAt": started_at, "endedAt": ended_at})
+
+        for session in self.db.break_sessions.find(
+            {"rawAuthor": {"$in": authors}, "startedAt": {"$lte": max_recorded_at}},
+            {"_id": 0},
+        ):
+            raw_author = str(session.get("rawAuthor") or "")
+            started_at = _coerce_datetime(session.get("startedAt"))
+
+            if raw_author in lookup and started_at:
+                lookup[raw_author]["sessions"].append({"startedAt": started_at})
+
+        return lookup
+
+    def _is_empty_plugin_report_without_signal(self, report_row: dict[str, Any]) -> bool:
+        if report_row.get("source") in {"discord", "telegram", "status"} or report_row.get("reportType") in {"meeting", "telegram", "status"}:
+            return False
+
+        if _has_time_delta(report_row):
+            return False
+
+        return not (
+            report_row.get("activityCountDeltas")
+            or report_row.get("savedPrefabDeltas")
+            or report_row.get("overtimeActivityCountDeltas")
+            or report_row.get("overtimeSavedPrefabDeltas")
+        )
+
+    def activity_summary(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_mode: str | None = None,
+        now: dt.datetime | None = None,
+        include_profiles: bool = True,
+        include_hourly: bool = True,
+        include_breakdowns: bool = True,
+    ) -> dict[str, Any]:
+        totals = {
+            "daySeconds": 0,
+            "telegramDaySeconds": 0,
+            "pluginDaySeconds": 0,
+            "rawPluginDaySeconds": 0,
+            "telegramToFirstActivitySeconds": 0,
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "meetingSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "breakSeconds": 0,
+        }
+        activity_counts: dict[str, int] = {}
+        overtime_activity_counts: dict[str, int] = {}
+        saved_prefabs: dict[str, dict[str, Any]] = {}
+        overtime_saved_prefabs: dict[str, dict[str, Any]] = {}
+        hourly_by_author: dict[str, dict[str, Any]] = {}
+        authors_by_raw: dict[str, dict[str, Any]] = {}
+        normal_consumed_by_author_date: dict[tuple[str, str], int] = {}
+        telegram_seconds_by_author_date: dict[tuple[str, str], int] = {}
+        break_seconds_by_author_date: dict[tuple[str, str], int] = {}
+        meeting_seconds_by_author_date: dict[tuple[str, str], int] = {}
+        break_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
+        meeting_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
+        profiles = self._profiles_by_raw_author()
+        now = now or dt.datetime.now(dt.UTC)
+        daily_items = sorted(
+            self.db.daily_author_activity.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0}),
+            key=lambda item: (
+                str(item.get("date") or ""),
+                str(item.get("lastRecordedAt") or item.get("lastReceivedAt") or ""),
+                str(item.get("source") or ""),
+            ),
+        )
+        if date_mode == "authorLocalToday":
+            daily_items = [
+                item
+                for item in daily_items
+                if _is_author_local_today(
+                    item.get("date"),
+                    item.get("author") or "Unknown User",
+                    profiles,
+                    item.get("timeZoneId"),
+                    now,
+                )
+            ]
+        break_buckets = self._break_buckets_for_daily_items(daily_items)
+        meeting_buckets = self._meeting_buckets_for_daily_items(daily_items, now)
+        telegram_gaps = self._telegram_gaps_for_daily_items(daily_items)
+        telegram_gap_counted: set[tuple[str, str]] = set()
+
+        for item in daily_items:
+            raw_author = item.get("author") or "Unknown User"
+            item_date = item.get("date") or ""
+            author_date_key = (raw_author, item_date)
+            profile = profiles.get(raw_author, {})
+            display_name = _display_name(raw_author, profile)
+            hourly_activity = _apply_breaks_to_hourly_activity(
+                item.get("hourlyActivity", []),
+                break_buckets.get(author_date_key, []),
+                break_consumed_by_author_date_hour.setdefault(author_date_key, _empty_hourly_activity()),
+            )
+            hourly_activity = _apply_meetings_to_hourly_activity(
+                hourly_activity,
+                meeting_buckets.get(author_date_key, []),
+                meeting_consumed_by_author_date_hour.setdefault(author_date_key, _empty_hourly_activity()),
+            )
+            telegram_gap = telegram_gaps.get(author_date_key, {})
+            telegram_gap_hours = telegram_gap.get("hourlyActivity", [])
+            can_apply_telegram_gap = item.get("source") not in {"telegram", "discord"}
+            telegram_gap_seconds = (
+                int(telegram_gap.get("seconds", 0))
+                if can_apply_telegram_gap and author_date_key not in telegram_gap_counted
+                else 0
+            )
+
+            if telegram_gap_seconds:
+                _merge_hourly_activity(hourly_activity, telegram_gap_hours)
+                telegram_gap_counted.add(author_date_key)
+
+            report_active_seconds = int(item.get("activeSeconds", 0))
+            report_idle_seconds = sum(int(hour.get("idleSeconds", 0)) for hour in hourly_activity)
+            raw_plugin_day_seconds = max(0, int(item.get("activeSeconds", 0)) + int(item.get("idleSeconds", 0)) + telegram_gap_seconds)
+            effective_break_seconds = sum(int(hour.get("breakSeconds", 0)) for hour in hourly_activity)
+            effective_meeting_seconds = sum(int(hour.get("meetingSeconds", 0)) for hour in hourly_activity)
+            telegram_day_seconds = int(item.get("daySeconds", 0))
+            telegram_to_first_activity_seconds = telegram_gap_seconds
+            work_window_seconds = int(item.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS)
+            normal_consumed = normal_consumed_by_author_date.get(author_date_key, 0)
+            normal_available = max(0, work_window_seconds - normal_consumed)
+            plugin_day_seconds = min(max(0, report_active_seconds + report_idle_seconds), normal_available)
+            effective_active_seconds = min(report_active_seconds, plugin_day_seconds)
+            effective_idle_seconds = min(
+                max(0, report_idle_seconds),
+                max(0, plugin_day_seconds - effective_active_seconds),
+            )
+            normal_consumed_by_author_date[author_date_key] = normal_consumed + plugin_day_seconds
+            telegram_seconds_by_author_date[author_date_key] = telegram_seconds_by_author_date.get(author_date_key, 0) + telegram_day_seconds
+            break_seconds_by_author_date[author_date_key] = break_seconds_by_author_date.get(author_date_key, 0) + effective_break_seconds
+            meeting_seconds_by_author_date[author_date_key] = meeting_seconds_by_author_date.get(author_date_key, 0) + effective_meeting_seconds
+            totals["daySeconds"] += telegram_day_seconds
+            totals["telegramDaySeconds"] += telegram_day_seconds
+            totals["pluginDaySeconds"] += plugin_day_seconds
+            totals["rawPluginDaySeconds"] += raw_plugin_day_seconds
+            totals["telegramToFirstActivitySeconds"] += telegram_to_first_activity_seconds
+            totals["activeSeconds"] += effective_active_seconds
+            totals["idleSeconds"] += effective_idle_seconds
+            totals["meetingSeconds"] += effective_meeting_seconds
+            totals["overtimeActiveSeconds"] += int(item.get("overtimeActiveSeconds", 0))
+            totals["breakSeconds"] += effective_break_seconds
+
+            for count in item.get("activityCounts", []):
+                activity_type = count.get("type")
+
+                if activity_type:
+                    activity_counts[activity_type] = activity_counts.get(activity_type, 0) + int(count.get("count", 0))
+
+            for count in item.get("overtimeActivityCounts", []):
+                activity_type = count.get("type")
+
+                if activity_type:
+                    overtime_activity_counts[activity_type] = overtime_activity_counts.get(activity_type, 0) + int(count.get("count", 0))
+
+            saved_prefab_items = _saved_prefabs_for_summary_item(item)
+            overtime_saved_prefab_items = item.get("overtimeSavedPrefabs", [])
+
+            for prefab in saved_prefab_items:
+                path = prefab.get("path")
+
+                if not path:
+                    continue
+
+                existing = saved_prefabs.get(path)
+
+                if existing:
+                    existing["saveCount"] += int(prefab.get("saveCount", 0))
+                else:
+                    saved_prefabs[path] = dict(prefab)
+
+            for prefab in overtime_saved_prefab_items:
+                path = prefab.get("path")
+
+                if not path:
+                    continue
+
+                existing = overtime_saved_prefabs.get(path)
+
+                if existing:
+                    existing["saveCount"] += int(prefab.get("saveCount", 0))
+                else:
+                    overtime_saved_prefabs[path] = dict(prefab)
+
+            author_row = authors_by_raw.get(raw_author)
+
+            if not author_row:
+                author_row = {
+                    "rawAuthor": raw_author,
+                    "authorEmail": profile.get("authorEmail") or item.get("authorEmail", ""),
+                    "displayName": display_name,
+                    "team": profile.get("team", ""),
+                    "telegramUsername": profile.get("telegramUsername", ""),
+                    "telegramPrivateChatId": profile.get("telegramPrivateChatId"),
+                    "discordUserId": profile.get("discordUserId", ""),
+                    "discordUsername": profile.get("discordUsername", ""),
+                    "autoBreakEnabled": profile.get("autoBreakEnabled", False),
+                    "autoBreakEffectiveDate": profile.get("autoBreakEffectiveDate", ""),
+                    "authorColor": profile.get("authorColor") or _author_color(raw_author),
+                    "source": item.get("source"),
+                    "pluginVersion": item.get("pluginVersion"),
+                    "timeZoneId": profile.get("timeZoneId") or item.get("timeZoneId"),
+                    "timeZoneDisplayName": profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName"),
+                    "lastRecordedAt": item.get("lastRecordedAt"),
+                    "lastReceivedAt": item.get("lastReceivedAt"),
+                    "daySeconds": 0,
+                    "telegramDaySeconds": 0,
+                    "pluginDaySeconds": 0,
+                    "rawPluginDaySeconds": 0,
+                    "telegramToFirstActivitySeconds": 0,
+                    "activeSeconds": 0,
+                    "idleSeconds": 0,
+                    "meetingSeconds": 0,
+                    "breakSeconds": 0,
+                    "overtimeActiveSeconds": 0,
+                    "activityCounts": [],
+                    "savedPrefabs": [],
+                    "overtimeActivityCounts": [],
+                    "overtimeSavedPrefabs": [],
+                }
+                authors_by_raw[raw_author] = author_row
+
+            author_row["daySeconds"] += telegram_day_seconds
+            author_row["telegramDaySeconds"] += telegram_day_seconds
+            author_row["pluginDaySeconds"] += plugin_day_seconds
+            author_row["rawPluginDaySeconds"] += raw_plugin_day_seconds
+            author_row["telegramToFirstActivitySeconds"] += telegram_to_first_activity_seconds
+            author_row["activeSeconds"] += effective_active_seconds
+            author_row["idleSeconds"] += effective_idle_seconds
+            author_row["meetingSeconds"] += effective_meeting_seconds
+            author_row["breakSeconds"] += effective_break_seconds
+            author_row["overtimeActiveSeconds"] += int(item.get("overtimeActiveSeconds", 0))
+            author_row["authorEmail"] = profile.get("authorEmail") or item.get("authorEmail") or author_row.get("authorEmail", "")
+            author_row["pluginVersion"] = item.get("pluginVersion") or author_row.get("pluginVersion")
+            author_row["source"] = item.get("source") or author_row.get("source")
+            author_row["timeZoneId"] = profile.get("timeZoneId") or item.get("timeZoneId") or author_row.get("timeZoneId")
+            author_row["timeZoneDisplayName"] = (
+                profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName") or author_row.get("timeZoneDisplayName")
+            )
+            author_row["activityCounts"] = _merge_count_list(
+                author_row.get("activityCounts", []), item.get("activityCounts", []), "type", "count"
+            )
+            author_row["savedPrefabs"] = _merge_count_list(
+                author_row.get("savedPrefabs", []), saved_prefab_items, "path", "saveCount"
+            )
+            author_row["overtimeActivityCounts"] = _merge_count_list(
+                author_row.get("overtimeActivityCounts", []), item.get("overtimeActivityCounts", []), "type", "count"
+            )
+            author_row["overtimeSavedPrefabs"] = _merge_count_list(
+                author_row.get("overtimeSavedPrefabs", []), overtime_saved_prefab_items, "path", "saveCount"
+            )
+
+            if str(item.get("lastRecordedAt") or "") > str(author_row.get("lastRecordedAt") or ""):
+                author_row["lastRecordedAt"] = item.get("lastRecordedAt")
+
+            if item.get("lastReceivedAt") and (
+                not author_row.get("lastReceivedAt") or item.get("lastReceivedAt") > author_row.get("lastReceivedAt")
+            ):
+                author_row["lastReceivedAt"] = item.get("lastReceivedAt")
+
+            current_author = hourly_by_author.get(raw_author)
+
+            if not current_author:
+                current_author = {
+                    "author": display_name,
+                    "rawAuthor": raw_author,
+                    "timeZoneId": item.get("timeZoneId"),
+                    "timeZoneDisplayName": item.get("timeZoneDisplayName"),
+                    "hourlyActivity": _empty_hourly_activity(),
+                }
+                hourly_by_author[raw_author] = current_author
+            else:
+                current_author["timeZoneId"] = current_author.get("timeZoneId") or item.get("timeZoneId")
+                current_author["timeZoneDisplayName"] = current_author.get("timeZoneDisplayName") or item.get(
+                    "timeZoneDisplayName"
+                )
+
+            _merge_hourly_activity(current_author["hourlyActivity"], hourly_activity)
+
+        activity_mix = _activity_mix_from_counts(activity_counts)
+        overtime_activity_mix = _activity_mix_from_counts(overtime_activity_counts)
+
+        self._apply_live_telegram_summary(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            telegram_seconds_by_author_date,
+            break_seconds_by_author_date,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+            meeting_seconds_by_author_date,
+            meeting_buckets,
+        )
+        meeting_hourly_adjustments = _merge_meeting_buckets_into_hourly_author_rows(hourly_by_author, meeting_buckets, profiles)
+
+        for raw_author, adjustment in meeting_hourly_adjustments.items():
+            author_row = authors_by_raw.get(raw_author)
+
+            if not author_row:
+                continue
+
+            meeting_addition = int(adjustment.get("meetingSeconds", 0))
+
+            if meeting_addition > 0:
+                author_row["meetingSeconds"] = int(author_row.get("meetingSeconds", 0)) + meeting_addition
+                totals["meetingSeconds"] = int(totals.get("meetingSeconds", 0)) + meeting_addition
+
+            idle_reduction = int(adjustment.get("idleSeconds", 0))
+
+            if idle_reduction > 0:
+                applied_reduction = min(int(author_row.get("idleSeconds", 0)), idle_reduction)
+                author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) - applied_reduction
+                totals["idleSeconds"] = max(0, int(totals.get("idleSeconds", 0)) - applied_reduction)
+
+        security_alerts_by_author = self._security_alerts_by_author(start_date, end_date)
+
+        for raw_author, alerts in security_alerts_by_author.items():
+            author_row = authors_by_raw.get(raw_author)
+
+            if not author_row:
+                profile = profiles.get(raw_author, {})
+                author_row = {
+                    "rawAuthor": raw_author,
+                    "authorEmail": profile.get("authorEmail") or alerts[0].get("authorEmail", ""),
+                    "displayName": _display_name(raw_author, profile),
+                    "team": profile.get("team", ""),
+                    "telegramUsername": profile.get("telegramUsername", ""),
+                    "telegramPrivateChatId": profile.get("telegramPrivateChatId"),
+                    "discordUserId": profile.get("discordUserId", ""),
+                    "discordUsername": profile.get("discordUsername", ""),
+                    "authorColor": profile.get("authorColor") or _author_color(raw_author),
+                    "source": alerts[0].get("source"),
+                    "pluginVersion": alerts[0].get("pluginVersion"),
+                    "lastRecordedAt": "",
+                    "lastReceivedAt": alerts[0].get("createdAt"),
+                    "daySeconds": 0,
+                    "telegramDaySeconds": 0,
+                    "pluginDaySeconds": 0,
+                    "rawPluginDaySeconds": 0,
+                    "telegramToFirstActivitySeconds": 0,
+                    "activeSeconds": 0,
+                    "idleSeconds": 0,
+                    "meetingSeconds": 0,
+                    "breakSeconds": 0,
+                    "overtimeActiveSeconds": 0,
+                    "activityCounts": [],
+                    "savedPrefabs": [],
+                    "overtimeActivityCounts": [],
+                    "overtimeSavedPrefabs": [],
+                }
+                authors_by_raw[raw_author] = author_row
+
+            author_row["securityAlerts"] = alerts
+
+        for raw_author in self.list_authors():
+            self._ensure_summary_author(authors_by_raw, raw_author, profiles)
+
+        for raw_author, author_row in authors_by_raw.items():
+            if raw_author in hourly_by_author:
+                continue
+
+            hourly_by_author[raw_author] = {
+                "author": author_row["displayName"],
+                "rawAuthor": raw_author,
+                "timeZoneId": profiles.get(raw_author, {}).get("timeZoneId"),
+                "timeZoneDisplayName": profiles.get(raw_author, {}).get("timeZoneDisplayName"),
+                "hourlyActivity": _empty_hourly_activity(),
+            }
+
+        self._apply_plugin_hour_idle_gaps(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+        )
+        self._apply_offline_idle_gaps(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+        )
+        self._apply_workday_hour_idle_gaps(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+        )
+        self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now)
+        self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
+        self._apply_latest_report_metadata(authors_by_raw, start_date, end_date, date_mode, profiles, now)
+        _clear_inactive_author_report_metadata(authors_by_raw.values())
+        presence_overrides = self._author_presence_overrides(
+            authors_by_raw.keys(),
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+        )
+        author_rows = []
+
+        for author in authors_by_raw.values():
+            raw_author = author["rawAuthor"]
+            presence_override = presence_overrides.get(raw_author)
+            workday_started = self._author_workday_started_for_summary(
+                raw_author,
+                author,
+                profiles,
+                start_date,
+                end_date,
+                date_mode,
+                now,
+            )
+            include_report_stopped_alerts = _should_apply_realtime_presence_alerts(
+                raw_author,
+                profiles,
+                author.get("timeZoneId"),
+                start_date,
+                end_date,
+                date_mode,
+                now,
+                workday_started,
+            )
+
+            if presence_override and presence_override.get("offlineAt"):
+                include_report_stopped_alerts = False
+
+            send_interval_seconds = self.get_interval_for_author(raw_author)
+            summary_author = _with_alerts(
+                _with_activity_mix(_with_productivity(author)),
+                send_interval_seconds,
+                now,
+                presence_override,
+                include_report_stopped_alerts,
+            )
+            self._record_status_transition_for_author(
+                summary_author,
+                send_interval_seconds,
+                now,
+                include_report_stopped_alerts,
+            )
+            author_rows.append(summary_author)
+        hourly_author_rows = [
+            {**item, "hourlyActivity": _public_hourly_activity(item.get("hourlyActivity", []))}
+            for item in hourly_by_author.values()
+        ]
+
+        return {
+            "totals": totals,
+            "activityMix": sorted(activity_mix, key=lambda item: item["count"], reverse=True) if include_breakdowns else [],
+            "savedPrefabs": sorted(saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True) if include_breakdowns else [],
+            "overtimeActivityMix": sorted(overtime_activity_mix, key=lambda item: item["count"], reverse=True) if include_breakdowns else [],
+            "overtimeSavedPrefabs": sorted(overtime_saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True) if include_breakdowns else [],
+            "authors": sorted(author_rows, key=lambda item: item["displayName"].lower()),
+            "profiles": self.author_profiles() if include_profiles else [],
+            "authorAliases": self.author_aliases() if include_profiles else [],
+            "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]) if include_hourly else [],
+        }
+
+    def _apply_plugin_hour_idle_gaps(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+
+        for (raw_author, day_date), latest_report_at in latest_report_by_author_date.items():
+            time_zone_id = _author_time_zone_id(raw_author, profiles, None)
+
+            if not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            author_row = authors_by_raw.get(raw_author)
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not author_row or not hourly_author:
+                continue
+
+            local_latest_report_at = _to_local_datetime(latest_report_at, time_zone_id)
+            hourly_activity = hourly_author.get("hourlyActivity", [])
+
+            if not hourly_activity:
+                continue
+
+            visual_plugin_seconds = int(author_row.get("pluginDaySeconds", 0))
+
+            for hour_index in range(0, min(local_latest_report_at.hour, len(hourly_activity))):
+                hour = hourly_activity[hour_index]
+                accounted_seconds = _visual_hour_occupied_seconds(hour)
+
+                if accounted_seconds <= 0:
+                    continue
+
+                gap_seconds = max(0, 3600 - min(3600, accounted_seconds))
+                remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - visual_plugin_seconds)
+                idle_seconds = min(gap_seconds, remaining_plugin_seconds)
+
+                if idle_seconds <= 0:
+                    continue
+
+                _add_idle_seconds_to_hour(hour, idle_seconds)
+                visual_plugin_seconds += idle_seconds
+
+    def _apply_offline_idle_gaps(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+        session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        for session in self.db.day_sessions.find(session_query, {"_id": 0}):
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            day_date = str(session.get("date") or "")
+            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
+
+            if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
+            ended_at = _coerce_datetime(session.get("lastOfflineAt"))
+
+            if not latest_report_at or not ended_at or ended_at <= latest_report_at:
+                continue
+
+            author_row = authors_by_raw.get(raw_author)
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not author_row or not hourly_author:
+                continue
+
+            gap_seconds = max(0, int((ended_at - latest_report_at).total_seconds()))
+            remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - int(author_row.get("pluginDaySeconds", 0)))
+            idle_seconds = min(gap_seconds, remaining_plugin_seconds)
+
+            if idle_seconds <= 0:
+                continue
+
+            idle_end = latest_report_at + dt.timedelta(seconds=idle_seconds)
+            hourly_activity = _empty_hourly_activity()
+            _add_idle_interval_to_buckets(hourly_activity, latest_report_at, idle_end, time_zone_id)
+            _merge_hourly_activity(hourly_author["hourlyActivity"], hourly_activity)
+
+    def _apply_workday_hour_idle_gaps(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+        session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        for session in self.db.day_sessions.find(session_query, {"_id": 0}):
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            day_date = str(session.get("date") or "")
+            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
+
+            if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            started_at = _coerce_datetime(session.get("startedAt"))
+            ended_at = _coerce_datetime(session.get("lastOfflineAt")) or latest_report_by_author_date.get((raw_author, day_date))
+
+            if not started_at or not ended_at or ended_at <= started_at:
+                continue
+
+            author_row = authors_by_raw.get(raw_author)
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not author_row or not hourly_author:
+                continue
+
+            hourly_activity = hourly_author.get("hourlyActivity", [])
+
+            if not hourly_activity:
+                continue
+
+            local_start = _to_local_datetime(started_at, time_zone_id)
+            local_end = _to_local_datetime(ended_at, time_zone_id)
+            current_hour = local_start.replace(minute=0, second=0, microsecond=0)
+            final_hour = local_end.replace(minute=0, second=0, microsecond=0)
+
+            while current_hour <= final_hour:
+                hour_index = current_hour.hour
+
+                if 0 <= hour_index < len(hourly_activity):
+                    hour_start = current_hour
+                    hour_end = current_hour + dt.timedelta(hours=1)
+                    expected_start = max(local_start, hour_start)
+                    if hour_end > local_end:
+                        current_hour += dt.timedelta(hours=1)
+                        continue
+
+                    expected_end = hour_end
+                    expected_seconds = max(0, int((expected_end - expected_start).total_seconds()))
+                    occupied_seconds = _visual_hour_occupied_seconds(hourly_activity[hour_index])
+
+                    if occupied_seconds <= 0:
+                        current_hour += dt.timedelta(hours=1)
+                        continue
+
+                    occupied_seconds = min(expected_seconds, occupied_seconds)
+                    gap_seconds = max(0, expected_seconds - occupied_seconds)
+                    remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - int(author_row.get("pluginDaySeconds", 0)))
+                    idle_seconds = min(gap_seconds, remaining_plugin_seconds)
+
+                    if idle_seconds > 0:
+                        _add_idle_seconds_to_hour(hourly_activity[hour_index], idle_seconds)
+
+                current_hour += dt.timedelta(hours=1)
+
+    def _apply_visual_missed_hours(
+        self,
+        hourly_by_author: dict[str, dict[str, Any]],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+        session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        for session in self.db.day_sessions.find(session_query, {"_id": 0}):
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            day_date = str(session.get("date") or "")
+            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
+
+            if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            started_at = _coerce_datetime(session.get("startedAt"))
+            ended_at = _coerce_datetime(session.get("lastOfflineAt"))
+            latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
+            latest_signal_at = (latest_report_at or ended_at) if ended_at else None
+
+            if not started_at and not latest_signal_at:
+                continue
+
+            profile = profiles.get(raw_author, {})
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not hourly_author:
+                hourly_author = {
+                    "author": _display_name(raw_author, profile),
+                    "rawAuthor": raw_author,
+                    "timeZoneId": profile.get("timeZoneId") or session.get("timeZoneId"),
+                    "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
+                    "hourlyActivity": _empty_hourly_activity(),
+                }
+                hourly_by_author[raw_author] = hourly_author
+
+            hourly_activity = hourly_author.get("hourlyActivity", [])
+            self._add_visual_missed_start(hourly_activity, started_at, time_zone_id)
+            self._add_visual_missed_end(
+                hourly_activity,
+                latest_signal_at,
+                time_zone_id,
+                fill_to_hour=latest_report_at is not None,
+                offline_at=ended_at,
+            )
+
+    def _latest_report_times_by_author_date(
+        self,
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        profiles: dict[str, dict[str, Any]],
+        now: dt.datetime,
+    ) -> dict[tuple[str, str], dt.datetime]:
+        latest_by_key: dict[tuple[str, str], dt.datetime] = {}
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        for report in self.db.report_rows.find(
+            query,
+            {
+                "_id": 0,
+                "author": 1,
+                "date": 1,
+                "source": 1,
+                "reportType": 1,
+                "recordedAt": 1,
+                "lastRecordedAt": 1,
+                "receivedAt": 1,
+                "lastReceivedAt": 1,
+            },
+        ):
+            if report.get("source") in {"telegram", "discord", "status"} or report.get("reportType") in {"telegram", "meeting", "status"}:
+                continue
+
+            raw_author = str(report.get("author") or "Unknown User")
+            report_date = str(report.get("date") or "")
+
+            if not report_date:
+                continue
+
+            occurred_at = (
+                _coerce_datetime(report.get("recordedAt"))
+                or _coerce_datetime(report.get("lastRecordedAt"))
+                or _coerce_datetime(report.get("receivedAt"))
+                or _coerce_datetime(report.get("lastReceivedAt"))
+            )
+
+            if not occurred_at:
+                continue
+
+            key = (raw_author, report_date)
+            current = latest_by_key.get(key)
+
+            if not current or occurred_at > current:
+                latest_by_key[key] = occurred_at
+
+        return latest_by_key
+
+    def _add_visual_missed_start(
+        self,
+        hourly_activity: list[dict[str, Any]],
+        started_at: dt.datetime | None,
+        time_zone_id: str,
+    ) -> None:
+        if not started_at:
+            return
+
+        local_start = _to_local_datetime(started_at, time_zone_id)
+        hour_start = local_start.replace(minute=0, second=0, microsecond=0)
+        missed_seconds = max(0, int((local_start - hour_start).total_seconds()))
+        _add_visual_missed_seconds(hourly_activity, local_start.hour, missed_seconds, "missedStartSeconds")
+
+    def _add_visual_missed_end(
+        self,
+        hourly_activity: list[dict[str, Any]],
+        ended_at: dt.datetime | None,
+        time_zone_id: str,
+        fill_to_hour: bool = False,
+        offline_at: dt.datetime | None = None,
+    ) -> None:
+        if not ended_at:
+            return
+
+        local_end = _to_local_datetime(ended_at, time_zone_id)
+
+        if fill_to_hour:
+            target_hour = _visual_missed_end_hour(hourly_activity, local_end.hour, _to_local_datetime(offline_at, time_zone_id) if offline_at else None)
+            missed_seconds = _visual_hour_available_seconds(target_hour)
+            target_hour_index = int(target_hour.get("hour", local_end.hour))
+        else:
+            hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+            missed_seconds = max(0, int((hour_end - local_end).total_seconds()))
+            target_hour_index = local_end.hour
+
+        _add_visual_missed_seconds(hourly_activity, target_hour_index, missed_seconds, "missedEndSeconds")
+
+    def _apply_visual_overtime_hour_gaps(
+        self,
+        hourly_by_author: dict[str, dict[str, Any]],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+        overtime_reports_by_key: dict[tuple[str, str], list[dt.datetime]] = {}
+
+        for report in self.db.report_rows.find(
+            query,
+            {
+                "_id": 0,
+                "author": 1,
+                "date": 1,
+                "source": 1,
+                "reportType": 1,
+                "timeZoneId": 1,
+                "recordedAt": 1,
+                "lastRecordedAt": 1,
+                "receivedAt": 1,
+                "lastReceivedAt": 1,
+                "overtimeActiveDeltaSeconds": 1,
+                "overtimeActiveDeltaMicroseconds": 1,
+            },
+        ):
+            if report.get("source") in {"telegram", "discord", "status"} or report.get("reportType") in {"telegram", "meeting", "status"}:
+                continue
+
+            if _time_microseconds(report, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") <= 0:
+                continue
+
+            raw_author = str(report.get("author") or "Unknown User")
+            report_date = str(report.get("date") or "")
+            time_zone_id = _author_time_zone_id(raw_author, profiles, report.get("timeZoneId"))
+
+            if not report_date or not _date_in_summary_scope(report_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            occurred_at = (
+                _coerce_datetime(report.get("recordedAt"))
+                or _coerce_datetime(report.get("lastRecordedAt"))
+                or _coerce_datetime(report.get("receivedAt"))
+                or _coerce_datetime(report.get("lastReceivedAt"))
+            )
+
+            if not occurred_at:
+                continue
+
+            overtime_reports_by_key.setdefault((raw_author, report_date), []).append(_to_local_datetime(occurred_at, time_zone_id))
+
+        for (raw_author, _report_date), reports in overtime_reports_by_key.items():
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not hourly_author:
+                continue
+
+            hourly_activity = hourly_author.get("hourlyActivity", [])
+            ordered_reports = sorted(reports)
+
+            _fill_overtime_hours_bracketed_by_reports(hourly_activity, ordered_reports)
+            _fill_normal_to_overtime_transition_hours(hourly_activity)
+
+    def _apply_latest_report_metadata(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        profiles: dict[str, dict[str, Any]],
+        now: dt.datetime,
+    ) -> None:
+        latest_by_author: dict[str, dict[str, Any]] = {}
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+        report_rows = list(self.db.report_rows.find(query, {"_id": 0}))
+        meeting_lookup = self._meeting_lookup_for_reports(report_rows)
+
+        for report in report_rows:
+            raw_author = str(report.get("author") or "Unknown User")
+
+            if raw_author not in authors_by_raw:
+                continue
+
+            if date_mode == "authorLocalToday" and not _is_author_local_today(
+                report.get("date"),
+                raw_author,
+                profiles,
+                report.get("timeZoneId"),
+                now,
+            ):
+                continue
+
+            if report.get("source") == "status" or report.get("reportType") == "status":
+                continue
+
+            if self._is_empty_plugin_report_without_signal(report) or self._is_idle_report_during_meeting(report, meeting_lookup):
+                continue
+
+            received_at = _coerce_datetime(report.get("receivedAt") or report.get("lastReceivedAt"))
+            recorded_at = _coerce_datetime(report.get("recordedAt") or report.get("lastRecordedAt") or report.get("receivedAt"))
+            report_sort_at = received_at or recorded_at
+
+            if not report_sort_at:
+                continue
+
+            current = latest_by_author.get(raw_author)
+
+            if current and report_sort_at <= current["sortAt"]:
+                continue
+
+            latest_by_author[raw_author] = {"report": report, "sortAt": report_sort_at}
+
+        for raw_author, latest in latest_by_author.items():
+            report = latest["report"]
+            author_row = authors_by_raw[raw_author]
+            author_row["source"] = report.get("source") or author_row.get("source")
+            author_row["pluginVersion"] = report.get("pluginVersion") or author_row.get("pluginVersion")
+            author_row["lastRecordedAt"] = report.get("lastRecordedAt") or report.get("recordedAt") or author_row.get("lastRecordedAt")
+            author_row["lastReceivedAt"] = _iso(report.get("lastReceivedAt") or report.get("receivedAt")) or author_row.get("lastReceivedAt")
+
+    def _author_presence_overrides(
+        self,
+        raw_authors: Any,
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> dict[str, dict[str, Any]]:
+        authors = [str(author or "") for author in raw_authors if str(author or "")]
+
+        if not authors:
+            return {}
+
+        latest_break_by_author: dict[str, dict[str, Any]] = {}
+
+        for event in self.db.break_events.find({"rawAuthor": {"$in": authors}, "eventType": {"$in": ["online", "offline"]}}, {"_id": 0}):
+            raw_author = str(event.get("rawAuthor") or "")
+            timestamp = _coerce_datetime(event.get("timestamp"))
+
+            if not raw_author or not timestamp:
+                continue
+
+            event_date = _local_date_for_time_zone(timestamp, _author_time_zone_id(raw_author, profiles, None))
+
+            if not _date_in_summary_scope(event_date, raw_author, profiles, None, now, start_date, end_date, date_mode):
+                continue
+
+            current = latest_break_by_author.get(raw_author)
+
+            if not current or timestamp > current["timestamp"]:
+                latest_break_by_author[raw_author] = {"eventType": str(event.get("eventType") or ""), "timestamp": timestamp}
+
+        overrides: dict[str, dict[str, Any]] = {}
+
+        for raw_author, event in latest_break_by_author.items():
+            if event.get("eventType") != "offline":
+                continue
+
+            offline_at = event["timestamp"]
+            latest_overtime_at: dt.datetime | None = None
+
+            for report in self.db.report_rows.find({"author": raw_author, "receivedAt": {"$gt": offline_at}}, {"_id": 0}):
+                if _time_microseconds(report, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") <= 0:
+                    continue
+
+                received_at = _coerce_datetime(report.get("receivedAt") or report.get("lastReceivedAt"))
+
+                if received_at and (not latest_overtime_at or received_at > latest_overtime_at):
+                    latest_overtime_at = received_at
+
+            overrides[raw_author] = {
+                "offlineAt": offline_at,
+                "overtimeReceivedAt": latest_overtime_at,
+            }
+
+        return overrides
+
+    def _author_workday_started_for_summary(
+        self,
+        raw_author: str,
+        author: dict[str, Any],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> bool:
+        if bool(author.get("activeMeeting")):
+            return True
+
+        if _author_has_summary_activity(author):
+            return True
+
+        time_zone_id = _author_time_zone_id(raw_author, profiles, author.get("timeZoneId"))
+        local_today = _local_date_for_time_zone(now, time_zone_id)
+
+        if not _date_in_summary_scope(local_today, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+            return False
+
+        for session in self.db.day_sessions.find({"rawAuthor": raw_author, "date": local_today}, {"_id": 0, "startedAt": 1}):
+            if _coerce_datetime(session.get("startedAt")):
+                return True
+
+        report_query = {"author": raw_author, "date": local_today, "source": {"$nin": ["telegram", "discord"]}}
+        return bool(self.db.report_rows.find_one(report_query, {"_id": 0}))
+
+    def analytics_summary(self, period: str = "7d") -> dict[str, Any]:
+        year = dt.date.today().year
+        profiles = self._profiles_by_raw_author()
+        start_date = dt.date(year - 1, 12, 1).isoformat()
+        end_date = dt.date(year, 12, 31).isoformat()
+        docs = list(self.db.daily_author_activity.find(_date_query(start_date, end_date), {"_id": 0}))
+        authors = set(self.list_authors())
+        docs_by_author: dict[str, list[dict[str, Any]]] = {}
+
+        for item in docs:
+            raw_author = str(item.get("author") or "")
+
+            if raw_author:
+                authors.add(raw_author)
+                docs_by_author.setdefault(raw_author, []).append(item)
+
+        author_summaries = []
+
+        for raw_author in sorted(authors):
+            profile = profiles.get(raw_author, {})
+            author_docs = docs_by_author.get(raw_author, [])
+            author_summaries.append(
+                {
+                    "rawAuthor": raw_author,
+                    "authorEmail": profile.get("authorEmail", ""),
+                    "displayName": _display_name(raw_author, profile),
+                    "team": profile.get("team", ""),
+                    "authorColor": profile.get("authorColor") or _author_color(raw_author),
+                    "months": _analytics_year_months(author_docs, year),
+                }
+            )
+
+        return {
+            "year": year,
+            "authors": sorted(author_summaries, key=lambda item: item["displayName"].lower()),
+        }
+
+    def _security_alerts_by_author(self, start_date: str | None = None, end_date: str | None = None) -> dict[str, list[dict[str, Any]]]:
+        query: dict[str, Any] = {}
+        created_filter: dict[str, dt.datetime] = {}
+
+        if start_date:
+            created_filter["$gte"] = _date_start(start_date)
+
+        if end_date:
+            created_filter["$lt"] = _date_start(end_date) + dt.timedelta(days=1)
+
+        if created_filter:
+            query["createdAt"] = created_filter
+
+        by_author: dict[str, list[dict[str, Any]]] = {}
+
+        events = list(self.db.report_security_events.find(query, {"_id": 0}).sort("createdAt", DESCENDING).limit(100))
+
+        if query and not events:
+            events = list(self.db.report_security_events.find({}, {"_id": 0}).sort("createdAt", DESCENDING).limit(100))
+
+        for index, event in enumerate(events):
+            raw_author = self.resolve_author_alias(event.get("author") or "Unknown User")
+            created_at = _iso(event.get("createdAt"))
+            challenge_id = event.get("challengeId")
+            device_id = event.get("deviceId")
+            alert = {
+                "id": f"security:{raw_author}:{challenge_id or device_id or created_at or index}",
+                "type": "report_forgery_attempt",
+                "severity": "critical",
+                "title": "Report forgery attempt",
+                "message": event.get("message") or "A suspicious report submission was rejected.",
+                "value": None,
+                "threshold": None,
+                "source": event.get("source"),
+                "pluginVersion": event.get("pluginVersion"),
+                "authorEmail": event.get("authorEmail"),
+                "deviceId": device_id,
+                "challengeId": challenge_id,
+                "createdAt": created_at,
+            }
+            by_author.setdefault(raw_author, []).append(alert)
+
+        return by_author
+
+

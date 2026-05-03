@@ -43,6 +43,8 @@ from .protocol import decode_alr1, generate_report_challenge_keys
 from .repository import Repository
 from .settings import load_settings
 from .meeting_summary import generate_meeting_summary
+from .api_security import SESSION_COOKIE_NAME, require_permission
+from .routers.auth import router as auth_router
 
 
 settings = load_settings()
@@ -70,14 +72,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth_router)
 
-SESSION_COOKIE_NAME = "al_session"
-SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
-ROLE_PERMISSIONS = {
-    "admin": {"viewDashboard", "manageSettings", "manageUsers"},
-    "editor": {"viewDashboard", "manageSettings"},
-    "viewer": {"viewDashboard"},
-}
 PUBLIC_API_PATHS = {
     "/api/v1/health",
     "/api/v1/plugins/config",
@@ -104,22 +100,6 @@ DASHBOARD_METRIC_PATHS = {
     "/api/v1/analytics/summary",
     "/api/v1/calendar/summary",
 }
-
-
-def is_local_dev_request(request: Request) -> bool:
-    return request.url.hostname in {"127.0.0.1", "localhost"}
-
-
-def set_session_cookie(response: Response, token: str) -> None:
-    response.set_cookie(
-        SESSION_COOKIE_NAME,
-        token,
-        max_age=SESSION_MAX_AGE_SECONDS,
-        httponly=True,
-        samesite="lax",
-        path="/",
-    )
-
 
 @app.middleware("http")
 async def site_auth_middleware(request: Request, call_next):
@@ -163,28 +143,6 @@ def _with_dashboard_metrics(request: Request, response: Response, started_at: fl
 
     return response
 
-
-def current_site_user(request: Request) -> dict:
-    user = getattr(request.state, "site_user", None)
-
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    return user
-
-
-def require_permission(permission: str):
-    def dependency(user: dict = Depends(current_site_user)) -> dict:
-        role = user.get("role", "viewer")
-
-        if permission not in ROLE_PERMISSIONS.get(role, set()):
-            raise HTTPException(status_code=403, detail="Permission denied")
-
-        return user
-
-    return dependency
-
-
 def require_telegram_bot_secret(request: Request) -> None:
     if not settings.telegram_bot_secret:
         raise HTTPException(status_code=503, detail="Telegram bot secret is not configured")
@@ -199,51 +157,6 @@ def require_discord_bot_secret(request: Request) -> None:
 
     if request.headers.get("x-al-discord-bot-secret") != settings.discord_bot_secret:
         raise HTTPException(status_code=403, detail="Invalid Discord bot secret")
-
-
-@app.post("/api/v1/auth/login")
-def login(credentials: LoginIn, response: Response) -> dict:
-    user = app.state.repo.authenticate_site_user(credentials.email, credentials.password)
-
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    token = app.state.repo.create_site_session(user["email"])
-    set_session_cookie(response, token)
-    return {"ok": True, "user": user}
-
-
-@app.post("/api/v1/auth/dev-login")
-def dev_login(request: Request, response: Response) -> dict:
-    if not is_local_dev_request(request):
-        raise HTTPException(status_code=404, detail="Not found")
-
-    users = [user for user in app.state.repo.site_users() if user.get("active")]
-    user = next((item for item in users if item.get("role") == "admin"), users[0] if users else None)
-
-    if not user:
-        raise HTTPException(status_code=404, detail="No active local site user")
-
-    token = app.state.repo.create_site_session(user["email"])
-    set_session_cookie(response, token)
-    return {"ok": True, "user": user}
-
-
-@app.post("/api/v1/auth/logout")
-def logout(request: Request, response: Response) -> dict:
-    app.state.repo.delete_site_session(request.cookies.get(SESSION_COOKIE_NAME))
-    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
-    return {"ok": True}
-
-
-@app.get("/api/v1/auth/me")
-def auth_me(request: Request) -> dict:
-    user = app.state.repo.site_user_for_session(request.cookies.get(SESSION_COOKIE_NAME))
-
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    return {"user": user}
 
 
 @app.get("/api/v1/site-users")
