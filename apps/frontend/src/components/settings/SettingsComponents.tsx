@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import type { AuthorProfile, MeetingRecordingStatus, SiteUser, SiteUserRole, Summary } from "../../types/dashboard";
 import { apiFetch } from "../../api/client";
+import { AuthorAvatar } from "../AuthorAvatar";
 import { REFRESH_INTERVAL_MS } from "../../constants/dashboard";
 import { formatReportMinutes } from "../../utils/reports";
 import { formatProfileTimeZoneLabel, formatProfileTimeZoneTitle, formatTimestamp } from "../../pages/pageHelpers";
@@ -52,6 +53,76 @@ function authorProfileDisplayNameForSiteEmail(
     }
 
     return undefined;
+  }
+
+  return undefined;
+}
+
+/** Same label as the read-only Name column — used so avatar lookup matches what the table shows (incl. email fallbacks). */
+function siteUserTableDisplayLabel(
+  user: SiteUser,
+  draft: SiteUser,
+  profiles: AuthorProfile[],
+  profileDrafts: Record<string, AuthorProfile>
+): string {
+  const profileLinkedName = authorProfileDisplayNameForSiteEmail(user.email, profiles, profileDrafts);
+  const fallbackTableName = siteUserTableNameFallback(user.email);
+  const fromDraft = (draft.displayName ?? "").trim();
+
+  if (profileLinkedName) {
+    return profileLinkedName;
+  }
+
+  if (fallbackTableName) {
+    return fallbackTableName;
+  }
+
+  if (fromDraft) {
+    return fromDraft;
+  }
+
+  return "—";
+}
+
+function findAuthorProfileForSiteUser(
+  user: SiteUser,
+  draft: SiteUser,
+  profiles: AuthorProfile[],
+  profileDrafts: Record<string, AuthorProfile>
+): AuthorProfile | undefined {
+  const normalizedEmail = user.email.trim().toLowerCase();
+
+  if (normalizedEmail) {
+    for (const profile of profiles) {
+      const pDraft = profileDrafts[profile.rawAuthor] ?? profile;
+      const profileEmail = (pDraft.authorEmail ?? profile.authorEmail ?? "").trim().toLowerCase();
+      const rawNorm = (pDraft.rawAuthor ?? profile.rawAuthor ?? "").trim().toLowerCase();
+
+      const matchesByEmail = Boolean(profileEmail) && profileEmail === normalizedEmail;
+      const matchesByRawAuthor = Boolean(rawNorm) && rawNorm === normalizedEmail;
+
+      if (matchesByEmail || matchesByRawAuthor) {
+        return pDraft;
+      }
+    }
+  }
+
+  const tableLabel = siteUserTableDisplayLabel(user, draft, profiles, profileDrafts);
+
+  if (tableLabel === "—") {
+    return undefined;
+  }
+
+  const labelNorm = tableLabel.trim().toLowerCase();
+
+  for (const profile of profiles) {
+    const pDraft = profileDrafts[profile.rawAuthor] ?? profile;
+    const profileDisplay = (pDraft.displayName ?? profile.displayName ?? "").trim().toLowerCase();
+    const rawNorm = (pDraft.rawAuthor ?? profile.rawAuthor ?? "").trim().toLowerCase();
+
+    if ((profileDisplay && profileDisplay === labelNorm) || (rawNorm && rawNorm === labelNorm)) {
+      return pDraft;
+    }
   }
 
   return undefined;
@@ -264,10 +335,25 @@ export function SiteUsersPanel({
             profileLinkedName ??
             fallbackTableName ??
             ((draft.displayName ?? "").trim() ? draft.displayName.trim() : undefined);
+          const linkedAuthorProfile = findAuthorProfileForSiteUser(user, draft, authorProfiles, authorProfileDrafts);
           return (
             <div className="site-user-row" key={user.email}>
               <span className="site-user-name-cell" title={nameCellTitle}>
-                {nameCellText}
+                <span className="site-user-name-with-avatar">
+                  <AuthorAvatar
+                    displayName={
+                      linkedAuthorProfile
+                        ? linkedAuthorProfile.displayName || linkedAuthorProfile.rawAuthor
+                        : nameCellText !== "—"
+                          ? nameCellText
+                          : (draft.displayName ?? "").trim() || user.email
+                    }
+                    authorColor={linkedAuthorProfile?.authorColor}
+                    avatarUrl={linkedAuthorProfile?.avatarUrl}
+                    variant="mini"
+                  />
+                  <span className="site-user-name-text">{nameCellText}</span>
+                </span>
               </span>
               <span className="profile-author-cell site-user-email-cell" title={user.email}>
                 <input

@@ -787,21 +787,33 @@ export function SettingsPage({
               const profileDirty = isProfileDirty(profile);
               return (
                 <div className="auto-break-row" key={profile.rawAuthor}>
-                  <div>
-                    <strong>{profile.displayName || profile.rawAuthor}</strong>
-                    <small>{profile.rawAuthor}</small>
-                    <small>{autoBreakScheduleLabel(draft)}</small>
-                  </div>
-                  <label className="checkbox-cell">
-                    <input
-                      type="checkbox"
-                      checked={draft.autoBreakEnabled ?? false}
-                      onChange={(event) =>
-                        setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, autoBreakEnabled: event.target.checked } }))
-                      }
+                  <div className="auto-break-identity">
+                    <AuthorAvatar
+                      displayName={profile.displayName || profile.rawAuthor}
+                      authorColor={profile.authorColor}
+                      avatarUrl={profile.avatarUrl}
+                      variant="mini"
                     />
-                    Auto break
-                  </label>
+                    <div className="auto-break-identity-text">
+                      <strong>{profile.displayName || profile.rawAuthor}</strong>
+                      <small className="auto-break-raw-id">
+                        {(draft.authorEmail ?? profile.authorEmail ?? "").trim() || profile.rawAuthor}
+                      </small>
+                    </div>
+                  </div>
+                  <div className="auto-break-actions">
+                    <small className="auto-break-schedule">{autoBreakScheduleLabel(draft)}</small>
+                    <label className="checkbox-cell">
+                      <input
+                        type="checkbox"
+                        checked={draft.autoBreakEnabled ?? false}
+                        onChange={(event) =>
+                          setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, autoBreakEnabled: event.target.checked } }))
+                        }
+                      />
+                      Auto break
+                    </label>
+                  </div>
                   <button
                     className={settingsSaveButtonClassName(saveStatus[profile.rawAuthor], true)}
                     onClick={() => void saveProfile(profile.rawAuthor)}
