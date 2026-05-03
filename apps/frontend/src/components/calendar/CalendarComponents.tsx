@@ -175,8 +175,8 @@ export function CalendarMarkEditor({
   }
 
   return (
-    <div className="modal-backdrop">
-      <div className="calendar-modal">
+    <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+      <div className="calendar-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
         <h2>Mark {selectedDates.length} days</h2>
         <div className="modal-author-list">
           {authors.map((author) => (
@@ -234,8 +234,8 @@ export function CalendarClearEditor({
   }
 
   return (
-    <div className="modal-backdrop">
-      <div className="calendar-modal">
+    <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+      <div className="calendar-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
         <h2>Clear marks for {selectedDates.length} days</h2>
         <p className="calendar-helper">This removes saved marks for selected dates and selected authors.</p>
         <div className="modal-author-list">

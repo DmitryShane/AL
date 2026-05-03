@@ -235,69 +235,10 @@ export function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
   );
 }
 
-export function AuthorDeleteConfirm({
-  profile,
-  saving,
-  onCancel,
-  onDelete,
-  description,
-  confirmLabel,
-}: {
-  profile: AuthorProfile;
-  saving: boolean;
-  onCancel: () => void;
-  onDelete: () => void;
-  description?: string;
-  confirmLabel?: string;
-}) {
-  const defaultDescription =
-    "This will remove reports, raw activity events, Telegram day/break data, alerts, and activity statistics for this author. The author profile, display name, Telegram username, color, and plugin settings will stay unchanged. This action cannot be undone.";
+export { AuthorDeleteConfirm } from "./AuthorDeleteConfirmModal";
+export type { AuthorDeleteConfirmProps } from "./AuthorDeleteConfirmModal";
 
-  return (
-    <div className="modal-backdrop">
-      <div className="calendar-modal">
-        <h2>Delete data for {profile.displayName}</h2>
-        <p className="calendar-helper">{description ?? defaultDescription}</p>
-        <div className="modal-actions">
-          <button className="primary-outline-button" onClick={onCancel} disabled={saving}>Cancel</button>
-          <button className="primary-button danger-solid-button" onClick={onDelete} disabled={saving}>
-            {saving ? "Deleting..." : confirmLabel ?? "Delete all author data"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export function AuthorProfileDeleteConfirm({
-  profile,
-  saving,
-  onCancel,
-  onDelete
-}: {
-  profile: AuthorProfile;
-  saving: boolean;
-  onCancel: () => void;
-  onDelete: () => void;
-}) {
-  return (
-    <div className="modal-backdrop">
-      <div className="calendar-modal">
-        <h2>Delete profile for {profile.displayName}</h2>
-        <p className="calendar-helper">
-          This will remove the author profile, Telegram mapping, plugin settings, reports, raw activity events, Telegram day/break data,
-          calendar marks, alerts, and activity statistics for this author. This action cannot be undone.
-        </p>
-        <div className="modal-actions">
-          <button className="primary-outline-button" onClick={onCancel} disabled={saving}>Cancel</button>
-          <button className="primary-button danger-solid-button" onClick={onDelete} disabled={saving}>
-            {saving ? "Deleting..." : "Delete profile and all data"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+export { AuthorProfileDeleteModal } from "./AuthorProfileDeleteModal";
 
 function settingsSaveButtonLabel(key: string, saving: string | null, statuses: Record<string, "saved" | "error" | undefined>) {
   if (saving === key) {

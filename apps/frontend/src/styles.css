@@ -2285,6 +2285,11 @@ p {
   font-weight: 800;
 }
 
+.profile-create-card label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .settings-row input,
 .settings-row textarea,
 .profile-create-card input,
@@ -2458,6 +2463,18 @@ p {
 
 .danger-solid-button {
   background: #dc2626;
+}
+
+.primary-button.danger-solid-button.delete-all-data-solid-button:not(:disabled) {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.primary-button.danger-solid-button.delete-all-data-solid-button:not(:disabled):hover {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: #ffffff;
 }
 
 .year-calendar-panel {
@@ -2740,6 +2757,15 @@ p {
   gap: 10px;
 }
 
+.profile-table-shell {
+  margin-top: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 4px 22px rgba(15, 23, 42, 0.055);
+}
+
 .profile-table {
   --profile-columns: minmax(220px, 1.3fr) minmax(180px, 1.1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(170px, 1fr) minmax(76px, 0.55fr) minmax(110px, 0.7fr) 300px;
   display: grid;
@@ -2844,10 +2870,41 @@ p {
   display: grid;
   grid-template-columns: var(--profile-columns);
   min-width: 1480px;
-  gap: 12px;
+  gap: 14px;
   align-items: center;
-  border-bottom: 1px solid #e5eaf0;
-  padding: 10px 12px;
+}
+
+.profile-table-head {
+  padding: 12px 14px;
+  border-bottom: 1px solid #e2e8f0;
+  background: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.profile-row {
+  padding: 12px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background-color 0.14s ease;
+}
+
+.profile-row:nth-child(even) {
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.profile-row:last-child {
+  border-bottom: none;
+}
+
+.profile-row:hover {
+  background: rgba(241, 245, 249, 0.98);
+}
+
+.profile-row:nth-child(even):hover {
+  background: rgb(236 242 249 / 98%);
 }
 
 .profile-table-head span {
@@ -2864,6 +2921,31 @@ p {
   width: 100%;
 }
 
+.profile-row input:focus-visible {
+  outline: none;
+  border-color: #94a3b8;
+  box-shadow: 0 0 0 2px rgb(148 163 184 / 22%);
+}
+
+.profile-row input[type="color"]:focus-visible {
+  box-shadow: none;
+}
+
+.profile-create-card input:not([type="checkbox"]):not([type="color"]),
+.profile-create-card select,
+.profile-row input:not([type="checkbox"]):not([type="color"]),
+.profile-row select {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.profile-create-card input::placeholder,
+.profile-row input::placeholder {
+  font-weight: 400;
+  color: #94a3b8;
+}
+
 .profile-readonly-cell {
   min-height: 38px;
   display: flex;
@@ -2872,8 +2954,9 @@ p {
   border: 1px solid #e5eaf0;
   border-radius: 8px;
   background: #f8fafc;
-  color: #5c6b7a;
-  font-weight: 800;
+  color: #405064;
+  font-size: 13px;
+  font-weight: 500;
   padding: 8px 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2896,6 +2979,10 @@ p {
 }
 
 .delete-activity-author-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 18px;
   border: 1px solid #e5eaf0;
   border-radius: 12px;
   background: #fbfcff;
@@ -2903,12 +2990,16 @@ p {
 }
 
 .delete-activity-author-meta {
-  margin-bottom: 10px;
+  flex: 0 0 auto;
+  min-width: min(200px, 26vw);
 }
 
 .delete-activity-author-meta strong {
   display: block;
   color: #202a36;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .delete-activity-author-meta small {
@@ -2916,29 +3007,50 @@ p {
   margin-top: 3px;
   color: #718093;
   font-size: 12px;
+  font-weight: 400;
 }
 
 .delete-activity-controls {
+  display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   gap: 10px 14px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .delete-activity-controls label:not(.radio-inline) {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
-  font-weight: 700;
-  color: #405064;
+  font-weight: 600;
+  color: #64748b;
 }
 
 .delete-activity-controls input[type="date"] {
+  box-sizing: border-box;
+  height: 38px;
   min-height: 38px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: #202a36;
+}
+
+.delete-activity-controls button.primary-button,
+.delete-activity-controls button.primary-outline-button {
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .delete-activity-row-error {
-  margin: 10px 0 0;
+  flex-basis: 100%;
+  margin: 4px 0 0;
 }
 
 .radio-inline {
@@ -2948,6 +3060,18 @@ p {
   font-size: 13px;
   font-weight: 600;
   color: #405064;
+}
+
+.profile-actions button.primary-button,
+.profile-actions button.primary-outline-button {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.profile-create-card > button.primary-button,
+.profile-create-card > button.primary-outline-button {
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .profile-actions button {
@@ -2963,12 +3087,18 @@ p {
 }
 
 .profile-author-cell strong {
-  color: #202a36;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
 }
 
 .profile-author-cell small {
-  color: #718093;
+  color: #64748b;
   font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
 }
 
 .checkbox-cell {
@@ -2984,6 +3114,12 @@ p {
   color: #202a36;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.profile-row .checkbox-cell,
+.profile-create-card .checkbox-cell {
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .checkbox-cell input {

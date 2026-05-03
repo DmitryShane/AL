@@ -1,0 +1,221 @@
+.calendar-modal.calendar-modal--danger-delete-all,
+.calendar-modal.calendar-modal--danger-delete-profile {
+  position: relative;
+  width: min(480px, 100%);
+  max-width: 480px;
+  padding: 0;
+  gap: 0;
+  text-align: center;
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.22);
+  border: 1px solid #fecaca;
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.calendar-modal.calendar-modal--danger-delete-all h2,
+.calendar-modal.calendar-modal--danger-delete-profile h2 {
+  margin: 0;
+  font-size: 1.32rem;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+}
+
+.danger-delete-modal__accent {
+  height: 4px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  background: linear-gradient(90deg, #dc2626 0%, #ea580c 55%, #f59e0b 100%);
+}
+
+.danger-delete-modal__body {
+  display: grid;
+  gap: 12px;
+  padding: 16px 22px 18px;
+}
+
+.danger-delete-modal__header {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+}
+
+.danger-delete-modal__badge {
+  display: inline-block;
+  border-radius: 999px;
+  border: 1px solid #fecaca;
+  background: linear-gradient(180deg, #fff7ed 0%, #fef2f2 100%);
+  padding: 4px 10px;
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.danger-delete-modal__lead {
+  margin: 0;
+  max-width: 38rem;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 600;
+}
+
+.danger-delete-modal__profile-card {
+  display: grid;
+  gap: 3px;
+  justify-items: center;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+}
+
+.danger-delete-modal__profile-label {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.danger-delete-modal__profile-name {
+  font-size: 16px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.danger-delete-modal__profile-email {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: #94a3b8;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.danger-delete-modal__profile-raw-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.danger-delete-modal__list {
+  margin: 0;
+  padding: 10px 14px 10px 34px;
+  border-radius: 12px;
+  border: 1px solid #f1f5f9;
+  background: #fafbfc;
+  text-align: left;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.danger-delete-modal__list li {
+  margin-bottom: 4px;
+}
+
+.danger-delete-modal__list li:last-child {
+  margin-bottom: 0;
+}
+
+.danger-delete-modal__warning {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.danger-delete-modal__warning strong {
+  font-weight: 900;
+}
+
+.calendar-modal.calendar-modal--danger-delete-all label.danger-delete-modal__phrase-field,
+.calendar-modal.calendar-modal--danger-delete-profile label.danger-delete-modal__phrase-field {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  margin-top: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+.danger-delete-modal__phrase-label {
+  font-size: 12px;
+  font-weight: 800;
+  color: #334155;
+}
+
+.danger-delete-modal__phrase-keyword {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-weight: 900;
+  color: #dc2626;
+}
+
+.calendar-modal.calendar-modal--danger-delete-all .danger-delete-modal__phrase-field input,
+.calendar-modal.calendar-modal--danger-delete-profile .danger-delete-modal__phrase-field input {
+  box-sizing: border-box;
+  width: min(280px, 100%);
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  min-height: 38px;
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 7px 12px;
+}
+
+.calendar-modal.calendar-modal--danger-delete-all .danger-delete-modal__phrase-field input:focus,
+.calendar-modal.calendar-modal--danger-delete-profile .danger-delete-modal__phrase-field input:focus {
+  outline: none;
+  border-color: #f97316;
+  box-shadow: 0 0 0 3px rgb(249 115 22 / 18%);
+}
+
+.calendar-modal.calendar-modal--danger-delete-all .danger-delete-modal__phrase-field input::placeholder,
+.calendar-modal.calendar-modal--danger-delete-profile .danger-delete-modal__phrase-field input::placeholder {
+  color: #cbd5e1;
+  letter-spacing: normal;
+}
+
+.modal-actions.danger-delete-modal__actions {
+  justify-content: center;
+  flex-wrap: wrap;
+  padding-top: 2px;
+  gap: 8px;
+}
+
+.danger-delete-modal__delete-error {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #fecaca;
+  background: #fff7ed;
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+}
