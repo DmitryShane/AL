@@ -32,6 +32,7 @@ class BackendServices(
         self.client = storage.client
         self.db = storage.db
         self.default_send_interval_seconds = settings.default_send_interval_seconds
+        self.avatar_cache_dir = settings.avatar_cache_dir
 
     def ping(self) -> bool:
         self.client.admin.command("ping")

@@ -615,7 +615,7 @@ p {
 .authors-table-head,
 .authors-row {
   display: grid;
-  grid-template-columns: 1.5fr 0.65fr 0.82fr 0.82fr 0.72fr 0.72fr 0.72fr 0.72fr 0.72fr 0.8fr 0.78fr 0.58fr 0.82fr;
+  grid-template-columns: 2.25fr 0.65fr 0.82fr 0.82fr 0.72fr 0.72fr 0.72fr 0.72fr 0.72fr 0.8fr 0.78fr 0.58fr 0.82fr;
   min-width: 1360px;
   gap: 0;
   align-items: center;
@@ -694,16 +694,11 @@ p {
   display: block;
   overflow: hidden;
   white-space: nowrap;
-  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 24px), transparent 100%);
-  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 24px), transparent 100%);
+  text-overflow: ellipsis;
 }
 
 .author-cell small {
   color: #718093;
-}
-
-.author-email {
-  max-width: 150px;
 }
 
 .author-last-report {
@@ -763,6 +758,23 @@ p {
   background: #13a37b;
   color: #ffffff;
   font-weight: 900;
+}
+
+.author-avatar-image {
+  display: inline-block;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  object-fit: cover;
+  vertical-align: middle;
+}
+
+.author-avatar-image-mini {
+  width: 34px;
+  height: 34px;
+  border: 2px solid #ffffff;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.12);
 }
 
 .empty,
@@ -1452,11 +1464,6 @@ p {
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.mini-breakdown-list .empty {
-  font-size: 11px;
-  line-height: 1.25;
 }
 
 .list {
@@ -2219,6 +2226,10 @@ p {
   min-width: 0;
 }
 
+.settings-author-avatars-delete-row {
+  grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr);
+}
+
 .settings-tabs {
   display: inline-flex;
   width: fit-content;
@@ -2247,6 +2258,22 @@ p {
   display: flex;
   align-items: end;
   gap: 12px;
+}
+
+.github-avatars-toolbar {
+  flex-wrap: wrap;
+}
+
+.github-avatars-toolbar .github-avatars-refresh-all,
+.github-avatars-toolbar.delete-activity-bulk-toolbar .delete-all-data-solid-button {
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .github-avatars-toolbar .github-avatars-refresh-all,
+  .github-avatars-toolbar.delete-activity-bulk-toolbar .delete-all-data-solid-button {
+    margin-left: 0;
+  }
 }
 
 .auto-break-list {
@@ -2288,7 +2315,7 @@ p {
 .settings-row label,
 .profile-create-card label,
 .site-user-create-card label,
-.profile-row label:not(.checkbox-cell),
+.profile-row label:not(.checkbox-cell):not(.radio-inline),
 .score-settings-grid label {
   display: grid;
   gap: 6px;
@@ -2901,9 +2928,67 @@ p {
 }
 
 .profile-table {
-  --profile-columns: minmax(220px, 1.3fr) minmax(180px, 1.1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(170px, 1fr) minmax(76px, 0.55fr) minmax(110px, 0.7fr) minmax(140px, 1fr);
+  --profile-columns: minmax(268px, 1.35fr) minmax(180px, 1.1fr) minmax(150px, 1fr) minmax(130px, 0.85fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(170px, 1fr) minmax(76px, 0.55fr) minmax(110px, 0.7fr) minmax(140px, 1fr);
   display: grid;
   overflow-x: auto;
+}
+
+.profile-table-shell--compact {
+  margin-top: 12px;
+}
+
+.profile-table-shell--compact .profile-table-head,
+.profile-table-shell--compact .profile-row {
+  min-width: 0;
+}
+
+.profile-table--github-avatars {
+  --profile-columns: minmax(268px, 1.65fr) minmax(140px, 1.2fr) minmax(130px, 0.75fr);
+}
+
+.profile-table--delete-activity {
+  --profile-columns: minmax(220px, 0.88fr) minmax(240px, 1.82fr) minmax(200px, 1fr);
+}
+
+.profile-delete-activity-period-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.profile-delete-activity-period-cell .delete-activity-controls {
+  width: 100%;
+}
+
+.profile-table--delete-activity > .profile-row {
+  align-items: center;
+}
+
+.profile-table--delete-activity .profile-author-cell strong,
+.profile-table--delete-activity .profile-author-cell small {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.25rem), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.25rem), transparent 100%);
+}
+
+.profile-table-shell--compact .profile-row .profile-delete-activity-period-cell .delete-activity-row-error {
+  margin: 0;
+}
+
+
+.profile-table-shell--compact .profile-row > .profile-actions {
+  flex-wrap: wrap;
+}
+
+.profile-table-shell--compact .profile-table--delete-activity > .profile-row > .profile-actions {
+  flex-wrap: nowrap;
 }
 
 .profile-create-card {
@@ -2913,6 +2998,7 @@ p {
     minmax(180px, 1.1fr)
     minmax(180px, 1.1fr)
     minmax(150px, 0.9fr)
+    minmax(140px, 0.85fr)
     minmax(180px, 1fr)
     minmax(170px, 0.95fr)
     minmax(170px, 0.95fr)
@@ -3014,7 +3100,7 @@ p {
 .profile-table-head,
 .profile-row {
   grid-template-columns: var(--profile-columns);
-  min-width: 1410px;
+  min-width: 1560px;
 }
 
 .site-users-head,
@@ -3126,6 +3212,23 @@ p {
   box-shadow: none;
 }
 
+.profile-row input[type="radio"] {
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 6px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  accent-color: #2563eb;
+}
+
+.profile-row input[type="radio"]:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
 .profile-create-card input:not([type="checkbox"]):not([type="color"]),
 .profile-create-card select,
 .site-user-create-card input:not([type="checkbox"]):not([type="color"]),
@@ -3171,10 +3274,6 @@ p {
   gap: 8px;
 }
 
-.delete-activity-data-panel {
-  margin-top: 18px;
-}
-
 .delete-activity-author-list {
   display: flex;
   flex-direction: column;
@@ -3215,11 +3314,12 @@ p {
 
 .delete-activity-controls {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 10px 14px;
+  gap: 8px 12px;
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: max-content;
+  min-height: 38px;
 }
 
 .delete-activity-controls label:not(.radio-inline) {
@@ -3227,6 +3327,8 @@ p {
   flex-direction: row;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
   color: #64748b;
@@ -3234,11 +3336,15 @@ p {
 
 .delete-activity-controls input[type="date"] {
   box-sizing: border-box;
+  width: 7.125rem;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 0 auto;
   height: 38px;
   min-height: 38px;
   border: 1px solid #d8e0e8;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 6px 8px;
   font-size: 13px;
   font-weight: 500;
   line-height: 1.4;
@@ -3254,6 +3360,15 @@ p {
 .delete-activity-row-error {
   flex-basis: 100%;
   margin: 4px 0 0;
+}
+
+.delete-activity-controls .radio-inline {
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.profile-row .delete-activity-controls input[type="radio"] {
+  margin: 0;
 }
 
 .radio-inline {
@@ -3287,6 +3402,31 @@ p {
   gap: 3px;
   min-width: 0;
   width: 100%;
+}
+
+.profile-author-cell.profile-author-cell--with-avatar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-author-cell--with-avatar .profile-author-cell-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.profile-author-cell--with-avatar .author-avatar-image-mini,
+.profile-author-cell--with-avatar .avatar {
+  flex-shrink: 0;
+}
+
+.profile-author-cell--with-avatar .avatar.mini-avatar {
+  width: 34px;
+  height: 34px;
+  font-size: 11px;
 }
 
 .profile-author-cell strong {

@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { AnalyticsActivityOverview } from "../components/AnalyticsActivityOverview";
+import { AuthorAvatar } from "../components/AuthorAvatar";
 import { apiFetch } from "../api/client";
 import { ANALYTICS_SUMMARY_CACHE_KEY } from "../constants/dashboard";
 import type { AnalyticsSummary } from "../types/dashboard";
-import { avatarStyle, initials } from "./pageHelpers";
+
 export function AnalyticsPage() {
   const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(() => loadCachedAnalyticsSummary());
   const [selectedAuthor, setSelectedAuthor] = useState<string>("");
@@ -60,7 +61,7 @@ export function AnalyticsPage() {
                 key={author.rawAuthor}
                 onClick={() => setSelectedAuthor(author.rawAuthor)}
               >
-                <span className="avatar" style={avatarStyle(author.authorColor)}>{initials(author.displayName)}</span>
+                <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
                 <strong>{author.displayName}</strong>
                 <small>{author.team || "No team"}</small>
                 <div className="mini-metrics">
@@ -75,7 +76,9 @@ export function AnalyticsPage() {
             <AnalyticsActivityOverview
               author={selected}
               year={analytics.year}
-              avatar={<span className="avatar" style={avatarStyle(selected.authorColor)}>{initials(selected.displayName)}</span>}
+              avatar={
+                <AuthorAvatar displayName={selected.displayName} authorColor={selected.authorColor} avatarUrl={selected.avatarUrl} />
+              }
             />
           ) : (
             <p className="empty">No analytics authors yet.</p>

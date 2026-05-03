@@ -58,8 +58,8 @@ export function OvertimeBreakdownPanel({
   return (
     <div className="panel breakdown-panel overtime-breakdown-panel">
       <h2>Overtime</h2>
-      <MiniBreakdownList title="Activity Mix" items={activityItems} groups={activityGroups} emptyMessage="No overtime activity yet." />
-      <MiniBreakdownList title="Saved Files" items={savedItems} groups={savedGroups} emptyMessage="No overtime saves yet." />
+      <MiniBreakdownList title="Activity Mix" items={activityItems} groups={activityGroups} emptyMessage="No data yet." />
+      <MiniBreakdownList title="Saved Files" items={savedItems} groups={savedGroups} emptyMessage="No data yet." />
     </div>
   );
 }

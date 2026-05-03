@@ -19,11 +19,18 @@ class Settings:
     cors_origins: list[str]
     admin_email: str
     admin_password: str
+    avatar_cache_dir: Path
 
 
 def load_settings() -> Settings:
     base_dir = Path(__file__).resolve().parent
     raw_origins = os.getenv("AL_CORS_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173")
+    avatar_dir_env = os.getenv("AL_AVATAR_CACHE_DIR", "").strip()
+
+    if avatar_dir_env:
+        avatar_cache_dir = Path(avatar_dir_env).expanduser()
+    else:
+        avatar_cache_dir = (base_dir.parent / "data" / "avatars").resolve()
 
     return Settings(
         mongo_uri=os.getenv("AL_MONGO_URI", "mongodb://127.0.0.1:27017"),
@@ -38,4 +45,5 @@ def load_settings() -> Settings:
         cors_origins=[origin.strip() for origin in raw_origins.split(",") if origin.strip()],
         admin_email=os.getenv("AL_ADMIN_EMAIL", "").strip(),
         admin_password=os.getenv("AL_ADMIN_PASSWORD", ""),
+        avatar_cache_dir=avatar_cache_dir,
     )

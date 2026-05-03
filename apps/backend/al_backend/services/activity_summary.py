@@ -1058,6 +1058,15 @@ class ActivitySummaryService:
             date_mode,
             now,
         )
+        for author in authors_by_raw.values():
+            raw_author = author["rawAuthor"]
+            profile = profiles.get(raw_author, {})
+            url = _cached_author_avatar_api_url(raw_author, _github_username_for_avatar_fetch(raw_author, profile))
+            if url:
+                author["avatarUrl"] = url
+            else:
+                author.pop("avatarUrl", None)
+
         author_rows = []
 
         for author in authors_by_raw.values():
@@ -1666,6 +1675,7 @@ class ActivitySummaryService:
                     "displayName": _display_name(raw_author, profile),
                     "team": profile.get("team", ""),
                     "authorColor": profile.get("authorColor") or _author_color(raw_author),
+                    "avatarUrl": _cached_author_avatar_api_url(raw_author, _github_username_for_avatar_fetch(raw_author, profile)),
                     "months": _analytics_year_months(author_docs, year),
                 }
             )

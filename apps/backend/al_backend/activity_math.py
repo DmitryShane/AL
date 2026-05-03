@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 import unicodedata
+import urllib.parse
 import uuid
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -1084,6 +1085,61 @@ def _author_color(raw_author: Any) -> str:
 def _normalize_author(value: Any) -> str:
     normalized = unicodedata.normalize("NFC", str(value or "")).strip()
     return normalized or "Unknown User"
+
+
+def _normalize_github_username(value: Any) -> str:
+    s = str(value or "").strip()
+    if s.startswith("@"):
+        s = s[1:].strip()
+    if not s or len(s) > 39:
+        return ""
+    if s.startswith("-") or s.endswith("-"):
+        return ""
+    for ch in s:
+        if not (ch.isascii() and (ch.isalnum() or ch == "-")):
+            return ""
+    return s
+
+
+def _github_login_from_profile_doc(doc: dict[str, Any] | None) -> str:
+    if not doc:
+        return ""
+    return _normalize_github_username(doc.get("githubUsername") or doc.get("github_username"))
+
+
+def _github_username_ui_default(raw_author: str, profile: dict[str, Any] | None) -> str:
+    """Value for dashboard GitHub field: stored login, else GitHub-safe rawAuthor, else raw author string."""
+    stored = _github_login_from_profile_doc(profile)
+    if stored:
+        return stored
+    as_login = _normalize_github_username(raw_author)
+    if as_login:
+        return as_login
+    ra = str(raw_author or "").strip()
+
+    if ra and ra != "Unknown User":
+        return ra
+
+    return ""
+
+
+def _github_username_for_avatar_fetch(raw_author: str, profile: dict[str, Any] | None) -> str:
+    """Login for https://github.com/{{login}}.png — valid GitHub usernames only (never arbitrary display names)."""
+    stored = _github_login_from_profile_doc(profile)
+    if stored:
+        return stored
+    return _normalize_github_username(raw_author)
+
+
+def _cached_author_avatar_api_url(raw_author: Any, github_username: Any) -> str:
+    login = _normalize_github_username(github_username)
+
+    if not login:
+        return ""
+
+    author = _normalize_author(raw_author)
+    query = urllib.parse.quote(author, safe="")
+    return f"/api/v1/avatars/author?rawAuthor={query}"
 
 
 def _author_configured_time_zone_id(raw_author: str) -> str | None:

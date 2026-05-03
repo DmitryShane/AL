@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..activity_math import *
+from ..author_avatar_cache import DEFAULT_AVATAR_REFRESH_CADENCE, normalize_avatar_refresh_cadence
 
 
 class SettingsRepository:
@@ -170,6 +171,28 @@ class SettingsRepository:
         self.invalidate_activity_summary_cache()
         return self.get_interval_settings()
 
+    def get_avatar_refresh_cadence(self) -> str:
+        doc = self.db.system_settings.find_one({"kind": "avatars"}, {"_id": 0, "refreshCadence": 1}) or {}
+        return normalize_avatar_refresh_cadence(doc.get("refreshCadence") or DEFAULT_AVATAR_REFRESH_CADENCE)
+
+    def upsert_avatar_settings(self, refresh_cadence: str) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        cadence = normalize_avatar_refresh_cadence(refresh_cadence)
+        self.db.system_settings.update_one(
+            {"kind": "avatars"},
+            {
+                "$set": {
+                    "kind": "avatars",
+                    "refreshCadence": cadence,
+                    "updatedAt": now,
+                },
+                "$setOnInsert": {"createdAt": now},
+            },
+            upsert=True,
+        )
+        self.invalidate_activity_summary_cache()
+        return {"ok": True, "avatarRefreshCadence": cadence}
+
     def get_telegram_online_prompt_delay_seconds(self) -> int:
         settings = self.get_interval_settings()
         return int(settings["telegramOnlinePromptDelayMinutes"]) * 60
@@ -197,6 +220,7 @@ class SettingsRepository:
             "pluginIngestEnabled": self.get_plugin_ingest_enabled(),
             "telegramOnlinePromptDelayMinutes": telegram_online_prompt_delay_minutes,
             "authors": author_settings,
+            "avatarRefreshCadence": self.get_avatar_refresh_cadence(),
         }
 
     def upsert_discord_settings(self, meeting_auto_afk_timeout_seconds: int) -> dict[str, Any]:

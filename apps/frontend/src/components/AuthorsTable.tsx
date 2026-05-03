@@ -1,4 +1,4 @@
-import { avatarStyle, initials } from "../utils/author";
+import { AuthorAvatar } from "./AuthorAvatar";
 import { formatDuration, formatMinutes, formatSource } from "../utils/format";
 
 export type AuthorsTableRow = {
@@ -22,6 +22,7 @@ export type AuthorsTableRow = {
   autoBreakEnabled?: boolean;
   productivity: number;
   authorColor?: string;
+  avatarUrl?: string;
   status?: "online" | "stale";
   stalePresence?: "telegram" | "reports" | "both";
   alertStats?: {
@@ -57,7 +58,7 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
       {authors.map((author) => (
         <div className="authors-row" key={author.rawAuthor}>
           <div className="author-cell" title={author.authorEmail || author.rawAuthor}>
-            <span className="avatar" style={avatarStyle(author.authorColor)}>{initials(author.displayName)}</span>
+            <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
             <div>
               <strong>{author.displayName}</strong>
               <small className="author-email" title={author.authorEmail || author.rawAuthor}>{author.authorEmail || author.rawAuthor}</small>

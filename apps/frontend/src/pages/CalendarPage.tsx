@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api/client";
 import { CALENDAR_SUMMARY_CACHE_KEY } from "../constants/dashboard";
 import type { CalendarMark, CalendarSummary } from "../types/dashboard";
-import { dateRangeList, initials, monthIndexes, uniqueDates } from "./pageHelpers";
+import { AuthorAvatar } from "../components/AuthorAvatar";
+import { dateRangeList, monthIndexes, uniqueDates } from "./pageHelpers";
 import { CalendarClearEditor, CalendarLegend, CalendarMarkEditor, CalendarStats, MonthCalendar, ReasonEditor } from "../components/calendar/CalendarComponents";
 export function CalendarPage() {
   const year = new Date().getFullYear();
@@ -208,7 +209,13 @@ export function CalendarPage() {
             <button className={selectedAuthor === "all" ? "author-card active" : "author-card"} onClick={() => setSelectedAuthor("all")}>
               <span className="avatar-stack" aria-hidden="true">
                 {calendar.authors.slice(0, 5).map((author) => (
-                  <span className="avatar mini-avatar" style={{ background: author.authorColor }} key={author.rawAuthor}>{initials(author.displayName)}</span>
+                  <AuthorAvatar
+                    variant="mini"
+                    displayName={author.displayName}
+                    authorColor={author.authorColor}
+                    avatarUrl={author.avatarUrl}
+                    key={author.rawAuthor}
+                  />
                 ))}
               </span>
               <strong>All authors</strong>
@@ -216,7 +223,7 @@ export function CalendarPage() {
             </button>
             {calendar.authors.map((author) => (
               <button className={selectedAuthor === author.rawAuthor ? "author-card active" : "author-card"} key={author.rawAuthor} onClick={() => setSelectedAuthor(author.rawAuthor)}>
-                <span className="avatar" style={{ background: author.authorColor }}>{initials(author.displayName)}</span>
+                <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
                 <strong>{author.displayName}</strong>
                 <small>{author.team || "No team"}</small>
               </button>

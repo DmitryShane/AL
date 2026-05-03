@@ -40,6 +40,7 @@ export type AuthorRow = {
   discordUserId?: string;
   discordUsername?: string;
   authorColor?: string;
+  avatarUrl?: string;
   autoBreakEnabled?: boolean;
   source?: string;
   pluginVersion?: string;
@@ -140,6 +141,8 @@ export type AuthorProfile = {
   authorColor?: string;
   timeZoneId?: string;
   timeZoneDisplayName?: string;
+  githubUsername?: string;
+  avatarUrl?: string;
 };
 
 export type ActivityCount = {
@@ -192,6 +195,7 @@ export type Summary = {
     idleThresholdSeconds: number;
     pluginIngestEnabled: boolean;
     telegramOnlinePromptDelayMinutes: number;
+    avatarRefreshCadence?: "week" | "month";
     authors: Array<{ author: string; sendIntervalSeconds: number }>;
   };
   discordSettings: {
@@ -276,6 +280,7 @@ export type AnalyticsAuthorSummary = {
   displayName: string;
   team?: string;
   authorColor?: string;
+  avatarUrl?: string;
   months: AnalyticsMonth[];
 };
 
@@ -329,6 +334,7 @@ export type CalendarAuthor = {
   displayName: string;
   team?: string;
   authorColor: string;
+  avatarUrl?: string;
 };
 
 export type CalendarReason = {

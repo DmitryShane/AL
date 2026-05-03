@@ -1,6 +1,18 @@
 from __future__ import annotations
 
+import datetime as dt
+
 from ..activity_math import *
+from ..author_avatar_cache import ensure_author_avatar_cached, remove_author_avatar_cache_file
+
+_BULK_ACTIVITY_PRESET_DAY_SPAN = {"1d": 0, "2d": 1, "3d": 2, "week": 6, "month": 29}
+
+
+def utc_inclusive_range_for_bulk_activity_preset(preset: str) -> tuple[str, str]:
+    today = dt.datetime.now(dt.UTC).date()
+    days_back = _BULK_ACTIVITY_PRESET_DAY_SPAN[preset]
+    start = (today - dt.timedelta(days=days_back)).isoformat()
+    return start, today.isoformat()
 
 
 class AuthorRepository:
@@ -29,15 +41,20 @@ class AuthorRepository:
     def author_profiles(self) -> list[dict[str, Any]]:
         known_authors = self.list_authors()
         profiles = self._profiles_by_raw_author()
+        profiles_by_normalized_key = {_normalize_author(k): v for k, v in profiles.items() if k}
         result = []
 
         for raw_author in known_authors:
-            profile = profiles.get(raw_author, {})
+            profile = profiles.get(raw_author)
+            if profile is None:
+                profile = profiles_by_normalized_key.get(_normalize_author(raw_author), {})
             author_activity = self.db.daily_author_activity.find_one(
                 {"author": raw_author},
                 {"_id": 0, "authorEmail": 1, "timeZoneId": 1, "timeZoneDisplayName": 1},
                 sort=[("lastReceivedAt", DESCENDING)],
             )
+            gh_ui = _github_username_ui_default(raw_author, profile)
+            gh_fetch = _github_username_for_avatar_fetch(raw_author, profile)
             result.append(
                 {
                     "rawAuthor": raw_author,
@@ -55,10 +72,65 @@ class AuthorRepository:
                     "timeZoneId": profile.get("timeZoneId") or (author_activity or {}).get("timeZoneId", ""),
                     "timeZoneDisplayName": profile.get("timeZoneDisplayName")
                     or (author_activity or {}).get("timeZoneDisplayName", ""),
+                    "githubUsername": gh_ui,
+                    "avatarUrl": _cached_author_avatar_api_url(raw_author, gh_fetch),
                 }
             )
 
         return result
+
+    def refresh_author_github_avatar(self, raw_author: str) -> dict[str, Any]:
+        resolved = self.resolve_author_alias(_normalize_author(raw_author))
+        profile = self.db.author_profiles.find_one(
+            {"rawAuthor": resolved}, {"_id": 0, "githubUsername": 1, "github_username": 1}
+        ) or {}
+
+        if not _github_username_for_avatar_fetch(resolved, profile):
+            return {"ok": False, "error": "GitHub username is not set for this profile"}
+
+        cadence = self.get_avatar_refresh_cadence()
+        path, _ = ensure_author_avatar_cached(
+            self.db,
+            getattr(self, "avatar_cache_dir", None),
+            resolved,
+            cadence=cadence,
+            force=True,
+        )
+
+        if path is not None and path.is_file():
+            return {"ok": True, "rawAuthor": resolved}
+
+        return {"ok": False, "error": "Avatar could not be downloaded"}
+
+    def refresh_all_author_github_avatars(self) -> dict[str, Any]:
+        cache_dir = getattr(self, "avatar_cache_dir", None)
+        cadence = self.get_avatar_refresh_cadence()
+        attempted = 0
+        refreshed = 0
+        failed: list[str] = []
+
+        for doc in self.db.author_profiles.find({}, {"rawAuthor": 1, "githubUsername": 1, "github_username": 1}):
+            raw_author = doc.get("rawAuthor")
+
+            if not raw_author or not _github_username_for_avatar_fetch(raw_author, doc):
+                continue
+
+            resolved = self.resolve_author_alias(_normalize_author(raw_author))
+            attempted += 1
+            path, _ = ensure_author_avatar_cached(
+                self.db,
+                cache_dir,
+                resolved,
+                cadence=cadence,
+                force=True,
+            )
+
+            if path is not None and path.is_file():
+                refreshed += 1
+            else:
+                failed.append(resolved)
+
+        return {"ok": True, "attempted": attempted, "refreshed": refreshed, "failedRawAuthors": failed}
 
     def update_author_email(self, raw_author: str, author_email: str | None) -> None:
         raw_author = _normalize_author(raw_author)
@@ -205,6 +277,7 @@ class AuthorRepository:
         auto_break_enabled: bool = False,
         author_color: str | None = None,
         time_zone_id: str | None = None,
+        github_username: str | None = None,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         raw_author = _normalize_author(raw_author)
@@ -228,6 +301,11 @@ class AuthorRepository:
         if normalized_time_zone:
             update["timeZoneId"] = normalized_time_zone
 
+        normalized_github = _normalize_github_username(github_username)
+
+        if normalized_github:
+            update["githubUsername"] = normalized_github
+
         existing_auto_break_enabled = bool(existing_profile.get("autoBreakEnabled", False))
 
         if auto_break_enabled:
@@ -240,10 +318,15 @@ class AuthorRepository:
 
         operation: dict[str, Any] = {"$set": update}
 
+        if not normalized_github:
+            operation.setdefault("$unset", {})["githubUsername"] = ""
+            operation.setdefault("$unset", {})["avatarRefreshedAt"] = ""
+            operation.setdefault("$unset", {})["avatarMimeType"] = ""
+
         if normalized_telegram:
             update["telegramUsername"] = normalized_telegram
         else:
-            operation["$unset"] = {"telegramUsername": ""}
+            operation.setdefault("$unset", {})["telegramUsername"] = ""
 
         if normalized_discord_user_id:
             update["discordUserId"] = normalized_discord_user_id
@@ -260,7 +343,13 @@ class AuthorRepository:
 
         self.db.author_profiles.update_one({"rawAuthor": raw_author}, operation, upsert=True)
         self.invalidate_activity_summary_cache()
-        return {"ok": True, "profile": {k: v for k, v in update.items() if k != "updatedAt"}}
+        profile_out = {k: v for k, v in update.items() if k != "updatedAt"}
+        profile_out["avatarUrl"] = _cached_author_avatar_api_url(raw_author, normalized_github)
+
+        if not normalized_github:
+            remove_author_avatar_cache_file(getattr(self, "avatar_cache_dir", None), raw_author)
+
+        return {"ok": True, "profile": profile_out}
 
     def delete_author_data(self, raw_author: str) -> dict[str, Any]:
         normalized_author = _normalize_author(raw_author)
@@ -454,11 +543,47 @@ class AuthorRepository:
             "rebuildDeletedReportRows": rebuild_result.get("deletedReportRows", 0),
         }
 
+    def bulk_delete_activity_all_authors_for_range(self, start_date: str, end_date: str) -> dict[str, Any]:
+        authors = self.list_authors()
+        failures: list[dict[str, Any]] = []
+
+        for author in authors:
+            result = self.delete_author_data_for_date_range(author, start_date, end_date)
+
+            if not result.get("ok"):
+                failures.append({"author": author, "error": result.get("error", "Unknown error")})
+
+        return {
+            "ok": len(failures) == 0,
+            "startDate": start_date,
+            "endDate": end_date,
+            "authorsProcessed": len(authors),
+            "failures": failures,
+        }
+
+    def wipe_all_authors_activity_data(self) -> dict[str, Any]:
+        authors = self.list_authors()
+        failures: list[dict[str, Any]] = []
+
+        for author in authors:
+            result = self.delete_author_data(author)
+
+            if not result.get("ok"):
+                failures.append({"author": author, "error": result.get("error", "Unknown error")})
+
+        return {
+            "ok": len(failures) == 0,
+            "authorsProcessed": len(authors),
+            "failures": failures,
+        }
+
     def delete_author_profile(self, raw_author: str) -> dict[str, Any]:
         normalized_author = _normalize_author(raw_author)
 
         if not normalized_author:
             return {"ok": False, "error": "Author is required"}
+
+        remove_author_avatar_cache_file(getattr(self, "avatar_cache_dir", None), normalized_author)
 
         data_result = self.delete_author_data(normalized_author)
         counts = dict(data_result.get("deleted", {}))

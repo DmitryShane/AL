@@ -147,7 +147,8 @@ export function emptyAuthorProfile(): AuthorProfile {
     pluginEnabled: true,
     autoBreakEnabled: false,
     autoBreakEffectiveDate: "",
-    authorColor: "#13a37b"
+    authorColor: "#13a37b",
+    githubUsername: ""
   };
 }
 
@@ -162,7 +163,8 @@ export function authorProfilePayload(profile: AuthorProfile) {
     pluginEnabled: profile.pluginEnabled ?? true,
     autoBreakEnabled: profile.autoBreakEnabled ?? false,
     autoBreakEffectiveDate: profile.autoBreakEffectiveDate ?? "",
-    authorColor: profile.authorColor ?? "#13a37b"
+    authorColor: profile.authorColor ?? "#13a37b",
+    githubUsername: profile.githubUsername ?? ""
   };
 }
 
@@ -957,4 +959,29 @@ export function toDateInputValue(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+export type BulkActivityDeletePreset = "1d" | "2d" | "3d" | "week" | "month" | "full";
+
+const BULK_PRESET_DAY_SPAN: Record<Exclude<BulkActivityDeletePreset, "full">, number> = {
+  "1d": 0,
+  "2d": 1,
+  "3d": 2,
+  week: 6,
+  month: 29
+};
+
+/** Inclusive UTC calendar dates (YYYY-MM-DD), aligned with backend bulk-delete presets. */
+export function bulkActivityDeleteUtcRange(preset: BulkActivityDeletePreset): { start: string; end: string } | null {
+  if (preset === "full") {
+    return null;
+  }
+
+  const now = new Date();
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - BULK_PRESET_DAY_SPAN[preset]);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+
+  return { start: fmt(start), end: fmt(end) };
 }

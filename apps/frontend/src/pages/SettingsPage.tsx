@@ -1,9 +1,25 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
+import { AuthorAvatar } from "../components/AuthorAvatar";
 import { MEETING_AUDIO_RETENTION_OPTIONS, MEETING_SUMMARY_LANGUAGES, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
 import type { AuthorProfile, MeetingRecordingStatus, SettingsTab, SiteUser, Summary } from "../types/dashboard";
-import { autoBreakScheduleLabel, authorProfilePayload, emptyAuthorProfile, formatProfileTimeZoneLabel, formatProfileTimeZoneTitle, loadSavedSettingsTab, meetingRecordingDetail, meetingRecordingStatusLabel, normalizeAuthorInput, profileLocalTodayIso, settingsSaveButtonClassName, settingsSaveButtonLabel } from "./pageHelpers";
+import {
+  autoBreakScheduleLabel,
+  authorProfilePayload,
+  emptyAuthorProfile,
+  formatProfileTimeZoneLabel,
+  formatProfileTimeZoneTitle,
+  loadSavedSettingsTab,
+  meetingRecordingDetail,
+  meetingRecordingStatusLabel,
+  normalizeAuthorInput,
+  profileLocalTodayIso,
+  settingsSaveButtonClassName,
+  settingsSaveButtonLabel,
+  type BulkActivityDeletePreset
+} from "./pageHelpers";
 import { AuthorDeleteAllActivityModal } from "../components/settings/AuthorDeleteAllActivityModal";
+import { BulkAllAuthorsActivityDeleteModal } from "../components/settings/BulkAllAuthorsActivityDeleteModal";
 import { AuthorDeleteConfirm, AuthorProfileDeleteModal, SiteUsersPanel } from "../components/settings/SettingsComponents";
 
 type DeleteActivityDraft = {
@@ -16,6 +32,25 @@ type PendingAuthorActivityDelete =
   | { mode: "range"; profile: AuthorProfile; startDate: string; endDate: string }
   | { mode: "all"; profile: AuthorProfile };
 
+async function apiErrorDetail(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = (await response.json()) as { detail?: unknown };
+    const detail = payload.detail;
+
+    if (typeof detail === "string") {
+      return detail;
+    }
+
+    if (Array.isArray(detail) && detail[0] && typeof detail[0] === "object" && detail[0] !== null && "msg" in detail[0]) {
+      return String((detail[0] as { msg: string }).msg);
+    }
+  } catch {
+    //
+  }
+
+  return `${fallback} (HTTP ${response.status})`;
+}
+
 export function SettingsPage({
   summary,
   currentUser,
@@ -27,6 +62,8 @@ export function SettingsPage({
 }) {
   const profiles = summary?.activitySummary.profiles ?? [];
   const aliases = summary?.activitySummary.authorAliases ?? [];
+  const canManageSettings = currentUser.role === "admin" || currentUser.role === "editor";
+  const avatarSettingsLockedTitle = "Only editors and admins can change GitHub avatar cache settings.";
   const [settingsTab, setSettingsTabState] = useState<SettingsTab>(() => loadSavedSettingsTab());
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
@@ -43,6 +80,9 @@ export function SettingsPage({
   const [meetingSummaryRecipient, setMeetingSummaryRecipient] = useState(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
   const [meetingAudioRetention, setMeetingAudioRetention] = useState(String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0));
   const [meetingSummaryPrompt, setMeetingSummaryPrompt] = useState(summary?.discordSettings.meetingSummaryPrompt ?? "");
+  const [avatarRefreshCadence, setAvatarRefreshCadence] = useState<"week" | "month">(
+    summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month"
+  );
   const [saving, setSaving] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
   const [aliasError, setAliasError] = useState("");
@@ -50,6 +90,8 @@ export function SettingsPage({
   const [pendingAuthorActivityDelete, setPendingAuthorActivityDelete] = useState<PendingAuthorActivityDelete | null>(null);
   const [deleteActivityFieldError, setDeleteActivityFieldError] = useState<Record<string, string>>({});
   const [deleteProfileTarget, setDeleteProfileTarget] = useState<AuthorProfile | null>(null);
+  const [bulkActivityDeletePreset, setBulkActivityDeletePreset] = useState<BulkActivityDeletePreset>("1d");
+  const [bulkActivityDeleteModalOpen, setBulkActivityDeleteModalOpen] = useState(false);
   const [newProfile, setNewProfile] = useState<AuthorProfile>(() => emptyAuthorProfile());
   const [aliasSource, setAliasSource] = useState("");
   const [aliasTarget, setAliasTarget] = useState("");
@@ -113,6 +155,7 @@ export function SettingsPage({
     setMeetingSummaryRecipient(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
     setMeetingAudioRetention(String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0));
     setMeetingSummaryPrompt(summary?.discordSettings.meetingSummaryPrompt ?? "");
+    setAvatarRefreshCadence(summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month");
   }, [summary]);
 
   useEffect(() => {
@@ -263,6 +306,88 @@ export function SettingsPage({
     }
   }
 
+  async function saveAvatarRefreshCadence() {
+    setSaving("avatarCadence");
+    setSaveStatus((items) => ({ ...items, avatarCadence: undefined }));
+
+    try {
+      const response = await apiFetch("/api/v1/settings/avatars", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshCadence: avatarRefreshCadence })
+      });
+
+      if (!response.ok) {
+        throw new Error(await apiErrorDetail(response, "Avatar cadence save failed"));
+      }
+
+      setSaveStatus((items) => ({ ...items, avatarCadence: "saved" }));
+      onSaved();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Avatar cadence save failed";
+      window.alert(message);
+      setSaveStatus((items) => ({ ...items, avatarCadence: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, avatarCadence: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function refreshAllGitHubAvatars() {
+    setSaving("avatar-refresh-all");
+    setSaveStatus((items) => ({ ...items, avatarRefreshAll: undefined }));
+
+    try {
+      const response = await apiFetch("/api/v1/authors/avatars/refresh-all", { method: "POST" });
+
+      if (!response.ok) {
+        throw new Error(await apiErrorDetail(response, "Refresh all avatars failed"));
+      }
+
+      setSaveStatus((items) => ({ ...items, avatarRefreshAll: "saved" }));
+      onSaved();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Refresh all avatars failed";
+      window.alert(message);
+      setSaveStatus((items) => ({ ...items, avatarRefreshAll: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, avatarRefreshAll: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function refreshAuthorGitHubAvatar(rawAuthor: string) {
+    const key = `avatar-refresh:${rawAuthor}`;
+    setSaving(key);
+    setSaveStatus((items) => ({ ...items, [key]: undefined }));
+
+    try {
+      const response = await apiFetch(`/api/v1/authors/${encodeURIComponent(rawAuthor)}/avatar/refresh`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(await apiErrorDetail(response, "Avatar refresh failed"));
+      }
+
+      setSaveStatus((items) => ({ ...items, [key]: "saved" }));
+      onSaved();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Avatar refresh failed";
+      window.alert(message);
+      setSaveStatus((items) => ({ ...items, [key]: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, [key]: undefined }));
+      }, 2500);
+    }
+  }
+
   async function saveInterval() {
     setSaving("interval");
     setSaveStatus((items) => ({ ...items, interval: undefined }));
@@ -399,6 +524,46 @@ export function SettingsPage({
       setSaving(null);
       window.setTimeout(() => {
         setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function executeBulkActivityDeleteAllAuthors(confirmPhrase: string) {
+    setSaving("bulk-delete-all-authors");
+    setSaveStatus((items) => ({ ...items, bulkDeleteAllAuthors: undefined }));
+
+    try {
+      const response = await apiFetch("/api/v1/authors/activity/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          preset: bulkActivityDeletePreset,
+          confirmPhrase
+        })
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(String(payload.detail || "Bulk delete failed"));
+      }
+
+      const data = await response.json().catch(() => ({}));
+
+      if (data.failures?.length) {
+        throw new Error(`Some authors failed: ${JSON.stringify(data.failures)}`);
+      }
+
+      setBulkActivityDeleteModalOpen(false);
+      setSaveStatus((items) => ({ ...items, bulkDeleteAllAuthors: "saved" }));
+      onSaved();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Bulk delete failed";
+      window.alert(message);
+      setSaveStatus((items) => ({ ...items, bulkDeleteAllAuthors: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, bulkDeleteAllAuthors: undefined }));
       }, 2500);
     }
   }
@@ -552,6 +717,7 @@ export function SettingsPage({
       (draft.discordUserId ?? "") !== (profile.discordUserId ?? "") ||
       (draft.discordUsername ?? "") !== (profile.discordUsername ?? "") ||
       (draft.authorColor ?? "") !== (profile.authorColor ?? "") ||
+      (draft.githubUsername ?? "") !== (profile.githubUsername ?? "") ||
       (draft.pluginEnabled ?? true) !== (profile.pluginEnabled ?? true) ||
       (draft.autoBreakEnabled ?? false) !== (profile.autoBreakEnabled ?? false)
     );
@@ -564,6 +730,9 @@ export function SettingsPage({
     globalInterval !== savedGlobalInterval ||
     idleThreshold !== savedIdleThreshold ||
     pluginIngestEnabled !== savedPluginIngestEnabled;
+  const savedAvatarRefreshCadence: "week" | "month" =
+    summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month";
+  const isAvatarCadenceDirty = avatarRefreshCadence !== savedAvatarRefreshCadence;
 
   return (
     <section className="page-section settings-layout">
@@ -743,6 +912,14 @@ export function SettingsPage({
             />
           </label>
           <label>
+            GitHub
+            <input
+              value={newProfile.githubUsername ?? ""}
+              onChange={(event) => setNewProfile((profile) => ({ ...profile, githubUsername: event.target.value }))}
+              placeholder="username"
+            />
+          </label>
+          <label>
             Telegram
             <input
               value={newProfile.telegramUsername ?? ""}
@@ -799,6 +976,7 @@ export function SettingsPage({
               <span>Raw Author</span>
               <span>Display Name</span>
               <span>Team</span>
+              <span>GitHub</span>
               <span>Telegram</span>
               <span>Discord ID</span>
               <span>Discord Name</span>
@@ -813,9 +991,17 @@ export function SettingsPage({
             const deleteProfileKey = `delete-profile:${profile.rawAuthor}`;
             return (
               <div className="profile-row" key={profile.rawAuthor}>
-                <span className="profile-author-cell" title={profile.authorEmail || profile.rawAuthor}>
-                  <strong>{profile.rawAuthor}</strong>
-                  <small>{profile.authorEmail || "-"}</small>
+                <span className="profile-author-cell profile-author-cell--with-avatar" title={profile.authorEmail || profile.rawAuthor}>
+                  <AuthorAvatar
+                    displayName={(draft.displayName || profile.rawAuthor).trim() || profile.rawAuthor}
+                    authorColor={draft.authorColor ?? profile.authorColor}
+                    avatarUrl={draft.avatarUrl ?? profile.avatarUrl}
+                    variant="mini"
+                  />
+                  <span className="profile-author-cell-text">
+                    <strong>{profile.rawAuthor}</strong>
+                    <small>{profile.authorEmail || "-"}</small>
+                  </span>
                 </span>
                 <input
                   value={draft.displayName}
@@ -824,6 +1010,13 @@ export function SettingsPage({
                 <input
                   value={draft.team ?? ""}
                   onChange={(event) => setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, team: event.target.value } }))}
+                />
+                <input
+                  value={draft.githubUsername ?? ""}
+                  onChange={(event) =>
+                    setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, githubUsername: event.target.value } }))
+                  }
+                  placeholder="username"
                 />
                 <input
                   value={draft.telegramUsername ?? ""}
@@ -885,107 +1078,258 @@ export function SettingsPage({
           </div>
         </div>
       </div>
+      <div className="settings-card-row settings-author-avatars-delete-row">
+        <div className="panel github-avatars-panel">
+        <h2>GitHub avatars</h2>
+        <p className="settings-caption">
+          Profile pictures are cached from GitHub when a login is set. Use the buttons below to fetch the latest image immediately.
+          Between manual refreshes, cached images renew automatically at the start of a new calendar period (UTC), depending on the setting below.
+          Rows without a GitHub login are skipped.
+        </p>
+        <div className="settings-row github-avatars-toolbar">
+          <label title={canManageSettings ? undefined : avatarSettingsLockedTitle}>
+            Auto-refresh cadence (UTC)
+            <select
+              value={avatarRefreshCadence}
+              onChange={(event) => setAvatarRefreshCadence(event.target.value === "week" ? "week" : "month")}
+              disabled={!canManageSettings}
+            >
+              <option value="week">Week (ISO week)</option>
+              <option value="month">Month</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className={settingsSaveButtonClassName(saveStatus.avatarCadence)}
+            onClick={() => void saveAvatarRefreshCadence()}
+            disabled={saving === "avatarCadence" || !isAvatarCadenceDirty || !canManageSettings}
+            title={canManageSettings ? undefined : avatarSettingsLockedTitle}
+          >
+            {saving === "avatarCadence" ? "Saving..." : saveStatus.avatarCadence === "saved" ? "Saved" : saveStatus.avatarCadence === "error" ? "Failed" : "Save"}
+          </button>
+          <button
+            type="button"
+            className={`github-avatars-refresh-all ${settingsSaveButtonClassName(saveStatus.avatarRefreshAll)}`}
+            onClick={() => void refreshAllGitHubAvatars()}
+            disabled={saving === "avatar-refresh-all" || !canManageSettings}
+            title={canManageSettings ? undefined : avatarSettingsLockedTitle}
+          >
+            {saving === "avatar-refresh-all"
+              ? "Refreshing..."
+              : saveStatus.avatarRefreshAll === "saved"
+                ? "Done"
+                : saveStatus.avatarRefreshAll === "error"
+                  ? "Failed"
+                  : "Refresh avatars for all"}
+          </button>
+        </div>
+        <div className="profile-table-shell profile-table-shell--compact">
+          <div className="profile-table profile-table--github-avatars">
+            <div className="profile-table-head">
+              <span>Raw Author</span>
+              <span>GitHub</span>
+              <span>Actions</span>
+            </div>
+            {profiles.map((profile) => {
+              const draft = drafts[profile.rawAuthor] ?? profile;
+              const githubLogin = (draft.githubUsername ?? "").trim();
+              const hasGithub = Boolean(githubLogin);
+              const refreshKey = `avatar-refresh:${profile.rawAuthor}`;
+              return (
+                <div className="profile-row" key={`avatar-refresh:${profile.rawAuthor}`}>
+                  <span className="profile-author-cell profile-author-cell--with-avatar" title={draft.authorEmail || profile.rawAuthor}>
+                    <AuthorAvatar
+                      displayName={(draft.displayName || profile.rawAuthor).trim() || profile.rawAuthor}
+                      authorColor={draft.authorColor ?? profile.authorColor}
+                      avatarUrl={draft.avatarUrl ?? profile.avatarUrl}
+                      variant="mini"
+                    />
+                    <span className="profile-author-cell-text">
+                      <strong>{profile.rawAuthor}</strong>
+                      <small>{draft.authorEmail || profile.authorEmail || "-"}</small>
+                    </span>
+                  </span>
+                  <span className="profile-readonly-cell" title={githubLogin}>
+                    {githubLogin || "—"}
+                  </span>
+                  <div className="profile-actions">
+                    <button
+                      type="button"
+                      className={settingsSaveButtonClassName(saveStatus[refreshKey], true)}
+                      onClick={() => void refreshAuthorGitHubAvatar(profile.rawAuthor)}
+                      disabled={!hasGithub || saving === refreshKey || !canManageSettings}
+                      title={canManageSettings ? undefined : avatarSettingsLockedTitle}
+                    >
+                      {saving === refreshKey
+                        ? "Refreshing..."
+                        : saveStatus[refreshKey] === "saved"
+                          ? "Refreshed"
+                          : saveStatus[refreshKey] === "error"
+                            ? "Failed"
+                            : "Refresh"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
       <div className="panel delete-activity-data-panel">
         <h2>Delete activity data</h2>
         <p className="settings-caption">
           Delete data for today or a custom date range using the controls below. To wipe everything for an author, use <strong>Delete all data</strong> — that opens a separate confirmation step (you must type <strong>delete</strong>). The profile row stays unchanged unless you delete the profile above.
           &quot;Today&quot; uses each author&apos;s timezone when set on the profile; otherwise your browser&apos;s local calendar date.
         </p>
-        <div className="delete-activity-author-list">
-          {profiles.map((profile) => {
-            const actDraft =
-              deleteActivityDrafts[profile.rawAuthor] ?? { mode: "today" as const, rangeStart: "", rangeEnd: "" };
-            const deleteActivityKey = `delete:${profile.rawAuthor}`;
-            return (
-              <div className="delete-activity-author-row" key={`delete-activity:${profile.rawAuthor}`}>
-                <div className="delete-activity-author-meta">
-                  <strong>{profile.displayName || profile.rawAuthor}</strong>
-                  <small>{profile.authorEmail?.trim() ? profile.authorEmail.trim() : "—"}</small>
-                </div>
-                <div className="delete-activity-controls">
-                  <label className="radio-inline">
-                    <input
-                      type="radio"
-                      name={`delete-mode-${profile.rawAuthor}`}
-                      checked={actDraft.mode === "today"}
-                      onChange={() =>
-                        setDeleteActivityDrafts((items) => ({
-                          ...items,
-                          [profile.rawAuthor]: { ...actDraft, mode: "today" }
-                        }))
-                      }
+        <div className="settings-row github-avatars-toolbar delete-activity-bulk-toolbar">
+          <label>
+            Bulk delete for every author (UTC window)
+            <select
+              value={bulkActivityDeletePreset}
+              onChange={(event) => setBulkActivityDeletePreset(event.target.value as BulkActivityDeletePreset)}
+            >
+              <option value="1d">1 calendar day (today UTC)</option>
+              <option value="2d">2 calendar days</option>
+              <option value="3d">3 calendar days</option>
+              <option value="week">7 calendar days</option>
+              <option value="month">30 calendar days</option>
+              <option value="full">All activity history (every author)</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className="primary-button danger-solid-button delete-all-data-solid-button"
+            onClick={() => setBulkActivityDeleteModalOpen(true)}
+            disabled={saving === "bulk-delete-all-authors" || profiles.length === 0}
+          >
+            Delete for all authors…
+          </button>
+        </div>
+        <div className="profile-table-shell profile-table-shell--compact">
+          <div className="profile-table profile-table--delete-activity">
+            <div className="profile-table-head">
+              <span>Raw Author</span>
+              <span>Period</span>
+              <span>Actions</span>
+            </div>
+            {profiles.map((profile) => {
+              const actDraft =
+                deleteActivityDrafts[profile.rawAuthor] ?? { mode: "today" as const, rangeStart: "", rangeEnd: "" };
+              const deleteActivityKey = `delete:${profile.rawAuthor}`;
+              const draft = drafts[profile.rawAuthor] ?? profile;
+              return (
+                <div className="profile-row" key={`delete-activity:${profile.rawAuthor}`}>
+                  <span className="profile-author-cell profile-author-cell--with-avatar" title={profile.authorEmail || profile.rawAuthor}>
+                    <AuthorAvatar
+                      displayName={(draft.displayName || profile.rawAuthor).trim() || profile.rawAuthor}
+                      authorColor={draft.authorColor ?? profile.authorColor}
+                      avatarUrl={draft.avatarUrl ?? profile.avatarUrl}
+                      variant="mini"
                     />
-                    Today
-                  </label>
-                  <label className="radio-inline">
-                    <input
-                      type="radio"
-                      name={`delete-mode-${profile.rawAuthor}`}
-                      checked={actDraft.mode === "range"}
-                      onChange={() =>
-                        setDeleteActivityDrafts((items) => ({
-                          ...items,
-                          [profile.rawAuthor]: { ...actDraft, mode: "range" }
-                        }))
-                      }
-                    />
-                    Custom range
-                  </label>
-                  {actDraft.mode === "range" ? (
-                    <>
-                      <label>
-                        Start
+                    <span className="profile-author-cell-text">
+                      <strong>{profile.rawAuthor}</strong>
+                      <small>{profile.authorEmail?.trim() ? profile.authorEmail.trim() : "—"}</small>
+                    </span>
+                  </span>
+                  <div className="profile-delete-activity-period-cell">
+                    <div className="delete-activity-controls">
+                      <label className="radio-inline">
                         <input
-                          type="date"
-                          value={actDraft.rangeStart}
-                          onChange={(event) =>
+                          type="radio"
+                          name={`delete-mode-${profile.rawAuthor}`}
+                          checked={actDraft.mode === "today"}
+                          onChange={() =>
                             setDeleteActivityDrafts((items) => ({
                               ...items,
-                              [profile.rawAuthor]: { ...actDraft, rangeStart: event.target.value }
+                              [profile.rawAuthor]: { ...actDraft, mode: "today" }
                             }))
                           }
                         />
+                        Today
                       </label>
-                      <label>
-                        End
+                      <label className="radio-inline">
                         <input
-                          type="date"
-                          value={actDraft.rangeEnd}
-                          onChange={(event) =>
+                          type="radio"
+                          name={`delete-mode-${profile.rawAuthor}`}
+                          checked={actDraft.mode === "range"}
+                          onChange={() =>
                             setDeleteActivityDrafts((items) => ({
                               ...items,
-                              [profile.rawAuthor]: { ...actDraft, rangeEnd: event.target.value }
+                              [profile.rawAuthor]: { ...actDraft, mode: "range" }
                             }))
                           }
                         />
+                        Custom range
                       </label>
-                    </>
-                  ) : null}
-                  <button
-                    type="button"
-                    className={`${settingsSaveButtonClassName(saveStatus[deleteActivityKey], true)} danger-button`}
-                    onClick={() => requestAuthorActivityDelete(profile)}
-                    disabled={saving === deleteActivityKey}
-                  >
-                    {saving === deleteActivityKey ? "Deleting..." : saveStatus[deleteActivityKey] === "error" ? "Failed" : "Delete"}
-                  </button>
-                  <button
-                    type="button"
-                    className="primary-button danger-solid-button delete-all-data-solid-button"
-                    onClick={() => requestAuthorDeleteAllActivity(profile)}
-                    disabled={saving === deleteActivityKey}
-                  >
-                    Delete all data
-                  </button>
+                      {actDraft.mode === "range" ? (
+                        <>
+                          <label>
+                            Start
+                            <input
+                              type="date"
+                              value={actDraft.rangeStart}
+                              onChange={(event) =>
+                                setDeleteActivityDrafts((items) => ({
+                                  ...items,
+                                  [profile.rawAuthor]: { ...actDraft, rangeStart: event.target.value }
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            End
+                            <input
+                              type="date"
+                              value={actDraft.rangeEnd}
+                              onChange={(event) =>
+                                setDeleteActivityDrafts((items) => ({
+                                  ...items,
+                                  [profile.rawAuthor]: { ...actDraft, rangeEnd: event.target.value }
+                                }))
+                              }
+                            />
+                          </label>
+                        </>
+                      ) : null}
+                    </div>
+                    {deleteActivityFieldError[profile.rawAuthor] ? (
+                      <p className="alert-text delete-activity-row-error">{deleteActivityFieldError[profile.rawAuthor]}</p>
+                    ) : null}
+                  </div>
+                  <div className="profile-actions">
+                    <button
+                      type="button"
+                      className={`${settingsSaveButtonClassName(saveStatus[deleteActivityKey], true)} danger-button`}
+                      onClick={() => requestAuthorActivityDelete(profile)}
+                      disabled={saving === deleteActivityKey}
+                    >
+                      {saving === deleteActivityKey ? "Deleting..." : saveStatus[deleteActivityKey] === "error" ? "Failed" : "Delete"}
+                    </button>
+                    <button
+                      type="button"
+                      className="primary-button danger-solid-button delete-all-data-solid-button"
+                      onClick={() => requestAuthorDeleteAllActivity(profile)}
+                      disabled={saving === deleteActivityKey}
+                    >
+                      Delete all data
+                    </button>
+                  </div>
                 </div>
-                {deleteActivityFieldError[profile.rawAuthor] ? (
-                  <p className="alert-text delete-activity-row-error">{deleteActivityFieldError[profile.rawAuthor]}</p>
-                ) : null}
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
+      </div>
+      {bulkActivityDeleteModalOpen ? (
+        <BulkAllAuthorsActivityDeleteModal
+          preset={bulkActivityDeletePreset}
+          authorCount={profiles.length}
+          saving={saving === "bulk-delete-all-authors"}
+          onCancel={() => setBulkActivityDeleteModalOpen(false)}
+          onDelete={(confirmPhrase) => void executeBulkActivityDeleteAllAuthors(confirmPhrase)}
+        />
+      ) : null}
       {pendingAuthorActivityDelete?.mode === "range" ? (
         <AuthorDeleteConfirm
           profile={pendingAuthorActivityDelete.profile}

@@ -1,5 +1,6 @@
 import type { AuthorAlert, AuthorRow } from "../types/dashboard";
-import { alertAuthorCardClassName, alertCardClassName, alertCountBadgeClassName, alertKey, alertSeverityBadgeClassName, authorStatusBadgeClassName, avatarStyle, compareAlertAuthors, formatAlertValue, formatAuthorStatus, initials } from "./pageHelpers";
+import { AuthorAvatar } from "../components/AuthorAvatar";
+import { alertAuthorCardClassName, alertCardClassName, alertCountBadgeClassName, alertKey, alertSeverityBadgeClassName, authorStatusBadgeClassName, compareAlertAuthors, formatAlertValue, formatAuthorStatus } from "./pageHelpers";
 import { AlertSummaryMetric } from "../components/alerts/AlertSummaryMetric";
 export function AlertsPage({ authors }: { authors: AuthorRow[] }) {
   const sortedAuthors = [...authors].sort(compareAlertAuthors);
@@ -79,7 +80,7 @@ export function AlertsPage({ authors }: { authors: AuthorRow[] }) {
           return (
             <article className={alertAuthorCardClassName(stats)} key={author.rawAuthor}>
               <div className="alert-author-header">
-                <span className="avatar" style={avatarStyle(author.authorColor)}>{initials(author.displayName)}</span>
+                <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
                 <div>
                   <strong>{author.displayName}</strong>
                   <small>{author.authorEmail || author.rawAuthor}</small>

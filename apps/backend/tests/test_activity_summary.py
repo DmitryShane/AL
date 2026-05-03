@@ -1,7 +1,10 @@
 import datetime as dt
 import re
+import tempfile
 import unicodedata
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from al_backend.discord_author_mappings import apply_discord_author_mappings
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, meeting_summary_sections, render_meeting_summary_prompt
@@ -246,6 +249,7 @@ def fake_repository() -> Any:
     repo: Any = BackendServices.__new__(BackendServices)
     repo.db = FakeDb()
     repo.default_send_interval_seconds = 60
+    repo.avatar_cache_dir = Path(tempfile.mkdtemp())
     return repo
 
 
@@ -856,6 +860,25 @@ def test_manual_profile_is_listed_before_activity_and_can_receive_email():
     repo.update_author_email("Future Artist", "future@example.com")
 
     assert repo.author_profiles()[0]["authorEmail"] == "future@example.com"
+
+
+def test_author_profile_github_username_sets_avatar_url():
+    repo = fake_repository()
+
+    repo.upsert_author_profile(
+        raw_author="Test Dev",
+        display_name="Test Dev",
+        team="",
+        telegram_username=None,
+        plugin_enabled=True,
+        author_color="#13a37b",
+        github_username="OctoCat",
+    )
+
+    profiles = repo.author_profiles()
+    assert len(profiles) == 1
+    assert profiles[0]["githubUsername"] == "OctoCat"
+    assert profiles[0]["avatarUrl"] == f"/api/v1/avatars/author?rawAuthor={quote('Test Dev', safe='')}"
 
 
 def test_cyrillic_author_names_are_unicode_normalized_for_profile_matching():

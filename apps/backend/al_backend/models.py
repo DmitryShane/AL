@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -101,6 +101,16 @@ class AuthorProfileIn(ApiModel):
     auto_break_enabled: bool = Field(default=False, alias="autoBreakEnabled")
     auto_break_effective_date: str | None = Field(default=None, alias="autoBreakEffectiveDate")
     author_color: str | None = Field(default=None, alias="authorColor")
+    github_username: str | None = Field(default=None, alias="githubUsername")
+
+
+class AvatarSettingsIn(ApiModel):
+    refresh_cadence: str = Field(alias="refreshCadence", min_length=1)
+
+
+class BulkAuthorsActivityDeleteIn(ApiModel):
+    preset: Literal["1d", "2d", "3d", "week", "month", "full"]
+    confirm_phrase: str = Field(alias="confirmPhrase", min_length=1)
 
 
 class AuthorAliasIn(ApiModel):

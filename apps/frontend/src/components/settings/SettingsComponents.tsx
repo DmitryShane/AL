@@ -498,7 +498,8 @@ function emptyAuthorProfile(): AuthorProfile {
     pluginEnabled: true,
     autoBreakEnabled: false,
     autoBreakEffectiveDate: "",
-    authorColor: "#13a37b"
+    authorColor: "#13a37b",
+    githubUsername: ""
   };
 }
 
@@ -513,7 +514,8 @@ function authorProfilePayload(profile: AuthorProfile) {
     pluginEnabled: profile.pluginEnabled ?? true,
     autoBreakEnabled: profile.autoBreakEnabled ?? false,
     autoBreakEffectiveDate: profile.autoBreakEffectiveDate ?? "",
-    authorColor: profile.authorColor ?? "#13a37b"
+    authorColor: profile.authorColor ?? "#13a37b",
+    githubUsername: profile.githubUsername ?? ""
   };
 }
 

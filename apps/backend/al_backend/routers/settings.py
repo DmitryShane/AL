@@ -5,10 +5,19 @@ from fastapi import APIRouter, Depends, Request
 from ..api_security import require_discord_bot_secret, require_permission
 from ..container import BackendServices
 from ..dependencies import get_settings_service
-from ..models import DiscordSettingsIn, IntervalSettingsIn
+from ..models import AvatarSettingsIn, DiscordSettingsIn, IntervalSettingsIn
 
 
 router = APIRouter()
+
+
+@router.put("/api/v1/settings/avatars")
+def update_avatar_settings(
+    settings_in: AvatarSettingsIn,
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.upsert_avatar_settings(settings_in.refresh_cadence)
 
 
 @router.put("/api/v1/settings/intervals")

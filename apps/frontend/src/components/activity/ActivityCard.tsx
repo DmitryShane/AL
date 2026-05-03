@@ -1,10 +1,9 @@
 import type { AuthorRow } from "../../types/dashboard";
+import { AuthorAvatar } from "../AuthorAvatar";
 import {
   authorCardClassName,
   authorCardProductivityTone,
-  avatarStyle,
   formatDuration,
-  initials,
   productivityTone
 } from "../../pages/pageHelpers";
 
@@ -22,7 +21,7 @@ export function ActivityCard({ author, active, onSelect }: ActivityCardProps) {
     >
       <span className="author-card-status" aria-hidden="true" />
       <span className="author-card-identity">
-        <span className="avatar" style={avatarStyle(author.authorColor)}>{initials(author.displayName)}</span>
+        <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
         {productivityTone(author.productivity) === "overdrive" ? <span className="overdrive-author-text">Are you human?</span> : null}
       </span>
       <strong>{author.displayName}</strong>
