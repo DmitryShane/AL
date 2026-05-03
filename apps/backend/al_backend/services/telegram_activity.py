@@ -818,6 +818,9 @@ class TelegramActivityService:
         status: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        if hasattr(self, "_should_materialize_aggregate_date") and not self._should_materialize_aggregate_date(event_date, raw_author):
+            return
+
         deltas = _empty_event_deltas()
         self.db.report_rows.insert_one(
             {
@@ -937,7 +940,17 @@ class TelegramActivityService:
             )
 
     def _materialize_status_report_rows(self) -> None:
-        for event in self.db.status_events.find({}, {"_id": 0}).sort("transitionAt", ASCENDING):
+        target_dates = getattr(self, "_aggregate_rebuild_target_dates", None)
+        target_authors = getattr(self, "_aggregate_rebuild_target_authors", None)
+        query: dict[str, Any] = {}
+
+        if target_dates is not None:
+            query["date"] = {"$in": sorted(target_dates)}
+
+        if target_authors:
+            query["rawAuthor"] = {"$in": sorted(target_authors)}
+
+        for event in self.db.status_events.find(query, {"_id": 0}).sort("transitionAt", ASCENDING):
             self._insert_status_report_row(event)
 
     def _insert_status_report_row(self, event: dict[str, Any]) -> None:
@@ -949,6 +962,9 @@ class TelegramActivityService:
         event_date = str(event.get("date") or _telegram_event_date(transition_at, time_zone_id))
 
         if event_type not in {"offline", "online"}:
+            return
+
+        if hasattr(self, "_should_materialize_aggregate_date") and not self._should_materialize_aggregate_date(event_date, raw_author):
             return
 
         self.db.report_rows.delete_many(

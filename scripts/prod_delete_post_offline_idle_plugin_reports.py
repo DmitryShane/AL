@@ -204,6 +204,7 @@ def main() -> None:
         raw_deleted = 0
         snap_deleted = 0
         report_ids_to_remove: list[Any] = []
+        affected_dates: set[str] = set()
         skipped: list[dict[str, Any]] = []
 
         for row in by_id.values():
@@ -212,9 +213,11 @@ def main() -> None:
             if got_raw:
                 raw_deleted += 1
                 report_ids_to_remove.append(row["_id"])
+                affected_dates.add(str(row.get("date") or ""))
             elif got_snap:
                 snap_deleted += 1
                 report_ids_to_remove.append(row["_id"])
+                affected_dates.add(str(row.get("date") or ""))
             else:
                 skipped.append(row)
 
@@ -235,7 +238,7 @@ def main() -> None:
         res = repo.db.report_rows.delete_many({"_id": {"$in": report_ids_to_remove}})
         print(
             f"post_offline_idle_reports: raw_or_snap_batches={raw_deleted} snapshots={snap_deleted} "
-            f"report_rows_deleted={res.deleted_count} skipped={len(skipped)}"
+            f"report_rows_deleted={res.deleted_count} skipped={len(skipped)} affected_dates={sorted(affected_dates)}"
         )
 
         if skipped:
@@ -250,8 +253,9 @@ def main() -> None:
 
             if len(skipped) > 15:
                 print(f"post_offline_idle_reports: ... {len(skipped) - 15} more skips")
-        print("post_offline_idle_reports: starting rebuild_aggregates_if_needed(force=True) …")
-        repo.rebuild_aggregates_if_needed(force=True)
+        print("post_offline_idle_reports: starting scoped rebuild for affected dates …")
+        for day in sorted(day for day in affected_dates if day):
+            repo.rebuild_aggregates_for_dates(day)
         print("post_offline_idle_reports: rebuild finished")
     finally:
         container.close()

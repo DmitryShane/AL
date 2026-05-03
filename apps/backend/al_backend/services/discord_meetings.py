@@ -176,6 +176,9 @@ class DiscordMeetingService:
         channel_id: str | None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        if hasattr(self, "_should_materialize_aggregate_date") and not self._should_materialize_aggregate_date(event_date, raw_author):
+            return
+
         deltas = _empty_event_deltas()
         self.db.report_rows.insert_one(
             {

@@ -188,6 +188,7 @@ class FakeDb:
         self.author_aliases = FakeCollection()
         self.activity_snapshots = FakeCollection()
         self.aggregate_metadata = FakeCollection()
+        self.aggregate_day_state = FakeCollection()
         self.break_events = FakeCollection()
         self.break_sessions = FakeCollection()
         self.day_sessions = FakeCollection()
@@ -2188,6 +2189,144 @@ def test_rebuild_keeps_cross_source_idle_out_of_unity_rows():
     )
     assert unity_daily is not None
     assert unity_daily["idleSeconds"] == 0
+
+
+def test_scoped_rebuild_rebuilds_only_selected_date():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "date": "2026-05-01",
+            "activeSeconds": 123,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "date": "2026-05-01",
+            "activeDeltaSeconds": 123,
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "date": "2026-05-02",
+            "activeSeconds": 999,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "date": "2026-05-02",
+            "activeDeltaSeconds": 999,
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "scoped-focus",
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "deviceId": "mac-mini",
+            "date": "2026-05-02",
+            "eventType": "focus",
+            "occurredAtUtc": dt.datetime(2026, 5, 2, 8, 0, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-05-02T08:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 8, 0, 1, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "scoped-save",
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "deviceId": "mac-mini",
+            "date": "2026-05-02",
+            "eventType": "file_saved",
+            "occurredAtUtc": dt.datetime(2026, 5, 2, 8, 2, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-05-02T08:02:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 8, 2, 1, tzinfo=dt.UTC),
+        }
+    )
+
+    result = repo.rebuild_aggregates_for_dates("2026-05-02")
+
+    previous_day = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-01"})
+    rebuilt_day = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
+    previous_rows = list(repo.db.report_rows.find({"author": "Future Artist", "date": "2026-05-01"}))
+    rebuilt_rows = list(repo.db.report_rows.find({"author": "Future Artist", "date": "2026-05-02", "source": "cur"}))
+
+    assert result["dates"] == ["2026-05-02"]
+    assert previous_day["activeSeconds"] == 123
+    assert len(previous_rows) == 1
+    assert rebuilt_day["activeSeconds"] == 120
+    assert len(rebuilt_rows) == 1
+    assert rebuilt_rows[0]["activeDeltaSeconds"] == 120
+    assert repo.db.aggregate_day_state.find_one({"author": "Future Artist", "date": "2026-05-02"}) is not None
+
+
+def test_scoped_rebuild_can_limit_authors():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+
+    for author in ("Future Artist", "Other Artist"):
+        repo.db.author_profiles.insert_one({"rawAuthor": author, "displayName": author})
+        repo.db.daily_author_activity.insert_one(
+            {
+                "source": "cur",
+                "author": author,
+                "projectId": "al",
+                "date": "2026-05-02",
+                "activeSeconds": 999,
+            }
+        )
+        repo.db.raw_activity_events.insert_one(
+            {
+                "eventId": f"{author}-focus",
+                "source": "cur",
+                "author": author,
+                "projectId": "al",
+                "deviceId": "mac-mini",
+                "date": "2026-05-02",
+                "eventType": "focus",
+                "occurredAtUtc": dt.datetime(2026, 5, 2, 8, 0, tzinfo=dt.UTC),
+                "occurredAtLocal": "2026-05-02T08:00:00+00:00",
+                "receivedAt": dt.datetime(2026, 5, 2, 8, 0, 1, tzinfo=dt.UTC),
+            }
+        )
+        repo.db.raw_activity_events.insert_one(
+            {
+                "eventId": f"{author}-save",
+                "source": "cur",
+                "author": author,
+                "projectId": "al",
+                "deviceId": "mac-mini",
+                "date": "2026-05-02",
+                "eventType": "file_saved",
+                "occurredAtUtc": dt.datetime(2026, 5, 2, 8, 2, tzinfo=dt.UTC),
+                "occurredAtLocal": "2026-05-02T08:02:00+00:00",
+                "receivedAt": dt.datetime(2026, 5, 2, 8, 2, 1, tzinfo=dt.UTC),
+            }
+        )
+
+    repo.rebuild_aggregates_for_dates("2026-05-02", authors=["Future Artist"])
+
+    rebuilt_author = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02"})
+    untouched_author = repo.db.daily_author_activity.find_one({"author": "Other Artist", "date": "2026-05-02"})
+
+    assert rebuilt_author["activeSeconds"] == 120
+    assert untouched_author["activeSeconds"] == 999
 
 
 def test_rebuild_restores_raw_event_batches_as_single_report_rows():

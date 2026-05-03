@@ -14,8 +14,101 @@ class ActivityAggregationService:
         self.db.report_rows.delete_many({})
         self.db.daily_author_activity.delete_many({})
         self.db.aggregate_session_state.delete_many({})
+        self.db.aggregate_day_state.delete_many({})
+        self._rebuild_aggregates_from_sources()
+        self._persist_aggregate_day_state(sorted(self.db.daily_author_activity.distinct("date")), set())
 
-        snapshots = self.db.activity_snapshots.find({}).sort("receivedAt", ASCENDING)
+        self.db.aggregate_metadata.update_one(
+            {"kind": "activity"},
+            {"$set": {"kind": "activity", "version": self.aggregates_version, "rebuiltAt": dt.datetime.now(dt.UTC)}},
+            upsert=True,
+        )
+        self._daily_consumed_microseconds_cache = None
+
+    def rebuild_aggregates_for_dates(
+        self,
+        start_date: str,
+        end_date: str | None = None,
+        authors: list[str] | tuple[str, ...] | set[str] | None = None,
+        dates: list[str] | tuple[str, ...] | set[str] | None = None,
+    ) -> dict[str, Any]:
+        target_dates = self._aggregate_rebuild_dates(start_date, end_date, dates)
+        target_authors = {self.resolve_author_alias(str(author or "Unknown User")) for author in (authors or []) if str(author or "").strip()}
+        scoped_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
+        raw_author_query = self._aggregate_rebuild_query(target_dates, target_authors, "rawAuthor")
+        deleted_report_rows = self.db.report_rows.delete_many(scoped_query).deleted_count
+        deleted_daily = self.db.daily_author_activity.delete_many(scoped_query).deleted_count
+        deleted_state = self.db.aggregate_session_state.delete_many(scoped_query).deleted_count
+        deleted_day_state = self.db.aggregate_day_state.delete_many(scoped_query).deleted_count
+
+        for day in target_dates:
+            if target_authors:
+                for author in target_authors:
+                    deleted_state += self.db.aggregate_session_state.delete_many(
+                        {"_id": {"$regex": f"(^|\\|){re.escape(author)}\\|.*{re.escape(day)}(\\||$)"}}
+                    ).deleted_count
+            else:
+                deleted_state += self.db.aggregate_session_state.delete_many({"_id": {"$regex": f"(^|\\|){re.escape(day)}(\\||$)"}}).deleted_count
+
+        previous_dates = getattr(self, "_aggregate_rebuild_target_dates", None)
+        previous_authors = getattr(self, "_aggregate_rebuild_target_authors", None)
+        self._aggregate_rebuild_target_dates = set(target_dates)
+        self._aggregate_rebuild_target_authors = set(target_authors)
+        self._daily_consumed_microseconds_cache = {}
+
+        try:
+            self._rebuild_aggregates_from_sources(set(target_dates), target_authors)
+        finally:
+            self._aggregate_rebuild_target_dates = previous_dates
+            self._aggregate_rebuild_target_authors = previous_authors
+            self._daily_consumed_microseconds_cache = None
+
+        state_count = self._persist_aggregate_day_state(target_dates, target_authors)
+        return {
+            "ok": True,
+            "dates": target_dates,
+            "authors": sorted(target_authors),
+            "deletedReportRows": deleted_report_rows,
+            "deletedDailyAuthorActivity": deleted_daily,
+            "deletedAggregateSessionState": deleted_state,
+            "deletedAggregateDayState": deleted_day_state,
+            "capturedAggregateDayState": state_count,
+            "rawAuthorQuery": raw_author_query,
+        }
+
+    def rebuild_aggregates_for_author_dates(self, authors: list[str] | tuple[str, ...] | set[str]) -> dict[str, Any]:
+        raw_authors = {str(author or "Unknown User") for author in authors if str(author or "").strip()}
+        dates: set[str] = set()
+
+        for collection, author_field in (
+            (self.db.activity_snapshots, "author"),
+            (self.db.raw_activity_events, "author"),
+            (self.db.break_events, "rawAuthor"),
+            (self.db.meeting_events, "rawAuthor"),
+            (self.db.status_events, "rawAuthor"),
+            (self.db.daily_author_activity, "author"),
+            (self.db.report_rows, "author"),
+        ):
+            for day in collection.distinct("date", {author_field: {"$in": sorted(raw_authors)}}):
+                if day:
+                    dates.add(str(day))
+
+        if not dates:
+            return {"ok": True, "dates": [], "authors": sorted(raw_authors)}
+
+        # Alias changes can move raw authors between display authors, so rebuild whole affected dates.
+        return self.rebuild_aggregates_for_dates(sorted(dates)[0], dates=sorted(dates))
+
+    def _rebuild_aggregates_from_sources(
+        self,
+        target_dates: set[str] | None = None,
+        target_authors: set[str] | None = None,
+    ) -> None:
+        snapshot_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
+        raw_author_query = self._aggregate_rebuild_query(target_dates, target_authors, "rawAuthor")
+        raw_event_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
+
+        snapshots = self.db.activity_snapshots.find(snapshot_query).sort("receivedAt", ASCENDING)
 
         for snapshot in snapshots:
             self._apply_snapshot_to_aggregates(snapshot)
@@ -26,9 +119,8 @@ class ActivityAggregationService:
             if batch.get("batchId")
         }
         batch_delta_items_by_batch_id: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
-        last_event_by_batch_id: dict[str, dict[str, Any]] = {}
         orphan_report_rows: list[dict[str, Any]] = []
-        raw_events = self.db.raw_activity_events.find({}).sort("occurredAtUtc", ASCENDING)
+        raw_events = self.db.raw_activity_events.find(raw_event_query).sort("occurredAtUtc", ASCENDING)
 
         for event in raw_events:
             deltas = self._apply_raw_event_to_aggregates(event)
@@ -37,7 +129,6 @@ class ActivityAggregationService:
             if batch_id and batch_id in batch_ids:
                 batch_delta_items = batch_delta_items_by_batch_id.setdefault(batch_id, [])
                 batch_delta_items.append((event, deltas))
-                last_event_by_batch_id[batch_id] = event
                 continue
 
             if not _has_time_delta(deltas):
@@ -71,10 +162,19 @@ class ActivityAggregationService:
 
         for batch in self.db.raw_event_batches.find({}).sort("receivedAt", ASCENDING):
             batch_id = str(batch.get("batchId") or "")
+
+            if target_dates is not None and batch_id not in batch_delta_items_by_batch_id:
+                continue
+
             author = str(batch.get("author") or "Unknown User")
             cutoff = last_report_time_by_author.get(author)
             rows = self._build_event_batch_report_rows(batch, batch_delta_items_by_batch_id.get(batch_id, []), cutoff)
-            _insert_many_if_supported(self.db.report_rows, rows)
+            materialized_rows = [
+                row
+                for row in rows
+                if self._should_materialize_aggregate_date(str(row.get("date") or ""), str(row.get("author") or "Unknown User"))
+            ]
+            _insert_many_if_supported(self.db.report_rows, materialized_rows)
 
             for row in rows:
                 row_time = _report_row_time(row)
@@ -84,7 +184,7 @@ class ActivityAggregationService:
 
         _insert_many_if_supported(self.db.report_rows, orphan_report_rows)
 
-        for event in self.db.break_events.find({}).sort("timestamp", ASCENDING):
+        for event in self.db.break_events.find(raw_author_query).sort("timestamp", ASCENDING):
             event_time = _coerce_datetime(event.get("timestamp"))
 
             if not event_time:
@@ -103,7 +203,7 @@ class ActivityAggregationService:
                 str(event.get("eventType") or "telegram"),
             )
 
-        for event in self.db.meeting_events.find({}).sort("timestamp", ASCENDING):
+        for event in self.db.meeting_events.find(raw_author_query).sort("timestamp", ASCENDING):
             event_time = _coerce_datetime(event.get("timestamp"))
 
             if not event_time:
@@ -127,12 +227,96 @@ class ActivityAggregationService:
 
         self._materialize_status_report_rows()
 
-        self.db.aggregate_metadata.update_one(
-            {"kind": "activity"},
-            {"$set": {"kind": "activity", "version": self.aggregates_version, "rebuiltAt": dt.datetime.now(dt.UTC)}},
-            upsert=True,
-        )
-        self._daily_consumed_microseconds_cache = None
+    def _aggregate_rebuild_dates(
+        self,
+        start_date: str,
+        end_date: str | None,
+        dates: list[str] | tuple[str, ...] | set[str] | None,
+    ) -> list[str]:
+        if dates:
+            values = sorted({str(value) for value in dates if str(value or "").strip()})
+
+            for value in values:
+                dt.date.fromisoformat(value)
+
+            return values
+
+        start = dt.date.fromisoformat(start_date)
+        end = dt.date.fromisoformat(end_date or start_date)
+
+        if end < start:
+            raise ValueError("end_date must be greater than or equal to start_date")
+
+        days: list[str] = []
+        current = start
+
+        while current <= end:
+            days.append(current.isoformat())
+            current += dt.timedelta(days=1)
+
+        return days
+
+    def _aggregate_rebuild_query(
+        self,
+        target_dates: set[str] | list[str] | tuple[str, ...] | None,
+        target_authors: set[str] | None,
+        author_field: str,
+    ) -> dict[str, Any]:
+        query: dict[str, Any] = {}
+
+        if target_dates is not None:
+            query["date"] = {"$in": sorted(target_dates)}
+
+        if target_authors:
+            query[author_field] = {"$in": sorted(target_authors)}
+
+        return query
+
+    def _should_materialize_aggregate_date(self, day_date: str, author: str | None = None) -> bool:
+        target_dates = getattr(self, "_aggregate_rebuild_target_dates", None)
+
+        if target_dates is not None and day_date not in target_dates:
+            return False
+
+        target_authors = getattr(self, "_aggregate_rebuild_target_authors", None)
+
+        if target_authors and self.resolve_author_alias(author or "Unknown User") not in target_authors:
+            return False
+
+        return True
+
+    def _persist_aggregate_day_state(self, target_dates: list[str], target_authors: set[str]) -> int:
+        captured = 0
+        now = dt.datetime.now(dt.UTC)
+
+        for state in self.db.aggregate_session_state.find({}):
+            state_date = str(state.get("date") or "")
+
+            if state_date not in target_dates:
+                continue
+
+            state_author = self.resolve_author_alias(str(state.get("author") or "Unknown User"))
+
+            if target_authors and state_author not in target_authors:
+                continue
+
+            state_id = str(state.get("_id") or "")
+            self.db.aggregate_day_state.update_one(
+                {"date": state_date, "author": state_author, "stateId": state_id},
+                {
+                    "$set": {
+                        "date": state_date,
+                        "author": state_author,
+                        "stateId": state_id,
+                        "state": dict(state),
+                        "rebuiltAt": now,
+                    },
+                },
+                upsert=True,
+            )
+            captured += 1
+
+        return captured
 
     def _apply_snapshot_to_aggregates(self, snapshot: dict[str, Any]) -> None:
         snapshot = dict(snapshot)
@@ -141,22 +325,32 @@ class ActivityAggregationService:
         session_key = _session_key(snapshot)
         previous = self.db.aggregate_session_state.find_one({"_id": session_key}) or {}
         deltas = _build_deltas(snapshot, previous.get("snapshot", {}))
+        materialize = self._should_materialize_aggregate_date(str(snapshot.get("date") or ""), str(snapshot.get("author") or "Unknown User"))
         if self._should_suppress_post_offline_plugin_deltas(snapshot, deltas):
             self.db.aggregate_session_state.update_one(
                 {"_id": session_key},
-                {"$set": {"snapshot": _state_snapshot(snapshot), "updatedAt": snapshot.get("receivedAt", dt.datetime.now(dt.UTC))}},
+                {
+                    "$set": {
+                        "author": snapshot.get("author") or "Unknown User",
+                        "date": snapshot.get("date") or "",
+                        "snapshot": _state_snapshot(snapshot),
+                        "updatedAt": snapshot.get("receivedAt", dt.datetime.now(dt.UTC)),
+                    }
+                },
                 upsert=True,
             )
             return
 
-        row = dict(snapshot)
-        row.update(deltas)
-        row["snapshotKey"] = session_key
-        self.db.report_rows.insert_one(row)
-        self._update_daily_author_activity(snapshot, deltas)
+        if materialize:
+            row = dict(snapshot)
+            row.update(deltas)
+            row["snapshotKey"] = session_key
+            self.db.report_rows.insert_one(row)
+            self._update_daily_author_activity(snapshot, deltas)
+
         received_at = _coerce_datetime(snapshot.get("receivedAt")) or dt.datetime.now(dt.UTC)
         report_time = _coerce_datetime(snapshot.get("recordedAt") or snapshot.get("lastRecordedAt") or snapshot.get("receivedAt")) or received_at
-        if _has_active_or_overtime_delta(deltas):
+        if materialize and _has_active_or_overtime_delta(deltas):
             self._schedule_telegram_break_activity_prompt_if_needed(
                 str(snapshot.get("author") or "Unknown User"),
                 str(snapshot.get("date") or ""),
@@ -164,7 +358,7 @@ class ActivityAggregationService:
                 report_time,
             )
 
-        if _has_time_delta(deltas):
+        if materialize and _has_time_delta(deltas):
             self._schedule_telegram_online_prompt_if_needed(
                 str(snapshot.get("author") or "Unknown User"),
                 str(snapshot.get("date") or ""),
@@ -173,7 +367,14 @@ class ActivityAggregationService:
             )
         self.db.aggregate_session_state.update_one(
             {"_id": session_key},
-            {"$set": {"snapshot": _state_snapshot(snapshot), "updatedAt": snapshot.get("receivedAt", dt.datetime.now(dt.UTC))}},
+            {
+                "$set": {
+                    "author": snapshot.get("author") or "Unknown User",
+                    "date": snapshot.get("date") or "",
+                    "snapshot": _state_snapshot(snapshot),
+                    "updatedAt": snapshot.get("receivedAt", dt.datetime.now(dt.UTC)),
+                }
+            },
             upsert=True,
         )
 
@@ -454,8 +655,9 @@ class ActivityAggregationService:
             "workWindowSeconds": DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
         }
         suppress_deltas = self._should_suppress_post_offline_plugin_deltas(event, deltas)
+        materialize = self._should_materialize_aggregate_date(str(snapshot.get("date") or ""), str(snapshot.get("author") or "Unknown User"))
 
-        if not suppress_deltas:
+        if not suppress_deltas and materialize:
             self._update_daily_author_activity(snapshot, deltas)
             cache = getattr(self, "_daily_consumed_microseconds_cache", None)
 
@@ -475,6 +677,8 @@ class ActivityAggregationService:
             {"_id": state_key},
             {
                 "$set": {
+                    "author": event.get("author") or "Unknown User",
+                    "date": event.get("date") or "",
                     "state": {
                         "firstActivityAt": first_activity_at.isoformat() if first_activity_at else None,
                         "lastActivityAt": last_activity_at.isoformat() if last_activity_at else None,
@@ -494,6 +698,8 @@ class ActivityAggregationService:
             {"_id": author_state_key},
             {
                 "$set": {
+                    "author": event.get("author") or "Unknown User",
+                    "date": event.get("date") or "",
                     "state": {
                         "firstActivityAt": author_first_activity_at.isoformat() if author_first_activity_at else None,
                         "lastActivityAt": author_last_activity_at.isoformat() if author_last_activity_at else None,
@@ -512,6 +718,7 @@ class ActivityAggregationService:
 
         if (
             not suppress_deltas
+            and materialize
             and overtime_window is None
             and consumed_normal_microseconds >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
         ):

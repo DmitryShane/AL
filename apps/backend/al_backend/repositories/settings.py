@@ -100,7 +100,7 @@ class SettingsRepository:
             upsert=True,
         )
         self.db.author_profiles.delete_many({"rawAuthor": source})
-        self.rebuild_aggregates_if_needed(force=True)
+        self.rebuild_aggregates_for_author_dates([source, target])
         return {"ok": True, "alias": {"sourceRawAuthor": source, "targetRawAuthor": target}}
 
     def delete_author_alias(self, source_raw_author: str) -> dict[str, Any]:
@@ -110,7 +110,7 @@ class SettingsRepository:
             return {"ok": False, "error": "Source author is required"}
 
         result = self.db.author_aliases.delete_one({"sourceRawAuthor": source})
-        self.rebuild_aggregates_if_needed(force=True)
+        self.rebuild_aggregates_for_author_dates([source])
         return {"ok": True, "deleted": getattr(result, "deleted_count", 0)}
 
     def upsert_interval_settings(

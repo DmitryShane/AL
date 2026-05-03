@@ -117,12 +117,16 @@ Use grey offline for authors who have not started their current workday yet, aut
 
 Production runs at `activity.mempic.com`. When the user asks to pull production data locally, use SSH as `root@activity.mempic.com` and treat MongoDB dumps as sensitive data.
 
-- In owner chat, phrases like **"обнови БД"**, **"обнови базу"**, or **"обнови локальную БД"** mean: pull the production MongoDB data and replace the local `al` database using this Production Data Sync flow.
+- In owner chat, phrases like **"обнови БД"**, **"обнови базу"**, or **"обнови локальную БД"** mean: first ask which scope to sync from production before running anything: **today**, **week**, or **full database**. Do not infer the scope.
+- If the owner asks for a production database rebuild, first offer the scope choice: **today**, **specific day**, or **full history**. The safe/default production rebuild scope is **today only**, across all authors.
+- Never run a full-history production aggregate rebuild by default. Only run a full production rebuild when the owner explicitly asks to rebuild the entire production history.
+- If the available code path only supports `rebuild_aggregates_if_needed(force=True)` as a full-history rebuild, stop instead of running it on production; implement or use a day/date-range scoped rebuild path first.
 - Production env lives in `/etc/al/backend.env`; the current production MongoDB defaults are `AL_MONGO_URI=mongodb://127.0.0.1:27017` and `AL_MONGO_DATABASE=al`.
 - Store dump archives outside the repository, for example under `/tmp/al-prod-sync`. Never commit MongoDB dumps, restored data exports, secrets, or server env files.
 - Do not create a local backup before replacing the local `al` database unless the user explicitly asks for one. Local data is treated as disposable during production sync.
 - Create the production dump on the server with `mongodump --uri="mongodb://127.0.0.1:27017" --db="al" --archive="/tmp/al-prod-$(date +%Y%m%d-%H%M%S).archive.gz" --gzip`, copy it locally with `scp`, then remove the temporary server archive.
 - Restore production data locally with `mongorestore --uri="mongodb://127.0.0.1:27017" --nsInclude="al.*" --drop --archive="<local-prod-dump>.archive.gz" --gzip`.
+- For scoped production syncs, replace only documents in the selected date range locally. Do not drop the entire local `al` database unless the owner selected **full database**.
 - After restore, run `start` or `scripts/start-local.sh`, then verify `http://127.0.0.1:8000/api/v1/health` and `http://127.0.0.1:5173/`.
 - Normal deployment flow is local work followed by push or merge to `main`; `.github/workflows/deploy.yml` deploys `main` to production automatically.
 - Production database changes must never be shipped through git or normal deploy. Only run production imports/restores when the user explicitly asks for that exact operation.

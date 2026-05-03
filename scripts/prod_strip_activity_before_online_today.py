@@ -89,6 +89,7 @@ def main() -> None:
     now_utc = dt.datetime.now(dt.UTC)
     deleted_raw = 0
     deleted_snapshots = 0
+    affected_dates: set[str] = set()
     affected_raw: list[str] = []
     affected_snap: list[str] = []
 
@@ -133,6 +134,7 @@ def main() -> None:
             r_n = int(r_result.deleted_count)
             if r_n > 0:
                 affected_raw.append(raw_author)
+                affected_dates.add(day_str)
                 deleted_raw += r_n
 
             snap_filter = {
@@ -144,17 +146,20 @@ def main() -> None:
             s_n = int(s_result.deleted_count)
             if s_n > 0:
                 affected_snap.append(raw_author)
+                affected_dates.add(day_str)
                 deleted_snapshots += s_n
 
         print(
             "strip_activity_before_online: "
             f"deleted_raw_events={deleted_raw} authors_raw={affected_raw} "
-            f"deleted_snapshots={deleted_snapshots} authors_snap={affected_snap}"
+            f"deleted_snapshots={deleted_snapshots} authors_snap={affected_snap} "
+            f"affected_dates={sorted(affected_dates)}"
         )
 
         if deleted_raw > 0 or deleted_snapshots > 0:
-            print("strip_activity_before_online: starting rebuild_aggregates_if_needed(force=True) …")
-            repo.rebuild_aggregates_if_needed(force=True)
+            print("strip_activity_before_online: starting scoped rebuild for affected dates …")
+            for day in sorted(affected_dates):
+                repo.rebuild_aggregates_for_dates(day)
             print("strip_activity_before_online: rebuild finished")
         else:
             print("strip_activity_before_online: nothing deleted; skip rebuild")
