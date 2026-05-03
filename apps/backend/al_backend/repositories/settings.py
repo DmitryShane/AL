@@ -120,6 +120,7 @@ class SettingsRepository:
         plugin_ingest_enabled: bool | None,
         author: str | None,
         author_send_interval_seconds: int | None,
+        telegram_online_prompt_delay_minutes: int | None = None,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
 
@@ -130,6 +131,13 @@ class SettingsRepository:
 
         if idle_threshold_seconds is not None:
             global_update["idleThresholdSeconds"] = idle_threshold_seconds
+
+        if telegram_online_prompt_delay_minutes is not None:
+            clamped = max(
+                1,
+                min(int(telegram_online_prompt_delay_minutes), MAX_TELEGRAM_ONLINE_PROMPT_DELAY_MINUTES),
+            )
+            global_update["telegramOnlinePromptDelayMinutes"] = clamped
 
         if len(global_update) > 1:
             self.db.interval_settings.update_one(
@@ -162,11 +170,24 @@ class SettingsRepository:
         self.invalidate_activity_summary_cache()
         return self.get_interval_settings()
 
+    def get_telegram_online_prompt_delay_seconds(self) -> int:
+        settings = self.get_interval_settings()
+        return int(settings["telegramOnlinePromptDelayMinutes"]) * 60
+
     def get_interval_settings(self) -> dict[str, Any]:
         global_setting = self.db.interval_settings.find_one({"kind": "global"}) or {}
         author_settings = list(
             self.db.interval_settings.find({"kind": "author"}, {"_id": 0}).sort("author", ASCENDING)
         )
+        raw_minutes = global_setting.get("telegramOnlinePromptDelayMinutes")
+
+        if raw_minutes is None:
+            telegram_online_prompt_delay_minutes = DEFAULT_TELEGRAM_ONLINE_PROMPT_DELAY_MINUTES
+        else:
+            telegram_online_prompt_delay_minutes = max(
+                1,
+                min(int(raw_minutes), MAX_TELEGRAM_ONLINE_PROMPT_DELAY_MINUTES),
+            )
 
         return {
             "defaultSendIntervalSeconds": int(
@@ -174,6 +195,7 @@ class SettingsRepository:
             ),
             "idleThresholdSeconds": int(global_setting.get("idleThresholdSeconds", DEFAULT_IDLE_THRESHOLD_SECONDS)),
             "pluginIngestEnabled": self.get_plugin_ingest_enabled(),
+            "telegramOnlinePromptDelayMinutes": telegram_online_prompt_delay_minutes,
             "authors": author_settings,
         }
 

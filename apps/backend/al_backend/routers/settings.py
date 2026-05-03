@@ -23,6 +23,7 @@ def update_intervals(
         plugin_ingest_enabled=settings_in.plugin_ingest_enabled,
         author=settings_in.author,
         author_send_interval_seconds=settings_in.author_send_interval_seconds,
+        telegram_online_prompt_delay_minutes=settings_in.telegram_online_prompt_delay_minutes,
     )
 
 

@@ -903,6 +903,7 @@ export function loadSavedSettingsTab(): SettingsTab {
     savedTab === "autoBreak" ||
     savedTab === "redirects" ||
     savedTab === "discord" ||
+    savedTab === "telegram" ||
     savedTab === "meetingSummaries" ||
     savedTab === "users"
   ) {

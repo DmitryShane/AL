@@ -53,6 +53,12 @@ class IntervalSettingsIn(ApiModel):
     plugin_ingest_enabled: bool | None = Field(default=None, alias="pluginIngestEnabled")
     author: str | None = None
     author_send_interval_seconds: int | None = Field(default=None, alias="authorSendIntervalSeconds", ge=30)
+    telegram_online_prompt_delay_minutes: int | None = Field(
+        default=None,
+        alias="telegramOnlinePromptDelayMinutes",
+        ge=1,
+        le=1440,
+    )
 
 
 class DiscordSettingsIn(ApiModel):

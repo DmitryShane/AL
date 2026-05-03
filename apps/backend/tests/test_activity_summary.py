@@ -268,6 +268,7 @@ def test_interval_settings_include_independent_idle_threshold():
 
     assert repo.get_interval_settings()["defaultSendIntervalSeconds"] == 60
     assert repo.get_interval_settings()["idleThresholdSeconds"] == 300
+    assert repo.get_interval_settings()["telegramOnlinePromptDelayMinutes"] == 15
 
     result = repo.upsert_interval_settings(
         default_send_interval_seconds=120,
@@ -296,6 +297,23 @@ def test_interval_settings_include_global_plugin_ingest_toggle():
     assert result["pluginIngestEnabled"] is False
     assert repo.get_plugin_ingest_enabled() is False
     assert repo.is_plugin_enabled_for_author("Future Artist") is False
+
+
+def test_interval_settings_persist_telegram_online_prompt_delay_minutes():
+    repo = fake_repository()
+
+    result = repo.upsert_interval_settings(
+        default_send_interval_seconds=None,
+        idle_threshold_seconds=None,
+        plugin_ingest_enabled=None,
+        author=None,
+        author_send_interval_seconds=None,
+        telegram_online_prompt_delay_minutes=42,
+    )
+
+    assert result["telegramOnlinePromptDelayMinutes"] == 42
+    assert repo.get_interval_settings()["telegramOnlinePromptDelayMinutes"] == 42
+    assert repo.get_telegram_online_prompt_delay_seconds() == 42 * 60
 
 
 def test_submit_report_ignores_without_writes_when_global_plugin_ingest_disabled():
@@ -5043,6 +5061,20 @@ def test_telegram_online_prompt_claim_after_delay():
     assert repo.claim_due_telegram_online_prompts(t0 + dt.timedelta(minutes=20)) == []
 
 
+def test_telegram_online_prompt_claim_after_custom_delay_minutes():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one({"kind": "global", "telegramOnlinePromptDelayMinutes": 30})
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+
+    assert repo.claim_due_telegram_online_prompts(t0 + dt.timedelta(minutes=29)) == []
+
+    due = repo.claim_due_telegram_online_prompts(t0 + dt.timedelta(minutes=31))
+    assert len(due) == 1
+    assert repo.claim_due_telegram_online_prompts(t0 + dt.timedelta(minutes=35)) == []
+
+
 def test_telegram_online_prompt_superseded_when_day_session_exists_at_claim():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
@@ -5073,6 +5105,88 @@ def test_telegram_online_prompt_dismiss_closes_without_online_event():
     assert result["status"] == "online_prompt_dismissed"
     assert repo.db.day_sessions.items == []
     assert [e for e in repo.db.break_events.items if e.get("eventType") == "online"] == []
+
+
+def test_telegram_online_prompt_dismiss_purges_plugin_raw_events_preserves_discord():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    day = "2026-04-30"
+    batch_id = "batch-dismiss-1"
+    repo.db.raw_reports.insert_one({"_id": "rr1"})
+    repo.db.raw_event_batches.insert_one(
+        {
+            "batchId": batch_id,
+            "rawReportId": "rr1",
+            "challengeId": "c1",
+            "source": "ual",
+            "pluginVersion": "1",
+            "author": "A",
+            "authorEmail": "",
+            "projectId": "p",
+            "sessionId": "s",
+            "deviceId": "d",
+            "receivedAt": dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC),
+            "sentAt": None,
+            "eventCount": 1,
+            "reportType": "auto",
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "ual-e1",
+            "batchId": batch_id,
+            "rawReportId": "rr1",
+            "challengeId": "c1",
+            "source": "ual",
+            "pluginVersion": "1",
+            "author": "A",
+            "authorEmail": "",
+            "projectId": "p",
+            "sessionId": "s",
+            "deviceId": "d",
+            "date": day,
+            "eventType": "focus",
+            "occurredAtUtc": dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-30T08:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 8, 0, 1, tzinfo=dt.UTC),
+            "reportType": "auto",
+            "timeZoneId": "UTC",
+            "timeZoneDisplayName": "UTC",
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "discord-e1",
+            "source": "discord",
+            "pluginVersion": "1",
+            "author": "A",
+            "authorEmail": "",
+            "projectId": "p",
+            "sessionId": "s",
+            "deviceId": "d",
+            "date": day,
+            "eventType": "focus",
+            "occurredAtUtc": dt.datetime(2026, 4, 30, 9, 0, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-30T09:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 9, 0, 1, tzinfo=dt.UTC),
+            "reportType": "auto",
+            "timeZoneId": "UTC",
+            "timeZoneDisplayName": "UTC",
+        }
+    )
+    t0 = dt.datetime(2026, 4, 30, 7, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", day, "ual", t0)
+    rid = repo.db.telegram_online_prompts.items[0]["reminderId"]
+    repo.db.telegram_online_prompts.items[0]["status"] = "sent"
+
+    result = repo.close_telegram_online_prompt(rid, "dismiss", "2026-04-30T12:00:00Z", "ta")
+
+    assert result["ok"]
+    assert result["deletedRawActivityEvents"] == 1
+    assert len(repo.db.raw_activity_events.items) == 1
+    assert repo.db.raw_activity_events.items[0]["source"] == "discord"
+    assert repo.db.raw_event_batches.items == []
+    assert repo.db.raw_reports.items == []
 
 
 def test_telegram_online_prompt_confirm_records_online():

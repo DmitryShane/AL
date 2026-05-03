@@ -21,6 +21,9 @@ export function SettingsPage({
   const [idleThreshold, setIdleThreshold] = useState(String(intervalSettingsIdleThreshold(summary)));
   const [pluginIngestEnabled, setPluginIngestEnabled] = useState(summary?.intervalSettings.pluginIngestEnabled ?? true);
   const [discordAutoAfkTimeout, setDiscordAutoAfkTimeout] = useState(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
+  const [telegramOnlinePromptDelayMinutes, setTelegramOnlinePromptDelayMinutes] = useState(
+    String(intervalSettingsTelegramOnlinePromptMinutes(summary))
+  );
   const [meetingSummariesEnabled, setMeetingSummariesEnabled] = useState(Boolean(summary?.discordSettings.meetingSummariesEnabled));
   const [meetingSummaryMinParticipants, setMeetingSummaryMinParticipants] = useState(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
   const [meetingSummaryMinDuration, setMeetingSummaryMinDuration] = useState(String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120));
@@ -51,6 +54,7 @@ export function SettingsPage({
     setIdleThreshold(String(intervalSettingsIdleThreshold(summary)));
     setPluginIngestEnabled(summary?.intervalSettings.pluginIngestEnabled ?? true);
     setDiscordAutoAfkTimeout(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
+    setTelegramOnlinePromptDelayMinutes(String(intervalSettingsTelegramOnlinePromptMinutes(summary)));
     setMeetingSummariesEnabled(Boolean(summary?.discordSettings.meetingSummariesEnabled));
     setMeetingSummaryMinParticipants(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
     setMeetingSummaryMinDuration(String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120));
@@ -117,6 +121,8 @@ export function SettingsPage({
     meetingAudioRetention !== String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0) ||
     meetingSummaryPrompt !== (summary?.discordSettings.meetingSummaryPrompt ?? "");
   const discordSettingsDirty = discordAutoAfkTimeout !== String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600);
+  const telegramPromptSettingsDirty =
+    telegramOnlinePromptDelayMinutes !== String(intervalSettingsTelegramOnlinePromptMinutes(summary));
 
   async function saveProfile(rawAuthor: string) {
     const profile = drafts[rawAuthor];
@@ -219,6 +225,41 @@ export function SettingsPage({
       setSaving(null);
       window.setTimeout(() => {
         setSaveStatus((items) => ({ ...items, interval: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function saveTelegramPromptSettings() {
+    setSaving("telegramPrompt");
+    setSaveStatus((items) => ({ ...items, telegramPrompt: undefined }));
+
+    try {
+      const minutes = Number(telegramOnlinePromptDelayMinutes);
+
+      if (!Number.isFinite(minutes)) {
+        throw new Error("Invalid minutes");
+      }
+
+      const response = await apiFetch(`/api/v1/settings/intervals`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telegramOnlinePromptDelayMinutes: minutes,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Telegram prompt settings save failed");
+      }
+
+      setSaveStatus((items) => ({ ...items, telegramPrompt: "saved" }));
+      onSaved();
+    } catch {
+      setSaveStatus((items) => ({ ...items, telegramPrompt: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, telegramPrompt: undefined }));
       }, 2500);
     }
   }
@@ -407,6 +448,7 @@ export function SettingsPage({
         <button className={settingsTab === "autoBreak" ? "active" : ""} onClick={() => setSettingsTab("autoBreak")}>Auto Break</button>
         <button className={settingsTab === "redirects" ? "active" : ""} onClick={() => setSettingsTab("redirects")}>Author Redirects</button>
         <button className={settingsTab === "discord" ? "active" : ""} onClick={() => setSettingsTab("discord")}>Discord</button>
+        <button className={settingsTab === "telegram" ? "active" : ""} onClick={() => setSettingsTab("telegram")}>Telegram</button>
         <button className={settingsTab === "meetingSummaries" ? "active" : ""} onClick={() => setSettingsTab("meetingSummaries")}>Meeting Summaries</button>
         <button className={settingsTab === "users" ? "active" : ""} onClick={() => setSettingsTab("users")}>Site Users</button>
       </div>
@@ -755,6 +797,33 @@ export function SettingsPage({
             </button>
           </div>
         </div>
+      ) : settingsTab === "telegram" ? (
+        <div className="panel">
+          <h2>Telegram</h2>
+          <p className="settings-caption">
+            Minutes to wait after the first plugin activity on a day before the bot asks in the work chat whether you are online or whether activity was a mistake (requires Telegram username on the profile).
+          </p>
+          <div className="settings-row">
+            <label>
+              Online confirmation delay, minutes
+              <input
+                value={telegramOnlinePromptDelayMinutes}
+                onChange={(event) => setTelegramOnlinePromptDelayMinutes(event.target.value)}
+                type="number"
+                min="1"
+                max="1440"
+                step="1"
+              />
+            </label>
+            <button
+              className={settingsSaveButtonClassName(saveStatus.telegramPrompt)}
+              onClick={() => void saveTelegramPromptSettings()}
+              disabled={saving === "telegramPrompt" || !telegramPromptSettingsDirty}
+            >
+              {settingsSaveButtonLabel("telegramPrompt", saving, saveStatus)}
+            </button>
+          </div>
+        </div>
       ) : settingsTab === "meetingSummaries" ? (
         <>
           <div className="panel">
@@ -881,5 +950,10 @@ export function SettingsPage({
 function intervalSettingsIdleThreshold(summary: Summary | null) {
   const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { idleThresholdSeconds?: number }) | undefined;
   return intervalSettings?.idleThresholdSeconds ?? 300;
+}
+
+function intervalSettingsTelegramOnlinePromptMinutes(summary: Summary | null) {
+  const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { telegramOnlinePromptDelayMinutes?: number }) | undefined;
+  return intervalSettings?.telegramOnlinePromptDelayMinutes ?? 15;
 }
 

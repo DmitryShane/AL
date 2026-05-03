@@ -417,7 +417,9 @@ class TelegramActivityService:
             if not raw_author or not day_date or not anchor:
                 continue
 
-            if (now - anchor).total_seconds() < TELEGRAM_ONLINE_PROMPT_DELAY_SECONDS:
+            delay_seconds = self.get_telegram_online_prompt_delay_seconds()
+
+            if (now - anchor).total_seconds() < delay_seconds:
                 continue
 
             if self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": day_date}, {"_id": 1}):
@@ -673,6 +675,8 @@ class TelegramActivityService:
             return {"ok": False, "error": "Reminder belongs to another Telegram user", "status": "wrong_user"}
 
         if action == "dismiss":
+            day_date = str(reminder.get("date") or "")
+            purge_result = self.purge_editor_plugin_activity_for_author_day(raw_author, day_date)
             self.db.telegram_online_prompts.update_one(
                 {"reminderId": reminder_id},
                 {
@@ -684,7 +688,19 @@ class TelegramActivityService:
                     }
                 },
             )
-            return {"ok": True, "status": "online_prompt_dismissed"}
+            response: dict[str, Any] = {"ok": True, "status": "online_prompt_dismissed"}
+
+            if purge_result.get("ok"):
+                response["deletedRawActivityEvents"] = purge_result["deletedRawActivityEvents"]
+                response["deletedRawEventBatches"] = purge_result["deletedRawEventBatches"]
+                response["deletedRawReports"] = purge_result["deletedRawReports"]
+                response["deletedActivitySnapshots"] = purge_result["deletedActivitySnapshots"]
+                response["purgeRebuildDates"] = purge_result.get("purgeRebuildDates")
+                response["purgeRebuildAuthors"] = purge_result.get("purgeRebuildAuthors")
+            else:
+                response["purgeError"] = purge_result.get("error")
+
+            return response
 
         break_result = self.record_break_event(telegram_username, "online", timestamp)
         if not break_result.get("ok"):
