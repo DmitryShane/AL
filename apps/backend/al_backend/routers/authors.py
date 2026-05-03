@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..api_security import require_permission
 from ..container import BackendServices
@@ -67,10 +67,23 @@ def delete_author_alias(
 @router.delete("/api/v1/authors/{raw_author}/data")
 def delete_author_data(
     raw_author: str,
+    start_date: str | None = Query(None, alias="startDate"),
+    end_date: str | None = Query(None, alias="endDate"),
     _: dict = Depends(require_permission("manageSettings")),
     service: BackendServices = Depends(get_author_service),
 ) -> dict:
-    return service.delete_author_data(raw_author=raw_author)
+    if start_date is None and end_date is None:
+        return service.delete_author_data(raw_author=raw_author)
+
+    if start_date is None or end_date is None:
+        raise HTTPException(status_code=422, detail="Both startDate and endDate are required for ranged delete")
+
+    result = service.delete_author_data_for_date_range(raw_author=raw_author, start_date=start_date, end_date=end_date)
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=str(result.get("error") or "Ranged delete failed"))
+
+    return result
 
 
 @router.delete("/api/v1/authors/{raw_author}/profile")

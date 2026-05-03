@@ -2881,8 +2881,73 @@ p {
 
 .profile-actions {
   display: grid;
-  grid-template-columns: 72px 100px 112px;
+  grid-template-columns: minmax(72px, auto) minmax(112px, auto);
   gap: 8px;
+}
+
+.delete-activity-data-panel {
+  margin-top: 18px;
+}
+
+.delete-activity-author-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.delete-activity-author-row {
+  border: 1px solid #e5eaf0;
+  border-radius: 12px;
+  background: #fbfcff;
+  padding: 12px 14px;
+}
+
+.delete-activity-author-meta {
+  margin-bottom: 10px;
+}
+
+.delete-activity-author-meta strong {
+  display: block;
+  color: #202a36;
+}
+
+.delete-activity-author-meta small {
+  display: block;
+  margin-top: 3px;
+  color: #718093;
+  font-size: 12px;
+}
+
+.delete-activity-controls {
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+}
+
+.delete-activity-controls label:not(.radio-inline) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #405064;
+}
+
+.delete-activity-controls input[type="date"] {
+  min-height: 38px;
+}
+
+.delete-activity-row-error {
+  margin: 10px 0 0;
+}
+
+.radio-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #405064;
 }
 
 .profile-actions button {

@@ -314,6 +314,146 @@ class AuthorRepository:
         self.invalidate_activity_summary_cache()
         return {"ok": True, "author": normalized_author, "deleted": counts}
 
+    def delete_author_data_for_date_range(self, raw_author: str, start_date: str, end_date: str) -> dict[str, Any]:
+        normalized_author = _normalize_author(raw_author)
+
+        if not normalized_author:
+            return {"ok": False, "error": "Author is required"}
+
+        try:
+            dt.date.fromisoformat(start_date)
+            dt.date.fromisoformat(end_date)
+        except ValueError:
+            return {"ok": False, "error": "Invalid date format, expected YYYY-MM-DD"}
+
+        if start_date > end_date:
+            return {"ok": False, "error": "startDate must be <= endDate"}
+
+        profile = (
+            self.db.author_profiles.find_one({"rawAuthor": normalized_author}, {"_id": 0, "telegramUsername": 1, "timeZoneId": 1}) or {}
+        )
+        author_tz = _valid_time_zone_id(profile.get("timeZoneId")) or "UTC"
+        date_filter = {"date": {"$gte": start_date, "$lte": end_date}}
+
+        event_query = {"author": normalized_author, **date_filter}
+        batch_ids: set[str] = set()
+
+        for event in self.db.raw_activity_events.find(event_query, {"_id": 0, "batchId": 1}):
+            batch_id = str(event.get("batchId") or "").strip()
+
+            if batch_id:
+                batch_ids.add(batch_id)
+
+        counts: dict[str, int] = {}
+        counts["rawActivityEvents"] = self.db.raw_activity_events.delete_many(event_query).deleted_count
+
+        deleted_batches = 0
+        deleted_raw_reports = 0
+
+        for batch_id in sorted(batch_ids):
+            if self.db.raw_activity_events.count_documents({"batchId": batch_id}) > 0:
+                continue
+
+            batch = self.db.raw_event_batches.find_one({"batchId": batch_id}, {"_id": 0})
+
+            if batch:
+                self.db.raw_event_batches.delete_many({"batchId": batch_id})
+                deleted_batches += 1
+                raw_report_id = batch.get("rawReportId")
+
+                if raw_report_id is not None:
+                    self.db.raw_reports.delete_many({"_id": raw_report_id})
+                    deleted_raw_reports += 1
+
+        counts["rawEventBatches"] = deleted_batches
+        counts["rawReports"] = deleted_raw_reports
+        counts["activitySnapshots"] = self.db.activity_snapshots.delete_many({"author": normalized_author, **date_filter}).deleted_count
+
+        raw_author_query = {"rawAuthor": normalized_author, **date_filter}
+        counts["breakEvents"] = self.db.break_events.delete_many(raw_author_query).deleted_count
+        counts["breakIntervals"] = self.db.break_intervals.delete_many(raw_author_query).deleted_count
+        counts["breakSessions"] = self.db.break_sessions.delete_many(raw_author_query).deleted_count
+        counts["daySessions"] = self.db.day_sessions.delete_many(raw_author_query).deleted_count
+        counts["telegramDayReminders"] = self.db.telegram_day_reminders.delete_many(raw_author_query).deleted_count
+        counts["telegramOnlinePrompts"] = self.db.telegram_online_prompts.delete_many(raw_author_query).deleted_count
+        counts["telegramBreakActivityPrompts"] = self.db.telegram_break_activity_prompts.delete_many(raw_author_query).deleted_count
+        counts["telegramMeetingAutoAfkNotifications"] = self.db.telegram_meeting_auto_afk_notifications.delete_many(
+            raw_author_query
+        ).deleted_count
+        counts["meetingEvents"] = self.db.meeting_events.delete_many(raw_author_query).deleted_count
+        counts["meetingIntervals"] = self.db.meeting_intervals.delete_many(raw_author_query).deleted_count
+        counts["calendarMarks"] = self.db.calendar_marks.delete_many(raw_author_query).deleted_count
+        counts["statusEvents"] = self.db.status_events.delete_many(raw_author_query).deleted_count
+
+        telegram_username = profile.get("telegramUsername")
+
+        if telegram_username:
+            telegram_query = {"telegramUsername": telegram_username, **date_filter}
+            counts["breakEvents"] += self.db.break_events.delete_many(telegram_query).deleted_count
+            counts["breakSessions"] += self.db.break_sessions.delete_many(telegram_query).deleted_count
+
+        meeting_sessions_deleted = 0
+
+        for session in list(self.db.meeting_sessions.find({"rawAuthor": normalized_author}, {"_id": 0})):
+            discord_uid = session.get("discordUserId")
+
+            if not discord_uid:
+                continue
+
+            session_date_value = str(session.get("date") or "").strip()
+            session_tz = _valid_time_zone_id(session.get("timeZoneId")) or author_tz
+
+            if session_date_value:
+                in_range = start_date <= session_date_value <= end_date
+            else:
+                started_at = _coerce_datetime(session.get("startedAt"))
+
+                if not started_at:
+                    continue
+
+                session_date_value = _telegram_event_date(started_at, session_tz)
+                in_range = start_date <= session_date_value <= end_date
+
+            if in_range:
+                self.db.meeting_sessions.delete_one({"discordUserId": discord_uid})
+                meeting_sessions_deleted += 1
+
+        counts["meetingSessions"] = meeting_sessions_deleted
+
+        meeting_summaries_deleted = 0
+
+        for summary in list(self.db.meeting_summaries.find({"participantNames": normalized_author}, {"_id": 0})):
+            started_at = _coerce_datetime(summary.get("startedAt"))
+
+            if not started_at:
+                continue
+
+            summary_date = _telegram_event_date(started_at, author_tz)
+
+            if start_date <= summary_date <= end_date:
+                summary_id = summary.get("summaryId")
+
+                if summary_id:
+                    self.db.meeting_summaries.delete_one({"summaryId": summary_id})
+                    meeting_summaries_deleted += 1
+
+        counts["meetingSummaries"] = meeting_summaries_deleted
+
+        rebuild_result = self.rebuild_aggregates_for_dates(
+            start_date=start_date,
+            end_date=end_date,
+            authors=[normalized_author],
+        )
+
+        return {
+            "ok": True,
+            "author": normalized_author,
+            "startDate": start_date,
+            "endDate": end_date,
+            "deleted": counts,
+            "rebuildDeletedReportRows": rebuild_result.get("deletedReportRows", 0),
+        }
+
     def delete_author_profile(self, raw_author: str) -> dict[str, Any]:
         normalized_author = _normalize_author(raw_author)
 

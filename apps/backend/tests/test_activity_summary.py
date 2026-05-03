@@ -5848,6 +5848,87 @@ def test_delete_author_data_preserves_profile_but_delete_profile_removes_it():
     assert repo.db.report_rows.items == []
 
 
+def test_delete_author_data_for_date_range_keeps_outside_dates_and_profile():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    raw_author = "Range Tester"
+    repo.db.author_profiles.insert_one({"rawAuthor": raw_author, "displayName": raw_author})
+
+    def insert_day(day: str, suffix: str) -> None:
+        repo.db.raw_activity_events.insert_one(
+            {
+                "eventId": f"{day}-{suffix}-focus",
+                "source": "cur",
+                "author": raw_author,
+                "projectId": "al",
+                "deviceId": "mac-mini",
+                "date": day,
+                "eventType": "focus",
+                "occurredAtUtc": dt.datetime.fromisoformat(f"{day}T08:00:00+00:00"),
+                "occurredAtLocal": f"{day}T08:00:00+00:00",
+                "receivedAt": dt.datetime.fromisoformat(f"{day}T08:00:01+00:00"),
+            }
+        )
+        repo.db.raw_activity_events.insert_one(
+            {
+                "eventId": f"{day}-{suffix}-save",
+                "source": "cur",
+                "author": raw_author,
+                "projectId": "al",
+                "deviceId": "mac-mini",
+                "date": day,
+                "eventType": "file_saved",
+                "occurredAtUtc": dt.datetime.fromisoformat(f"{day}T08:02:00+00:00"),
+                "occurredAtLocal": f"{day}T08:02:00+00:00",
+                "receivedAt": dt.datetime.fromisoformat(f"{day}T08:02:01+00:00"),
+            }
+        )
+        repo.db.day_sessions.insert_one(
+            {
+                "rawAuthor": raw_author,
+                "telegramUsername": "range_tester",
+                "date": day,
+                "startedAt": dt.datetime.fromisoformat(f"{day}T09:00:00+00:00"),
+                "daySeconds": 3600,
+            }
+        )
+
+    insert_day("2026-05-01", "a")
+    insert_day("2026-05-02", "b")
+    insert_day("2026-05-03", "c")
+
+    repo.rebuild_aggregates_for_dates("2026-05-01", end_date="2026-05-03")
+
+    result = repo.delete_author_data_for_date_range(raw_author, "2026-05-02", "2026-05-02")
+
+    assert result["ok"] is True
+    assert repo.db.author_profiles.find_one({"rawAuthor": raw_author}) is not None
+
+    mid_events = list(repo.db.raw_activity_events.find({"author": raw_author, "date": "2026-05-02"}))
+    assert mid_events == []
+
+    outer_dates = {"2026-05-01", "2026-05-03"}
+
+    for day in outer_dates:
+        events = list(repo.db.raw_activity_events.find({"author": raw_author, "date": day}))
+        assert len(events) == 2
+
+    mid_sessions = list(repo.db.day_sessions.find({"rawAuthor": raw_author, "date": "2026-05-02"}))
+    assert mid_sessions == []
+
+    for day in outer_dates:
+        sessions = list(repo.db.day_sessions.find({"rawAuthor": raw_author, "date": day}))
+        assert len(sessions) == 1
+
+    mid_daily = repo.db.daily_author_activity.find_one({"author": raw_author, "date": "2026-05-02", "source": "cur"})
+    assert mid_daily is None
+
+    for day in outer_dates:
+        daily = repo.db.daily_author_activity.find_one({"author": raw_author, "date": day, "source": "cur"})
+        assert daily is not None
+        assert daily["activeSeconds"] == 120
+
+
 def test_break_event_flow_records_day_and_break():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "telegramUsername": "dmitry_shane"})

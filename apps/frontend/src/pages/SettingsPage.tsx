@@ -2,8 +2,19 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "../api/client";
 import { MEETING_AUDIO_RETENTION_OPTIONS, MEETING_SUMMARY_LANGUAGES, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
 import type { AuthorProfile, MeetingRecordingStatus, SettingsTab, SiteUser, Summary } from "../types/dashboard";
-import { autoBreakScheduleLabel, authorProfilePayload, emptyAuthorProfile, formatProfileTimeZoneLabel, formatProfileTimeZoneTitle, loadSavedSettingsTab, meetingRecordingDetail, meetingRecordingStatusLabel, normalizeAuthorInput, settingsSaveButtonClassName, settingsSaveButtonLabel } from "./pageHelpers";
+import { autoBreakScheduleLabel, authorProfilePayload, emptyAuthorProfile, formatProfileTimeZoneLabel, formatProfileTimeZoneTitle, loadSavedSettingsTab, meetingRecordingDetail, meetingRecordingStatusLabel, normalizeAuthorInput, profileLocalTodayIso, settingsSaveButtonClassName, settingsSaveButtonLabel } from "./pageHelpers";
 import { AuthorDeleteConfirm, AuthorProfileDeleteConfirm, SiteUsersPanel } from "../components/settings/SettingsComponents";
+
+type DeleteActivityDraft = {
+  mode: "today" | "range" | "all";
+  rangeStart: string;
+  rangeEnd: string;
+};
+
+type PendingActivityDelete =
+  | { profile: AuthorProfile; scope: "all" }
+  | { profile: AuthorProfile; scope: "range"; startDate: string; endDate: string };
+
 export function SettingsPage({
   summary,
   currentUser,
@@ -34,7 +45,9 @@ export function SettingsPage({
   const [saving, setSaving] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
   const [aliasError, setAliasError] = useState("");
-  const [deleteTarget, setDeleteTarget] = useState<AuthorProfile | null>(null);
+  const [deleteActivityDrafts, setDeleteActivityDrafts] = useState<Record<string, DeleteActivityDraft>>({});
+  const [pendingActivityDelete, setPendingActivityDelete] = useState<PendingActivityDelete | null>(null);
+  const [deleteActivityFieldError, setDeleteActivityFieldError] = useState<Record<string, string>>({});
   const [deleteProfileTarget, setDeleteProfileTarget] = useState<AuthorProfile | null>(null);
   const [newProfile, setNewProfile] = useState<AuthorProfile>(() => emptyAuthorProfile());
   const [aliasSource, setAliasSource] = useState("");
@@ -69,6 +82,20 @@ export function SettingsPage({
       setAliasTarget(profiles[0].rawAuthor);
     }
   }, [aliasTarget, profiles]);
+
+  useEffect(() => {
+    setDeleteActivityDrafts((prev) => {
+      const next = { ...prev };
+
+      for (const profile of profiles) {
+        if (!next[profile.rawAuthor]) {
+          next[profile.rawAuthor] = { mode: "today", rangeStart: "", rangeEnd: "" };
+        }
+      }
+
+      return next;
+    });
+  }, [profiles]);
 
   useEffect(() => {
     if (settingsTab !== "meetingSummaries") {
@@ -300,13 +327,24 @@ export function SettingsPage({
     }
   }
 
-  async function deleteAuthorData(rawAuthor: string) {
+  async function executeAuthorActivityDelete(pending: PendingActivityDelete) {
+    const rawAuthor = pending.profile.rawAuthor;
     const deleteKey = `delete:${rawAuthor}`;
     setSaving(deleteKey);
     setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
 
     try {
-      const response = await apiFetch(`/api/v1/authors/${encodeURIComponent(rawAuthor)}/data`, {
+      let url = `/api/v1/authors/${encodeURIComponent(rawAuthor)}/data`;
+
+      if (pending.scope === "range") {
+        const params = new URLSearchParams({
+          startDate: pending.startDate,
+          endDate: pending.endDate
+        });
+        url += `?${params.toString()}`;
+      }
+
+      const response = await apiFetch(url, {
         method: "DELETE"
       });
 
@@ -314,7 +352,7 @@ export function SettingsPage({
         throw new Error("Author data delete failed");
       }
 
-      setDeleteTarget(null);
+      setPendingActivityDelete(null);
       setSaveStatus((items) => ({ ...items, [deleteKey]: "saved" }));
       onSaved();
     } catch {
@@ -325,6 +363,51 @@ export function SettingsPage({
         setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
       }, 2500);
     }
+  }
+
+  function requestAuthorActivityDelete(profile: AuthorProfile) {
+    const draft: DeleteActivityDraft =
+      deleteActivityDrafts[profile.rawAuthor] ?? { mode: "today", rangeStart: "", rangeEnd: "" };
+
+    setDeleteActivityFieldError((items) => {
+      const next = { ...items };
+      delete next[profile.rawAuthor];
+      return next;
+    });
+
+    if (draft.mode === "all") {
+      setPendingActivityDelete({ profile, scope: "all" });
+      return;
+    }
+
+    if (draft.mode === "today") {
+      const day = profileLocalTodayIso(profile);
+      setPendingActivityDelete({ profile, scope: "range", startDate: day, endDate: day });
+      return;
+    }
+
+    if (!draft.rangeStart.trim() || !draft.rangeEnd.trim()) {
+      setDeleteActivityFieldError((items) => ({
+        ...items,
+        [profile.rawAuthor]: "Choose both start and end dates."
+      }));
+      return;
+    }
+
+    if (draft.rangeStart > draft.rangeEnd) {
+      setDeleteActivityFieldError((items) => ({
+        ...items,
+        [profile.rawAuthor]: "Start date must be on or before end date."
+      }));
+      return;
+    }
+
+    setPendingActivityDelete({
+      profile,
+      scope: "range",
+      startDate: draft.rangeStart,
+      endDate: draft.rangeEnd
+    });
   }
 
   async function deleteAuthorProfile(rawAuthor: string) {
@@ -677,7 +760,6 @@ export function SettingsPage({
           {profiles.map((profile) => {
             const draft = drafts[profile.rawAuthor] ?? profile;
             const profileDirty = isProfileDirty(profile);
-            const deleteKey = `delete:${profile.rawAuthor}`;
             const deleteProfileKey = `delete-profile:${profile.rawAuthor}`;
             return (
               <div className="profile-row" key={profile.rawAuthor}>
@@ -739,13 +821,6 @@ export function SettingsPage({
                     {settingsSaveButtonLabel(profile.rawAuthor, saving, saveStatus)}
                   </button>
                   <button
-                    className={`${settingsSaveButtonClassName(saveStatus[deleteKey], true)} danger-button`}
-                    onClick={() => setDeleteTarget(profile)}
-                    disabled={saving === deleteKey}
-                  >
-                    {saving === deleteKey ? "Deleting..." : saveStatus[deleteKey] === "error" ? "Failed" : "Delete data"}
-                  </button>
-                  <button
                     className={`${settingsSaveButtonClassName(saveStatus[deleteProfileKey], true)} danger-button`}
                     onClick={() => setDeleteProfileTarget(profile)}
                     disabled={saving === deleteProfileKey}
@@ -758,12 +833,125 @@ export function SettingsPage({
           })}
         </div>
       </div>
-      {deleteTarget ? (
+      <div className="panel delete-activity-data-panel">
+        <h2>Delete activity data</h2>
+        <p className="settings-caption">
+          Remove stored reports and statistics for a calendar period or all history. The author profile row above stays unchanged unless you delete the profile there.
+          &quot;Today&quot; uses each author&apos;s timezone when set on the profile; otherwise your browser&apos;s local calendar date.
+        </p>
+        <div className="delete-activity-author-list">
+          {profiles.map((profile) => {
+            const actDraft =
+              deleteActivityDrafts[profile.rawAuthor] ?? { mode: "today" as const, rangeStart: "", rangeEnd: "" };
+            const deleteActivityKey = `delete:${profile.rawAuthor}`;
+            return (
+              <div className="delete-activity-author-row" key={`delete-activity:${profile.rawAuthor}`}>
+                <div className="delete-activity-author-meta">
+                  <strong>{profile.displayName || profile.rawAuthor}</strong>
+                  <small>{profile.rawAuthor}</small>
+                </div>
+                <div className="delete-activity-controls settings-row">
+                  <label className="radio-inline">
+                    <input
+                      type="radio"
+                      name={`delete-mode-${profile.rawAuthor}`}
+                      checked={actDraft.mode === "today"}
+                      onChange={() =>
+                        setDeleteActivityDrafts((items) => ({
+                          ...items,
+                          [profile.rawAuthor]: { ...actDraft, mode: "today" }
+                        }))
+                      }
+                    />
+                    Today
+                  </label>
+                  <label className="radio-inline">
+                    <input
+                      type="radio"
+                      name={`delete-mode-${profile.rawAuthor}`}
+                      checked={actDraft.mode === "range"}
+                      onChange={() =>
+                        setDeleteActivityDrafts((items) => ({
+                          ...items,
+                          [profile.rawAuthor]: { ...actDraft, mode: "range" }
+                        }))
+                      }
+                    />
+                    Custom range
+                  </label>
+                  <label className="radio-inline">
+                    <input
+                      type="radio"
+                      name={`delete-mode-${profile.rawAuthor}`}
+                      checked={actDraft.mode === "all"}
+                      onChange={() =>
+                        setDeleteActivityDrafts((items) => ({
+                          ...items,
+                          [profile.rawAuthor]: { ...actDraft, mode: "all" }
+                        }))
+                      }
+                    />
+                    All data
+                  </label>
+                  {actDraft.mode === "range" ? (
+                    <>
+                      <label>
+                        Start
+                        <input
+                          type="date"
+                          value={actDraft.rangeStart}
+                          onChange={(event) =>
+                            setDeleteActivityDrafts((items) => ({
+                              ...items,
+                              [profile.rawAuthor]: { ...actDraft, rangeStart: event.target.value }
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        End
+                        <input
+                          type="date"
+                          value={actDraft.rangeEnd}
+                          onChange={(event) =>
+                            setDeleteActivityDrafts((items) => ({
+                              ...items,
+                              [profile.rawAuthor]: { ...actDraft, rangeEnd: event.target.value }
+                            }))
+                          }
+                        />
+                      </label>
+                    </>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={`${settingsSaveButtonClassName(saveStatus[deleteActivityKey], true)} danger-button`}
+                    onClick={() => requestAuthorActivityDelete(profile)}
+                    disabled={saving === deleteActivityKey}
+                  >
+                    {saving === deleteActivityKey ? "Deleting..." : saveStatus[deleteActivityKey] === "error" ? "Failed" : "Delete"}
+                  </button>
+                </div>
+                {deleteActivityFieldError[profile.rawAuthor] ? (
+                  <p className="alert-text delete-activity-row-error">{deleteActivityFieldError[profile.rawAuthor]}</p>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {pendingActivityDelete ? (
         <AuthorDeleteConfirm
-          profile={deleteTarget}
-          saving={saving === `delete:${deleteTarget.rawAuthor}`}
-          onCancel={() => setDeleteTarget(null)}
-          onDelete={() => void deleteAuthorData(deleteTarget.rawAuthor)}
+          profile={pendingActivityDelete.profile}
+          saving={saving === `delete:${pendingActivityDelete.profile.rawAuthor}`}
+          onCancel={() => setPendingActivityDelete(null)}
+          onDelete={() => void executeAuthorActivityDelete(pendingActivityDelete)}
+          description={
+            pendingActivityDelete.scope === "all"
+              ? undefined
+              : `This will remove reports, raw activity events, Telegram day/break data, Discord meeting activity in range, calendar marks, status events, and activity statistics for ${pendingActivityDelete.profile.rawAuthor} from ${pendingActivityDelete.startDate} through ${pendingActivityDelete.endDate} (inclusive). The author profile will stay unchanged. Aggregates will be rebuilt for those dates. This action cannot be undone.`
+          }
+          confirmLabel={pendingActivityDelete.scope === "all" ? undefined : "Delete activity for period"}
         />
       ) : null}
       {deleteProfileTarget ? (
