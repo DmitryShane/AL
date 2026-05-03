@@ -123,7 +123,7 @@ export function ReportsTable({
         </div>
       </div>
       <div className="table-pagination">
-        <span>Rows {total ? pageStart + 1 : 0}-{pageEnd} of {total}</span>
+        {total > 0 ? <span>Rows {pageStart + 1}-{pageEnd} of {total}</span> : null}
         <label>
           Rows per page
           <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>

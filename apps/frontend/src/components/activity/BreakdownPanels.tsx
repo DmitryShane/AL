@@ -17,9 +17,10 @@ export type BreakdownPanelGroup = {
 };
 
 export function BreakdownPanel({ title, items, groups = [] }: { title: string; items: BreakdownPanelItem[]; groups?: BreakdownPanelGroup[] }) {
-  const total = items.reduce((sum, item) => sum + Math.max(0, item.value), 0);
+  const flatForBar = items.length > 0 ? items : groups.flatMap((group) => group.items);
+  const total = flatForBar.reduce((sum, item) => sum + Math.max(0, item.value), 0);
   const barStyle = {
-    "--bar-gradient": segmentedBarGradient(items, total)
+    "--bar-gradient": segmentedBarGradient(flatForBar, total)
   } as React.CSSProperties;
 
   return (
@@ -36,10 +37,12 @@ export function BreakdownPanel({ title, items, groups = [] }: { title: string; i
           )}
         </div>
       </div>
-      <div className="breakdown-bar-row">
-        <div className="breakdown-bar" style={barStyle} aria-hidden="true" />
-        <strong>{total ? totalDisplayValue(items) : "-"}</strong>
-      </div>
+      {total > 0 ? (
+        <div className="breakdown-bar-row">
+          <div className="breakdown-bar" style={barStyle} aria-hidden="true" />
+          <strong>{totalDisplayValue(flatForBar)}</strong>
+        </div>
+      ) : null}
     </div>
   );
 }
