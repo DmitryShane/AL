@@ -281,7 +281,7 @@ class AuthorRepository:
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         raw_author = _normalize_author(raw_author)
-        existing_profile = self.db.author_profiles.find_one(
+        existing_row = self.db.author_profiles.find_one(
             {"rawAuthor": raw_author},
             {
                 "_id": 0,
@@ -292,8 +292,15 @@ class AuthorRepository:
                 "github_username": 1,
                 "avatarRefreshedAt": 1,
                 "avatarMimeType": 1,
+                "pluginEnabled": 1,
             },
-        ) or {}
+        )
+        existing_profile: dict[str, Any] = dict(existing_row) if existing_row else {}
+
+        if existing_row is None:
+            prior_plugin_enabled = None
+        else:
+            prior_plugin_enabled = existing_row.get("pluginEnabled", True)
         normalized_telegram = _normalize_telegram_username(telegram_username)
         normalized_discord_user_id = _normalize_discord_user_id(discord_user_id)
         normalized_discord_username = str(discord_username or "").strip()
@@ -306,6 +313,9 @@ class AuthorRepository:
             "authorColor": _valid_color(author_color) or _author_color(raw_author),
             "updatedAt": now,
         }
+
+        if prior_plugin_enabled is False and plugin_enabled:
+            update["pluginIngestResumedAtUtc"] = now
         normalized_time_zone = _valid_time_zone_id(time_zone_id)
 
         if normalized_time_zone:

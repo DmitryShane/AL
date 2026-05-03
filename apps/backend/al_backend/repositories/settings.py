@@ -43,6 +43,26 @@ class SettingsRepository:
 
         return True
 
+    def get_effective_plugin_ingest_resume_cutoff_utc(self, author: str) -> dt.datetime | None:
+        author = self.resolve_author_alias(_normalize_author(author))
+        stamps: list[dt.datetime] = []
+        plugins = self.db.system_settings.find_one({"kind": "plugins"}, {"_id": 0, "pluginIngestResumedAtUtc": 1}) or {}
+        global_resume = _coerce_datetime(plugins.get("pluginIngestResumedAtUtc"))
+
+        if global_resume is not None:
+            stamps.append(global_resume)
+
+        profile = self.db.author_profiles.find_one({"rawAuthor": author}, {"_id": 0, "pluginIngestResumedAtUtc": 1}) or {}
+        author_resume = _coerce_datetime(profile.get("pluginIngestResumedAtUtc"))
+
+        if author_resume is not None:
+            stamps.append(author_resume)
+
+        if not stamps:
+            return None
+
+        return max(stamps)
+
     def resolve_author_alias(self, raw_author: str | None) -> str:
         normalized_author = _normalize_author(raw_author or "Unknown User")
         alias = self.db.author_aliases.find_one({"sourceRawAuthor": normalized_author}, {"_id": 0, "targetRawAuthor": 1})
@@ -148,9 +168,19 @@ class SettingsRepository:
             )
 
         if plugin_ingest_enabled is not None:
+            prev_plugin_enabled = self.get_plugin_ingest_enabled()
+            plugin_fields: dict[str, Any] = {
+                "kind": "plugins",
+                "pluginIngestEnabled": plugin_ingest_enabled,
+                "updatedAt": now,
+            }
+
+            if plugin_ingest_enabled and not prev_plugin_enabled:
+                plugin_fields["pluginIngestResumedAtUtc"] = now
+
             self.db.system_settings.update_one(
                 {"kind": "plugins"},
-                {"$set": {"kind": "plugins", "pluginIngestEnabled": plugin_ingest_enabled, "updatedAt": now}},
+                {"$set": plugin_fields},
                 upsert=True,
             )
 

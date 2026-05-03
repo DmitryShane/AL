@@ -216,6 +216,7 @@ class ReportIngestService:
         self.db.raw_event_batches.insert_one(batch)
 
         events = sorted(payload.get("events") or [], key=lambda item: str(item.get("occurredAtUtc") or item.get("occurredAtLocal") or ""))
+        resume_cutoff = self.get_effective_plugin_ingest_resume_cutoff_utc(author)
 
         for raw_event in events:
             event = _normalize_raw_event(
@@ -237,6 +238,12 @@ class ReportIngestService:
 
             if not event:
                 continue
+
+            if resume_cutoff is not None:
+                event_time = _raw_event_time(event)
+
+                if event_time is None or event_time < resume_cutoff:
+                    continue
 
             try:
                 self.db.raw_activity_events.insert_one(event)

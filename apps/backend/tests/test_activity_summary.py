@@ -303,6 +303,179 @@ def test_interval_settings_include_global_plugin_ingest_toggle():
     assert repo.is_plugin_enabled_for_author("Future Artist") is False
 
 
+def test_interval_settings_store_plugin_ingest_resume_timestamp_when_re_enabled():
+    repo = fake_repository()
+
+    repo.upsert_interval_settings(
+        default_send_interval_seconds=None,
+        idle_threshold_seconds=None,
+        plugin_ingest_enabled=False,
+        author=None,
+        author_send_interval_seconds=None,
+    )
+    repo.upsert_interval_settings(
+        default_send_interval_seconds=None,
+        idle_threshold_seconds=None,
+        plugin_ingest_enabled=True,
+        author=None,
+        author_send_interval_seconds=None,
+    )
+
+    doc = repo.db.system_settings.find_one({"kind": "plugins"}) or {}
+    assert doc.get("pluginIngestResumedAtUtc") is not None
+
+
+def test_author_profile_stores_plugin_ingest_resume_timestamp_when_plugin_re_enabled():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Resume Author", "displayName": "Resume Author", "pluginEnabled": False}
+    )
+    repo.upsert_author_profile(
+        raw_author="Resume Author",
+        display_name="Resume Author",
+        team="",
+        telegram_username=None,
+        plugin_enabled=True,
+    )
+    profile = repo.db.author_profiles.find_one({"rawAuthor": "Resume Author"}) or {}
+    assert profile.get("pluginIngestResumedAtUtc") is not None
+
+
+def test_save_event_batch_drops_events_before_global_plugin_ingest_resume_cutoff():
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    cutoff = dt.datetime(2026, 5, 2, 8, 3, 0, tzinfo=dt.UTC)
+    repo.db.system_settings.insert_one(
+        {
+            "kind": "plugins",
+            "pluginIngestEnabled": True,
+            "pluginIngestResumedAtUtc": cutoff,
+        }
+    )
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    received_at = dt.datetime(2026, 5, 2, 8, 10, tzinfo=dt.UTC)
+    payload = {
+        "author": "Future Artist",
+        "authorEmail": "future@example.com",
+        "projectId": "AL",
+        "sessionId": "session-1",
+        "deviceId": "mac-mini",
+        "timeZoneId": "UTC",
+        "timeZoneDisplayName": "UTC",
+        "events": [
+            {
+                "eventId": "old-1",
+                "eventType": "focus",
+                "date": "2026-05-02",
+                "occurredAtUtc": "2026-05-02T08:00:00Z",
+                "occurredAtLocal": "2026-05-02T08:00:00+00:00",
+            },
+            {
+                "eventId": "new-1",
+                "eventType": "file_saved",
+                "date": "2026-05-02",
+                "occurredAtUtc": "2026-05-02T08:04:00Z",
+                "occurredAtLocal": "2026-05-02T08:04:00+00:00",
+            },
+        ],
+    }
+    repo._save_event_batch("cur", "1.0.0", payload, "raw-1", "auto", received_at, "challenge-1", None)
+    assert len(repo.db.raw_activity_events.items) == 1
+    assert repo.db.raw_activity_events.items[0]["eventId"] == "new-1"
+
+
+def test_save_event_batch_drops_events_before_author_plugin_ingest_resume_cutoff():
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    cutoff = dt.datetime(2026, 5, 2, 8, 3, 0, tzinfo=dt.UTC)
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "pluginIngestResumedAtUtc": cutoff,
+        }
+    )
+    received_at = dt.datetime(2026, 5, 2, 8, 10, tzinfo=dt.UTC)
+    payload = {
+        "author": "Future Artist",
+        "authorEmail": "future@example.com",
+        "projectId": "AL",
+        "sessionId": "session-1",
+        "deviceId": "mac-mini",
+        "timeZoneId": "UTC",
+        "timeZoneDisplayName": "UTC",
+        "events": [
+            {
+                "eventId": "old-1",
+                "eventType": "focus",
+                "date": "2026-05-02",
+                "occurredAtUtc": "2026-05-02T08:00:00Z",
+                "occurredAtLocal": "2026-05-02T08:00:00+00:00",
+            },
+            {
+                "eventId": "new-1",
+                "eventType": "file_saved",
+                "date": "2026-05-02",
+                "occurredAtUtc": "2026-05-02T08:04:00Z",
+                "occurredAtLocal": "2026-05-02T08:04:00+00:00",
+            },
+        ],
+    }
+    repo._save_event_batch("cur", "1.0.0", payload, "raw-1", "auto", received_at, "challenge-1", None)
+    assert len(repo.db.raw_activity_events.items) == 1
+    assert repo.db.raw_activity_events.items[0]["eventId"] == "new-1"
+
+
+def test_save_event_batch_uses_latest_of_global_and_author_plugin_ingest_resume_cutoffs():
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    global_cutoff = dt.datetime(2026, 5, 2, 8, 3, 0, tzinfo=dt.UTC)
+    author_cutoff = dt.datetime(2026, 5, 2, 8, 5, 0, tzinfo=dt.UTC)
+    repo.db.system_settings.insert_one(
+        {
+            "kind": "plugins",
+            "pluginIngestEnabled": True,
+            "pluginIngestResumedAtUtc": global_cutoff,
+        }
+    )
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "pluginIngestResumedAtUtc": author_cutoff,
+        }
+    )
+    received_at = dt.datetime(2026, 5, 2, 8, 10, tzinfo=dt.UTC)
+    payload = {
+        "author": "Future Artist",
+        "authorEmail": "future@example.com",
+        "projectId": "AL",
+        "sessionId": "session-1",
+        "deviceId": "mac-mini",
+        "timeZoneId": "UTC",
+        "timeZoneDisplayName": "UTC",
+        "events": [
+            {
+                "eventId": "between-1",
+                "eventType": "focus",
+                "date": "2026-05-02",
+                "occurredAtUtc": "2026-05-02T08:04:00Z",
+                "occurredAtLocal": "2026-05-02T08:04:00+00:00",
+            },
+            {
+                "eventId": "after-both-1",
+                "eventType": "file_saved",
+                "date": "2026-05-02",
+                "occurredAtUtc": "2026-05-02T08:06:00Z",
+                "occurredAtLocal": "2026-05-02T08:06:00+00:00",
+            },
+        ],
+    }
+    repo._save_event_batch("cur", "1.0.0", payload, "raw-1", "auto", received_at, "challenge-1", None)
+    assert len(repo.db.raw_activity_events.items) == 1
+    assert repo.db.raw_activity_events.items[0]["eventId"] == "after-both-1"
+
+
 def test_interval_settings_persist_telegram_online_prompt_delay_minutes():
     repo = fake_repository()
 
