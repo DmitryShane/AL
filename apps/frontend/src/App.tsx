@@ -96,13 +96,15 @@ function writeStoredSessionUserPreview(user: SiteUser | null) {
   }
 
   try {
+    const avatarUrl = typeof user.avatarUrl === "string" && user.avatarUrl.trim() ? user.avatarUrl.trim() : undefined;
     sessionStorage.setItem(
       SESSION_USER_PREVIEW_STORAGE_KEY,
       JSON.stringify({
         email: user.email,
         displayName: user.displayName,
         role: user.role,
-        active: user.active
+        active: user.active,
+        ...(avatarUrl ? { avatarUrl } : {})
       })
     );
   } catch {
