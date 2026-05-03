@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Activity, BarChart3, Bell, CalendarDays, LogOut, Settings, UsersRound } from "lucide-react";
 import { DateRangePicker } from "./components/layout/DateRangePicker";
 import { LoginPage } from "./pages/LoginPage";
@@ -72,7 +72,7 @@ function App() {
     isRestoringScrollRef.current = isRestoringScroll;
   }, [isRestoringScroll]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previousScrollRestoration = window.history.scrollRestoration;
     window.history.scrollRestoration = "manual";
 
@@ -250,8 +250,8 @@ function App() {
     };
   }, [page]);
 
-  useEffect(() => {
-    if (authLoading || !authUser || loading) {
+  useLayoutEffect(() => {
+    if (!canShowCachedDashboard) {
       return;
     }
 
@@ -268,13 +268,9 @@ function App() {
       return;
     }
 
-    window.requestAnimationFrame(() => {
-      window.scrollTo({ top: savedScroll, left: 0, behavior: "auto" });
-      window.requestAnimationFrame(() => {
-        setIsRestoringScroll(false);
-      });
-    });
-  }, [authLoading, authUser?.email, loading, page]);
+    window.scrollTo({ top: savedScroll, left: 0, behavior: "auto" });
+    setIsRestoringScroll(false);
+  }, [canShowCachedDashboard, page]);
 
   function setSelectedAuthor(value: string) {
     setSelectedAuthorState(value);
@@ -631,7 +627,7 @@ function loadSavedDateRange(): DateRange {
     ) {
       return {
         startDate: parsed.startDate,
-        endDate: parsed.endDate,
+        endDate: parsed.startDate,
         preset: parsed.preset
       };
     }

@@ -213,14 +213,23 @@ p {
 }
 
 .date-range-control {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 8px;
+  gap: 3.5px;
+  min-height: 38px;
+  padding: 8px 10px;
   border: 1px solid #d9ddff;
-  border-radius: 999px;
+  border-radius: 8px;
   background: #ffffff;
   color: #5b4dff;
+  box-shadow: 0 6px 18px rgb(91 77 255 / 9%);
+  cursor: pointer;
+  user-select: none;
+}
+
+.date-range-control.focused {
+  border-color: #5b4dff;
   box-shadow: 0 6px 18px rgb(91 77 255 / 9%);
 }
 
@@ -234,6 +243,43 @@ p {
   width: 118px;
   border: 0;
   color: #202a36;
+  cursor: pointer;
+  outline: 0;
+  user-select: none;
+}
+
+.date-range-control input:focus,
+.date-range-control input:focus-visible {
+  outline: 0;
+  box-shadow: none;
+}
+
+.date-range-control input::selection {
+  background: transparent;
+}
+
+.date-range-value {
+  display: inline-flex;
+  color: #202a36;
+  font-size: 13.3333px;
+  line-height: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.date-range-icon {
+  flex: 0 0 auto;
+  color: #202a36;
+  pointer-events: none;
+}
+
+.date-range-control .date-native-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .date-range-control input::-webkit-calendar-picker-indicator {
@@ -1290,6 +1336,50 @@ p {
 
 .dashboard-insights-row .breakdown-panel .list {
   gap: 2px;
+}
+
+.breakdown-source-group {
+  display: grid;
+  gap: 2px;
+}
+
+.breakdown-source-group + .breakdown-source-group {
+  margin-top: 8px;
+}
+
+.breakdown-source-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  background: #f1f5f9;
+  color: #64748b;
+  padding: 4px 1px 4px 3px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.breakdown-source-heading span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breakdown-source-heading .source-icon {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+}
+
+.breakdown-source-heading strong {
+  color: #94a3b8;
+  font-size: 10px;
 }
 
 .breakdown-scroll-list {

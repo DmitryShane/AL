@@ -62,6 +62,10 @@ export type AuthorRow = {
   savedPrefabs?: SavedPrefab[];
   overtimeActivityMix?: ActivityCount[];
   overtimeSavedPrefabs?: SavedPrefab[];
+  activityMixBySource?: ActivityMixSourceGroup[];
+  savedPrefabsBySource?: SavedPrefabsSourceGroup[];
+  overtimeActivityMixBySource?: ActivityMixSourceGroup[];
+  overtimeSavedPrefabsBySource?: SavedPrefabsSourceGroup[];
   status?: "online" | "stale";
   stalePresence?: "telegram" | "reports" | "both";
   alerts?: AuthorAlert[];
@@ -149,6 +153,18 @@ export type SavedPrefab = {
   name: string;
   projectId?: string;
   saveCount: number;
+};
+
+export type ActivityMixSourceGroup = {
+  source: string;
+  totalCount: number;
+  activityMix: ActivityCount[];
+};
+
+export type SavedPrefabsSourceGroup = {
+  source: string;
+  totalSaveCount: number;
+  savedPrefabs: SavedPrefab[];
 };
 
 export type HourlyActivity = {

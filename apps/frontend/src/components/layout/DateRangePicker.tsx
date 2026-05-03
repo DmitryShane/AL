@@ -1,3 +1,6 @@
+import { CalendarDays } from "lucide-react";
+import { type MouseEvent, useRef, useState } from "react";
+
 export type DateRange = {
   startDate: string;
   endDate: string;
@@ -10,8 +13,28 @@ type DateRangePickerProps = {
 };
 
 export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
-  function updateDateRange(next: Pick<DateRange, "startDate" | "endDate">) {
-    onChange({ ...next, preset: "custom" });
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [focused, setFocused] = useState(false);
+
+  function updateSelectedDate(date: string) {
+    onChange({ startDate: date, endDate: date, preset: "custom" });
+  }
+
+  function openDatePicker() {
+    const input = inputRef.current;
+
+    if (!input) {
+      return;
+    }
+
+    input.focus();
+    window.getSelection()?.removeAllRanges();
+    input.showPicker?.();
+  }
+
+  function handleDateControlMouseDown(event: MouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    openDatePicker();
   }
 
   return (
@@ -23,10 +46,19 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
         </button>
         <button className={value.preset === "yesterday" ? "active" : undefined} onClick={() => onChange(yesterdayRange())}>Yesterday</button>
       </div>
-      <div className="date-range-control">
-        <input type="date" value={value.startDate} onChange={(event) => updateDateRange({ ...value, startDate: event.target.value })} />
-        <span>to</span>
-        <input type="date" value={value.endDate} onChange={(event) => updateDateRange({ ...value, endDate: event.target.value })} />
+      <div className={focused ? "date-range-control focused" : "date-range-control"} onMouseDown={handleDateControlMouseDown}>
+        <span className="date-range-value">{formatSelectedDate(value.startDate)}</span>
+        <CalendarDays className="date-range-icon" size={16} aria-hidden="true" />
+        <input
+          ref={inputRef}
+          className="date-native-input"
+          type="date"
+          value={value.startDate}
+          onChange={(event) => updateSelectedDate(event.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          aria-label="Selected day"
+        />
       </div>
     </div>
   );
@@ -49,4 +81,14 @@ function toDateInputValue(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function formatSelectedDate(value: string) {
+  const [year, month, day] = value.split("-");
+
+  if (!year || !month || !day) {
+    return value;
+  }
+
+  return `${day}-${month}-${year}`;
 }

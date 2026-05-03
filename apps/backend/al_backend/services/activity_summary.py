@@ -836,6 +836,10 @@ class ActivitySummaryService:
                     "savedPrefabs": [],
                     "overtimeActivityCounts": [],
                     "overtimeSavedPrefabs": [],
+                    "_activityCountsBySource": {},
+                    "_savedPrefabsBySource": {},
+                    "_overtimeActivityCountsBySource": {},
+                    "_overtimeSavedPrefabsBySource": {},
                 }
                 authors_by_raw[raw_author] = author_row
 
@@ -867,6 +871,25 @@ class ActivitySummaryService:
             )
             author_row["overtimeSavedPrefabs"] = _merge_count_list(
                 author_row.get("overtimeSavedPrefabs", []), overtime_saved_prefab_items, "path", "saveCount"
+            )
+            source_key = str(item.get("source") or "unknown")
+            author_row["_activityCountsBySource"][source_key] = _merge_count_list(
+                author_row["_activityCountsBySource"].get(source_key, []), item.get("activityCounts", []), "type", "count"
+            )
+            author_row["_savedPrefabsBySource"][source_key] = _merge_count_list(
+                author_row["_savedPrefabsBySource"].get(source_key, []), saved_prefab_items, "path", "saveCount"
+            )
+            author_row["_overtimeActivityCountsBySource"][source_key] = _merge_count_list(
+                author_row["_overtimeActivityCountsBySource"].get(source_key, []),
+                item.get("overtimeActivityCounts", []),
+                "type",
+                "count",
+            )
+            author_row["_overtimeSavedPrefabsBySource"][source_key] = _merge_count_list(
+                author_row["_overtimeSavedPrefabsBySource"].get(source_key, []),
+                overtime_saved_prefab_items,
+                "path",
+                "saveCount",
             )
 
             if str(item.get("lastRecordedAt") or "") > str(author_row.get("lastRecordedAt") or ""):
@@ -969,6 +992,10 @@ class ActivitySummaryService:
                     "savedPrefabs": [],
                     "overtimeActivityCounts": [],
                     "overtimeSavedPrefabs": [],
+                    "_activityCountsBySource": {},
+                    "_savedPrefabsBySource": {},
+                    "_overtimeActivityCountsBySource": {},
+                    "_overtimeSavedPrefabsBySource": {},
                 }
                 authors_by_raw[raw_author] = author_row
 
@@ -1061,7 +1088,7 @@ class ActivitySummaryService:
 
             send_interval_seconds = self.get_interval_for_author(raw_author)
             summary_author = _with_alerts(
-                _with_activity_mix(_with_productivity(author)),
+                _with_source_breakdowns(_with_activity_mix(_with_productivity(author))),
                 send_interval_seconds,
                 now,
                 presence_override,
@@ -1691,5 +1718,59 @@ class ActivitySummaryService:
             by_author.setdefault(raw_author, []).append(alert)
 
         return by_author
+
+
+def _with_source_breakdowns(author: dict[str, Any]) -> dict[str, Any]:
+    item = dict(author)
+    activity_counts_by_source = item.pop("_activityCountsBySource", {})
+    saved_prefabs_by_source = item.pop("_savedPrefabsBySource", {})
+    overtime_activity_counts_by_source = item.pop("_overtimeActivityCountsBySource", {})
+    overtime_saved_prefabs_by_source = item.pop("_overtimeSavedPrefabsBySource", {})
+
+    item["activityMixBySource"] = _activity_mix_source_groups(activity_counts_by_source)
+    item["savedPrefabsBySource"] = _saved_prefab_source_groups(saved_prefabs_by_source)
+    item["overtimeActivityMixBySource"] = _activity_mix_source_groups(overtime_activity_counts_by_source)
+    item["overtimeSavedPrefabsBySource"] = _saved_prefab_source_groups(overtime_saved_prefabs_by_source)
+    return item
+
+
+def _activity_mix_source_groups(items_by_source: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    groups = []
+
+    for source, items in items_by_source.items():
+        activity_mix = _activity_mix_from_list(items)
+
+        if not activity_mix:
+            continue
+
+        groups.append(
+            {
+                "source": source,
+                "totalCount": sum(int(item.get("count", 0)) for item in items),
+                "activityMix": activity_mix,
+            }
+        )
+
+    return sorted(groups, key=lambda item: (-int(item.get("totalCount", 0)), str(item.get("source") or "")))
+
+
+def _saved_prefab_source_groups(items_by_source: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    groups = []
+
+    for source, items in items_by_source.items():
+        saved_prefabs = sorted(items, key=lambda item: int(item.get("saveCount", 0)), reverse=True)
+
+        if not saved_prefabs:
+            continue
+
+        groups.append(
+            {
+                "source": source,
+                "totalSaveCount": sum(int(item.get("saveCount", 0)) for item in saved_prefabs),
+                "savedPrefabs": saved_prefabs,
+            }
+        )
+
+    return sorted(groups, key=lambda item: (-int(item.get("totalSaveCount", 0)), str(item.get("source") or "")))
 
 

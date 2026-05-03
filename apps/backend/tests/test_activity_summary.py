@@ -5485,6 +5485,95 @@ def test_activity_summary_keeps_mix_and_saved_files_per_author():
     assert authors["Igor Mats"]["savedPrefabs"] == [{"path": "Assets/Igor.prefab", "name": "Igor", "saveCount": 4}]
 
 
+def test_activity_summary_groups_author_breakdowns_by_source():
+    repo = fake_repository()
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Dmitry Shane",
+            "date": "2026-04-29",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "activityCounts": [{"type": "focus", "count": 4}, {"type": "file_saved", "count": 1}],
+            "savedPrefabs": [{"path": "cursor:AL", "name": "AL", "projectId": "AL", "saveCount": 6}],
+            "overtimeActivityCounts": [{"type": "focus", "count": 2}],
+            "overtimeSavedPrefabs": [{"path": "cursor:OT", "name": "OT", "projectId": "AL", "saveCount": 1}],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry Shane",
+            "date": "2026-04-29",
+            "activeSeconds": 90,
+            "idleSeconds": 0,
+            "activityCounts": [{"type": "play_mode", "count": 3}],
+            "savedPrefabs": [{"path": "Assets/Bike.prefab", "name": "Bike", "saveCount": 2}],
+            "overtimeActivityCounts": [{"type": "scene_changed", "count": 1}],
+            "overtimeSavedPrefabs": [{"path": "Assets/Overtime.prefab", "name": "Overtime", "saveCount": 3}],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry Shane")
+
+    assert author["activityMix"] == [
+        {"type": "focus", "count": 4, "percent": 50},
+        {"type": "play_mode", "count": 3, "percent": 38},
+        {"type": "file_saved", "count": 1, "percent": 12},
+    ]
+    assert author["activityMixBySource"] == [
+        {
+            "source": "cur",
+            "totalCount": 5,
+            "activityMix": [{"type": "focus", "count": 4, "percent": 80}, {"type": "file_saved", "count": 1, "percent": 20}],
+        },
+        {
+            "source": "ual",
+            "totalCount": 3,
+            "activityMix": [{"type": "play_mode", "count": 3, "percent": 100}],
+        },
+    ]
+    assert author["savedPrefabsBySource"] == [
+        {
+            "source": "cur",
+            "totalSaveCount": 6,
+            "savedPrefabs": [{"path": "cursor:AL", "name": "AL", "projectId": "AL", "saveCount": 6}],
+        },
+        {
+            "source": "ual",
+            "totalSaveCount": 2,
+            "savedPrefabs": [{"path": "Assets/Bike.prefab", "name": "Bike", "saveCount": 2}],
+        },
+    ]
+    assert author["overtimeActivityMixBySource"] == [
+        {
+            "source": "cur",
+            "totalCount": 2,
+            "activityMix": [{"type": "focus", "count": 2, "percent": 100}],
+        },
+        {
+            "source": "ual",
+            "totalCount": 1,
+            "activityMix": [{"type": "scene_changed", "count": 1, "percent": 100}],
+        },
+    ]
+    assert author["overtimeSavedPrefabsBySource"] == [
+        {
+            "source": "ual",
+            "totalSaveCount": 3,
+            "savedPrefabs": [{"path": "Assets/Overtime.prefab", "name": "Overtime", "saveCount": 3}],
+        },
+        {
+            "source": "cur",
+            "totalSaveCount": 1,
+            "savedPrefabs": [{"path": "cursor:OT", "name": "OT", "projectId": "AL", "saveCount": 1}],
+        },
+    ]
+
+
 def test_analytics_summary_includes_day_hourly_activity():
     repo = fake_repository()
     today = dt.date.today()
