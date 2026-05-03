@@ -396,6 +396,9 @@ class ActivitySummaryService:
         if report_row.get("source") == "status" or report_row.get("reportType") == "status":
             return False
 
+        if report_row.get("source") == "telegram" and report_row.get("telegramEventType") == "online":
+            return False
+
         raw_author = str(report_row.get("author") or "Unknown User")
         report_date = str(report_row.get("date") or "")
         sort_at = _report_sort_datetime(report_row)

@@ -5572,6 +5572,64 @@ def test_telegram_online_prompt_confirm_records_online():
     assert len(repo.db.break_events.items) > before
     assert repo.db.day_sessions.items
     assert repo.db.telegram_online_prompts.items[0]["closeAction"] == "confirm_online"
+    telegram_reports = [r for r in repo.db.report_rows.items if r.get("source") == "telegram" and r.get("telegramEventType") == "online"]
+    assert len(telegram_reports) == 1
+    assert telegram_reports[0]["recordedAt"] == "2026-04-30T08:00:00+00:00"
+    assert telegram_reports[0]["receivedAt"] == dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+
+
+def test_telegram_online_prompt_confirm_aligns_to_first_plugin_report_and_exempt_from_status_filter():
+    repo = fake_repository()
+    day = "2026-04-30"
+    t_plugin = dt.datetime(2026, 4, 30, 11, 23, tzinfo=dt.UTC)
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "pluginVersion": "ual",
+            "author": "A",
+            "authorEmail": "",
+            "projectId": "unity",
+            "sessionId": "s1",
+            "deviceId": "",
+            "date": day,
+            "recordedAt": t_plugin.isoformat(),
+            "receivedAt": dt.datetime(2026, 4, 30, 11, 24, tzinfo=dt.UTC),
+            "lastRecordedAt": t_plugin.isoformat(),
+            "lastReceivedAt": dt.datetime(2026, 4, 30, 11, 24, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "timeZoneDisplayName": "UTC",
+            "reportType": "auto",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "status",
+            "author": "A",
+            "date": day,
+            "recordedAt": "2026-04-30T06:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 6, 0, tzinfo=dt.UTC),
+            "reportType": "status",
+            "statusEventType": "offline",
+        }
+    )
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", day, "ual", t0)
+    rid = repo.db.telegram_online_prompts.items[0]["reminderId"]
+    repo.db.telegram_online_prompts.items[0]["status"] = "sent"
+
+    result = repo.close_telegram_online_prompt(rid, "confirm_online", "2026-04-30T18:00:00Z", "ta")
+
+    assert result["ok"]
+    telegram_reports = [r for r in repo.db.report_rows.items if r.get("source") == "telegram" and r.get("telegramEventType") == "online"]
+    assert len(telegram_reports) == 1
+    telegram_row = telegram_reports[0]
+    assert telegram_row["recordedAt"] == t_plugin.isoformat()
+    assert telegram_row["receivedAt"] == t_plugin
+    assert telegram_row["lastReceivedAt"] == t_plugin
+    status_rows = [r for r in repo.db.report_rows.items if r.get("source") == "status"]
+    intervals = repo._status_intervals_for_reports(status_rows)
+    assert repo._is_report_inside_status_interval(telegram_row, intervals) is False
 
 
 def test_record_break_event_online_invalidates_online_prompt():

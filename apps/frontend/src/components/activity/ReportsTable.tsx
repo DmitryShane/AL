@@ -111,7 +111,7 @@ export function ReportsTable({
             <div className="table-row" key={`${report.recordedAt ?? "report"}-${index}`}>
               <span className="source-cell"><SourceIcon source={report.source} />{formatSource(report.source)}</span>
               <span>{report.displayName ?? report.author ?? "Unknown User"}</span>
-              <span>{report.date ?? "-"}</span>
+              <span>{formatReportTableDate(report.date)}</span>
               <span>{formatReportActive(report)}</span>
               <span>{formatReportIdle(report)}</span>
               <span>{formatReportOvertime(report.overtimeActiveDeltaSeconds ?? 0)}</span>
@@ -146,6 +146,26 @@ export function ReportsTable({
 
 function formatHourOption(value: string) {
   return `${value.padStart(2, "0")}:00`;
+}
+
+/** Calendar day from API (YYYY-MM-DD) shown as DD-MM-YYYY. */
+function formatReportTableDate(value: string | undefined): string {
+  if (!value?.trim()) {
+    return "-";
+  }
+
+  const trimmed = value.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+
+  if (!match) {
+    return trimmed;
+  }
+
+  const year = match[1];
+  const month = match[2];
+  const day = match[3];
+
+  return `${day}-${month}-${year}`;
 }
 
 function preferredTimeZoneLabelsByAuthor(reports: Report[]) {

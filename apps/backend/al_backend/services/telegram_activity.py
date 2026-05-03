@@ -4,10 +4,18 @@ from ..activity_math import *
 
 
 class TelegramActivityService:
-    def record_break_event(self, telegram_username: str, event_type: str, timestamp: str | None = None) -> dict[str, Any]:
+    def record_break_event(
+        self,
+        telegram_username: str,
+        event_type: str,
+        timestamp: str | None = None,
+        *,
+        ingest_received_at: dt.datetime | None = None,
+    ) -> dict[str, Any]:
         normalized_telegram = _normalize_telegram_username(telegram_username)
         event_time = _parse_timestamp(timestamp)
-        received_at = dt.datetime.now(dt.UTC)
+        audit_now = dt.datetime.now(dt.UTC)
+        row_received_at = ingest_received_at if ingest_received_at is not None else audit_now
         profile = self.db.author_profiles.find_one({"telegramUsername": normalized_telegram})
 
         if not profile:
@@ -25,7 +33,7 @@ class TelegramActivityService:
                 "timestamp": event_time,
                 "date": event_date,
                 "timeZoneId": time_zone_id,
-                "createdAt": received_at,
+                "createdAt": audit_now,
             }
         )
 
@@ -33,7 +41,7 @@ class TelegramActivityService:
             session = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
 
             if session:
-                self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "break_already_started")
+                self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, row_received_at, "break_already_started")
                 return {"ok": True, "status": "break_already_started"}
 
             self.db.break_sessions.update_one(
@@ -49,7 +57,7 @@ class TelegramActivityService:
                 },
                 upsert=True,
             )
-            self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "break_started")
+            self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, row_received_at, "break_started")
             return {"ok": True, "status": "break_started"}
 
         if event_type == "offline":
@@ -59,7 +67,7 @@ class TelegramActivityService:
 
             if not day_state:
                 self._insert_telegram_report_row(
-                    raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "offline_without_online", break_result
+                    raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, row_received_at, "offline_without_online", break_result
                 )
                 return {"ok": True, "status": "offline_without_online", **break_result}
 
@@ -70,7 +78,7 @@ class TelegramActivityService:
                 {"$set": {"lastOfflineAt": event_time, "daySeconds": day_seconds}},
                 upsert=True,
             )
-            self._upsert_telegram_day_activity(raw_author, normalized_telegram, day_date, time_zone_id, started_at, event_time, received_at, day_seconds)
+            self._upsert_telegram_day_activity(raw_author, normalized_telegram, day_date, time_zone_id, started_at, event_time, row_received_at, day_seconds)
             self._insert_telegram_report_row(
                 raw_author,
                 normalized_telegram,
@@ -78,7 +86,7 @@ class TelegramActivityService:
                 event_time,
                 event_date,
                 time_zone_id,
-                received_at,
+                row_received_at,
                 "day_closed",
                 {"daySeconds": day_seconds, **break_result},
             )
@@ -106,10 +114,10 @@ class TelegramActivityService:
         break_result = self._close_break_session(normalized_telegram, raw_author, event_time)
 
         if not break_result:
-            self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "online_recorded")
+            self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, row_received_at, "online_recorded")
             return {"ok": True, "status": "online_recorded"}
 
-        self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, received_at, "break_closed", break_result)
+        self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, row_received_at, "break_closed", break_result)
         return {"ok": True, "status": "break_closed", **break_result}
 
     def claim_due_telegram_day_reminders(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
@@ -649,6 +657,29 @@ class TelegramActivityService:
 
         return {"ok": True}
 
+    def _first_plugin_report_recorded_at_for_day(self, raw_author: str, day_date: str) -> dt.datetime | None:
+        if not raw_author or not day_date:
+            return None
+
+        rows = list(
+            self.db.report_rows.find(
+                {
+                    "author": raw_author,
+                    "date": day_date,
+                    "source": {"$nin": ["telegram", "discord", "status"]},
+                },
+                {"_id": 0, "recordedAt": 1, "lastRecordedAt": 1},
+            )
+            .sort([("recordedAt", ASCENDING)])
+            .limit(1)
+        )
+
+        if not rows:
+            return None
+
+        row = rows[0]
+        return _coerce_datetime(row.get("recordedAt")) or _coerce_datetime(row.get("lastRecordedAt"))
+
     def close_telegram_online_prompt(
         self,
         reminder_id: str,
@@ -707,7 +738,22 @@ class TelegramActivityService:
 
             return response
 
-        break_result = self.record_break_event(telegram_username, "online", timestamp)
+        day_date = str(reminder.get("date") or "")
+        aligned_at = self._first_plugin_report_recorded_at_for_day(raw_author, day_date)
+
+        if aligned_at is None:
+            aligned_at = _coerce_datetime(reminder.get("firstReportReceivedAt"))
+
+        if aligned_at is None:
+            aligned_at = _parse_timestamp(timestamp)
+
+        if aligned_at.tzinfo is None:
+            aligned_at = aligned_at.replace(tzinfo=dt.UTC)
+        else:
+            aligned_at = aligned_at.astimezone(dt.UTC)
+
+        timestamp_str = aligned_at.isoformat().replace("+00:00", "Z")
+        break_result = self.record_break_event(telegram_username, "online", timestamp_str, ingest_received_at=aligned_at)
         if not break_result.get("ok"):
             return {**break_result, "status": str(break_result.get("status") or "online_failed")}
 
