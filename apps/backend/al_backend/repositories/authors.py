@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..activity_math import *
 
 
-class AuthorRepositoryMixin:
+class AuthorRepository:
     def list_authors(self) -> list[str]:
         alias_sources = {item.get("sourceRawAuthor") for item in self.author_aliases()}
         authors = set()

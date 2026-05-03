@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..activity_math import *
 
 
-class SettingsRepositoryMixin:
+class SettingsRepository:
     def get_interval_for_author(self, author: str) -> int:
         author = _normalize_author(author)
         author_setting = self.db.interval_settings.find_one({"kind": "author", "author": author})

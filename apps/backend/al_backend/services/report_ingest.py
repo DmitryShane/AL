@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..activity_math import *
 
 
-class ReportIngestServiceMixin:
+class ReportIngestService:
     def create_report_challenge(self, challenge_in: Any, keys: Any) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         expires_at = now + dt.timedelta(seconds=REPORT_CHALLENGE_TTL_SECONDS)

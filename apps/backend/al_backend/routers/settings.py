@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, Request
+
+from ..api_security import require_discord_bot_secret, require_permission
+from ..container import BackendServices
+from ..dependencies import get_settings_service
+from ..models import DiscordSettingsIn, IntervalSettingsIn
+
+
+router = APIRouter()
+
+
+@router.put("/api/v1/settings/intervals")
+def update_intervals(
+    settings_in: IntervalSettingsIn,
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.upsert_interval_settings(
+        default_send_interval_seconds=settings_in.default_send_interval_seconds,
+        idle_threshold_seconds=settings_in.idle_threshold_seconds,
+        plugin_ingest_enabled=settings_in.plugin_ingest_enabled,
+        author=settings_in.author,
+        author_send_interval_seconds=settings_in.author_send_interval_seconds,
+    )
+
+
+@router.put("/api/v1/settings/discord")
+def update_discord_settings(
+    settings_in: DiscordSettingsIn,
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=settings_in.meeting_auto_afk_timeout_seconds,
+        meeting_summaries_enabled=settings_in.meeting_summaries_enabled,
+        meeting_summary_min_participants=settings_in.meeting_summary_min_participants,
+        meeting_summary_min_duration_seconds=settings_in.meeting_summary_min_duration_seconds,
+        meeting_summary_language=settings_in.meeting_summary_language,
+        meeting_summary_recipient=settings_in.meeting_summary_recipient,
+        meeting_audio_retention_seconds=settings_in.meeting_audio_retention_seconds,
+        meeting_summary_prompt=settings_in.meeting_summary_prompt,
+    )
+
+
+@router.get("/api/v1/discord/settings")
+def discord_settings(request: Request, service: BackendServices = Depends(get_settings_service)) -> dict:
+    require_discord_bot_secret(request)
+    return service.get_discord_settings()

@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..activity_math import *
 
 
-class TelegramActivityServiceMixin:
+class TelegramActivityService:
     def record_break_event(self, telegram_username: str, event_type: str, timestamp: str | None = None) -> dict[str, Any]:
         normalized_telegram = _normalize_telegram_username(telegram_username)
         event_time = _parse_timestamp(timestamp)

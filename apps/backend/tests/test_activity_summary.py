@@ -5,8 +5,7 @@ from typing import Any
 
 from al_backend.discord_author_mappings import apply_discord_author_mappings
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, meeting_summary_sections, render_meeting_summary_prompt
-from al_backend.repository import (
-    Repository,
+from al_backend.activity_math import (
     _add_break_interval_to_buckets,
     _apply_breaks_to_hourly_activity,
     _date_query,
@@ -21,6 +20,7 @@ from al_backend.repository import (
     _with_alerts,
     _with_productivity,
 )
+from al_backend.container import BackendServices
 from al_backend.telegram_bot import (
     BotConfig,
     edit_reminder_message,
@@ -220,7 +220,7 @@ class FakeDb:
 
 
 def fake_repository() -> Any:
-    repo: Any = Repository.__new__(Repository)
+    repo: Any = BackendServices.__new__(BackendServices)
     repo.db = FakeDb()
     repo.default_send_interval_seconds = 60
     return repo
@@ -275,16 +275,16 @@ def test_interval_settings_include_global_plugin_ingest_toggle():
     assert repo.is_plugin_enabled_for_author("Future Artist") is False
 
 
-def test_submit_report_ignores_without_writes_when_global_plugin_ingest_disabled(monkeypatch):
-    from al_backend import main as backend_main
+def test_submit_report_ignores_without_writes_when_global_plugin_ingest_disabled():
     from al_backend.models import ReportIn
+    from al_backend.routers.reports import submit_report
 
     repo = fake_repository()
     repo.db.system_settings.insert_one({"kind": "plugins", "pluginIngestEnabled": False})
-    monkeypatch.setattr(backend_main.app.state, "repo", repo, raising=False)
 
-    result = backend_main.submit_report(
-        ReportIn(source="cur", pluginVersion="1.0.0", challengeId="challenge-1", encryptedPacket="not-decoded")
+    result = submit_report(
+        ReportIn(source="cur", pluginVersion="1.0.0", challengeId="challenge-1", encryptedPacket="not-decoded"),
+        service=repo,
     )
 
     assert result.ok

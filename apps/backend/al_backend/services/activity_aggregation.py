@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..activity_math import *
 
 
-class ActivityAggregationServiceMixin:
+class ActivityAggregationService:
     def rebuild_aggregates_if_needed(self, force: bool = False) -> None:
         metadata = self.db.aggregate_metadata.find_one({"kind": "activity"})
 

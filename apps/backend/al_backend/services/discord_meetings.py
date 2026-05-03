@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..activity_math import *
 
 
-class DiscordMeetingServiceMixin:
+class DiscordMeetingService:
     def record_discord_voice_event(
         self,
         discord_user_id: str,

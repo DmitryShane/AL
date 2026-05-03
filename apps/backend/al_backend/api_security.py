@@ -46,3 +46,23 @@ def require_permission(permission: str):
         return user
 
     return dependency
+
+
+def require_telegram_bot_secret(request: Request) -> None:
+    settings = request.app.state.container.settings
+
+    if not settings.telegram_bot_secret:
+        raise HTTPException(status_code=503, detail="Telegram bot secret is not configured")
+
+    if request.headers.get("x-al-telegram-bot-secret") != settings.telegram_bot_secret:
+        raise HTTPException(status_code=403, detail="Invalid Telegram bot secret")
+
+
+def require_discord_bot_secret(request: Request) -> None:
+    settings = request.app.state.container.settings
+
+    if not settings.discord_bot_secret:
+        raise HTTPException(status_code=503, detail="Discord bot secret is not configured")
+
+    if request.headers.get("x-al-discord-bot-secret") != settings.discord_bot_secret:
+        raise HTTPException(status_code=403, detail="Invalid Discord bot secret")

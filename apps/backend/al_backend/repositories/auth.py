@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..activity_math import *
 
 
-class AuthRepositoryMixin:
+class AuthRepository:
     def ensure_bootstrap_site_admin(self, email: str, password: str) -> None:
         normalized_email = _normalize_email(email)
 

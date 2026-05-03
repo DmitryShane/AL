@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..activity_math import *
 
 
-class CalendarServiceMixin:
+class CalendarService:
     def calendar_summary(self, year: int) -> dict[str, Any]:
         self._ensure_calendar_reasons()
         start_date = f"{year}-01-01"

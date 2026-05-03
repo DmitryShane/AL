@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .repository import Repository
+from .container import BackendContainer, BackendServices
 from .settings import load_settings
 
 
@@ -40,16 +40,16 @@ DISCORD_AUTHOR_MAPPINGS = [
 
 def main() -> None:
     logging.basicConfig(level="INFO")
-    repo = Repository(load_settings())
+    container = BackendContainer(load_settings())
 
     try:
-        result = apply_discord_author_mappings(repo)
+        result = apply_discord_author_mappings(container.services)
         LOGGER.info("Applied Discord author mappings: %s", result)
     finally:
-        repo.client.close()
+        container.close()
 
 
-def apply_discord_author_mappings(repo: Repository) -> dict[str, Any]:
+def apply_discord_author_mappings(repo: BackendServices) -> dict[str, Any]:
     updated = []
     missing = []
 

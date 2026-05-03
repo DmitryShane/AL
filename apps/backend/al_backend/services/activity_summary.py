@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..activity_math import *
 
 
-class ActivitySummaryServiceMixin:
+class ActivitySummaryService:
     def latest_reports(
         self,
         limit: int | None = None,
