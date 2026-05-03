@@ -23,6 +23,7 @@ class ActivityAggregationService:
             {"$set": {"kind": "activity", "version": self.aggregates_version, "rebuiltAt": dt.datetime.now(dt.UTC)}},
             upsert=True,
         )
+        self.invalidate_activity_summary_cache()
         self._daily_consumed_microseconds_cache = None
 
     def rebuild_aggregates_for_dates(
@@ -64,6 +65,7 @@ class ActivityAggregationService:
             self._daily_consumed_microseconds_cache = None
 
         state_count = self._persist_aggregate_day_state(target_dates, target_authors)
+        self.invalidate_activity_summary_cache(target_dates)
         return {
             "ok": True,
             "dates": target_dates,

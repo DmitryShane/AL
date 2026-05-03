@@ -8,7 +8,7 @@ import { BreakdownPanel, OvertimeBreakdownPanel } from "../components/activity/B
 import { ReportsTable } from "../components/activity/ReportsTable";
 import { apiFetch } from "../api/client";
 import { REPORTS_PAGE_STORAGE_KEY } from "../constants/dashboard";
-import type { ActivitySummary, DateRange, Report, ReportsPage, ReportsPageCache } from "../types/dashboard";
+import type { ActivitySummary, AuthorHourlyActivity, DateRange, Report, ReportsPage, ReportsPageCache } from "../types/dashboard";
 import { activityColor, compareAuthorCardStatus, formatActivityType, loadSavedReportsPage, paletteColor, savedFileLabel } from "./pageHelpers";
 export function ActivityPage({
   summary,
@@ -26,8 +26,16 @@ export function ActivityPage({
   onRefreshAuthor: (author: string) => void;
 }) {
   const author = summary.authors.find((item) => item.rawAuthor === selectedAuthor) ?? summary.authors[0];
+  const [hourlyRows, setHourlyRows] = useState<AuthorHourlyActivity[]>(summary.hourlyActivityByAuthor);
+  const hourlyCacheRef = useRef<Record<string, AuthorHourlyActivity[]>>({});
+  const hourlyCacheKey = useMemo(() => JSON.stringify({
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+    dateMode: dateRange.preset === "live" ? "authorLocalToday" : ""
+  }), [dateRange.startDate, dateRange.endDate, dateRange.preset]);
   const authorHourly = useMemo(() => {
-    const hourly = summary.hourlyActivityByAuthor
+    const hourlySource = hourlyRows.length ? hourlyRows : summary.hourlyActivityByAuthor;
+    const hourly = hourlySource
       .filter((item) => item.rawAuthor === author?.rawAuthor)
       .map((item) => ({ ...item, status: author?.status }));
 
@@ -36,7 +44,7 @@ export function ActivityPage({
     }
 
     return [{ author: author.displayName, rawAuthor: author.rawAuthor, status: author.status, hourlyActivity: [] }];
-  }, [author, summary.hourlyActivityByAuthor]);
+  }, [author, hourlyRows, summary.hourlyActivityByAuthor]);
   const activityMix = author?.activityMix ?? [];
   const savedPrefabs = author?.savedPrefabs ?? [];
   const overtimeActivityMix = author?.overtimeActivityMix ?? [];
@@ -75,6 +83,58 @@ export function ActivityPage({
     limit: reportsPageSize,
     page: reportsPage
   }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportHourFilter, reportsPageSize, reportsPage]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadHourly() {
+      const cachedRows = hourlyCacheRef.current[hourlyCacheKey];
+
+      if (cachedRows) {
+        setHourlyRows(cachedRows);
+        return;
+      }
+
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate
+      });
+
+      if (dateRange.preset === "live") {
+        params.set("dateMode", "authorLocalToday");
+      }
+
+      try {
+        const response = await apiFetch(`/api/v1/reports/activity-hourly?${params.toString()}`);
+
+        if (!response.ok) {
+          throw new Error("Hourly activity request failed");
+        }
+
+        const payload = (await response.json()) as { hourlyActivityByAuthor: AuthorHourlyActivity[] };
+
+        if (ignore) {
+          return;
+        }
+
+        hourlyCacheRef.current = {
+          ...hourlyCacheRef.current,
+          [hourlyCacheKey]: payload.hourlyActivityByAuthor
+        };
+        setHourlyRows(payload.hourlyActivityByAuthor);
+      } catch {
+        if (!ignore) {
+          setHourlyRows(summary.hourlyActivityByAuthor);
+        }
+      }
+    }
+
+    void loadHourly();
+
+    return () => {
+      ignore = true;
+    };
+  }, [dateRange.startDate, dateRange.endDate, dateRange.preset, hourlyCacheKey, summary.hourlyActivityByAuthor]);
 
   useEffect(() => {
     if (!author?.rawAuthor) {

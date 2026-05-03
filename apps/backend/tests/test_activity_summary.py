@@ -55,10 +55,31 @@ class FakeCursor:
         return len(self.items)
 
     def sort(self, *args, **kwargs):
+        sort_spec = args[0] if args else []
+
+        if isinstance(sort_spec, list):
+            for key, direction in reversed(sort_spec):
+                self.items.sort(key=lambda item: self._sort_value(item.get(key)), reverse=direction < 0)
+
         return self
 
     def limit(self, *args, **kwargs):
+        if args:
+            self.items = self.items[: int(args[0])]
+
         return self
+
+    def skip(self, *args, **kwargs):
+        if args:
+            self.items = self.items[int(args[0]) :]
+
+        return self
+
+    def _sort_value(self, value):
+        if isinstance(value, dt.datetime):
+            return value.isoformat()
+
+        return str(value or "")
 
 
 class FakeCollection:
@@ -187,6 +208,7 @@ class FakeDb:
         self.author_profiles = FakeCollection()
         self.author_aliases = FakeCollection()
         self.activity_snapshots = FakeCollection()
+        self.activity_summary_cache = FakeCollection()
         self.aggregate_metadata = FakeCollection()
         self.aggregate_day_state = FakeCollection()
         self.break_events = FakeCollection()
@@ -4031,6 +4053,100 @@ def test_reports_page_paginates_author_reports_and_keeps_source_options():
     assert filtered_page["total"] == 2
     assert [report["source"] for report in filtered_page["reports"]] == ["ual", "ual"]
     assert filtered_page["sources"] == ["bal", "ual"]
+
+
+def test_activity_summary_cache_hits_and_invalidates():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "date": "2026-04-29",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "activityCounts": [{"type": "file_saved", "count": 1}],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    first = repo.cached_activity_summary(
+        view="activity-lite",
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        include_profiles=False,
+        include_hourly=False,
+        include_breakdowns=False,
+    )
+    second = repo.cached_activity_summary(
+        view="activity-lite",
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        include_profiles=False,
+        include_hourly=False,
+        include_breakdowns=False,
+    )
+    repo.invalidate_activity_summary_cache(["2026-04-29"])
+    third = repo.cached_activity_summary(
+        view="activity-lite",
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        include_profiles=False,
+        include_hourly=False,
+        include_breakdowns=False,
+    )
+
+    assert first["cache"]["hit"] is False
+    assert second["cache"]["hit"] is True
+    assert third["cache"]["hit"] is False
+    assert second["totals"]["activeSeconds"] == first["totals"]["activeSeconds"]
+
+
+def test_activity_hourly_cache_keeps_heavy_hourly_separate():
+    repo = fake_repository()
+    hourly = _empty_hourly_activity()
+    hourly[10]["activeSeconds"] = 60
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "date": "2026-04-29",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "activityCounts": [],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": hourly,
+        }
+    )
+
+    lite = repo.cached_activity_summary(
+        view="activity-lite",
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        include_profiles=False,
+        include_hourly=False,
+        include_breakdowns=False,
+    )
+    hourly_summary = repo.cached_activity_summary(
+        view="activity-hourly",
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        include_profiles=False,
+        include_hourly=True,
+        include_breakdowns=False,
+    )
+
+    assert lite["hourlyActivityByAuthor"] == []
+    assert hourly_summary["hourlyActivityByAuthor"][0]["rawAuthor"] == "Future Artist"
+    assert hourly_summary["hourlyActivityByAuthor"][0]["hourlyActivity"][10]["activeSeconds"] == 60
 
 
 def test_cursor_activity_project_appears_in_saved_files_without_file_save():

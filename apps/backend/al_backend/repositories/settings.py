@@ -159,6 +159,7 @@ class SettingsRepository:
                 upsert=True,
             )
 
+        self.invalidate_activity_summary_cache()
         return self.get_interval_settings()
 
     def get_interval_settings(self) -> dict[str, Any]:
@@ -197,6 +198,7 @@ class SettingsRepository:
             },
             upsert=True,
         )
+        self.invalidate_activity_summary_cache()
         return self.get_discord_settings()
 
     def upsert_discord_summary_settings(
@@ -230,6 +232,7 @@ class SettingsRepository:
             },
             upsert=True,
         )
+        self.invalidate_activity_summary_cache()
         return self.get_discord_settings()
 
     def get_discord_settings(self) -> dict[str, Any]:

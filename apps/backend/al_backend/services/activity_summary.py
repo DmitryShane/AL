@@ -4,6 +4,11 @@ from ..activity_math import *
 
 
 class ActivitySummaryService:
+    SUMMARY_CACHE_TTL_SECONDS = 5
+    REPORTS_PAGE_SCAN_MULTIPLIER = 5
+    REPORTS_PAGE_SCAN_FLOOR = 50
+    REPORTS_PAGE_SCAN_CEILING = 1000
+
     def latest_reports(
         self,
         limit: int | None = None,
@@ -159,14 +164,9 @@ class ActivitySummaryService:
             {str(item or "") for item in self.db.report_rows.distinct("source", source_query)},
             key=lambda value: value.lower(),
         )
-        candidate_rows = list(
-            self.db.report_rows.find(query, self._reports_projection()).sort(
-                [("receivedAt", DESCENDING), ("recordedAt", DESCENDING), ("batchId", DESCENDING)]
-            )
-        )
         status_rows = list(self.db.report_rows.find({**source_query, "source": "status"}, self._reports_projection()))
         status_intervals = self._status_intervals_for_reports(status_rows)
-        candidate_rows.sort(key=lambda row: _report_table_sort_key(row, status_intervals), reverse=True)
+        candidate_rows = self._bounded_report_rows_for_page(query, self._reports_projection(), offset, limit, status_intervals)
         meeting_lookup = self._meeting_lookup_for_reports(candidate_rows)
         break_lookup = self._break_lookup_for_reports(candidate_rows)
         reports: list[dict[str, Any]] = []
@@ -206,6 +206,9 @@ class ActivitySummaryService:
 
             total += 1
 
+        if not self._reports_page_uses_post_filters(hour, status_intervals, candidate_rows, meeting_lookup, break_lookup):
+            total = self.db.report_rows.count_documents(query)
+
         return {
             "reports": reports,
             "total": total,
@@ -213,6 +216,143 @@ class ActivitySummaryService:
             "offset": offset,
             "sources": sources,
         }
+
+    def _bounded_report_rows_for_page(
+        self,
+        query: dict[str, Any],
+        projection: dict[str, int],
+        offset: int,
+        limit: int,
+        status_intervals: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]],
+    ) -> list[dict[str, Any]]:
+        scan_limit = min(
+            self.REPORTS_PAGE_SCAN_CEILING,
+            max(self.REPORTS_PAGE_SCAN_FLOOR, offset + limit * self.REPORTS_PAGE_SCAN_MULTIPLIER),
+        )
+        cursor = self.db.report_rows.find(query, projection).sort(
+            [("receivedAt", DESCENDING), ("recordedAt", DESCENDING), ("batchId", DESCENDING)]
+        )
+        limit_method = getattr(cursor, "limit", None)
+
+        if limit_method:
+            cursor = limit_method(scan_limit)
+
+        rows = list(cursor)
+        rows.sort(key=lambda row: _report_table_sort_key(row, status_intervals), reverse=True)
+        return rows
+
+    def _reports_page_uses_post_filters(
+        self,
+        hour: int | None,
+        status_intervals: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]],
+        candidate_rows: list[dict[str, Any]],
+        meeting_lookup: dict[str, dict[str, list[dict[str, Any]]]],
+        break_lookup: dict[str, dict[str, list[dict[str, Any]]]],
+    ) -> bool:
+        if hour is not None or status_intervals:
+            return True
+
+        return any(
+            self._is_empty_plugin_report_without_signal(row)
+            or self._is_idle_report_during_meeting(row, meeting_lookup)
+            or self._is_idle_report_during_break(row, break_lookup)
+            for row in candidate_rows
+        )
+
+    def cached_activity_summary(
+        self,
+        *,
+        view: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_mode: str | None = None,
+        include_profiles: bool = True,
+        include_hourly: bool = True,
+        include_breakdowns: bool = True,
+    ) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        cache_key = self._activity_summary_cache_key(
+            view,
+            start_date,
+            end_date,
+            date_mode,
+            include_profiles,
+            include_hourly,
+            include_breakdowns,
+            now,
+        )
+        cached = self.db.activity_summary_cache.find_one(
+            {"cacheKey": cache_key, "expiresAt": {"$gt": now}},
+            {"_id": 0, "payload": 1},
+        )
+
+        if cached:
+            payload = dict(cached.get("payload") or {})
+            payload["cache"] = {"hit": True, "key": cache_key}
+            return payload
+
+        payload = self.activity_summary(
+            start_date=start_date,
+            end_date=end_date,
+            date_mode=date_mode,
+            now=now,
+            include_profiles=include_profiles,
+            include_hourly=include_hourly,
+            include_breakdowns=include_breakdowns,
+        )
+        expires_at = now + dt.timedelta(seconds=self.SUMMARY_CACHE_TTL_SECONDS)
+        self.db.activity_summary_cache.update_one(
+            {"cacheKey": cache_key},
+            {
+                "$set": {
+                    "cacheKey": cache_key,
+                    "view": view,
+                    "startDate": start_date or "",
+                    "endDate": end_date or "",
+                    "dateMode": date_mode or "",
+                    "payload": payload,
+                    "createdAt": now,
+                    "expiresAt": expires_at,
+                }
+            },
+            upsert=True,
+        )
+        payload = dict(payload)
+        payload["cache"] = {"hit": False, "key": cache_key}
+        return payload
+
+    def invalidate_activity_summary_cache(self, dates: list[str] | tuple[str, ...] | set[str] | None = None) -> None:
+        if dates:
+            date_values = {str(day) for day in dates if str(day or "").strip()}
+            self.db.activity_summary_cache.delete_many({"dates": {"$in": sorted(date_values)}})
+
+        self.db.activity_summary_cache.delete_many({})
+
+    def _activity_summary_cache_key(
+        self,
+        view: str,
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        include_profiles: bool,
+        include_hourly: bool,
+        include_breakdowns: bool,
+        now: dt.datetime,
+    ) -> str:
+        profiles = self._profiles_by_raw_author()
+        scope_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+        return "|".join(
+            [
+                view,
+                start_date or "",
+                end_date or "",
+                date_mode or "",
+                "profiles" if include_profiles else "no-profiles",
+                "hourly" if include_hourly else "no-hourly",
+                "breakdowns" if include_breakdowns else "no-breakdowns",
+                repr(scope_query.get("date", "")),
+            ]
+        )
 
     def _status_intervals_for_reports(self, status_rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]]:
         intervals_by_key: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]] = {}

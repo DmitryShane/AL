@@ -158,7 +158,7 @@ def reports_summary(
     start_date: str | None = Query(default=None, alias="startDate"),
     end_date: str | None = Query(default=None, alias="endDate"),
     date_mode: str | None = Query(default=None, alias="dateMode"),
-    view: str = Query(default="activity", pattern="^(authors|activity|alerts|settings)$"),
+    view: str = Query(default="activity", pattern="^(authors|activity|activity-lite|alerts|settings)$"),
     author_service: BackendServices = Depends(get_author_service),
     settings_service: BackendServices = Depends(get_settings_service),
     summary_service: BackendServices = Depends(get_summary_service),
@@ -172,7 +172,8 @@ def reports_summary(
         reports=[],
         intervalSettings=settings_service.get_interval_settings(),
         discordSettings=settings_service.get_discord_settings(),
-        activitySummary=summary_service.activity_summary(
+        activitySummary=summary_service.cached_activity_summary(
+            view=view,
             start_date=start_date,
             end_date=end_date,
             date_mode=date_mode,
@@ -181,3 +182,22 @@ def reports_summary(
             include_breakdowns=include_breakdowns,
         ),
     )
+
+
+@router.get("/api/v1/reports/activity-hourly")
+def reports_activity_hourly(
+    start_date: str | None = Query(default=None, alias="startDate"),
+    end_date: str | None = Query(default=None, alias="endDate"),
+    date_mode: str | None = Query(default=None, alias="dateMode"),
+    service: BackendServices = Depends(get_summary_service),
+) -> dict:
+    summary = service.cached_activity_summary(
+        view="activity-hourly",
+        start_date=start_date,
+        end_date=end_date,
+        date_mode=date_mode,
+        include_profiles=False,
+        include_hourly=True,
+        include_breakdowns=False,
+    )
+    return {"hourlyActivityByAuthor": summary.get("hourlyActivityByAuthor", []), "cache": summary.get("cache", {})}

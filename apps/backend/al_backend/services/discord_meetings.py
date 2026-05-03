@@ -26,6 +26,7 @@ class DiscordMeetingService:
         event_date = _telegram_event_date(event_time, time_zone_id)
         normalized_discord_username = str(discord_username or profile.get("discordUsername") or "").strip()
         event_type = event_type if event_type in {"join", "leave", "reconcile"} else "reconcile"
+        self.invalidate_activity_summary_cache([event_date])
 
         self.db.meeting_events.insert_one(
             {
@@ -238,6 +239,7 @@ class DiscordMeetingService:
         if self.db.meeting_events.find_one({"autoAfkEventId": auto_afk_event_id}, {"_id": 1}):
             return {"ok": True, "status": "auto_afk_already_recorded"}
 
+        self.invalidate_activity_summary_cache([event_date])
         meeting_result: dict[str, Any] = {}
         session = self.db.meeting_sessions.find_one({"discordUserId": normalized_discord_user_id})
 

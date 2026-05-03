@@ -24,7 +24,11 @@ class IndexManager:
         self.db.report_rows.create_index([("date", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.report_rows.create_index([("author", ASCENDING), ("date", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.report_rows.create_index([("author", ASCENDING), ("date", ASCENDING), ("source", ASCENDING), ("receivedAt", DESCENDING)])
+        self.db.report_rows.create_index([("date", ASCENDING), ("author", ASCENDING), ("source", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.report_rows.create_index([("source", ASCENDING), ("author", ASCENDING), ("sessionId", ASCENDING), ("date", ASCENDING)])
+        self.db.activity_summary_cache.create_index("cacheKey", unique=True)
+        self.db.activity_summary_cache.create_index("expiresAt", expireAfterSeconds=0)
+        self.db.activity_summary_cache.create_index("dateMode")
         self.db.status_events.create_index(
             [("rawAuthor", ASCENDING), ("date", ASCENDING), ("statusEventType", ASCENDING), ("transitionAt", ASCENDING)],
             unique=True,

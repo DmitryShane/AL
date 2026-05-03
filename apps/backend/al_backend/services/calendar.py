@@ -123,10 +123,12 @@ class CalendarService:
                 )
                 saved_count += 1
 
+        self.invalidate_activity_summary_cache(dates)
         return {"ok": True, "savedCount": saved_count}
 
     def delete_calendar_mark(self, raw_author: str, date: str) -> dict[str, Any]:
         self.db.calendar_marks.delete_one({"rawAuthor": raw_author, "date": date})
+        self.invalidate_activity_summary_cache([date])
         return {"ok": True}
 
     def delete_calendar_marks(self, raw_authors: list[str], dates: list[str]) -> dict[str, Any]:
@@ -137,6 +139,7 @@ class CalendarService:
             _parse_date(date)
 
         result = self.db.calendar_marks.delete_many({"rawAuthor": {"$in": raw_authors}, "date": {"$in": dates}})
+        self.invalidate_activity_summary_cache(dates)
         return {"ok": True, "deletedCount": result.deleted_count}
 
     def _ensure_calendar_reasons(self) -> None:

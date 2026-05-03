@@ -259,6 +259,7 @@ class AuthorRepository:
             operation.setdefault("$unset", {})["autoBreakEffectiveDate"] = ""
 
         self.db.author_profiles.update_one({"rawAuthor": raw_author}, operation, upsert=True)
+        self.invalidate_activity_summary_cache()
         return {"ok": True, "profile": {k: v for k, v in update.items() if k != "updatedAt"}}
 
     def delete_author_data(self, raw_author: str) -> dict[str, Any]:
@@ -310,6 +311,7 @@ class AuthorRepository:
             counts["breakEvents"] += self.db.break_events.delete_many({"telegramUsername": telegram_username}).deleted_count
             counts["breakSessions"] += self.db.break_sessions.delete_many({"telegramUsername": telegram_username}).deleted_count
 
+        self.invalidate_activity_summary_cache()
         return {"ok": True, "author": normalized_author, "deleted": counts}
 
     def delete_author_profile(self, raw_author: str) -> dict[str, Any]:
@@ -324,6 +326,7 @@ class AuthorRepository:
         counts["intervalSettings"] = self.db.interval_settings.delete_many({"kind": "author", "author": normalized_author}).deleted_count
         counts["calendarMarks"] = self.db.calendar_marks.delete_many({"rawAuthor": normalized_author}).deleted_count
 
+        self.invalidate_activity_summary_cache()
         return {"ok": True, "author": normalized_author, "deleted": counts}
 
 

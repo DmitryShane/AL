@@ -110,6 +110,10 @@ export type ActivitySummary = {
   overtimeActivityMix?: ActivityCount[];
   overtimeSavedPrefabs?: SavedPrefab[];
   hourlyActivityByAuthor: AuthorHourlyActivity[];
+  cache?: {
+    hit?: boolean;
+    key?: string;
+  };
 };
 
 export type AuthorAlias = {

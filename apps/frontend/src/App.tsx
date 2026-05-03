@@ -402,7 +402,7 @@ function summaryViewForPage(page: Page) {
   }
 
   if (page === "activity") {
-    return "activity";
+    return "activity-lite";
   }
 
   return "authors";

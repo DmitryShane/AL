@@ -119,6 +119,7 @@ class ReportIngestService:
                 challenge_id=challenge_id,
                 device_id=device_id,
             )
+            self.invalidate_activity_summary_cache()
             return str(raw_result.inserted_id)
 
         snapshot = dict(payload)
@@ -135,6 +136,7 @@ class ReportIngestService:
         )
         self.db.activity_snapshots.insert_one(snapshot)
         self._apply_snapshot_to_aggregates(snapshot)
+        self.invalidate_activity_summary_cache()
         return str(raw_result.inserted_id)
 
     def request_report_refresh(self, author: str | None = None) -> dict[str, Any]:

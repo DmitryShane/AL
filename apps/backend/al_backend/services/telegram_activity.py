@@ -16,6 +16,7 @@ class TelegramActivityService:
         raw_author = profile["rawAuthor"]
         time_zone_id = _valid_time_zone_id(profile.get("timeZoneId")) or "UTC"
         event_date = _telegram_event_date(event_time, time_zone_id)
+        self.invalidate_activity_summary_cache([event_date])
         self.db.break_events.insert_one(
             {
                 "telegramUsername": normalized_telegram,
@@ -866,6 +867,7 @@ class TelegramActivityService:
         received_at = _coerce_datetime(received_at) or transition_at
         normalized_time_zone_id = _valid_time_zone_id(time_zone_id) or _author_configured_time_zone_id(raw_author) or "UTC"
         event_date = _telegram_event_date(transition_at, normalized_time_zone_id)
+        self.invalidate_activity_summary_cache([event_date])
         event = {
             "rawAuthor": raw_author,
             "date": event_date,
