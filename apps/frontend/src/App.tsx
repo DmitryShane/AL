@@ -465,6 +465,8 @@ function App() {
           <ActivityPage
             summary={activitySummary}
             dateRange={appliedDateRange}
+            datePickerValue={dateRange}
+            onDatePickerChange={setDateRange}
             selectedAuthor={activeAuthor}
             setSelectedAuthor={setSelectedAuthor}
             refreshing={refreshingReports}

@@ -717,6 +717,16 @@ export function authorCardClassName(author: AuthorRow, active: boolean) {
   return `author-card ${active ? "active " : ""}${presenceClass} ${productivityTone(author.productivity)}`.trim();
 }
 
+export function authorMiniCardClassName(author: AuthorRow, active: boolean) {
+  let presenceClass = "is-online";
+
+  if (author.status === "stale") {
+    presenceClass = isTelegramSignedOff(author.stalePresence) ? "is-telegram-offline" : "is-offline";
+  }
+
+  return `author-mini-card ${active ? "active " : ""}${presenceClass} ${productivityTone(author.productivity)}`.trim();
+}
+
 export function isTelegramSignedOff(stalePresence?: AuthorRow["stalePresence"]) {
   return stalePresence === "telegram" || stalePresence === "both";
 }

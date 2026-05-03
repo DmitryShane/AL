@@ -1,6 +1,6 @@
 :root {
   color: #202a36;
-  background: #f5f7fb;
+  background: #fcfdff;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -439,7 +439,7 @@ p {
   background:
     radial-gradient(circle at 18% 20%, rgb(91 77 255 / 24%), transparent 28%),
     radial-gradient(circle at 82% 12%, rgb(19 163 123 / 20%), transparent 24%),
-    linear-gradient(135deg, #101827, #172238 48%, #f5f7fb 48%);
+    linear-gradient(135deg, #101827, #172238 48%, #f7f9fc 48%);
   padding: 48px;
 }
 
@@ -830,6 +830,251 @@ p {
   background: #8d99ad;
 }
 
+@keyframes activity-author-floating-strip-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -100%, 0);
+  }
+
+  82% {
+    opacity: 1;
+    transform: translate3d(0, 3px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes activity-author-floating-strip-out {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+
+  18% {
+    opacity: 1;
+    transform: translate3d(0, 4px, 0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translate3d(0, -100%, 0);
+  }
+}
+
+.activity-author-floating-strip {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 240px;
+  z-index: 50;
+  border-bottom: 1px solid #e2e8f0;
+  background: rgb(255 255 255 / 94%);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 24px -10px rgb(15 23 42 / 12%);
+  padding: 10px 32px;
+  animation: activity-author-floating-strip-in 0.23s cubic-bezier(0.33, 1.08, 0.52, 1) both;
+}
+
+.activity-author-floating-strip.is-exiting {
+  animation: activity-author-floating-strip-out 0.22s cubic-bezier(0.48, 0.02, 0.52, 0.98) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-author-floating-strip,
+  .activity-author-floating-strip.is-exiting {
+    animation: none;
+  }
+}
+
+.activity-author-floating-strip-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.activity-author-floating-strip-scroll {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scroll-padding-inline: 4px;
+}
+
+.activity-author-floating-strip-dates {
+  flex: 0 0 auto;
+}
+
+.activity-author-floating-strip-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+
+.activity-author-floating-strip-scroll::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: #e8edf5;
+}
+
+.activity-author-floating-strip-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #b8c2d2;
+}
+
+@media (max-width: 900px) {
+  .activity-author-floating-strip {
+    left: 0;
+    padding: 10px 18px;
+  }
+
+  .activity-author-floating-strip-inner {
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .activity-author-floating-strip-dates {
+    display: flex;
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+.author-mini-card {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  max-width: 280px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  scroll-snap-align: start;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 96%), #ffffff);
+  box-shadow: 0 4px 14px rgb(15 23 42 / 6%);
+  padding: 8px 12px 8px 10px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.author-mini-card:hover {
+  border-color: #c7d2fe;
+  box-shadow: 0 8px 20px rgb(15 23 42 / 10%);
+}
+
+.author-mini-card.active {
+  border-color: #5b4dff;
+  box-shadow:
+    0 0 0 2px rgb(91 77 255 / 14%),
+    0 10px 22px rgb(91 77 255 / 12%);
+}
+
+.author-mini-card-avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.author-mini-card-status {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px rgb(148 163 184 / 14%);
+  pointer-events: none;
+}
+
+.author-mini-card-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.author-mini-card-productivity {
+  min-width: 52px;
+  flex-shrink: 0;
+  padding: 3px 7px;
+}
+
+.author-mini-card-productivity strong {
+  font-size: 13px;
+}
+
+.author-mini-card.is-online {
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 96%), #ffffff),
+    radial-gradient(circle at top right, rgb(34 197 94 / 12%), transparent 40%);
+}
+
+.author-mini-card.is-online .author-mini-card-status {
+  background: #22c55e;
+  animation: authorOnlinePulse 1.8s ease-out infinite;
+}
+
+.author-mini-card.is-offline {
+  background:
+    linear-gradient(135deg, rgb(254 242 242 / 35%) 0%, rgb(255 255 255 / 97%) 55%, rgb(255 228 230 / 28%) 100%),
+    radial-gradient(circle at top right, rgb(239 68 68 / 5%), transparent 40%);
+}
+
+.author-mini-card.is-offline .author-mini-card-status {
+  background: #ef4444;
+  box-shadow: 0 0 0 3px rgb(239 68 68 / 12%);
+  animation: authorOfflinePulse 2.4s ease-in-out infinite;
+}
+
+.author-mini-card.is-offline .author-mini-card-name,
+.author-mini-card.is-offline .author-mini-card-productivity {
+  opacity: 0.72;
+}
+
+.author-mini-card.is-telegram-offline {
+  background:
+    linear-gradient(180deg, rgb(241 245 249 / 97%), rgb(226 232 240 / 95%)),
+    radial-gradient(circle at top right, rgb(71 85 105 / 11%), transparent 40%);
+}
+
+.author-mini-card.is-telegram-offline .author-mini-card-status {
+  background: #8798ad;
+  box-shadow: 0 0 0 3px rgb(100 116 139 / 16%);
+  animation: authorTelegramOfflinePulse 2.4s ease-in-out infinite;
+}
+
+.author-mini-card.is-telegram-offline .author-mini-card-name,
+.author-mini-card.is-telegram-offline .author-mini-card-productivity {
+  opacity: 0.78;
+}
+
+.author-mini-card.overdrive {
+  border-color: rgb(139 92 246 / 45%);
+  background:
+    radial-gradient(circle at 92% 8%, rgb(216 180 254 / 22%), transparent 28%),
+    linear-gradient(135deg, #fbf7ff 0%, #f5f3ff 60%, #eef2ff 100%);
+  box-shadow: 0 8px 20px rgb(109 40 217 / 12%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .author-mini-card.is-online .author-mini-card-status,
+  .author-mini-card.is-offline .author-mini-card-status,
+  .author-mini-card.is-telegram-offline .author-mini-card-status {
+    animation: none;
+  }
+}
+
 .author-card {
   position: relative;
   display: grid;
@@ -913,16 +1158,16 @@ p {
 }
 
 .author-card.is-telegram-offline {
-  border-color: #e2e8f0;
+  border-color: #d1d5db;
   background:
-    linear-gradient(180deg, rgb(248 250 252 / 96%), rgb(241 245 249 / 94%)),
-    radial-gradient(circle at top right, rgb(100 116 139 / 10%), transparent 44%);
-  box-shadow: 0 8px 18px rgb(15 23 42 / 5%);
+    linear-gradient(180deg, rgb(241 245 249 / 97%), rgb(226 232 240 / 95%)),
+    radial-gradient(circle at top right, rgb(71 85 105 / 12%), transparent 44%);
+  box-shadow: 0 8px 18px rgb(15 23 42 / 6%);
 }
 
 .author-card.is-telegram-offline:hover {
-  border-color: #cbd5e1;
-  box-shadow: 0 12px 22px rgb(15 23 42 / 8%);
+  border-color: #b8c4ce;
+  box-shadow: 0 12px 22px rgb(15 23 42 / 9%);
 }
 
 .author-card.is-telegram-offline.active {
@@ -937,8 +1182,8 @@ p {
 }
 
 .author-card.is-telegram-offline .author-card-status {
-  background: #94a3b8;
-  box-shadow: 0 0 0 4px rgb(148 163 184 / 14%);
+  background: #8798ad;
+  box-shadow: 0 0 0 4px rgb(100 116 139 / 16%);
   animation: authorTelegramOfflinePulse 2.4s ease-in-out infinite;
 }
 
@@ -952,11 +1197,11 @@ p {
 
 .author-card.overdrive:is(.is-telegram-offline) {
   overflow: hidden;
-  border-color: #e2e8f0;
+  border-color: #d1d5db;
   background:
-    linear-gradient(180deg, rgb(248 250 252 / 96%), rgb(241 245 249 / 94%)),
-    radial-gradient(circle at top right, rgb(100 116 139 / 10%), transparent 44%);
-  box-shadow: 0 8px 18px rgb(15 23 42 / 5%);
+    linear-gradient(180deg, rgb(241 245 249 / 97%), rgb(226 232 240 / 95%)),
+    radial-gradient(circle at top right, rgb(71 85 105 / 12%), transparent 44%);
+  box-shadow: 0 8px 18px rgb(15 23 42 / 6%);
 }
 
 .author-card.overdrive:is(.is-telegram-offline)::after {
@@ -966,7 +1211,7 @@ p {
 .author-card.overdrive:is(.is-telegram-offline) .avatar {
   box-shadow:
     inset 0 0 0 1px rgb(255 255 255 / 55%),
-    0 0 0 4px rgb(148 163 184 / 10%),
+    0 0 0 4px rgb(100 116 139 / 14%),
     0 10px 18px rgb(15 23 42 / 12%);
 }
 
