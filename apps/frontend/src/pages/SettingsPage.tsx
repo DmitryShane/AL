@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { MEETING_AUDIO_RETENTION_OPTIONS, MEETING_SUMMARY_LANGUAGES, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
 import type { AuthorProfile, MeetingRecordingStatus, SettingsTab, SiteUser, Summary } from "../types/dashboard";
@@ -55,6 +55,36 @@ export function SettingsPage({
   const [aliasTarget, setAliasTarget] = useState("");
   const [meetingRecordings, setMeetingRecordings] = useState<MeetingRecordingStatus[]>([]);
   const [meetingRecordingsError, setMeetingRecordingsError] = useState("");
+  const meetingSummaryWorkspaceRef = useRef<HTMLDivElement>(null);
+  const meetingSummaryPromptPanelRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (settingsTab !== "meetingSummaries") {
+      return;
+    }
+
+    const workspace = meetingSummaryWorkspaceRef.current;
+    const promptPanel = meetingSummaryPromptPanelRef.current;
+
+    if (!workspace || !promptPanel) {
+      return;
+    }
+
+    function syncPromptPanelHeight() {
+      const height = promptPanel.getBoundingClientRect().height;
+      workspace.style.setProperty("--meeting-summary-prompt-panel-height", `${Math.round(height)}px`);
+    }
+
+    syncPromptPanelHeight();
+
+    const observer = new ResizeObserver(syncPromptPanelHeight);
+    observer.observe(promptPanel);
+
+    return () => {
+      observer.disconnect();
+      workspace.style.removeProperty("--meeting-summary-prompt-panel-height");
+    };
+  }, [settingsTab]);
 
   useEffect(() => {
     const nextDrafts: Record<string, AuthorProfile> = {};
@@ -552,13 +582,16 @@ export function SettingsPage({
               Idle threshold, sec
               <input value={idleThreshold} onChange={(event) => setIdleThreshold(event.target.value)} type="number" min="30" />
             </label>
-            <label className="checkbox-cell plugin-ingest-toggle">
-              <input
-                type="checkbox"
-                checked={pluginIngestEnabled}
-                onChange={(event) => setPluginIngestEnabled(event.target.checked)}
-              />
-              Plugin reports: {pluginIngestEnabled ? "On" : "Off"}
+            <label>
+              Plugin reports
+              <span className="checkbox-cell plugin-ingest-toggle">
+                <input
+                  type="checkbox"
+                  checked={pluginIngestEnabled}
+                  onChange={(event) => setPluginIngestEnabled(event.target.checked)}
+                />
+                {pluginIngestEnabled ? "On" : "Off"}
+              </span>
             </label>
             <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval" || !isIntervalSettingsDirty}>
               {settingsSaveButtonLabel("interval", saving, saveStatus)}
@@ -571,7 +604,8 @@ export function SettingsPage({
           <p className="settings-caption">
             Assign authors whose first idle time during a work day should count as break time until the legal 60 minute break is filled.
           </p>
-          <div className="auto-break-list">
+          <div className="profile-table-shell">
+            <div className="auto-break-list">
             {profiles.map((profile) => {
               const draft = drafts[profile.rawAuthor] ?? profile;
               const profileDirty = isProfileDirty(profile);
@@ -602,6 +636,7 @@ export function SettingsPage({
                 </div>
               );
             })}
+            </div>
           </div>
         </div>
       ) : settingsTab === "redirects" ? (
@@ -642,7 +677,8 @@ export function SettingsPage({
             </button>
           </div>
           {aliasError ? <p className="notice error">{aliasError}</p> : null}
-          <div className="alias-list">
+          <div className="profile-table-shell">
+            <div className="alias-list">
             {aliases.length ? (
               aliases.map((alias) => {
                 const target = profiles.find((profile) => profile.rawAuthor === alias.targetRawAuthor);
@@ -661,8 +697,9 @@ export function SettingsPage({
                 );
               })
             ) : (
-              <p className="empty">No redirects yet.</p>
+              <p className="empty alias-list-empty">No redirects yet.</p>
             )}
+            </div>
           </div>
         </div>
       ) : settingsTab === "authors" ? (
@@ -1030,7 +1067,7 @@ export function SettingsPage({
             </p>
             <div className="settings-row meeting-summary-settings-row">
               <label>
-                Meeting summaries
+                <span className="meeting-summary-setting-label">Meeting summaries</span>
                 <span className="checkbox-cell">
                   <input
                     type="checkbox"
@@ -1041,7 +1078,7 @@ export function SettingsPage({
                 </span>
               </label>
               <label>
-                Min participants
+                <span className="meeting-summary-setting-label">Min participants</span>
                 <input
                   value={meetingSummaryMinParticipants}
                   onChange={(event) => setMeetingSummaryMinParticipants(event.target.value)}
@@ -1050,7 +1087,7 @@ export function SettingsPage({
                 />
               </label>
               <label>
-                Min duration, sec
+                <span className="meeting-summary-setting-label">Min duration, sec</span>
                 <input
                   value={meetingSummaryMinDuration}
                   onChange={(event) => setMeetingSummaryMinDuration(event.target.value)}
@@ -1060,7 +1097,7 @@ export function SettingsPage({
                 />
               </label>
               <label>
-                Summary language
+                <span className="meeting-summary-setting-label">Summary language</span>
                 <select value={meetingSummaryLanguage} onChange={(event) => setMeetingSummaryLanguage(event.target.value)}>
                   {MEETING_SUMMARY_LANGUAGES.map((language) => (
                     <option value={language} key={language}>{language}</option>
@@ -1068,7 +1105,7 @@ export function SettingsPage({
                 </select>
               </label>
               <label>
-                Send summaries to
+                <span className="meeting-summary-setting-label">Send summaries to</span>
                 <select value={meetingSummaryRecipient} onChange={(event) => setMeetingSummaryRecipient(event.target.value)}>
                   <option value="work_chat">Work chat</option>
                   {profiles
@@ -1082,7 +1119,7 @@ export function SettingsPage({
                 </select>
               </label>
               <label>
-                Keep audio on server
+                <span className="meeting-summary-setting-label">Keep audio on server</span>
                 <select value={meetingAudioRetention} onChange={(event) => setMeetingAudioRetention(event.target.value)}>
                   {MEETING_AUDIO_RETENTION_OPTIONS.map((option) => (
                     <option value={String(option.value)} key={option.value}>{option.label}</option>
@@ -1091,29 +1128,32 @@ export function SettingsPage({
               </label>
             </div>
           </div>
-          <div className="meeting-summary-workspace">
-            <div className="panel">
+          <div className="meeting-summary-workspace" ref={meetingSummaryWorkspaceRef}>
+            <div className="panel meeting-summary-activity-panel">
               <h3>Recent meeting summary activity</h3>
               <p className="settings-caption">
                 Live status for the Discord recording, OpenAI summary, and Telegram delivery pipeline.
               </p>
-              {meetingRecordingsError ? (
-                <p className="empty">{meetingRecordingsError}</p>
-              ) : meetingRecordings.length ? (
-                <div className="settings-list">
-                  {meetingRecordings.map((recording) => (
-                    <div className="settings-list-item" key={recording.recordingId}>
-                      <strong>{meetingRecordingStatusLabel(recording)}</strong>
-                      <span>{meetingRecordingDetail(recording)}</span>
-                      {recording.error ? <span className="alert-text">{recording.error}</span> : null}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="empty">No meeting summary activity yet.</p>
-              )}
+              <div className="meeting-summary-recordings-field">
+                Process
+                {meetingRecordingsError ? (
+                  <p className="empty">{meetingRecordingsError}</p>
+                ) : meetingRecordings.length ? (
+                  <div className="settings-list">
+                    {meetingRecordings.map((recording) => (
+                      <div className="settings-list-item" key={recording.recordingId}>
+                        <strong>{meetingRecordingStatusLabel(recording)}</strong>
+                        <span>{meetingRecordingDetail(recording)}</span>
+                        {recording.error ? <span className="alert-text">{recording.error}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="empty">No meeting summary activity yet.</p>
+                )}
+              </div>
             </div>
-            <div className="panel meeting-summary-prompt-panel">
+            <div className="panel meeting-summary-prompt-panel" ref={meetingSummaryPromptPanelRef}>
               <h3>Summary instructions</h3>
               <p className="settings-caption">
                 Prompt text used before the backend adds participants, required sections, language, and transcript automatically.
@@ -1138,7 +1178,7 @@ export function SettingsPage({
           </div>
         </>
       ) : (
-        <SiteUsersPanel currentUser={currentUser} />
+        <SiteUsersPanel currentUser={currentUser} authorProfiles={profiles} authorProfileDrafts={drafts} />
       )}
     </section>
   );

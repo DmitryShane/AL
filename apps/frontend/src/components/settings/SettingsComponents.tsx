@@ -4,7 +4,68 @@ import { apiFetch } from "../../api/client";
 import { REFRESH_INTERVAL_MS } from "../../constants/dashboard";
 import { formatReportMinutes } from "../../utils/reports";
 import { formatProfileTimeZoneLabel, formatProfileTimeZoneTitle, formatTimestamp } from "../../pages/pageHelpers";
-export function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
+import { SiteUserDeleteModal } from "./SiteUserDeleteModal";
+
+/** Table Name column only—when author profile cannot be linked by email/rawAuthor. */
+const SITE_USER_TABLE_NAME_FALLBACK: Record<string, string> = {
+  "igor.mats@gmail.com": "Igor Mats"
+};
+
+function siteUserTableNameFallback(email: string): string | undefined {
+  const label = SITE_USER_TABLE_NAME_FALLBACK[email.trim().toLowerCase()];
+  const trimmed = label?.trim();
+
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
+function authorProfileDisplayNameForSiteEmail(
+  email: string,
+  profiles: AuthorProfile[],
+  drafts: Record<string, AuthorProfile>
+): string | undefined {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  if (!normalizedEmail) {
+    return undefined;
+  }
+
+  for (const profile of profiles) {
+    const draft = drafts[profile.rawAuthor] ?? profile;
+    const profileEmail = (draft.authorEmail ?? profile.authorEmail ?? "").trim().toLowerCase();
+    const rawNorm = (draft.rawAuthor ?? profile.rawAuthor ?? "").trim().toLowerCase();
+
+    const matchesByEmail = Boolean(profileEmail) && profileEmail === normalizedEmail;
+    const matchesByRawAuthor = Boolean(rawNorm) && rawNorm === normalizedEmail;
+
+    if (!matchesByEmail && !matchesByRawAuthor) {
+      continue;
+    }
+
+    const displayName = (draft.displayName ?? "").trim();
+
+    if (displayName) {
+      return displayName;
+    }
+
+    return undefined;
+  }
+
+  return undefined;
+}
+
+export function SiteUsersPanel({
+  currentUser,
+  authorProfiles = [],
+  authorProfileDrafts = {}
+}: {
+  currentUser: SiteUser;
+  authorProfiles?: AuthorProfile[];
+  authorProfileDrafts?: Record<string, AuthorProfile>;
+}) {
   const canManageUsers = currentUser.role === "admin";
   const [users, setUsers] = useState<SiteUser[]>([]);
   const [drafts, setDrafts] = useState<Record<string, SiteUser>>({});
@@ -17,6 +78,7 @@ export function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
   });
   const [saving, setSaving] = useState<string | null>(null);
   const [status, setStatus] = useState<Record<string, "saved" | "error" | undefined>>({});
+  const [pendingDeleteEmail, setPendingDeleteEmail] = useState<string | null>(null);
 
   async function loadUsers() {
     if (!canManageUsers) {
@@ -99,6 +161,7 @@ export function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
         throw new Error("User delete failed");
       }
 
+      setPendingDeleteEmail(null);
       setStatus((items) => ({ ...items, [`delete:${email}`]: "saved" }));
       await loadUsers();
     } catch {
@@ -123,6 +186,8 @@ export function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
     );
   }
 
+  const pendingDeleteUser = pendingDeleteEmail ? users.find((userItem) => userItem.email === pendingDeleteEmail) : undefined;
+
   if (!canManageUsers) {
     return (
       <div className="panel">
@@ -135,23 +200,28 @@ export function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
   return (
     <div className="panel">
       <h2>Site Users</h2>
-      <p className="settings-caption">Create dashboard logins, issue temporary passwords, and choose what each person can do on the site.</p>
+      <p className="settings-caption">
+        Create dashboard logins, issue temporary passwords, and choose what each person can do on the site.
+        Existing passwords are stored as hashes and cannot be shown; enter a new value in the password column only when resetting someone&apos;s login.
+      </p>
       <div className="site-user-create-card">
-        <label>
-          Email
-          <input value={newUser.email} onChange={(event) => setNewUser((user) => ({ ...user, email: event.target.value }))} />
-        </label>
         <label>
           Display Name
           <input value={newUser.displayName} onChange={(event) => setNewUser((user) => ({ ...user, displayName: event.target.value }))} />
+        </label>
+        <label>
+          Email
+          <input value={newUser.email} onChange={(event) => setNewUser((user) => ({ ...user, email: event.target.value }))} />
         </label>
         <label>
           Password
           <input
             value={newUser.password}
             onChange={(event) => setNewUser((user) => ({ ...user, password: event.target.value }))}
-            type="password"
+            type="text"
             minLength={8}
+            spellCheck={false}
+            autoComplete="new-password"
           />
         </label>
         <label>
@@ -170,26 +240,46 @@ export function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
           {saving === "newUser" ? "Creating..." : status.newUser === "saved" ? "Created" : status.newUser === "error" ? "Failed" : "Add user"}
         </button>
       </div>
-      <div className="site-users-table">
-        <div className="site-users-head">
-          <span>Email</span>
-          <span>Name</span>
-          <span>Role</span>
-          <span>Status</span>
-          <span>New Password</span>
-          <span>Actions</span>
-        </div>
-        {users.map((user) => {
+      <div className="profile-table-shell">
+        <div className="site-users-table">
+          <div className="site-users-head">
+            <span>Name</span>
+            <span>Email</span>
+            <span>Role</span>
+            <span>Status</span>
+            <span>New Password</span>
+            <span>Actions</span>
+          </div>
+          {users.map((user) => {
           const draft = drafts[user.email] ?? user;
           const deleteKey = `delete:${user.email}`;
           const userDirty = isUserDirty(user);
+          const profileLinkedName = authorProfileDisplayNameForSiteEmail(user.email, authorProfiles, authorProfileDrafts);
+          const fallbackTableName = siteUserTableNameFallback(user.email);
+          const nameCellText =
+            profileLinkedName ??
+            fallbackTableName ??
+            ((draft.displayName ?? "").trim() ? draft.displayName.trim() : "—");
+          const nameCellTitle =
+            profileLinkedName ??
+            fallbackTableName ??
+            ((draft.displayName ?? "").trim() ? draft.displayName.trim() : undefined);
           return (
             <div className="site-user-row" key={user.email}>
-              <strong>{user.email}</strong>
-              <input
-                value={draft.displayName}
-                onChange={(event) => setDrafts((items) => ({ ...items, [user.email]: { ...draft, displayName: event.target.value } }))}
-              />
+              <span className="site-user-name-cell" title={nameCellTitle}>
+                {nameCellText}
+              </span>
+              <span className="profile-author-cell site-user-email-cell" title={user.email}>
+                <input
+                  type="text"
+                  value={draft.displayName}
+                  placeholder="Display name"
+                  aria-label={`Display name for ${user.email}`}
+                  spellCheck={false}
+                  autoComplete="name"
+                  onChange={(event) => setDrafts((items) => ({ ...items, [user.email]: { ...draft, displayName: event.target.value } }))}
+                />
+              </span>
               <select
                 value={draft.role}
                 onChange={(event) => setDrafts((items) => ({ ...items, [user.email]: { ...draft, role: event.target.value as SiteUserRole } }))}
@@ -207,9 +297,18 @@ export function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
                 Active
               </label>
               <input
-                type="password"
-                placeholder="Leave unchanged"
-                onChange={(event) => setDrafts((items) => ({ ...items, [user.email]: { ...draft, password: event.target.value } as SiteUser }))}
+                type="text"
+                value={(draft as SiteUser & { password?: string }).password ?? ""}
+                placeholder="Optional — new password"
+                title="Stored passwords are hashed and cannot be displayed. Enter a new password here to reset."
+                spellCheck={false}
+                autoComplete="new-password"
+                onChange={(event) =>
+                  setDrafts((items) => ({
+                    ...items,
+                    [user.email]: { ...draft, password: event.target.value } as SiteUser & { password?: string }
+                  }))
+                }
               />
               <div className="profile-actions">
                 <button
@@ -219,18 +318,31 @@ export function SiteUsersPanel({ currentUser }: { currentUser: SiteUser }) {
                 >
                   {settingsSaveButtonLabel(user.email, saving, status)}
                 </button>
-                <button
-                  className={`${settingsSaveButtonClassName(status[deleteKey], true)} danger-button`}
-                  onClick={() => void deleteUser(user.email)}
-                  disabled={saving === deleteKey || user.email === currentUser.email}
-                >
-                  {saving === deleteKey ? "Deleting..." : "Delete"}
-                </button>
+                {user.email.trim().toLowerCase() !== currentUser.email.trim().toLowerCase() ? (
+                  <button
+                    type="button"
+                    className="primary-button danger-solid-button delete-all-data-solid-button"
+                    onClick={() => setPendingDeleteEmail(user.email)}
+                    disabled={saving === deleteKey}
+                  >
+                    Delete
+                  </button>
+                ) : null}
               </div>
             </div>
           );
         })}
+        </div>
       </div>
+      {pendingDeleteEmail && pendingDeleteUser ? (
+        <SiteUserDeleteModal
+          user={pendingDeleteUser}
+          saving={saving === `delete:${pendingDeleteEmail}`}
+          deleteError={status[`delete:${pendingDeleteEmail}`] === "error"}
+          onCancel={() => setPendingDeleteEmail(null)}
+          onDelete={() => void deleteUser(pendingDeleteUser.email)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -239,6 +351,8 @@ export { AuthorDeleteConfirm } from "./AuthorDeleteConfirmModal";
 export type { AuthorDeleteConfirmProps } from "./AuthorDeleteConfirmModal";
 
 export { AuthorProfileDeleteModal } from "./AuthorProfileDeleteModal";
+
+export { SiteUserDeleteModal } from "./SiteUserDeleteModal";
 
 function settingsSaveButtonLabel(key: string, saving: string | null, statuses: Record<string, "saved" | "error" | undefined>) {
   if (saving === key) {
