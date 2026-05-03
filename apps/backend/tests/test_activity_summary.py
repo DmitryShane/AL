@@ -5052,6 +5052,38 @@ def test_telegram_online_prompt_schedules_once_per_day():
     assert len(repo.db.telegram_online_prompts.items) == 1
 
 
+def test_telegram_online_prompt_schedules_again_after_dismiss_same_day():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    day = "2026-04-30"
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", day, "ual", t0)
+
+    assert len(repo.db.telegram_online_prompts.items) == 1
+
+    repo.db.telegram_online_prompts.items[0]["status"] = "closed"
+    repo.db.telegram_online_prompts.items[0]["closeAction"] = "dismiss"
+    t1 = dt.datetime(2026, 4, 30, 12, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", day, "ual", t1)
+
+    assert len(repo.db.telegram_online_prompts.items) == 2
+    assert repo.db.telegram_online_prompts.items[1]["status"] == "pending"
+    assert repo.db.telegram_online_prompts.items[1]["firstReportReceivedAt"] == t1
+
+
+def test_telegram_online_prompt_not_scheduled_second_time_while_sent():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    day = "2026-04-30"
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", day, "ual", t0)
+    repo.db.telegram_online_prompts.items[0]["status"] = "sent"
+    t1 = dt.datetime(2026, 4, 30, 12, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", day, "ual", t1)
+
+    assert len(repo.db.telegram_online_prompts.items) == 1
+
+
 def test_telegram_online_prompt_not_scheduled_without_telegram():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "A", "timeZoneId": "UTC"})

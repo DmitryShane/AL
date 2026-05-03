@@ -64,7 +64,21 @@ class IndexManager:
         self.db.telegram_day_reminders.create_index("reminderId", unique=True)
         self.db.telegram_day_reminders.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
         self.db.telegram_online_prompts.create_index("reminderId", unique=True)
-        self.db.telegram_online_prompts.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
+        for spec in list(self.db.telegram_online_prompts.list_indexes()):
+            key = spec.get("key")
+
+            if dict(key or {}) == {"rawAuthor": 1, "date": 1} and spec.get("name") != "telegram_online_prompts_open_day_unique":
+                try:
+                    self.db.telegram_online_prompts.drop_index(spec["name"])
+                except Exception:
+                    pass
+
+        self.db.telegram_online_prompts.create_index(
+            [("rawAuthor", ASCENDING), ("date", ASCENDING)],
+            unique=True,
+            name="telegram_online_prompts_open_day_unique",
+            partialFilterExpression={"status": {"$in": ["pending", "claimed", "sent"]}},
+        )
         self.db.telegram_break_activity_prompts.create_index("reminderId", unique=True)
         self.db.telegram_break_activity_prompts.create_index([("rawAuthor", ASCENDING), ("breakStartedAt", ASCENDING)], unique=True)
         self.db.interval_settings.create_index("kind", unique=True)

@@ -289,7 +289,10 @@ class TelegramActivityService:
         if self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": day_date}, {"_id": 1}):
             return
 
-        if self.db.telegram_online_prompts.find_one({"rawAuthor": raw_author, "date": day_date}, {"_id": 1}):
+        if self.db.telegram_online_prompts.find_one(
+            {"rawAuthor": raw_author, "date": day_date, "status": {"$in": ["pending", "claimed", "sent"]}},
+            {"_id": 1},
+        ):
             return
 
         profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0, "telegramUsername": 1}) or {}
