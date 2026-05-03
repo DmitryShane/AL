@@ -695,6 +695,8 @@ class TelegramActivityService:
                 response["deletedRawEventBatches"] = purge_result["deletedRawEventBatches"]
                 response["deletedRawReports"] = purge_result["deletedRawReports"]
                 response["deletedActivitySnapshots"] = purge_result["deletedActivitySnapshots"]
+                response["deletedStatusEvents"] = purge_result["deletedStatusEvents"]
+                response["deletedStatusReportRows"] = purge_result["deletedStatusReportRows"]
                 response["purgeRebuildDates"] = purge_result.get("purgeRebuildDates")
                 response["purgeRebuildAuthors"] = purge_result.get("purgeRebuildAuthors")
             else:

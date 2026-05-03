@@ -5198,6 +5198,50 @@ def test_telegram_online_prompt_dismiss_purges_plugin_raw_events_preserves_disco
             "timeZoneDisplayName": "UTC",
         }
     )
+    repo.db.status_events.insert_one(
+        {
+            "rawAuthor": "A",
+            "date": day,
+            "statusEventType": "offline",
+            "transitionAt": dt.datetime(2026, 4, 30, 6, 0, tzinfo=dt.UTC),
+            "receivedAt": dt.datetime(2026, 4, 30, 6, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "reason": "reports_stopped",
+            "createdAt": dt.datetime(2026, 4, 30, 6, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.status_events.insert_one(
+        {
+            "rawAuthor": "A",
+            "date": "2026-04-29",
+            "statusEventType": "online",
+            "transitionAt": dt.datetime(2026, 4, 29, 15, 0, tzinfo=dt.UTC),
+            "receivedAt": dt.datetime(2026, 4, 29, 15, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "reason": "reports_resumed",
+            "createdAt": dt.datetime(2026, 4, 29, 15, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.status_states.insert_one(
+        {
+            "rawAuthor": "A",
+            "status": "offline",
+            "updatedAt": dt.datetime(2026, 4, 30, 6, 0, tzinfo=dt.UTC),
+            "transitionAt": dt.datetime(2026, 4, 30, 6, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "LegacyAlias", "targetRawAuthor": "A"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "status",
+            "author": "LegacyAlias",
+            "date": day,
+            "recordedAt": "2026-04-30T05:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 5, 0, tzinfo=dt.UTC),
+            "reportType": "status",
+            "statusEventType": "offline",
+        }
+    )
     t0 = dt.datetime(2026, 4, 30, 7, 0, tzinfo=dt.UTC)
     repo._schedule_telegram_online_prompt_if_needed("A", day, "ual", t0)
     rid = repo.db.telegram_online_prompts.items[0]["reminderId"]
@@ -5207,10 +5251,16 @@ def test_telegram_online_prompt_dismiss_purges_plugin_raw_events_preserves_disco
 
     assert result["ok"]
     assert result["deletedRawActivityEvents"] == 1
+    assert result["deletedStatusEvents"] == 1
+    assert result["deletedStatusReportRows"] == 1
     assert len(repo.db.raw_activity_events.items) == 1
     assert repo.db.raw_activity_events.items[0]["source"] == "discord"
     assert repo.db.raw_event_batches.items == []
     assert repo.db.raw_reports.items == []
+    assert len(repo.db.status_events.items) == 1
+    assert repo.db.status_events.items[0]["date"] == "2026-04-29"
+    assert repo.db.status_states.items[0]["status"] == "online"
+    assert not [r for r in repo.db.report_rows.items if r.get("source") == "status" and r.get("date") == day]
 
 
 def test_telegram_online_prompt_confirm_records_online():
