@@ -1131,7 +1131,7 @@ def _github_username_for_avatar_fetch(raw_author: str, profile: dict[str, Any] |
     return _normalize_github_username(raw_author)
 
 
-def _cached_author_avatar_api_url(raw_author: Any, github_username: Any) -> str:
+def _cached_author_avatar_api_url(raw_author: Any, github_username: Any, profile: dict[str, Any] | None = None) -> str:
     login = _normalize_github_username(github_username)
 
     if not login:
@@ -1139,7 +1139,22 @@ def _cached_author_avatar_api_url(raw_author: Any, github_username: Any) -> str:
 
     author = _normalize_author(raw_author)
     query = urllib.parse.quote(author, safe="")
-    return f"/api/v1/avatars/author?rawAuthor={query}"
+    base = f"/api/v1/avatars/author?rawAuthor={query}"
+
+    bust: int | None = None
+    if profile:
+        ref = _coerce_datetime(profile.get("avatarRefreshedAt"))
+        if ref is not None:
+            bust = int(ref.timestamp() * 1000)
+        else:
+            up = _coerce_datetime(profile.get("updatedAt"))
+            if up is not None:
+                bust = int(up.timestamp() * 1000)
+
+    if bust is not None:
+        return f"{base}&v={bust}"
+
+    return base
 
 
 def _author_configured_time_zone_id(raw_author: str) -> str | None:

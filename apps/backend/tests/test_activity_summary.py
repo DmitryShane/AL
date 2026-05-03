@@ -878,7 +878,8 @@ def test_author_profile_github_username_sets_avatar_url():
     profiles = repo.author_profiles()
     assert len(profiles) == 1
     assert profiles[0]["githubUsername"] == "OctoCat"
-    assert profiles[0]["avatarUrl"] == f"/api/v1/avatars/author?rawAuthor={quote('Test Dev', safe='')}"
+    base = f"/api/v1/avatars/author?rawAuthor={quote('Test Dev', safe='')}"
+    assert profiles[0]["avatarUrl"].startswith(f"{base}&v=")
 
 
 def test_cyrillic_author_names_are_unicode_normalized_for_profile_matching():

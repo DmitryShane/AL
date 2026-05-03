@@ -32,7 +32,11 @@ def author_avatar_file(
     if not path:
         raise HTTPException(status_code=404, detail="Avatar not available")
 
-    return FileResponse(path, media_type=media_type or "application/octet-stream")
+    return FileResponse(
+        path,
+        media_type=media_type or "application/octet-stream",
+        headers={"Cache-Control": "private, no-cache"},
+    )
 
 
 @router.post("/api/v1/authors/avatars/refresh-all")

@@ -73,7 +73,7 @@ class AuthorRepository:
                     "timeZoneDisplayName": profile.get("timeZoneDisplayName")
                     or (author_activity or {}).get("timeZoneDisplayName", ""),
                     "githubUsername": gh_ui,
-                    "avatarUrl": _cached_author_avatar_api_url(raw_author, gh_fetch),
+                    "avatarUrl": _cached_author_avatar_api_url(raw_author, gh_fetch, profile if isinstance(profile, dict) else None),
                 }
             )
 
@@ -282,7 +282,17 @@ class AuthorRepository:
         now = dt.datetime.now(dt.UTC)
         raw_author = _normalize_author(raw_author)
         existing_profile = self.db.author_profiles.find_one(
-            {"rawAuthor": raw_author}, {"_id": 0, "autoBreakEnabled": 1, "autoBreakEffectiveDate": 1, "timeZoneId": 1}
+            {"rawAuthor": raw_author},
+            {
+                "_id": 0,
+                "autoBreakEnabled": 1,
+                "autoBreakEffectiveDate": 1,
+                "timeZoneId": 1,
+                "githubUsername": 1,
+                "github_username": 1,
+                "avatarRefreshedAt": 1,
+                "avatarMimeType": 1,
+            },
         ) or {}
         normalized_telegram = _normalize_telegram_username(telegram_username)
         normalized_discord_user_id = _normalize_discord_user_id(discord_user_id)
@@ -341,10 +351,20 @@ class AuthorRepository:
         if not auto_break_enabled:
             operation.setdefault("$unset", {})["autoBreakEffectiveDate"] = ""
 
+        prev_gh = _github_login_from_profile_doc(existing_profile)
+        if normalized_github != prev_gh:
+            remove_author_avatar_cache_file(getattr(self, "avatar_cache_dir", None), raw_author)
+            operation.setdefault("$unset", {})["avatarRefreshedAt"] = ""
+            operation.setdefault("$unset", {})["avatarMimeType"] = ""
+
         self.db.author_profiles.update_one({"rawAuthor": raw_author}, operation, upsert=True)
         self.invalidate_activity_summary_cache()
+        merged_profile = {**existing_profile, **update}
+        if operation.get("$unset", {}).get("avatarRefreshedAt") == "":
+            merged_profile.pop("avatarRefreshedAt", None)
+            merged_profile.pop("avatarMimeType", None)
         profile_out = {k: v for k, v in update.items() if k != "updatedAt"}
-        profile_out["avatarUrl"] = _cached_author_avatar_api_url(raw_author, normalized_github)
+        profile_out["avatarUrl"] = _cached_author_avatar_api_url(raw_author, normalized_github, merged_profile)
 
         if not normalized_github:
             remove_author_avatar_cache_file(getattr(self, "avatar_cache_dir", None), raw_author)
