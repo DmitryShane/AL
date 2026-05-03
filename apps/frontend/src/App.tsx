@@ -1,13 +1,20 @@
-import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, BarChart3, Bell, CalendarDays, LogOut, Settings, UsersRound } from "lucide-react";
 import { DateRangePicker } from "./components/layout/DateRangePicker";
 import { LoginPage } from "./pages/LoginPage";
 import { NavButton } from "./components/layout/NavButton";
+import { ActivityPage } from "./pages/ActivityPage";
+import { AlertsPage } from "./pages/AlertsPage";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { AuthorsPage } from "./pages/AuthorsPage";
+import { CalendarPage } from "./pages/CalendarPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { apiFetch, IS_LOCAL_DASHBOARD } from "./api/client";
 import {
   ACTIVITY_AUTHOR_STORAGE_KEY,
   AUTH_HINT_STORAGE_KEY,
   DATE_RANGE_STORAGE_KEY,
+  DASHBOARD_SUMMARY_CACHE_PREFIX,
   MEETING_AUDIO_RETENTION_OPTIONS,
   MEETING_SUMMARY_LANGUAGES,
   PAGE_SCROLL_STORAGE_PREFIX,
@@ -19,13 +26,6 @@ import {
 import "./styles.css";
 
 import type { ActivitySummary, AuthorRow, DateRange, Health, Page, SettingsTab, SiteUser, SiteUserRole, Summary } from "./types/dashboard";
-
-const ActivityPage = lazy(() => import("./pages/ActivityPage").then((module) => ({ default: module.ActivityPage })));
-const AlertsPage = lazy(() => import("./pages/AlertsPage").then((module) => ({ default: module.AlertsPage })));
-const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
-const AuthorsPage = lazy(() => import("./pages/AuthorsPage").then((module) => ({ default: module.AuthorsPage })));
-const CalendarPage = lazy(() => import("./pages/CalendarPage").then((module) => ({ default: module.CalendarPage })));
-const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 
 const emptyActivitySummary: ActivitySummary = {
   totals: {
@@ -59,9 +59,9 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [hasAuthHint, setHasAuthHint] = useState(() => localStorage.getItem(AUTH_HINT_STORAGE_KEY) === "true");
   const [health, setHealth] = useState<Health | null>(null);
-  const [summary, setSummary] = useState<Summary | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>(() => loadSavedDateRange());
   const [appliedDateRange, setAppliedDateRange] = useState<DateRange>(() => loadSavedDateRange());
+  const [summary, setSummary] = useState<Summary | null>(() => loadCachedDashboardSummary(loadSavedPage(), loadSavedDateRange()));
   const [search, setSearch] = useState("");
   const [selectedAuthor, setSelectedAuthorState] = useState<string | null>(() => loadSavedActivityAuthor());
   const [loading, setLoading] = useState(true);
@@ -124,12 +124,19 @@ function App() {
     setError(null);
 
     const requestedDateRange = dateRange;
+    const requestedPage = page;
+    const cachedSummary = loadCachedDashboardSummary(requestedPage, requestedDateRange);
+
+    if (showLoading && cachedSummary) {
+      setSummary(cachedSummary);
+      setAppliedDateRange(requestedDateRange);
+    }
 
     try {
       const params = new URLSearchParams({
         startDate: requestedDateRange.startDate,
         endDate: requestedDateRange.endDate,
-        view: summaryViewForPage(page)
+        view: summaryViewForPage(requestedPage)
       });
 
       if (requestedDateRange.preset === "live") {
@@ -153,7 +160,9 @@ function App() {
       }
 
       setHealth(await healthResponse.json());
-      setSummary(await summaryResponse.json());
+      const nextSummary = await summaryResponse.json() as Summary;
+      setSummary(nextSummary);
+      saveCachedDashboardSummary(requestedPage, requestedDateRange, nextSummary);
       setAppliedDateRange(requestedDateRange);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unknown error");
@@ -209,7 +218,8 @@ function App() {
     };
   }, [authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset, dashboardRefreshMs, page]);
 
-  const activitySummary = summary?.activitySummary ?? emptyActivitySummary;
+  const canShowCachedDashboard = Boolean(authUser) || (authLoading && hasAuthHint);
+  const activitySummary = canShowCachedDashboard ? (summary?.activitySummary ?? emptyActivitySummary) : emptyActivitySummary;
   const authors = useMemo(() => activitySummary.authors.filter((author) => matchesAuthorSearch(author, search)), [activitySummary, search]);
   const activeAuthor = activitySummary.authors.some((author) => author.rawAuthor === selectedAuthor)
     ? selectedAuthor
@@ -295,6 +305,7 @@ function App() {
     setAuthUser(null);
     setHasAuthHint(false);
     localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
+    clearDashboardSessionCaches();
     setSummary(null);
     setHealth(null);
   }
@@ -354,34 +365,31 @@ function App() {
           ) : null}
         </header>
 
-        {authLoading ? <p className="notice">Restoring dashboard session...</p> : null}
         {error ? <p className="notice error">{error}</p> : null}
 
-        <Suspense fallback={<p className="notice">Loading page...</p>}>
-          {page === "authors" ? (
-            <AuthorsPage
-              authors={authors}
-              search={search}
-              setSearch={setSearch}
-              refreshing={refreshingReports}
-              onRefresh={() => void requestReportRefresh()}
-            />
-          ) : null}
-          {page === "activity" ? (
-            <ActivityPage
-              summary={activitySummary}
-              dateRange={appliedDateRange}
-              selectedAuthor={activeAuthor}
-              setSelectedAuthor={setSelectedAuthor}
-              refreshing={refreshingReports}
-              onRefreshAuthor={(author) => void requestReportRefresh(author)}
-            />
-          ) : null}
-          {page === "analytics" ? <AnalyticsPage /> : null}
-          {page === "calendar" ? <CalendarPage /> : null}
-          {page === "alerts" ? <AlertsPage authors={activitySummary.authors} /> : null}
-          {page === "settings" ? <SettingsPage summary={summary} currentUser={sessionUser} onSaved={() => void load(false)} /> : null}
-        </Suspense>
+        {page === "authors" ? (
+          <AuthorsPage
+            authors={authors}
+            search={search}
+            setSearch={setSearch}
+            refreshing={refreshingReports}
+            onRefresh={() => void requestReportRefresh()}
+          />
+        ) : null}
+        {page === "activity" ? (
+          <ActivityPage
+            summary={activitySummary}
+            dateRange={appliedDateRange}
+            selectedAuthor={activeAuthor}
+            setSelectedAuthor={setSelectedAuthor}
+            refreshing={refreshingReports}
+            onRefreshAuthor={(author) => void requestReportRefresh(author)}
+          />
+        ) : null}
+        {page === "analytics" ? <AnalyticsPage /> : null}
+        {page === "calendar" ? <CalendarPage /> : null}
+        {page === "alerts" ? <AlertsPage authors={activitySummary.authors} /> : null}
+        {page === "settings" ? <SettingsPage summary={canShowCachedDashboard ? summary : null} currentUser={sessionUser} onSaved={() => void load(false)} /> : null}
       </main>
     </div>
   );
@@ -410,6 +418,61 @@ function summaryViewForPage(page: Page) {
 
 function pageUsesDashboardSummary(page: Page) {
   return page === "authors" || page === "activity" || page === "alerts" || page === "settings";
+}
+
+function dashboardSummaryCacheKey(page: Page, dateRange: DateRange) {
+  const view = summaryViewForPage(page);
+  const dateMode = dateRange.preset === "live" ? "authorLocalToday" : "";
+
+  return `${DASHBOARD_SUMMARY_CACHE_PREFIX}${view}.${dateRange.startDate}.${dateRange.endDate}.${dateMode}`;
+}
+
+function loadCachedDashboardSummary(page: Page, dateRange: DateRange) {
+  if (!pageUsesDashboardSummary(page)) {
+    return null;
+  }
+
+  try {
+    const cached = sessionStorage.getItem(dashboardSummaryCacheKey(page, dateRange));
+
+    if (!cached) {
+      return null;
+    }
+
+    return JSON.parse(cached) as Summary;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedDashboardSummary(page: Page, dateRange: DateRange, summary: Summary) {
+  if (!pageUsesDashboardSummary(page)) {
+    return;
+  }
+
+  try {
+    sessionStorage.setItem(dashboardSummaryCacheKey(page, dateRange), JSON.stringify(summary));
+  } catch {
+    // Browsers can reject storage writes in private mode or when the quota is full.
+  }
+}
+
+function clearDashboardSessionCaches() {
+  const prefixes = [
+    DASHBOARD_SUMMARY_CACHE_PREFIX,
+    "AL.Dashboard.ActivityHourly.",
+    "AL.Dashboard.ActivityReports.",
+    "AL.Dashboard.AnalyticsSummary",
+    "AL.Dashboard.CalendarSummary"
+  ];
+
+  for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+    const key = sessionStorage.key(index);
+
+    if (key && prefixes.some((prefix) => key.startsWith(prefix))) {
+      sessionStorage.removeItem(key);
+    }
+  }
 }
 
 function matchesAuthorSearch(author: AuthorRow, search: string) {

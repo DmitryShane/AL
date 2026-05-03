@@ -10,6 +10,10 @@ import { apiFetch } from "../api/client";
 import { REPORTS_PAGE_STORAGE_KEY } from "../constants/dashboard";
 import type { ActivitySummary, AuthorHourlyActivity, DateRange, Report, ReportsPage, ReportsPageCache } from "../types/dashboard";
 import { activityColor, compareAuthorCardStatus, formatActivityType, loadSavedReportsPage, paletteColor, savedFileLabel } from "./pageHelpers";
+
+const ACTIVITY_HOURLY_CACHE_PREFIX = "AL.Dashboard.ActivityHourly.";
+const ACTIVITY_REPORTS_CACHE_PREFIX = "AL.Dashboard.ActivityReports.";
+
 export function ActivityPage({
   summary,
   dateRange,
@@ -26,13 +30,13 @@ export function ActivityPage({
   onRefreshAuthor: (author: string) => void;
 }) {
   const author = summary.authors.find((item) => item.rawAuthor === selectedAuthor) ?? summary.authors[0];
-  const [hourlyRows, setHourlyRows] = useState<AuthorHourlyActivity[]>(summary.hourlyActivityByAuthor);
-  const hourlyCacheRef = useRef<Record<string, AuthorHourlyActivity[]>>({});
   const hourlyCacheKey = useMemo(() => JSON.stringify({
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
     dateMode: dateRange.preset === "live" ? "authorLocalToday" : ""
   }), [dateRange.startDate, dateRange.endDate, dateRange.preset]);
+  const [hourlyRows, setHourlyRows] = useState<AuthorHourlyActivity[]>(() => loadCachedActivityHourly(hourlyCacheKey) ?? summary.hourlyActivityByAuthor);
+  const hourlyCacheRef = useRef<Record<string, AuthorHourlyActivity[]>>({});
   const authorHourly = useMemo(() => {
     const hourlySource = hourlyRows.length ? hourlyRows : summary.hourlyActivityByAuthor;
     const hourly = hourlySource
@@ -95,6 +99,16 @@ export function ActivityPage({
         return;
       }
 
+      const persistedRows = loadCachedActivityHourly(hourlyCacheKey);
+
+      if (persistedRows) {
+        hourlyCacheRef.current = {
+          ...hourlyCacheRef.current,
+          [hourlyCacheKey]: persistedRows
+        };
+        setHourlyRows(persistedRows);
+      }
+
       const params = new URLSearchParams({
         startDate: dateRange.startDate,
         endDate: dateRange.endDate
@@ -121,6 +135,7 @@ export function ActivityPage({
           ...hourlyCacheRef.current,
           [hourlyCacheKey]: payload.hourlyActivityByAuthor
         };
+        saveCachedActivityHourly(hourlyCacheKey, payload.hourlyActivityByAuthor);
         setHourlyRows(payload.hourlyActivityByAuthor);
       } catch {
         if (!ignore) {
@@ -183,6 +198,18 @@ export function ActivityPage({
         return;
       }
 
+      const persistedPage = loadCachedReportsPage(reportsCacheKey);
+
+      if (persistedPage) {
+        setReports(persistedPage.reports);
+        setReportsTotal(persistedPage.total);
+        setReportSources(persistedPage.sources);
+        reportsPageCacheRef.current = {
+          ...reportsPageCacheRef.current,
+          [reportsCacheKey]: persistedPage
+        };
+      }
+
       setReportsLoading(true);
       setReportsError(null);
 
@@ -227,14 +254,12 @@ export function ActivityPage({
           ...reportsPageCacheRef.current,
           [reportsCacheKey]: payload
         };
+        saveCachedReportsPage(reportsCacheKey, payload);
       } catch (requestError) {
         if (ignore) {
           return;
         }
 
-        setReports([]);
-        setReportsTotal(0);
-        setReportSources([]);
         setReportsError(requestError instanceof Error ? requestError.message : "Unknown error");
       } finally {
         if (!ignore) {
@@ -345,5 +370,53 @@ export function ActivityPage({
       )}
     </section>
   );
+}
+
+function activityCacheKey(prefix: string, key: string) {
+  return `${prefix}${key}`;
+}
+
+function loadCachedActivityHourly(key: string) {
+  try {
+    const cached = sessionStorage.getItem(activityCacheKey(ACTIVITY_HOURLY_CACHE_PREFIX, key));
+
+    if (!cached) {
+      return null;
+    }
+
+    return JSON.parse(cached) as AuthorHourlyActivity[];
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedActivityHourly(key: string, rows: AuthorHourlyActivity[]) {
+  try {
+    sessionStorage.setItem(activityCacheKey(ACTIVITY_HOURLY_CACHE_PREFIX, key), JSON.stringify(rows));
+  } catch {
+    // Ignore storage failures; live API data is still shown.
+  }
+}
+
+function loadCachedReportsPage(key: string) {
+  try {
+    const cached = sessionStorage.getItem(activityCacheKey(ACTIVITY_REPORTS_CACHE_PREFIX, key));
+
+    if (!cached) {
+      return null;
+    }
+
+    return JSON.parse(cached) as ReportsPage;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedReportsPage(key: string, page: ReportsPage) {
+  try {
+    sessionStorage.setItem(activityCacheKey(ACTIVITY_REPORTS_CACHE_PREFIX, key), JSON.stringify(page));
+  } catch {
+    // Ignore storage failures; live API data is still shown.
+  }
 }
 

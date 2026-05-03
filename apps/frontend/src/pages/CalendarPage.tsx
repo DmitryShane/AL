@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api/client";
+import { CALENDAR_SUMMARY_CACHE_KEY } from "../constants/dashboard";
 import type { CalendarMark, CalendarSummary } from "../types/dashboard";
 import { dateRangeList, initials, monthIndexes, uniqueDates } from "./pageHelpers";
 import { CalendarClearEditor, CalendarLegend, CalendarMarkEditor, CalendarStats, MonthCalendar, ReasonEditor } from "../components/calendar/CalendarComponents";
 export function CalendarPage() {
   const year = new Date().getFullYear();
-  const [calendar, setCalendar] = useState<CalendarSummary | null>(null);
+  const [calendar, setCalendar] = useState<CalendarSummary | null>(() => loadCachedCalendarSummary(year));
   const [selectedAuthor, setSelectedAuthor] = useState("all");
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
   const [rangeStart, setRangeStart] = useState<string | null>(null);
@@ -35,6 +36,7 @@ export function CalendarPage() {
 
       const data: CalendarSummary = await response.json();
       setCalendar(data);
+      saveCachedCalendarSummary(data);
       setError(null);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Failed to load calendar.");
@@ -293,5 +295,31 @@ export function CalendarPage() {
       )}
     </section>
   );
+}
+
+function loadCachedCalendarSummary(year: number) {
+  try {
+    const cached = sessionStorage.getItem(calendarCacheKey(year));
+
+    if (!cached) {
+      return null;
+    }
+
+    return JSON.parse(cached) as CalendarSummary;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedCalendarSummary(summary: CalendarSummary) {
+  try {
+    sessionStorage.setItem(calendarCacheKey(summary.year), JSON.stringify(summary));
+  } catch {
+    // Ignore storage failures; live API data is still shown.
+  }
+}
+
+function calendarCacheKey(year: number) {
+  return `${CALENDAR_SUMMARY_CACHE_KEY}.${year}`;
 }
 

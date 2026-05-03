@@ -6,6 +6,9 @@ export const DATE_RANGE_STORAGE_KEY = "AL.Dashboard.DateRange";
 export const REPORTS_PAGE_STORAGE_KEY = "AL.Dashboard.PluginReportsPage";
 export const SETTINGS_TAB_STORAGE_KEY = "AL.Dashboard.SettingsTab";
 export const AUTH_HINT_STORAGE_KEY = "AL.Dashboard.Authenticated";
+export const DASHBOARD_SUMMARY_CACHE_PREFIX = "AL.Dashboard.Summary.";
+export const ANALYTICS_SUMMARY_CACHE_KEY = "AL.Dashboard.AnalyticsSummary";
+export const CALENDAR_SUMMARY_CACHE_KEY = "AL.Dashboard.CalendarSummary";
 
 export const MEETING_SUMMARY_LANGUAGES = [
   "English",

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { AnalyticsActivityOverview } from "../components/AnalyticsActivityOverview";
 import { apiFetch } from "../api/client";
+import { ANALYTICS_SUMMARY_CACHE_KEY } from "../constants/dashboard";
 import type { AnalyticsSummary } from "../types/dashboard";
 import { avatarStyle, initials } from "./pageHelpers";
 export function AnalyticsPage() {
-  const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null);
+  const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(() => loadCachedAnalyticsSummary());
   const [selectedAuthor, setSelectedAuthor] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -23,6 +24,7 @@ export function AnalyticsPage() {
 
       const data: AnalyticsSummary = await response.json();
       setAnalytics(data);
+      saveCachedAnalyticsSummary(data);
       setSelectedAuthor((current) => current || (data.authors[0]?.rawAuthor ?? ""));
       setError(null);
     } catch (requestError) {
@@ -86,5 +88,27 @@ export function AnalyticsPage() {
       )}
     </section>
   );
+}
+
+function loadCachedAnalyticsSummary() {
+  try {
+    const cached = sessionStorage.getItem(ANALYTICS_SUMMARY_CACHE_KEY);
+
+    if (!cached) {
+      return null;
+    }
+
+    return JSON.parse(cached) as AnalyticsSummary;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedAnalyticsSummary(summary: AnalyticsSummary) {
+  try {
+    sessionStorage.setItem(ANALYTICS_SUMMARY_CACHE_KEY, JSON.stringify(summary));
+  } catch {
+    // Ignore storage failures; live API data is still shown.
+  }
 }
 

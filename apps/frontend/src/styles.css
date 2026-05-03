@@ -43,10 +43,6 @@ p {
   grid-template-columns: 240px minmax(0, 1fr);
 }
 
-.app-frame.restoring-scroll {
-  visibility: hidden;
-}
-
 .sidebar {
   position: sticky;
   top: 0;
