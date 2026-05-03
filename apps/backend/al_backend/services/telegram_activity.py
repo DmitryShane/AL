@@ -953,6 +953,17 @@ class TelegramActivityService:
             )
             return
 
+        if (
+            not is_red_offline
+            and previous_status == "offline"
+            and stale_presence not in {"reports", "both"}
+        ):
+            self.db.status_states.update_one(
+                {"rawAuthor": raw_author},
+                {"$set": {"rawAuthor": raw_author, "status": "online", "updatedAt": now}},
+                upsert=True,
+            )
+
         if author.get("status") == "online" and previous_status == "offline" and self.get_plugin_ingest_enabled():
             transition_at = (_coerce_datetime(author.get("lastReceivedAt")) or now) + dt.timedelta(microseconds=1)
             self.record_status_event(raw_author, "online", transition_at, time_zone_id, "reports_resumed")

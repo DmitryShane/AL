@@ -1631,18 +1631,31 @@ class ActivitySummaryService:
         if bool(author.get("activeMeeting")):
             return True
 
-        if _author_has_summary_activity(author):
-            return True
-
         time_zone_id = _author_time_zone_id(raw_author, profiles, author.get("timeZoneId"))
         local_today = _local_date_for_time_zone(now, time_zone_id)
 
         if not _date_in_summary_scope(local_today, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
             return False
 
-        for session in self.db.day_sessions.find({"rawAuthor": raw_author, "date": local_today}, {"_id": 0, "startedAt": 1}):
-            if _coerce_datetime(session.get("startedAt")):
+        session = self.db.day_sessions.find_one(
+            {"rawAuthor": raw_author, "date": local_today},
+            {"_id": 0, "startedAt": 1, "lastOfflineAt": 1, "lastOnlineAt": 1},
+        )
+
+        if session:
+            started_at = _coerce_datetime(session.get("startedAt"))
+            last_offline_at = _coerce_datetime(session.get("lastOfflineAt"))
+            last_online_at = _coerce_datetime(session.get("lastOnlineAt"))
+
+            if last_offline_at:
+                if not last_online_at or last_online_at <= last_offline_at:
+                    return False
+
+            if started_at:
                 return True
+
+        if _author_has_summary_activity(author):
+            return True
 
         report_query = {"author": raw_author, "date": local_today, "source": {"$nin": ["telegram", "discord"]}}
         return bool(self.db.report_rows.find_one(report_query, {"_id": 0}))

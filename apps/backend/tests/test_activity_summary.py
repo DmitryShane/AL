@@ -1990,6 +1990,95 @@ def test_regular_date_still_applies_reports_stopped_when_it_is_author_local_toda
     assert [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
 
 
+def test_closed_telegram_workday_does_not_apply_reports_stopped_even_with_plugin_stale():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "telegramUsername": "future_artist",
+            "date": "2026-04-28",
+            "startedAt": dt.datetime(2026, 4, 28, 16, 0, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 4, 28, 23, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "lastReceivedAt": dt.datetime(2026, 4, 28, 20, 0, tzinfo=dt.UTC),
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "activityCounts": [{"type": "selection", "count": 1}],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    frozen_now = dt.datetime(2026, 4, 29, 1, 30, tzinfo=dt.UTC)
+    author = _author_from_summary(repo, frozen_now)
+
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "telegram"
+    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
+    assert repo.db.status_events.count_documents({"rawAuthor": "Future Artist", "reason": "reports_stopped"}) == 0
+
+
+def test_open_telegram_workday_still_applies_reports_stopped_when_plugin_stale():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "telegramUsername": "future_artist",
+            "date": "2026-04-28",
+            "startedAt": dt.datetime(2026, 4, 28, 16, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "lastReceivedAt": dt.datetime(2026, 4, 28, 20, 0, tzinfo=dt.UTC),
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "activityCounts": [{"type": "selection", "count": 1}],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 29, 1, 30, tzinfo=dt.UTC))
+
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "reports"
+    assert [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
+
+
 def test_regular_date_author_local_today_before_workday_start_is_gray_offline():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
