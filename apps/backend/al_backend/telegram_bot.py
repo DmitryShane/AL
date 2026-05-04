@@ -591,7 +591,7 @@ def edit_reminder_message(
         if action == "confirm_online":
             body = f"Done.{author} Online."
         else:
-            body = f"Done.{author} Dismissed as not applicable."
+            body = f"Done.{author} Still offline."
     elif reminder_kind == "break_activity_prompt":
         if action == "confirm_online":
             body = f"Done.{author} Online."
