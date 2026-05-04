@@ -131,6 +131,15 @@ export function ActivityPage({
     limit: reportsPageSize,
     page: reportsPage
   }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportHourFilter, reportsPageSize, reportsPage]);
+  const hasVisibleReports = !reportsLoading && !reportsError && reports.length > 0;
+  const visibleActivityMixItems = hasVisibleReports ? activityMixItems : [];
+  const visibleSavedPrefabItems = hasVisibleReports ? savedPrefabItems : [];
+  const visibleOvertimeActivityMixItems = hasVisibleReports ? overtimeActivityMixItems : [];
+  const visibleOvertimeSavedPrefabItems = hasVisibleReports ? overtimeSavedPrefabItems : [];
+  const visibleActivityMixGroups = hasVisibleReports ? activityMixGroups : [];
+  const visibleSavedPrefabGroups = hasVisibleReports ? savedPrefabGroups : [];
+  const visibleOvertimeActivityMixGroups = hasVisibleReports ? overtimeActivityMixGroups : [];
+  const visibleOvertimeSavedPrefabGroups = hasVisibleReports ? overtimeSavedPrefabGroups : [];
 
   useEffect(() => {
     let ignore = false;
@@ -444,21 +453,21 @@ export function ActivityPage({
               <BreakdownPanel
                 key={`${author.rawAuthor}-activity-mix`}
                 title="Activity Mix"
-                items={activityMixItems}
-                groups={activityMixGroups}
+                items={visibleActivityMixItems}
+                groups={visibleActivityMixGroups}
               />
               <BreakdownPanel
                 key={`${author.rawAuthor}-saved-files`}
                 title="Saved Files"
-                items={savedPrefabItems}
-                groups={savedPrefabGroups}
+                items={visibleSavedPrefabItems}
+                groups={visibleSavedPrefabGroups}
               />
               <OvertimeBreakdownPanel
                 key={`${author.rawAuthor}-overtime`}
-                activityItems={overtimeActivityMixItems}
-                savedItems={overtimeSavedPrefabItems}
-                activityGroups={overtimeActivityMixGroups}
-                savedGroups={overtimeSavedPrefabGroups}
+                activityItems={visibleOvertimeActivityMixItems}
+                savedItems={visibleOvertimeSavedPrefabItems}
+                activityGroups={visibleOvertimeActivityMixGroups}
+                savedGroups={visibleOvertimeSavedPrefabGroups}
               />
             </div>
 

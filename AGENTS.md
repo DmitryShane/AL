@@ -38,6 +38,14 @@ The VS Code Activity Logger extension source lives in:
 
 After any change under `vscode_al` (TypeScript in `src/`, `package.json`, or `tsconfig`), the agent must **finish the full workflow in the same session** without asking the user to run commands locally: `cd` into `vscode_al`, run `npm install` when dependencies or the lockfile changed (or when `node_modules` is missing), then run **`npm run package`**. That script runs `npm run compile` (updates `out/`) and **`vsce package`**, which writes the installable **`dist/al-vscode-activity-logger-<version>.vsix`**. Authors install the VSIX from `dist/`; leaving `dist/` stale while claiming the extension is ready is wrong. If you truly only need a TypeScript check without a VSIX, `npm run compile` alone is enough for `out/`, but default to **`npm run package`** whenever the change is meant for end users.
 
+The Cursor Activity Logger extension source lives in:
+
+```text
+/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual/cursor_al
+```
+
+After any behavior or end-user change under `cursor_al` (TypeScript in `src/`, `package.json`, or `tsconfig`), the agent must complete the full release/install workflow in the same session: bump the extension version in both `package.json` and `src/config.ts` (`PLUGIN_VERSION`), update the `npm run package` VSIX output filename to match, run `npm install` when dependencies or the lockfile changed (or when `node_modules` is missing), run **`npm run package`** to refresh `out/` and write **`dist/al-cursor-activity-logger-<version>.vsix`**, then install that VSIX locally when the owner asks to update the local Cursor plugin. Use the actual Cursor CLI at `/Applications/Cursor.app/Contents/Resources/app/bin/cursor --install-extension "<vsix-path>" --force`; do **not** use the generic `code` CLI for Cursor plugin installs because it installs into `~/.vscode/extensions`, while Cursor uses `~/.cursor/extensions`. After installation, verify that `~/.cursor/extensions/al.al-cursor-activity-logger-<version>/package.json` exists and the Cursor UI shows the new version. Never leave a changed Cursor plugin at the previous version or with stale `out/` / `dist/` artifacts.
+
 ## Backend And Frontend
 
 Continue working on the server and website in this AL repository:
@@ -111,6 +119,7 @@ When debugging summaries, `status_events`, or idle accounting:
 
 - Default to **short, direct answers** unless the user asks for depth, a tutorial, or a formal write-up. Skip long preamble and filler.
 - In chat, always answer the owner briefly and concisely. Do not add broad context, extra details, optional explanations, or implementation notes unless the owner explicitly asks for them.
+- The user is the repository owner. When the owner asks to check "my" data, reports, activity, profile, or similar site data, interpret that as the website author **Dmitry Shane** unless the owner explicitly names another author.
 - The owner may write in Russian in chat; **repository and product text stay English** per the rule above. **Russian in chat is not an implicit request for Russian in the product** — if the owner describes desired wording in Russian (alerts, bot copy, UI labels, emails), implement it in **English** unless they clearly ask for a **Russian-language deliverable** (for example: “пусть в боте будет по-русски”, “Russian locale for Telegram”).
 - Write implementation plans for the owner in Russian, because plans are part of chat communication. Keep repository and product text in English unless explicitly asked otherwise.
 

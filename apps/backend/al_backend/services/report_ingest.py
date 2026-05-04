@@ -87,6 +87,10 @@ class ReportIngestService(MongoComposableMixin):
     ) -> str:
         now = dt.datetime.now(dt.UTC)
         payload = dict(payload)
+
+        if self._is_heartbeat_only_event_payload(payload):
+            return ""
+
         original_author = _normalize_author(payload.get("author") or "Unknown User")
         payload["author"] = composed(self).resolve_author_alias(original_author)
         normalized_time_zone = _author_configured_time_zone_id(payload["author"]) or _valid_time_zone_id(payload.get("timeZoneId"))
@@ -144,6 +148,14 @@ class ReportIngestService(MongoComposableMixin):
         composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
         composed(self).invalidate_activity_summary_cache()
         return str(raw_result.inserted_id)
+
+    def _is_heartbeat_only_event_payload(self, payload: dict[str, Any]) -> bool:
+        events = payload.get("events")
+
+        if not isinstance(events, list) or not events:
+            return False
+
+        return all(isinstance(event, dict) and str(event.get("eventType") or "").strip() == "heartbeat" for event in events)
 
     def request_report_refresh(self, author: str | None = None) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
