@@ -3058,6 +3058,113 @@ def test_auto_break_only_fills_remaining_legal_break():
     assert author["breakSeconds"] == 3600
 
 
+def test_auto_break_uses_one_daily_limit_across_sources():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-05-02",
+        }
+    )
+    cur_hourly = _empty_hourly_activity()
+    vsc_hourly = _empty_hourly_activity()
+    cur_hourly[8]["idleSeconds"] = 3600
+    vsc_hourly[9]["idleSeconds"] = 3600
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "source": "cur",
+            "activeSeconds": 0,
+            "idleSeconds": 3600,
+            "daySeconds": 0,
+            "hourlyActivity": cur_hourly,
+            "lastRecordedAt": "2026-05-02T10:00:00Z",
+            "lastReceivedAt": dt.datetime(2026, 5, 2, 10, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "source": "vsc",
+            "activeSeconds": 0,
+            "idleSeconds": 3600,
+            "daySeconds": 0,
+            "hourlyActivity": vsc_hourly,
+            "lastRecordedAt": "2026-05-02T11:00:00Z",
+            "lastReceivedAt": dt.datetime(2026, 5, 2, 11, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    assert author["idleSeconds"] == 3600
+    assert author["breakSeconds"] == 3600
+    assert sum(hour["idleSeconds"] for hour in hourly) == 3600
+    assert sum(hour["breakSeconds"] for hour in hourly) == 3600
+
+
+def test_auto_break_applies_after_visual_idle_gaps():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-05-02",
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[8]["activeSeconds"] = 60
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "source": "cur",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "daySeconds": 0,
+            "hourlyActivity": hourly_activity,
+            "lastRecordedAt": "2026-05-02T10:00:00Z",
+            "lastReceivedAt": dt.datetime(2026, 5, 2, 10, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "source": "cur",
+            "reportType": "auto",
+            "recordedAt": "2026-05-02T10:00:00Z",
+            "receivedAt": dt.datetime(2026, 5, 2, 10, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-02",
+            "startedAt": dt.datetime(2026, 5, 2, 8, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    assert author["breakSeconds"] == 3540
+    assert hourly[8]["idleSeconds"] == 0
+    assert hourly[8]["breakSeconds"] == 3540
+
+
 def test_auto_break_waits_until_effective_date():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(

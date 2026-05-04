@@ -678,7 +678,7 @@ class ActivitySummaryService(MongoComposableMixin):
         meeting_seconds_by_author_date: dict[tuple[str, str], int] = {}
         break_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         meeting_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
-        auto_break_consumed_by_author_date: dict[tuple[str, str], int] = {}
+        summary_dates_by_author: dict[str, set[str]] = {}
         profiles = composed(self)._profiles_by_raw_author()
         now = now or dt.datetime.now(dt.UTC)
         daily_items = sorted(
@@ -710,6 +710,8 @@ class ActivitySummaryService(MongoComposableMixin):
             raw_author = item.get("author") or "Unknown User"
             item_date = item.get("date") or ""
             author_date_key = (raw_author, item_date)
+            if item_date:
+                summary_dates_by_author.setdefault(raw_author, set()).add(item_date)
             profile = profiles.get(raw_author, {})
             display_name = _display_name(raw_author, profile)
             hourly_activity = _apply_breaks_to_hourly_activity(
@@ -735,18 +737,6 @@ class ActivitySummaryService(MongoComposableMixin):
                 _merge_hourly_activity(hourly_activity, telegram_gap_hours)
                 telegram_gap_counted.add(author_date_key)
 
-            current_real_break_seconds = sum(int(hour.get("breakSeconds", 0)) for hour in hourly_activity)
-            auto_break_seconds = self._apply_summary_auto_break(
-                raw_author,
-                item_date,
-                hourly_activity,
-                profiles,
-                break_seconds_by_author_date.get(author_date_key, 0) + current_real_break_seconds,
-                auto_break_consumed_by_author_date.get(author_date_key, 0),
-            )
-            auto_break_consumed_by_author_date[author_date_key] = (
-                auto_break_consumed_by_author_date.get(author_date_key, 0) + auto_break_seconds
-            )
             report_active_seconds = int(item.get("activeSeconds", 0))
             report_idle_seconds = sum(int(hour.get("idleSeconds", 0)) for hour in hourly_activity)
             raw_plugin_day_seconds = max(0, int(item.get("activeSeconds", 0)) + int(item.get("idleSeconds", 0)) + telegram_gap_seconds)
@@ -1020,6 +1010,14 @@ class ActivitySummaryService(MongoComposableMixin):
             date_mode,
             now,
         )
+        self._apply_summary_auto_breaks(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            summary_dates_by_author,
+            break_seconds_by_author_date,
+        )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_latest_report_metadata(
@@ -1108,16 +1106,53 @@ class ActivitySummaryService(MongoComposableMixin):
             "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]) if include_hourly else [],
         }
 
-    def _apply_summary_auto_break(
+    def _apply_summary_auto_breaks(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        summary_dates_by_author: dict[str, set[str]],
+        break_seconds_by_author_date: dict[tuple[str, str], int],
+    ) -> None:
+        for raw_author, hourly_author in hourly_by_author.items():
+            author_row = authors_by_raw.get(raw_author)
+
+            if not author_row:
+                continue
+
+            remaining_seconds = self._summary_auto_break_remaining_seconds(
+                raw_author,
+                profiles,
+                summary_dates_by_author.get(raw_author, set()),
+                break_seconds_by_author_date,
+            )
+
+            if remaining_seconds <= 0:
+                continue
+
+            transferred_seconds = self._transfer_summary_idle_to_break(
+                hourly_author.get("hourlyActivity", []),
+                remaining_seconds,
+            )
+
+            if transferred_seconds <= 0:
+                continue
+
+            applied_idle_reduction = min(int(author_row.get("idleSeconds", 0)), transferred_seconds)
+            author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) - applied_idle_reduction
+            author_row["breakSeconds"] = int(author_row.get("breakSeconds", 0)) + transferred_seconds
+            totals["idleSeconds"] = max(0, int(totals.get("idleSeconds", 0)) - applied_idle_reduction)
+            totals["breakSeconds"] = int(totals.get("breakSeconds", 0)) + transferred_seconds
+
+    def _summary_auto_break_remaining_seconds(
         self,
         raw_author: str,
-        day_date: str,
-        hourly_activity: list[dict[str, Any]],
         profiles: dict[str, dict[str, Any]],
-        real_break_seconds: int,
-        consumed_auto_break_seconds: int,
+        summary_dates: set[str],
+        break_seconds_by_author_date: dict[tuple[str, str], int],
     ) -> int:
-        if not raw_author or not day_date:
+        if not raw_author or not summary_dates:
             return 0
 
         profile = profiles.get(raw_author, {})
@@ -1127,11 +1162,21 @@ class ActivitySummaryService(MongoComposableMixin):
 
         effective_date = str(profile.get("autoBreakEffectiveDate") or "")
 
-        if not effective_date or day_date < effective_date:
+        if not effective_date:
             return 0
 
-        remaining_seconds = max(0, AUTO_BREAK_SECONDS - real_break_seconds - consumed_auto_break_seconds)
+        remaining_seconds = 0
 
+        for day_date in summary_dates:
+            if day_date < effective_date:
+                continue
+
+            real_break_seconds = break_seconds_by_author_date.get((raw_author, day_date), 0)
+            remaining_seconds += max(0, AUTO_BREAK_SECONDS - real_break_seconds)
+
+        return remaining_seconds
+
+    def _transfer_summary_idle_to_break(self, hourly_activity: list[dict[str, Any]], remaining_seconds: int) -> int:
         if remaining_seconds <= 0:
             return 0
 
