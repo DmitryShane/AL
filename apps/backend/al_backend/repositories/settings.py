@@ -94,8 +94,11 @@ class SettingsRepository(MongoComposableMixin):
 
         return composed(self).default_send_interval_seconds
 
-    def get_idle_threshold_for_author(self, author: str) -> int:
+    def get_idle_threshold_for_author(self, author: str, source: str | None = None) -> int:
         global_setting = self.db.interval_settings.find_one({"kind": "global"}) or {}
+
+        if source == "dev" and global_setting.get("deviceIdleThresholdSeconds"):
+            return int(global_setting["deviceIdleThresholdSeconds"])
 
         if global_setting.get("idleThresholdSeconds"):
             return int(global_setting["idleThresholdSeconds"])
@@ -213,6 +216,7 @@ class SettingsRepository(MongoComposableMixin):
         self,
         default_send_interval_seconds: int | None,
         idle_threshold_seconds: int | None,
+        device_idle_threshold_seconds: int | None,
         plugin_ingest_enabled: bool | None,
         author: str | None,
         author_send_interval_seconds: int | None,
@@ -227,6 +231,9 @@ class SettingsRepository(MongoComposableMixin):
 
         if idle_threshold_seconds is not None:
             global_update["idleThresholdSeconds"] = idle_threshold_seconds
+
+        if device_idle_threshold_seconds is not None:
+            global_update["deviceIdleThresholdSeconds"] = device_idle_threshold_seconds
 
         if telegram_online_prompt_delay_minutes is not None:
             clamped = max(
@@ -322,6 +329,7 @@ class SettingsRepository(MongoComposableMixin):
                 global_setting.get("sendIntervalSeconds", composed(self).default_send_interval_seconds)
             ),
             "idleThresholdSeconds": int(global_setting.get("idleThresholdSeconds", DEFAULT_IDLE_THRESHOLD_SECONDS)),
+            "deviceIdleThresholdSeconds": int(global_setting.get("deviceIdleThresholdSeconds", DEFAULT_IDLE_THRESHOLD_SECONDS)),
             "pluginIngestEnabled": self.get_plugin_ingest_enabled(),
             "telegramOnlinePromptDelayMinutes": telegram_online_prompt_delay_minutes,
             "authors": author_settings,

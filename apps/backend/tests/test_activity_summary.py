@@ -224,6 +224,7 @@ class FakeDb:
         self.break_events = FakeCollection()
         self.break_sessions = FakeCollection()
         self.day_sessions = FakeCollection()
+        self.device_report_identities = FakeCollection()
         self.telegram_day_reminders = FakeCollection()
         self.telegram_online_prompts = FakeCollection()
         self.telegram_break_activity_prompts = FakeCollection()
@@ -285,6 +286,7 @@ def test_interval_settings_include_independent_idle_threshold():
     result = repo.upsert_interval_settings(
         default_send_interval_seconds=120,
         idle_threshold_seconds=450,
+        device_idle_threshold_seconds=60,
         plugin_ingest_enabled=None,
         author=None,
         author_send_interval_seconds=None,
@@ -292,6 +294,7 @@ def test_interval_settings_include_independent_idle_threshold():
 
     assert result["defaultSendIntervalSeconds"] == 120
     assert result["idleThresholdSeconds"] == 450
+    assert result["deviceIdleThresholdSeconds"] == 60
     assert result["pluginIngestEnabled"] is True
 
 
@@ -301,6 +304,7 @@ def test_interval_settings_include_global_plugin_ingest_toggle():
     result = repo.upsert_interval_settings(
         default_send_interval_seconds=None,
         idle_threshold_seconds=None,
+        device_idle_threshold_seconds=None,
         plugin_ingest_enabled=False,
         author=None,
         author_send_interval_seconds=None,
@@ -317,6 +321,7 @@ def test_interval_settings_store_plugin_ingest_resume_timestamp_when_re_enabled(
     repo.upsert_interval_settings(
         default_send_interval_seconds=None,
         idle_threshold_seconds=None,
+        device_idle_threshold_seconds=None,
         plugin_ingest_enabled=False,
         author=None,
         author_send_interval_seconds=None,
@@ -324,6 +329,7 @@ def test_interval_settings_store_plugin_ingest_resume_timestamp_when_re_enabled(
     repo.upsert_interval_settings(
         default_send_interval_seconds=None,
         idle_threshold_seconds=None,
+        device_idle_threshold_seconds=None,
         plugin_ingest_enabled=True,
         author=None,
         author_send_interval_seconds=None,
@@ -490,6 +496,7 @@ def test_interval_settings_persist_telegram_online_prompt_delay_minutes():
     result = repo.upsert_interval_settings(
         default_send_interval_seconds=None,
         idle_threshold_seconds=None,
+        device_idle_threshold_seconds=None,
         plugin_ingest_enabled=None,
         author=None,
         author_send_interval_seconds=None,
@@ -2457,6 +2464,122 @@ def test_heartbeat_idle_still_counts_within_same_raw_event_source_state():
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-28", "source": "ual"})
     assert daily is not None
     assert daily["idleSeconds"] == 600
+
+
+def test_device_click_counts_as_activity_and_heartbeat_counts_idle():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
+
+    click_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "dev",
+            "author": "Device1",
+            "projectId": "Bike Rush 2",
+            "deviceId": "advertising-id-1",
+            "date": "2026-05-04",
+            "eventType": "click",
+            "occurredAtUtc": "2026-05-04T10:00:00Z",
+            "occurredAtLocal": "2026-05-04T10:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 4, 10, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    idle_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "dev",
+            "author": "Device1",
+            "projectId": "Bike Rush 2",
+            "deviceId": "advertising-id-1",
+            "date": "2026-05-04",
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-05-04T10:10:00Z",
+            "occurredAtLocal": "2026-05-04T10:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 4, 10, 10, tzinfo=dt.UTC),
+        }
+    )
+
+    assert click_deltas["activityCountDeltas"] == [{"type": "click", "count": 1}]
+    assert idle_deltas["idleDeltaSeconds"] == 600
+    daily = repo.db.daily_author_activity.find_one({"author": "Device1", "date": "2026-05-04", "source": "dev"})
+    assert daily is not None
+    assert daily["idleSeconds"] == 600
+
+
+def test_device_summary_uses_application_name_as_saved_item():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "dev",
+            "author": "Device1",
+            "projectId": "Bike Rush 2",
+            "date": "2026-05-04",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "activityCounts": [{"type": "click", "count": 3}],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-04", end_date="2026-05-04")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Device1")
+    source_group = next(item for item in author["savedPrefabsBySource"] if item["source"] == "dev")
+
+    assert source_group["savedPrefabs"] == [
+        {"path": "device:bike rush 2", "name": "Bike Rush 2", "projectId": "Bike Rush 2", "saveCount": 3}
+    ]
+
+
+def test_device_report_author_is_stable_for_same_device_id():
+    repo = fake_repository()
+
+    first = repo.resolve_device_report_author("dev", "advertising-id-1")
+    second = repo.resolve_device_report_author("dev", "advertising-id-1")
+    third = repo.resolve_device_report_author("dev", "advertising-id-2")
+
+    assert first == "Device1"
+    assert second == "Device1"
+    assert third == "Device2"
+
+
+def test_device_source_uses_device_idle_threshold():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one(
+        {"kind": "global", "idleThresholdSeconds": 300, "deviceIdleThresholdSeconds": 60}
+    )
+    repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
+
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "dev",
+            "author": "Device1",
+            "projectId": "Bike Rush 2",
+            "deviceId": "advertising-id-1",
+            "date": "2026-05-04",
+            "eventType": "click",
+            "occurredAtUtc": "2026-05-04T10:00:00Z",
+            "occurredAtLocal": "2026-05-04T10:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 4, 10, 0, tzinfo=dt.UTC),
+        }
+    )
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "dev",
+            "author": "Device1",
+            "projectId": "Bike Rush 2",
+            "deviceId": "advertising-id-1",
+            "date": "2026-05-04",
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-05-04T10:01:30Z",
+            "occurredAtLocal": "2026-05-04T10:01:30+00:00",
+            "receivedAt": dt.datetime(2026, 5, 4, 10, 1, 30, tzinfo=dt.UTC),
+        }
+    )
+
+    assert deltas["idleDeltaSeconds"] == 90
 
 
 def test_heartbeat_idle_does_not_account_entire_delivery_gap_when_huge():

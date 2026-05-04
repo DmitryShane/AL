@@ -630,7 +630,10 @@ class ActivityAggregationService(MongoComposableMixin):
         is_activity = raw_is_activity and (source_is_focused is not False or event_type == "focus")
         consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
         overtime_window = self._overtime_window_for_event(event)
-        idle_threshold_seconds = composed(self).get_idle_threshold_for_author(str(event.get("author") or "Unknown User"))
+        idle_threshold_seconds = composed(self).get_idle_threshold_for_author(
+            str(event.get("author") or "Unknown User"),
+            current_source,
+        )
         received_at = _coerce_datetime(event.get("receivedAt"))
         status_context = self._status_interval_context_for_event(event, occurred_at, received_at)
         status_offline_at = status_context.get("offlineAt") if status_context else None

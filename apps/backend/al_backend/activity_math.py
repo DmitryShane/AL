@@ -43,6 +43,7 @@ SELECT_HEAVY_MIN_EVENTS = 20
 AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS = 300
 REPORT_CHALLENGE_TTL_SECONDS = 120
 RAW_ACTIVITY_EVENT_TYPES = {
+    "click",
     "selection",
     "select",
     "scene_saved",
@@ -145,6 +146,25 @@ def _merge_batch_deltas(target: dict[str, Any], source: dict[str, Any]) -> None:
 def _saved_prefabs_for_summary_item(item: dict[str, Any]) -> list[dict[str, Any]]:
     saved_prefabs = [dict(prefab) for prefab in item.get("savedPrefabs", [])]
 
+    if item.get("source") == "dev":
+        app_name = _device_activity_app_name(item)
+
+        if app_name:
+            device_path = f"device:{app_name.lower()}"
+
+            if not any(prefab.get("path") == device_path for prefab in saved_prefabs):
+                activity_count = sum(int(count.get("count", 0)) for count in item.get("activityCounts", []))
+                saved_prefabs.append(
+                    {
+                        "path": device_path,
+                        "name": app_name,
+                        "projectId": str(item.get("projectId") or ""),
+                        "saveCount": max(1, activity_count),
+                    }
+                )
+
+        return saved_prefabs
+
     if item.get("source") != "cur":
         return saved_prefabs
 
@@ -169,6 +189,21 @@ def _saved_prefabs_for_summary_item(item: dict[str, Any]) -> list[dict[str, Any]
         }
     )
     return saved_prefabs
+
+
+def _device_activity_app_name(item: dict[str, Any]) -> str:
+    project_id = str(item.get("projectId") or "").strip()
+
+    if project_id:
+        return project_id
+
+    metadata = item.get("metadata") or {}
+    app_name = str(metadata.get("applicationName") or metadata.get("appName") or "").strip()
+
+    if app_name:
+        return app_name
+
+    return ""
 
 
 def _has_time_delta(deltas: dict[str, Any]) -> bool:

@@ -170,6 +170,7 @@ export type Summary = {
   intervalSettings: {
     defaultSendIntervalSeconds: number;
     idleThresholdSeconds: number;
+    deviceIdleThresholdSeconds: number;
     pluginIngestEnabled: boolean;
     telegramOnlinePromptDelayMinutes: number;
     avatarRefreshCadence?: "week" | "month";

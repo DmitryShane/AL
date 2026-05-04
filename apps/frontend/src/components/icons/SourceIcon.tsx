@@ -1,4 +1,4 @@
-import { Activity, Box } from "lucide-react";
+import { Activity, Box, Smartphone } from "lucide-react";
 import cursorIconUrl from "../../assets/cursor-icon.png";
 
 type SourceIconProps = {
@@ -24,6 +24,10 @@ export function SourceIcon({ source }: SourceIconProps) {
 
   if (source === "cur") {
     return <CursorIcon />;
+  }
+
+  if (source === "dev") {
+    return <Smartphone size={16} />;
   }
 
   if (source === "telegram") {

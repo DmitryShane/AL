@@ -40,6 +40,10 @@ export function formatSource(source?: string) {
     return "Cursor";
   }
 
+  if (source === "dev") {
+    return "Device";
+  }
+
   if (source === "telegram") {
     return "Telegram";
   }

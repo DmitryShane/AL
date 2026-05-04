@@ -71,6 +71,7 @@ export function SettingsPage({
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
   const [idleThreshold, setIdleThreshold] = useState(String(intervalSettingsIdleThreshold(summary)));
+  const [deviceIdleThreshold, setDeviceIdleThreshold] = useState(String(intervalSettingsDeviceIdleThreshold(summary)));
   const [pluginIngestEnabled, setPluginIngestEnabled] = useState(summary?.intervalSettings.pluginIngestEnabled ?? true);
   const [discordAutoAfkTimeout, setDiscordAutoAfkTimeout] = useState(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
   const [telegramOnlinePromptDelayMinutes, setTelegramOnlinePromptDelayMinutes] = useState(
@@ -148,6 +149,7 @@ export function SettingsPage({
     setDrafts(nextDrafts);
     setGlobalInterval(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
     setIdleThreshold(String(intervalSettingsIdleThreshold(summary)));
+    setDeviceIdleThreshold(String(intervalSettingsDeviceIdleThreshold(summary)));
     setPluginIngestEnabled(summary?.intervalSettings.pluginIngestEnabled ?? true);
     setDiscordAutoAfkTimeout(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
     setTelegramOnlinePromptDelayMinutes(String(intervalSettingsTelegramOnlinePromptMinutes(summary)));
@@ -402,6 +404,7 @@ export function SettingsPage({
         body: JSON.stringify({
           defaultSendIntervalSeconds: Number(globalInterval),
           idleThresholdSeconds: Number(idleThreshold),
+          deviceIdleThresholdSeconds: Number(deviceIdleThreshold),
           pluginIngestEnabled
         })
       });
@@ -800,10 +803,12 @@ export function SettingsPage({
 
   const savedGlobalInterval = String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300);
   const savedIdleThreshold = String(intervalSettingsIdleThreshold(summary));
+  const savedDeviceIdleThreshold = String(intervalSettingsDeviceIdleThreshold(summary));
   const savedPluginIngestEnabled = summary?.intervalSettings.pluginIngestEnabled ?? true;
   const isIntervalSettingsDirty =
     globalInterval !== savedGlobalInterval ||
     idleThreshold !== savedIdleThreshold ||
+    deviceIdleThreshold !== savedDeviceIdleThreshold ||
     pluginIngestEnabled !== savedPluginIngestEnabled;
   const savedAvatarRefreshCadence: "week" | "month" =
     summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month";
@@ -833,6 +838,10 @@ export function SettingsPage({
               <label>
                 Idle threshold, sec
                 <input value={idleThreshold} onChange={(event) => setIdleThreshold(event.target.value)} type="number" min="30" />
+              </label>
+              <label>
+                Device idle threshold, sec
+                <input value={deviceIdleThreshold} onChange={(event) => setDeviceIdleThreshold(event.target.value)} type="number" min="30" />
               </label>
               <div className="plugin-ingest-field">
                 <span id="plugin-ingest-heading" className="plugin-ingest-field-heading">
@@ -1692,6 +1701,11 @@ export function SettingsPage({
 function intervalSettingsIdleThreshold(summary: Summary | null) {
   const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { idleThresholdSeconds?: number }) | undefined;
   return intervalSettings?.idleThresholdSeconds ?? 300;
+}
+
+function intervalSettingsDeviceIdleThreshold(summary: Summary | null) {
+  const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { deviceIdleThresholdSeconds?: number }) | undefined;
+  return intervalSettings?.deviceIdleThresholdSeconds ?? 300;
 }
 
 function intervalSettingsTelegramOnlinePromptMinutes(summary: Summary | null) {

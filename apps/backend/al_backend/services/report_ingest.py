@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+
 from ..activity_math import *
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+
+
+def is_unknown_device_author(value: Any) -> bool:
+    author = _normalize_author(value or "")
+    return author in {"Unknown User", "Device"}
+
+
+def _device_report_id_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 class ReportIngestService(MongoComposableMixin):
@@ -87,6 +98,10 @@ class ReportIngestService(MongoComposableMixin):
     ) -> str:
         now = dt.datetime.now(dt.UTC)
         payload = dict(payload)
+        resolved_device_id = str(device_id or payload.get("deviceId") or "")
+
+        if source == "dev" and self.is_unknown_device_author(payload.get("author")):
+            payload["author"] = self.resolve_device_report_author(source, resolved_device_id)
 
         original_author = _normalize_author(payload.get("author") or "Unknown User")
         payload["author"] = composed(self).resolve_author_alias(original_author)
@@ -103,7 +118,7 @@ class ReportIngestService(MongoComposableMixin):
                 "source": source,
                 "pluginVersion": plugin_version,
                 "challengeId": challenge_id,
-                "deviceId": device_id or payload.get("deviceId", ""),
+                "deviceId": resolved_device_id,
                 "encryptedPacket": encrypted_packet,
                 "receivedAt": now,
                 "status": "decoded",
@@ -137,7 +152,7 @@ class ReportIngestService(MongoComposableMixin):
                 "receivedAt": now,
                 "reportType": report_type,
                 "challengeId": challenge_id,
-                "deviceId": device_id or payload.get("deviceId", ""),
+                    "deviceId": resolved_device_id,
             }
         )
         self.db.activity_snapshots.insert_one(snapshot)
@@ -145,6 +160,38 @@ class ReportIngestService(MongoComposableMixin):
         composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
         composed(self).invalidate_activity_summary_cache()
         return str(raw_result.inserted_id)
+
+    def is_unknown_device_author(self, value: Any) -> bool:
+        return is_unknown_device_author(value)
+
+    def resolve_device_report_author(self, source: str, device_id: str) -> str:
+        normalized_device_id = str(device_id or "").strip()
+
+        if not normalized_device_id:
+            return "Device"
+
+        device_id_hash = _device_report_id_hash(normalized_device_id)
+        existing = self.db.device_report_identities.find_one({"source": source, "deviceIdHash": device_id_hash})
+
+        if existing and existing.get("rawAuthor"):
+            return str(existing["rawAuthor"])
+
+        next_number = self.db.device_report_identities.count_documents({"source": source}) + 1
+        raw_author = f"Device{next_number}"
+        self.db.device_report_identities.update_one(
+            {"source": source, "deviceIdHash": device_id_hash},
+            {
+                "$setOnInsert": {
+                    "source": source,
+                    "deviceIdHash": device_id_hash,
+                    "rawAuthor": raw_author,
+                    "createdAt": dt.datetime.now(dt.UTC),
+                }
+            },
+            upsert=True,
+        )
+        inserted = self.db.device_report_identities.find_one({"source": source, "deviceIdHash": device_id_hash})
+        return str((inserted or {}).get("rawAuthor") or raw_author)
 
     def _is_heartbeat_only_event_payload(self, payload: dict[str, Any]) -> bool:
         events = payload.get("events")

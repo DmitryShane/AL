@@ -1,5 +1,5 @@
 import React from "react";
-import { Activity, Box } from "lucide-react";
+import { Activity, Box, Smartphone } from "lucide-react";
 import cursorIconUrl from "../assets/cursor-icon.png";
 import { REFRESH_INTERVAL_MS, REPORTS_PAGE_STORAGE_KEY, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
 import type { AuthorProfile, AuthorRow, DateRange, MeetingActivityItem, MeetingRecordingStatus, Report, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
@@ -482,6 +482,10 @@ export function formatSource(source?: string) {
     return "Cursor";
   }
 
+  if (source === "dev") {
+    return "Device";
+  }
+
   if (source === "telegram") {
     return "Telegram";
   }
@@ -516,6 +520,10 @@ export function sourceIcon(source?: string) {
 
   if (source === "cur") {
     return <CursorIcon />;
+  }
+
+  if (source === "dev") {
+    return <Smartphone size={16} />;
   }
 
   if (source === "telegram") {

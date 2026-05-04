@@ -26,8 +26,12 @@ def plugin_config(
     author: str = Query(default="Unknown User"),
     author_email: str = Query(default="", alias="authorEmail"),
     project_id: str = Query(default="", alias="projectId"),
+    device_id: str = Query(default="", alias="deviceId"),
     service: BackendServices = Depends(get_report_service),
 ) -> PluginConfig:
+    if source == "dev" and service.is_unknown_device_author(author):
+        author = service.resolve_device_report_author(source, device_id)
+
     resolved_author = service.resolve_author_alias(author)
     service.update_author_email(resolved_author, author_email)
     enabled = service.is_plugin_enabled_for_author(resolved_author)
