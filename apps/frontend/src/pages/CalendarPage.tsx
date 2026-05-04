@@ -230,42 +230,46 @@ export function CalendarPage() {
             ))}
           </div>
 
-          <div className="calendar-management">
-            <div className="calendar-toolbar">
-              <strong>{selectedDates.length} selected days</strong>
-              <button className={rangeMode ? "primary-button" : "primary-outline-button"} onClick={() => setRangeMode((value) => !value)}>Range select</button>
-              <button className="primary-outline-button" onClick={() => { setSelectedDates([]); setRangeStart(null); }}>Clear selection</button>
-              <button className="primary-button" onClick={openMarkEditor} disabled={!selectedDates.length}>Mark days</button>
-              <button className="primary-outline-button danger-button" onClick={openClearEditor} disabled={!selectedDates.length}>Clear marks</button>
-            </div>
-            <ReasonEditor
-              reasons={calendar.reasons}
-              reasonLabel={reasonLabel}
-              setReasonLabel={setReasonLabel}
-              setReasonEditId={setReasonEditId}
-              onPickReason={openMarkEditorForReason}
-              onSave={() => void saveReason()}
-            />
-          </div>
-
-          <div className="year-calendar-panel">
-            <div className="year-calendar">
-              {monthIndexes().map((month) => (
-                <MonthCalendar
-                  year={year}
-                  month={month}
-                  marksByDate={marksByDate}
-                  selectedDates={selectedDates}
-                  rangeStart={rangeStart}
-                  onSelect={toggleDate}
-                  key={month}
+          <div className="calendar-workspace">
+            <div className="calendar-sidebar">
+              <div className="calendar-management">
+                <div className="calendar-toolbar">
+                  <strong>{selectedDates.length} selected days</strong>
+                  <button className={rangeMode ? "primary-button" : "primary-outline-button"} onClick={() => setRangeMode((value) => !value)}>Range select</button>
+                  <button className="primary-outline-button" onClick={() => { setSelectedDates([]); setRangeStart(null); }}>Clear selection</button>
+                  <button className="primary-button" onClick={openMarkEditor} disabled={!selectedDates.length}>Mark days</button>
+                  <button className="primary-outline-button danger-button" onClick={openClearEditor} disabled={!selectedDates.length}>Clear marks</button>
+                </div>
+                <ReasonEditor
+                  reasons={calendar.reasons}
+                  reasonLabel={reasonLabel}
+                  setReasonLabel={setReasonLabel}
+                  setReasonEditId={setReasonEditId}
+                  onPickReason={openMarkEditorForReason}
+                  onSave={() => void saveReason()}
                 />
-              ))}
-            </div>
-            <CalendarLegend authors={selectedAuthor === "all" ? calendar.authors : calendar.authors.filter((author) => author.rawAuthor === selectedAuthor)} reasons={calendar.reasons} />
-          </div>
+              </div>
 
-          <CalendarStats stats={visibleStats} reasons={calendar.reasons} />
+              <CalendarStats stats={visibleStats} reasons={calendar.reasons} />
+            </div>
+
+            <div className="year-calendar-panel">
+              <div className="year-calendar">
+                {monthIndexes().map((month) => (
+                  <MonthCalendar
+                    year={year}
+                    month={month}
+                    marksByDate={marksByDate}
+                    selectedDates={selectedDates}
+                    rangeStart={rangeStart}
+                    onSelect={toggleDate}
+                    key={month}
+                  />
+                ))}
+              </div>
+              <CalendarLegend authors={selectedAuthor === "all" ? calendar.authors : calendar.authors.filter((author) => author.rawAuthor === selectedAuthor)} reasons={calendar.reasons} />
+            </div>
+          </div>
 
           {showMarkEditor ? (
             <CalendarMarkEditor

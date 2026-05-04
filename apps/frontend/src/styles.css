@@ -2907,6 +2907,20 @@ p {
   gap: 18px;
 }
 
+.calendar-workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.calendar-sidebar {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  height: 100%;
+}
+
 .calendar-year-header {
   display: flex;
   justify-content: space-between;
@@ -2936,7 +2950,7 @@ p {
 
 .calendar-management {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-items: start;
   border: 1px solid #e5eaf0;
@@ -2947,10 +2961,20 @@ p {
 }
 
 .calendar-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.calendar-toolbar strong {
+  grid-column: 1 / -1;
+}
+
+.calendar-toolbar button {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  white-space: nowrap;
 }
 
 .danger-button {
@@ -3184,7 +3208,7 @@ p {
 
 .calendar-stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  grid-template-columns: 1fr;
   gap: 14px;
 }
 
@@ -4320,6 +4344,10 @@ p {
 
   .meeting-summary-recordings-field {
     grid-template-rows: auto auto;
+  }
+
+  .calendar-workspace {
+    grid-template-columns: 1fr;
   }
 }
 
