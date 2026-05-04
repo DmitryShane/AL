@@ -158,7 +158,7 @@ def reports_summary(
     start_date: str | None = Query(default=None, alias="startDate"),
     end_date: str | None = Query(default=None, alias="endDate"),
     date_mode: str | None = Query(default=None, alias="dateMode"),
-    view: str = Query(default="activity", pattern="^(authors|activity|activity-lite|alerts|settings)$"),
+    view: str = Query(default="activity", pattern="^(authors|activity|activity-lite|settings)$"),
     author_service: BackendServices = Depends(get_author_service),
     settings_service: BackendServices = Depends(get_settings_service),
     summary_service: BackendServices = Depends(get_summary_service),

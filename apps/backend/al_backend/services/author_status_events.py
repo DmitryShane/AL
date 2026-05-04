@@ -66,7 +66,7 @@ class AuthorStatusEventsService(MongoComposableMixin):
         author: dict[str, Any],
         send_interval_seconds: int,
         now: dt.datetime,
-        include_report_stopped_alerts: bool,
+        track_plugin_staleness: bool,
     ) -> None:
         raw_author = str(author.get("rawAuthor") or "")
 
@@ -77,7 +77,7 @@ class AuthorStatusEventsService(MongoComposableMixin):
         previous_status = str(previous_state.get("status") or "online")
         stale_presence = str(author.get("stalePresence") or "")
         is_red_offline = (
-            include_report_stopped_alerts
+            track_plugin_staleness
             and author.get("status") == "stale"
             and stale_presence in {"reports", "both"}
         )

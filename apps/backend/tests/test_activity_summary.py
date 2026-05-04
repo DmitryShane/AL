@@ -20,7 +20,7 @@ from al_backend.activity_math import (
     _plugin_day_seconds,
     _saved_prefab_delta,
     _with_activity_mix,
-    _with_alerts,
+    _with_author_presence,
     _with_productivity,
 )
 from al_backend.container import BackendServices
@@ -945,53 +945,7 @@ def test_telegram_bot_callback_rejects_wrong_user(monkeypatch):
     assert calls == [("answer", "token", "callback-1", "Sorry, this reminder was not sent to you.")]
 
 
-def test_security_alerts_are_scoped_to_resolved_authors():
-    repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
-    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats"})
-    repo.upsert_author_alias("D Shane", "Dmitry Shane")
-    repo.db.daily_author_activity.insert_one({"source": "ual", "author": "Dmitry Shane", "projectId": "unity", "date": "2026-04-29"})
-    repo.db.daily_author_activity.insert_one({"source": "ual", "author": "Igor Mats", "projectId": "unity", "date": "2026-04-29"})
-    repo.log_report_security_event(
-        "report_forgery_attempt",
-        "ual",
-        author="D Shane",
-        device_id="device-dmitry",
-        challenge_id="challenge-dmitry",
-        message="Dmitry alert",
-    )
-    repo.log_report_security_event(
-        "report_forgery_attempt",
-        "ual",
-        author="Igor Mats",
-        device_id="device-igor",
-        challenge_id="challenge-igor",
-        message="Igor alert",
-    )
-
-    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
-    authors = {author["rawAuthor"]: author for author in summary["authors"]}
-
-    assert [alert["message"] for alert in authors["Dmitry Shane"]["alerts"] if alert["type"] == "report_forgery_attempt"] == ["Dmitry alert"]
-    assert [alert["message"] for alert in authors["Igor Mats"]["alerts"] if alert["type"] == "report_forgery_attempt"] == ["Igor alert"]
-
-
-def test_repeated_security_alerts_keep_distinct_ids():
-    repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
-    repo.db.daily_author_activity.insert_one({"source": "ual", "author": "Dmitry Shane", "projectId": "unity", "date": "2026-04-29"})
-    repo.log_report_security_event("report_forgery_attempt", "ual", author="Dmitry Shane", device_id="device-a", challenge_id="challenge-a")
-    repo.log_report_security_event("report_forgery_attempt", "ual", author="Dmitry Shane", device_id="device-b", challenge_id="challenge-b")
-
-    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
-    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry Shane")
-    security_alerts = [alert for alert in author["alerts"] if alert["type"] == "report_forgery_attempt"]
-
-    assert len(security_alerts) == 2
-    assert len({alert["id"] for alert in security_alerts}) == 2
-
-
-def test_authors_without_alerts_have_zero_alert_stats():
+def test_summary_author_rows_have_no_removed_dashboard_arrays():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Healthy Author", "displayName": "Healthy Author"})
     received_at = dt.datetime.now(dt.UTC)
@@ -1010,8 +964,8 @@ def test_authors_without_alerts_have_zero_alert_stats():
     summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Healthy Author")
 
-    assert author["alertStats"]["total"] == 0
-    assert author["alerts"] == []
+    assert "alerts" not in author
+    assert "alertStats" not in author
 
 
 def test_manual_profile_is_listed_before_activity_and_can_receive_email():
@@ -1942,7 +1896,6 @@ def test_reports_stopped_skipped_when_last_raw_report_recent_despite_stale_repor
 
     author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC))
     assert author["status"] == "online"
-    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
 
 
 def test_historical_activity_summary_does_not_mark_stopped_reports_as_realtime_stale():
@@ -1954,27 +1907,6 @@ def test_historical_activity_summary_does_not_mark_stopped_reports_as_realtime_s
 
     assert author["status"] == "stale"
     assert author["stalePresence"] == "telegram"
-    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
-
-
-def test_alerts_presence_selected_day_reports_stopped_uses_evaluation_cap():
-    repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
-    _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC))
-
-    summary = repo.activity_summary(
-        start_date="2026-04-28",
-        end_date="2026-04-28",
-        now=dt.datetime(2026, 4, 29, 18, 30, tzinfo=dt.UTC),
-        presence_alerts_for_selected_day=True,
-        include_profiles=False,
-        include_hourly=False,
-        include_breakdowns=False,
-    )
-    author = next(row for row in summary["authors"] if row["rawAuthor"] == "Future Artist")
-
-    assert [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
-    assert author["stalePresence"] == "reports"
 
 
 def test_historical_activity_summary_keeps_selected_day_telegram_offline_gray():
@@ -1989,7 +1921,7 @@ def test_historical_activity_summary_keeps_selected_day_telegram_offline_gray():
 
     assert author["status"] == "stale"
     assert author["stalePresence"] == "telegram"
-    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
+
 
 def test_regular_date_still_applies_reports_stopped_when_it_is_author_local_today():
     repo = fake_repository()
@@ -2023,7 +1955,6 @@ def test_regular_date_still_applies_reports_stopped_when_it_is_author_local_toda
 
     assert author["status"] == "stale"
     assert author["stalePresence"] == "reports"
-    assert [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
 
 
 def test_closed_telegram_workday_does_not_apply_reports_stopped_even_with_plugin_stale():
@@ -2068,7 +1999,6 @@ def test_closed_telegram_workday_does_not_apply_reports_stopped_even_with_plugin
 
     assert author["status"] == "stale"
     assert author["stalePresence"] == "telegram"
-    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
     assert repo.db.status_events.count_documents({"rawAuthor": "Future Artist", "reason": "reports_stopped"}) == 0
 
 
@@ -2112,7 +2042,6 @@ def test_open_telegram_workday_still_applies_reports_stopped_when_plugin_stale()
 
     assert author["status"] == "stale"
     assert author["stalePresence"] == "reports"
-    assert [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
 
 
 def test_regular_date_author_local_today_before_workday_start_is_gray_offline():
@@ -2130,16 +2059,13 @@ def test_regular_date_author_local_today_before_workday_start_is_gray_offline():
 
     assert author["status"] == "stale"
     assert author["stalePresence"] == "telegram"
-    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
 
 
-def test_with_alerts_stale_presence_telegram_without_reports_stopped():
+def test_with_author_presence_stale_presence_telegram_without_reports_stopped():
     frozen_now = dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC)
     author = {
         "rawAuthor": "Future Artist",
         "displayName": "Future Artist",
-        "securityAlerts": [],
-        "telegramAlerts": [],
         "activeSeconds": 60,
         "idleSeconds": 0,
         "breakSeconds": 0,
@@ -2148,7 +2074,7 @@ def test_with_alerts_stale_presence_telegram_without_reports_stopped():
         "lastReceivedAt": dt.datetime(2026, 4, 28, 18, 9, tzinfo=dt.UTC),
     }
     wrapped = _with_activity_mix(_with_productivity(author))
-    result = _with_alerts(
+    result = _with_author_presence(
         wrapped,
         60,
         frozen_now,
@@ -2158,13 +2084,11 @@ def test_with_alerts_stale_presence_telegram_without_reports_stopped():
     assert result["stalePresence"] == "telegram"
 
 
-def test_with_alerts_stale_presence_both_when_telegram_offline_and_reports_stopped():
+def test_with_author_presence_stale_presence_both_when_telegram_offline_and_reports_stopped():
     frozen_now = dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC)
     author = {
         "rawAuthor": "Future Artist",
         "displayName": "Future Artist",
-        "securityAlerts": [],
-        "telegramAlerts": [],
         "activeSeconds": 60,
         "idleSeconds": 0,
         "breakSeconds": 0,
@@ -2173,7 +2097,7 @@ def test_with_alerts_stale_presence_both_when_telegram_offline_and_reports_stopp
         "lastReceivedAt": dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC),
     }
     wrapped = _with_activity_mix(_with_productivity(author))
-    result = _with_alerts(
+    result = _with_author_presence(
         wrapped,
         60,
         frozen_now,
@@ -2181,9 +2105,6 @@ def test_with_alerts_stale_presence_both_when_telegram_offline_and_reports_stopp
     )
     assert result["status"] == "stale"
     assert result["stalePresence"] == "both"
-
-
-def test_non_overtime_report_after_telegram_offline_keeps_author_stale():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
     _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC))
@@ -2219,7 +2140,6 @@ def test_overtime_report_after_telegram_offline_keeps_author_gray_offline():
     author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 11, tzinfo=dt.UTC))
     assert author["status"] == "stale"
     assert author["stalePresence"] == "telegram"
-    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
 
 
 def test_overtime_report_after_telegram_offline_expires_with_stale_threshold():
@@ -5268,7 +5188,7 @@ def test_status_events_rematerialize_report_rows_after_rebuild():
     assert page["reports"][0]["statusEventType"] == "offline"
 
 
-def test_open_telegram_day_is_capped_at_ten_hours_and_alerted():
+def test_open_telegram_day_is_capped_at_ten_hours_without_dashboard_payload():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
 
@@ -5282,7 +5202,7 @@ def test_open_telegram_day_is_capped_at_ten_hours_and_alerted():
 
     assert author["telegramDaySeconds"] == 10 * 3600
     assert summary["totals"]["telegramDaySeconds"] == 10 * 3600
-    assert any(alert["type"] == "telegram_day_open" for alert in author["alerts"])
+    assert "alerts" not in author
 
 
 def test_due_telegram_reminder_includes_profile_username_and_deduplicates_after_sent():
@@ -6125,10 +6045,8 @@ def test_author_local_today_summary_includes_authors_on_different_local_dates():
     assert authors["No Activity Author"]["activeSeconds"] == 0
     assert authors["No Activity Author"]["status"] == "stale"
     assert authors["No Activity Author"]["stalePresence"] == "telegram"
-    assert not [alert for alert in authors["No Activity Author"]["alerts"] if alert["type"] == "reports_stopped"]
     assert authors["Utc Author"]["status"] == "stale"
     assert authors["Utc Author"]["stalePresence"] == "reports"
-    assert [alert for alert in authors["Utc Author"]["alerts"] if alert["type"] == "reports_stopped"]
 
 
 def test_activity_summary_regular_date_keeps_calendar_filter_and_all_authors():

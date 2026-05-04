@@ -1230,12 +1230,8 @@ class TelegramActivityService(MongoComposableMixin):
 
             live_day_seconds = int(session.get("daySeconds", 0))
 
-            is_open_day_over_cap = False
-            uncapped_live_day_seconds = 0
-
             if not ended_at:
                 uncapped_live_day_seconds = max(0, int((now - started_at).total_seconds()))
-                is_open_day_over_cap = uncapped_live_day_seconds > TELEGRAM_DAY_REMINDER_SECONDS
                 live_day_seconds = min(uncapped_live_day_seconds, TELEGRAM_DAY_REMINDER_SECONDS)
             elif live_day_seconds <= 0:
                 live_day_seconds = max(0, int((ended_at - started_at).total_seconds()))
@@ -1249,20 +1245,6 @@ class TelegramActivityService(MongoComposableMixin):
                 author_row["telegramDaySeconds"] += day_delta_seconds
                 totals["daySeconds"] += day_delta_seconds
                 totals["telegramDaySeconds"] += day_delta_seconds
-
-            if is_open_day_over_cap:
-                author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
-                author_row.setdefault("telegramAlerts", []).append(
-                    {
-                        "id": f"telegram_day_open:{raw_author}:{day_date}",
-                        "type": "telegram_day_open",
-                        "severity": "warning",
-                        "title": "Telegram day still open",
-                        "message": "Telegram day was not closed after 10 hours and is capped on the dashboard.",
-                        "value": uncapped_live_day_seconds,
-                        "threshold": TELEGRAM_DAY_REMINDER_SECONDS,
-                    }
-                )
 
         for interval in self.db.break_intervals.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0}):
             raw_author = interval.get("rawAuthor") or "Unknown User"
@@ -1417,7 +1399,6 @@ class TelegramActivityService(MongoComposableMixin):
             "savedPrefabs": [],
             "overtimeActivityCounts": [],
             "overtimeSavedPrefabs": [],
-            "telegramAlerts": [],
         }
         authors_by_raw[raw_author] = author_row
         return author_row

@@ -52,7 +52,7 @@ export function AuthorDeleteConfirm({
   periodEndDate,
 }: AuthorDeleteConfirmProps) {
   const defaultDescription =
-    "This will remove reports, raw activity events, Telegram day/break data, alerts, and activity statistics for this author. The author profile, display name, Telegram username, color, and plugin settings will stay unchanged. This action cannot be undone.";
+    "This will remove reports, raw activity events, Telegram day/break data, report security audit records, and activity statistics for this author. The author profile, display name, Telegram username, color, and plugin settings will stay unchanged. This action cannot be undone.";
 
   const bodyText = description ?? defaultDescription;
 

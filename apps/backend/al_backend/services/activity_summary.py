@@ -273,12 +273,6 @@ class ActivitySummaryService(MongoComposableMixin):
         include_breakdowns: bool = True,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
-        presence_alerts_for_selected_day = (
-            view == "alerts"
-            and date_mode != "authorLocalToday"
-            and bool(str(start_date or "").strip())
-            and bool(str(end_date or "").strip())
-        )
         cache_key = self._activity_summary_cache_key(
             view,
             start_date,
@@ -287,7 +281,6 @@ class ActivitySummaryService(MongoComposableMixin):
             include_profiles,
             include_hourly,
             include_breakdowns,
-            presence_alerts_for_selected_day,
             now,
         )
         cached = self.db.activity_summary_cache.find_one(
@@ -308,7 +301,6 @@ class ActivitySummaryService(MongoComposableMixin):
             include_profiles=include_profiles,
             include_hourly=include_hourly,
             include_breakdowns=include_breakdowns,
-            presence_alerts_for_selected_day=presence_alerts_for_selected_day,
         )
         expires_at = now + dt.timedelta(seconds=self.SUMMARY_CACHE_TTL_SECONDS)
         self.db.activity_summary_cache.update_one(
@@ -347,7 +339,6 @@ class ActivitySummaryService(MongoComposableMixin):
         include_profiles: bool,
         include_hourly: bool,
         include_breakdowns: bool,
-        presence_alerts_for_selected_day: bool,
         now: dt.datetime,
     ) -> str:
         profiles = composed(self)._profiles_by_raw_author()
@@ -361,7 +352,6 @@ class ActivitySummaryService(MongoComposableMixin):
                 "profiles" if include_profiles else "no-profiles",
                 "hourly" if include_hourly else "no-hourly",
                 "breakdowns" if include_breakdowns else "no-breakdowns",
-                "psa1" if presence_alerts_for_selected_day else "psa0",
                 repr(scope_query.get("date", "")),
             ]
         )
@@ -663,7 +653,6 @@ class ActivitySummaryService(MongoComposableMixin):
         include_profiles: bool = True,
         include_hourly: bool = True,
         include_breakdowns: bool = True,
-        presence_alerts_for_selected_day: bool = False,
     ) -> dict[str, Any]:
         totals = {
             "daySeconds": 0,
@@ -691,14 +680,6 @@ class ActivitySummaryService(MongoComposableMixin):
         meeting_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         profiles = composed(self)._profiles_by_raw_author()
         now = now or dt.datetime.now(dt.UTC)
-        presence_calendar_anchor_day = (
-            str(end_date or "").strip() if presence_alerts_for_selected_day and str(end_date or "").strip() else None
-        )
-        alerts_evaluation_now = (
-            _alerts_evaluation_cap_utc(now, str(end_date or "").strip())
-            if presence_alerts_for_selected_day and str(end_date or "").strip()
-            else None
-        )
         daily_items = sorted(
             self.db.daily_author_activity.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0}),
             key=lambda item: (
@@ -981,50 +962,6 @@ class ActivitySummaryService(MongoComposableMixin):
                 author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) - applied_reduction
                 totals["idleSeconds"] = max(0, int(totals.get("idleSeconds", 0)) - applied_reduction)
 
-        security_alerts_by_author = self._security_alerts_by_author(start_date, end_date)
-
-        for raw_author, alerts in security_alerts_by_author.items():
-            author_row = authors_by_raw.get(raw_author)
-
-            if not author_row:
-                profile = profiles.get(raw_author, {})
-                author_row = {
-                    "rawAuthor": raw_author,
-                    "authorEmail": profile.get("authorEmail") or alerts[0].get("authorEmail", ""),
-                    "displayName": _display_name(raw_author, profile),
-                    "team": profile.get("team", ""),
-                    "telegramUsername": profile.get("telegramUsername", ""),
-                    "telegramPrivateChatId": profile.get("telegramPrivateChatId"),
-                    "discordUserId": profile.get("discordUserId", ""),
-                    "discordUsername": profile.get("discordUsername", ""),
-                    "authorColor": profile.get("authorColor") or _author_color(raw_author),
-                    "source": alerts[0].get("source"),
-                    "pluginVersion": alerts[0].get("pluginVersion"),
-                    "lastRecordedAt": "",
-                    "lastReceivedAt": alerts[0].get("createdAt"),
-                    "daySeconds": 0,
-                    "telegramDaySeconds": 0,
-                    "pluginDaySeconds": 0,
-                    "rawPluginDaySeconds": 0,
-                    "telegramToFirstActivitySeconds": 0,
-                    "activeSeconds": 0,
-                    "idleSeconds": 0,
-                    "meetingSeconds": 0,
-                    "breakSeconds": 0,
-                    "overtimeActiveSeconds": 0,
-                    "activityCounts": [],
-                    "savedPrefabs": [],
-                    "overtimeActivityCounts": [],
-                    "overtimeSavedPrefabs": [],
-                    "_activityCountsBySource": {},
-                    "_savedPrefabsBySource": {},
-                    "_overtimeActivityCountsBySource": {},
-                    "_overtimeSavedPrefabsBySource": {},
-                }
-                authors_by_raw[raw_author] = author_row
-
-            author_row["securityAlerts"] = alerts
-
         for raw_author in composed(self).list_authors():
             composed(self)._ensure_summary_author(authors_by_raw, raw_author, profiles)
 
@@ -1079,7 +1016,6 @@ class ActivitySummaryService(MongoComposableMixin):
             date_mode,
             profiles,
             now,
-            omit_profile_raw_report_merge=presence_alerts_for_selected_day,
         )
         _clear_inactive_author_report_metadata(authors_by_raw.values())
         presence_overrides = self._author_presence_overrides(
@@ -1104,7 +1040,6 @@ class ActivitySummaryService(MongoComposableMixin):
         for author in authors_by_raw.values():
             raw_author = author["rawAuthor"]
             presence_override = presence_overrides.get(raw_author)
-            calendar_anchor_day = presence_calendar_anchor_day if presence_alerts_for_selected_day else None
             workday_started = self._author_workday_started_for_summary(
                 raw_author,
                 author,
@@ -1113,9 +1048,8 @@ class ActivitySummaryService(MongoComposableMixin):
                 end_date,
                 date_mode,
                 now,
-                calendar_anchor_day=calendar_anchor_day,
             )
-            include_report_stopped_alerts = _should_apply_realtime_presence_alerts(
+            track_plugin_staleness = _should_track_plugin_staleness(
                 raw_author,
                 profiles,
                 author.get("timeZoneId"),
@@ -1124,28 +1058,25 @@ class ActivitySummaryService(MongoComposableMixin):
                 date_mode,
                 now,
                 workday_started,
-                presence_alerts_for_selected_day=presence_alerts_for_selected_day,
             )
 
             if presence_override and presence_override.get("offlineAt"):
-                include_report_stopped_alerts = False
+                track_plugin_staleness = False
 
             send_interval_seconds = composed(self).get_interval_for_author(raw_author)
-            summary_author = _with_alerts(
+            summary_author = _with_author_presence(
                 _with_source_breakdowns(_with_activity_mix(_with_productivity(author))),
                 send_interval_seconds,
                 now,
                 presence_override,
-                include_report_stopped_alerts,
-                evaluation_now=alerts_evaluation_now,
+                track_plugin_staleness,
             )
-            if not presence_alerts_for_selected_day:
-                composed(self)._record_status_transition_for_author(
-                    summary_author,
-                    send_interval_seconds,
-                    now,
-                    include_report_stopped_alerts,
-                )
+            composed(self)._record_status_transition_for_author(
+                summary_author,
+                send_interval_seconds,
+                now,
+                track_plugin_staleness,
+            )
             author_rows.append(summary_author)
         hourly_author_rows = [
             {**item, "hourlyActivity": _public_hourly_activity(item.get("hourlyActivity", []))}
@@ -1548,8 +1479,6 @@ class ActivitySummaryService(MongoComposableMixin):
         date_mode: str | None,
         profiles: dict[str, dict[str, Any]],
         now: dt.datetime,
-        *,
-        omit_profile_raw_report_merge: bool = False,
     ) -> None:
         latest_by_author: dict[str, dict[str, Any]] = {}
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
@@ -1605,17 +1534,14 @@ class ActivitySummaryService(MongoComposableMixin):
             row_dt = _coerce_datetime(author_row.get("lastReceivedAt"))
             merged: list[dt.datetime] = []
 
-            if not omit_profile_raw_report_merge:
-                if profile_raw_dt:
-                    merged.append(profile_raw_dt)
+            if profile_raw_dt:
+                merged.append(profile_raw_dt)
 
-                if row_dt:
-                    merged.append(row_dt)
+            if row_dt:
+                merged.append(row_dt)
 
-                if merged:
-                    author_row["lastReceivedAt"] = _iso(max(merged))
-            elif row_dt:
-                author_row["lastReceivedAt"] = _iso(row_dt)
+            if merged:
+                author_row["lastReceivedAt"] = _iso(max(merged))
 
     def _author_presence_overrides(
         self,
@@ -1684,16 +1610,12 @@ class ActivitySummaryService(MongoComposableMixin):
         end_date: str | None,
         date_mode: str | None,
         now: dt.datetime,
-        calendar_anchor_day: str | None = None,
     ) -> bool:
         if bool(author.get("activeMeeting")):
             return True
 
         time_zone_id = _author_time_zone_id(raw_author, profiles, author.get("timeZoneId"))
-        if calendar_anchor_day:
-            anchor_day = calendar_anchor_day
-        else:
-            anchor_day = _local_date_for_time_zone(now, time_zone_id)
+        anchor_day = _local_date_for_time_zone(now, time_zone_id)
 
         if not _date_in_summary_scope(anchor_day, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
             return False
@@ -1758,50 +1680,6 @@ class ActivitySummaryService(MongoComposableMixin):
             "year": year,
             "authors": sorted(author_summaries, key=lambda item: item["displayName"].lower()),
         }
-
-    def _security_alerts_by_author(self, start_date: str | None = None, end_date: str | None = None) -> dict[str, list[dict[str, Any]]]:
-        query: dict[str, Any] = {}
-        created_filter: dict[str, dt.datetime] = {}
-
-        if start_date:
-            created_filter["$gte"] = _date_start(start_date)
-
-        if end_date:
-            created_filter["$lt"] = _date_start(end_date) + dt.timedelta(days=1)
-
-        if created_filter:
-            query["createdAt"] = created_filter
-
-        by_author: dict[str, list[dict[str, Any]]] = {}
-
-        events = list(self.db.report_security_events.find(query, {"_id": 0}).sort("createdAt", DESCENDING).limit(100))
-
-        if query and not events:
-            events = list(self.db.report_security_events.find({}, {"_id": 0}).sort("createdAt", DESCENDING).limit(100))
-
-        for index, event in enumerate(events):
-            raw_author = composed(self).resolve_author_alias(event.get("author") or "Unknown User")
-            created_at = _iso(event.get("createdAt"))
-            challenge_id = event.get("challengeId")
-            device_id = event.get("deviceId")
-            alert = {
-                "id": f"security:{raw_author}:{challenge_id or device_id or created_at or index}",
-                "type": "report_forgery_attempt",
-                "severity": "critical",
-                "title": "Report forgery attempt",
-                "message": event.get("message") or "A suspicious report submission was rejected.",
-                "value": None,
-                "threshold": None,
-                "source": event.get("source"),
-                "pluginVersion": event.get("pluginVersion"),
-                "authorEmail": event.get("authorEmail"),
-                "deviceId": device_id,
-                "challengeId": challenge_id,
-                "createdAt": created_at,
-            }
-            by_author.setdefault(raw_author, []).append(alert)
-
-        return by_author
 
 
 def _with_source_breakdowns(author: dict[str, Any]) -> dict[str, Any]:

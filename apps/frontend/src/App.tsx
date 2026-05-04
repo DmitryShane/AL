@@ -208,6 +208,26 @@ function App() {
     }
 
     try {
+      if (requestedPage === "alerts") {
+        const [healthResponse, meResponse] = await Promise.all([apiFetch(`/api/v1/health`), apiFetch(`/api/v1/auth/me`)]);
+
+        if (meResponse.status === 401) {
+          setAuthUser(null);
+          setSessionUserPreview(null);
+          writeStoredSessionUserPreview(null);
+          setHasAuthHint(false);
+          localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
+          return;
+        }
+
+        if (!healthResponse.ok || !meResponse.ok) {
+          throw new Error("Backend request failed");
+        }
+
+        setHealth(await healthResponse.json());
+        return;
+      }
+
       const params = new URLSearchParams({
         startDate: requestedDateRange.startDate,
         endDate: requestedDateRange.endDate,
@@ -458,7 +478,7 @@ function App() {
             {!authLoading && loading && pageUsesDashboardSummary(page) ? <span className="topbar-loading-popover">Loading dashboard data...</span> : null}
             <p>{pageSubtitle(page)}</p>
           </div>
-          {page === "authors" || page === "activity" || page === "alerts" ? (
+          {page === "authors" || page === "activity" ? (
             <div className="topbar-actions">
               <DateRangePicker value={dateRange} onChange={setDateRange} />
             </div>
@@ -497,7 +517,7 @@ function App() {
         ) : null}
         {page === "analytics" ? <AnalyticsPage /> : null}
         {page === "calendar" ? <CalendarPage /> : null}
-        {page === "alerts" ? <AlertsPage authors={activitySummary.authors} /> : null}
+        {page === "alerts" ? <AlertsPage /> : null}
         {page === "settings" && displaySessionUser ? (
           <SettingsPage summary={canShowCachedDashboard ? summary : null} currentUser={displaySessionUser} onSaved={() => void load(false)} />
         ) : null}
@@ -516,10 +536,6 @@ function summaryViewForPage(page: Page) {
     return "settings";
   }
 
-  if (page === "alerts") {
-    return "alerts";
-  }
-
   if (page === "activity") {
     return "activity-lite";
   }
@@ -528,7 +544,7 @@ function summaryViewForPage(page: Page) {
 }
 
 function pageUsesDashboardSummary(page: Page) {
-  return page === "authors" || page === "activity" || page === "alerts" || page === "settings";
+  return page === "authors" || page === "activity" || page === "settings";
 }
 
 function dashboardSummaryCacheKey(page: Page, dateRange: DateRange) {
@@ -636,7 +652,7 @@ function pageSubtitle(page: Page) {
   }
 
   if (page === "alerts") {
-    return "Author alert stacks and risk signals for the selected period.";
+    return "";
   }
 
   if (page === "settings") {

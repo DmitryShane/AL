@@ -25,11 +25,6 @@ export type AuthorsTableRow = {
   avatarUrl?: string;
   status?: "online" | "stale";
   stalePresence?: "telegram" | "reports" | "both";
-  alertStats?: {
-    total: number;
-    critical: number;
-    warning: number;
-  };
 };
 
 type AuthorsTableProps = {

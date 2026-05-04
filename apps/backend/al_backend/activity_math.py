@@ -812,7 +812,7 @@ def _date_in_summary_scope(
     return _date_in_range(value, start_date, end_date)
 
 
-def _should_apply_realtime_presence_alerts(
+def _should_track_plugin_staleness(
     raw_author: str,
     profiles: dict[str, dict[str, Any]],
     fallback_time_zone_id: Any,
@@ -821,11 +821,7 @@ def _should_apply_realtime_presence_alerts(
     date_mode: str | None,
     now: dt.datetime,
     workday_started: bool,
-    presence_alerts_for_selected_day: bool = False,
 ) -> bool:
-    if presence_alerts_for_selected_day:
-        return workday_started
-
     if date_mode == "authorLocalToday":
         return workday_started
 
@@ -917,122 +913,47 @@ def _activity_mix_from_list(activity_counts: list[dict[str, Any]]) -> list[dict[
     ]
 
 
-def _with_alerts(
+def _with_author_presence(
     author: dict[str, Any],
     send_interval_seconds: int,
     now: dt.datetime,
     presence_override: dict[str, Any] | None = None,
-    include_report_stopped_alerts: bool = True,
-    *,
-    evaluation_now: dt.datetime | None = None,
+    track_plugin_staleness: bool = True,
 ) -> dict[str, Any]:
     item = dict(author)
-    alerts = list(item.get("securityAlerts") or [])
-    alerts.extend(item.get("telegramAlerts") or [])
-    alert_clock = evaluation_now if evaluation_now is not None else now
+    presence_clock = now
     last_received_at = _coerce_datetime(item.get("lastReceivedAt"))
     stale_threshold_seconds = max(0, send_interval_seconds * 2)
     active_meeting = bool(item.get("activeMeeting"))
     forced_offline = False
+    has_reports_stopped = False
 
     if active_meeting:
         pass
-    elif not include_report_stopped_alerts:
+    elif not track_plugin_staleness:
         pass
     elif last_received_at:
-        seconds_since_report = max(0, int((alert_clock - last_received_at).total_seconds()))
+        seconds_since_report = max(0, int((presence_clock - last_received_at).total_seconds()))
 
         if seconds_since_report > stale_threshold_seconds:
-            alerts.append(
-                {
-                    "id": f"reports_stopped:{item.get('rawAuthor') or item.get('displayName') or 'unknown'}",
-                    "type": "reports_stopped",
-                    "severity": "critical",
-                    "title": "Reports stopped",
-                    "message": "No Unity reports received within the expected auto-report window.",
-                    "value": seconds_since_report,
-                    "threshold": stale_threshold_seconds,
-                }
-            )
+            has_reports_stopped = True
     else:
-        alerts.append(
-            {
-                "id": f"reports_stopped:{item.get('rawAuthor') or item.get('displayName') or 'unknown'}",
-                "type": "reports_stopped",
-                "severity": "critical",
-                "title": "Reports stopped",
-                "message": "No Unity reports have been received for this author.",
-                "value": None,
-                "threshold": stale_threshold_seconds,
-            }
-        )
+        has_reports_stopped = True
 
     if presence_override and presence_override.get("offlineAt"):
         overtime_received_at = _coerce_datetime(presence_override.get("overtimeReceivedAt"))
         forced_offline = True
 
         if overtime_received_at:
-            seconds_since_overtime = max(0, int((alert_clock - overtime_received_at).total_seconds()))
+            seconds_since_overtime = max(0, int((presence_clock - overtime_received_at).total_seconds()))
             forced_offline = seconds_since_overtime > stale_threshold_seconds
 
-    if not include_report_stopped_alerts:
+    if not track_plugin_staleness:
         forced_offline = True
 
     if active_meeting:
         forced_offline = False
 
-    productivity = float(item.get("productivity", 0))
-    plugin_day_seconds = int(item.get("pluginDaySeconds", 0))
-
-    if plugin_day_seconds > 0 and productivity < LOW_PRODUCTIVITY_THRESHOLD:
-        alerts.append(
-            {
-                "id": f"low_productivity:{item.get('rawAuthor') or item.get('displayName') or 'unknown'}",
-                "type": "low_productivity",
-                "severity": "warning",
-                "title": "Low productivity",
-                "message": "Productivity is below the expected threshold.",
-                "value": productivity,
-                "threshold": LOW_PRODUCTIVITY_THRESHOLD,
-            }
-        )
-
-    break_seconds = int(item.get("breakSeconds", 0))
-
-    if break_seconds > LONG_BREAK_THRESHOLD_SECONDS:
-        alerts.append(
-            {
-                "id": f"long_break:{item.get('rawAuthor') or item.get('displayName') or 'unknown'}",
-                "type": "long_break",
-                "severity": "warning",
-                "title": "Long break",
-                "message": "Break time is longer than expected.",
-                "value": break_seconds,
-                "threshold": LONG_BREAK_THRESHOLD_SECONDS,
-            }
-        )
-
-    activity_counts = item.get("activityCounts", [])
-    total_activity_events = sum(int(count.get("count", 0)) for count in activity_counts)
-    select_events = sum(int(count.get("count", 0)) for count in activity_counts if count.get("type") == "select")
-    select_percent = round((select_events / total_activity_events) * 100) if total_activity_events else 0
-
-    if total_activity_events >= SELECT_HEAVY_MIN_EVENTS and select_percent >= SELECT_HEAVY_THRESHOLD_PERCENT:
-        alerts.append(
-            {
-                "id": f"select_heavy_activity:{item.get('rawAuthor') or item.get('displayName') or 'unknown'}",
-                "type": "select_heavy_activity",
-                "severity": "warning",
-                "title": "Select-heavy activity",
-                "message": "Most activity events are selection changes, which can look like simulated activity.",
-                "value": select_percent,
-                "threshold": SELECT_HEAVY_THRESHOLD_PERCENT,
-            }
-        )
-
-    critical_count = sum(1 for alert in alerts if alert["severity"] == "critical")
-    warning_count = sum(1 for alert in alerts if alert["severity"] == "warning")
-    has_reports_stopped = any(alert["type"] == "reports_stopped" for alert in alerts)
     is_stale = forced_offline or has_reports_stopped
     item["status"] = "stale" if is_stale else "online"
 
@@ -1044,12 +965,6 @@ def _with_alerts(
         else:
             item["stalePresence"] = "telegram"
 
-    item["alerts"] = alerts
-    item["alertStats"] = {
-        "total": len(alerts),
-        "critical": critical_count,
-        "warning": warning_count,
-    }
     item["sendIntervalSeconds"] = send_interval_seconds
     item["staleThresholdSeconds"] = stale_threshold_seconds
     return item
@@ -1995,18 +1910,6 @@ def _date_start(value: str) -> dt.datetime:
     return dt.datetime.fromisoformat(value).replace(tzinfo=dt.UTC)
 
 
-def _alerts_evaluation_cap_utc(real_now: dt.datetime, end_date_iso: str) -> dt.datetime:
-    """Latest instant where alert staleness toward plugin reports uses selected calendar endDate (UTC day end)."""
-    exclusive_next_midnight = _date_start(end_date_iso) + dt.timedelta(days=1)
-    cap = exclusive_next_midnight - dt.timedelta(microseconds=1)
-    if real_now.tzinfo is None:
-        real_now = real_now.replace(tzinfo=dt.UTC)
-    else:
-        real_now = real_now.astimezone(dt.UTC)
-
-    return min(real_now, cap)
-
-
 def _merge_count_list(
     current: list[dict[str, Any]], deltas: list[dict[str, Any]], key_name: str, count_name: str
 ) -> list[dict[str, Any]]:
@@ -2089,7 +1992,6 @@ __all__: tuple[str, ...] = (
     "_add_interval_to_hourly",
     "_add_meeting_interval_to_buckets",
     "_add_visual_missed_seconds",
-    "_alerts_evaluation_cap_utc",
     "_analytics_deltas",
     "_analytics_month_weeks",
     "_analytics_totals",
@@ -2178,7 +2080,7 @@ __all__: tuple[str, ...] = (
     "_saved_prefabs_for_summary_item",
     "_seconds_from_microseconds",
     "_session_key",
-    "_should_apply_realtime_presence_alerts",
+    "_should_track_plugin_staleness",
     "_slug",
     "_state_snapshot",
     "_telegram_event_date",
@@ -2191,7 +2093,7 @@ __all__: tuple[str, ...] = (
     "_visual_hour_occupied_seconds",
     "_visual_missed_end_hour",
     "_with_activity_mix",
-    "_with_alerts",
+    "_with_author_presence",
     "_with_productivity",
     "annotations",
     "dt",

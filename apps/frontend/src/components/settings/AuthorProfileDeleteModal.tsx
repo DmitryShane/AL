@@ -62,7 +62,7 @@ export function AuthorProfileDeleteModal({
         <ul className="danger-delete-modal__list">
           <li>Author profile, Telegram username mapping, Discord IDs and names</li>
           <li>Plugin enable flag, color, timezone preferences stored on the profile</li>
-          <li>Reports, raw events, snapshots, alerts, and rebuilt aggregates</li>
+          <li>Reports, raw events, snapshots, report security audit records, and rebuilt aggregates</li>
           <li>Telegram work-day rows, breaks, reminders, and related prompts</li>
           <li>Discord meetings, intervals, and summaries linked to this author</li>
           <li>Calendar marks and dashboard statistics for this author</li>

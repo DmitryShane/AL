@@ -94,7 +94,7 @@ class BackendComposableHost(Protocol):
         author: dict[str, Any],
         send_interval_seconds: int,
         now: dt.datetime,
-        include_report_stopped_alerts: bool,
+        track_plugin_staleness: bool,
     ) -> None: ...
 
     def _schedule_telegram_break_activity_prompt_if_needed(

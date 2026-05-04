@@ -69,29 +69,6 @@ export type AuthorRow = {
   overtimeSavedPrefabsBySource?: SavedPrefabsSourceGroup[];
   status?: "online" | "stale";
   stalePresence?: "telegram" | "reports" | "both";
-  alerts?: AuthorAlert[];
-  alertStats?: AlertStats;
-};
-
-export type AuthorAlert = {
-  id?: string;
-  type: string;
-  severity: "critical" | "warning";
-  title: string;
-  message: string;
-  value?: number | null;
-  threshold?: number | null;
-  source?: string;
-  pluginVersion?: string;
-  deviceId?: string;
-  challengeId?: string;
-  createdAt?: string;
-};
-
-export type AlertStats = {
-  total: number;
-  critical: number;
-  warning: number;
 };
 
 export type ActivitySummary = {

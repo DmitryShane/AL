@@ -2,7 +2,7 @@ import React from "react";
 import { Activity, Box } from "lucide-react";
 import cursorIconUrl from "../assets/cursor-icon.png";
 import { REFRESH_INTERVAL_MS, REPORTS_PAGE_STORAGE_KEY, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
-import type { AlertStats, AuthorAlert, AuthorProfile, AuthorRow, DateRange, MeetingRecordingStatus, Report, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
+import type { AuthorProfile, AuthorRow, DateRange, MeetingRecordingStatus, Report, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
 export function settingsSaveButtonLabel(key: string, saving: string | null, statuses: Record<string, "saved" | "error" | undefined>) {
   if (saving === key) {
     return "Saving...";
@@ -704,30 +704,6 @@ export function matchesAuthorSearch(author: AuthorRow, search: string) {
   );
 }
 
-export function formatAuthorStatus(author: AuthorRow) {
-  if (author.status === "stale") {
-    if (isTelegramSignedOff(author.stalePresence)) {
-      return "Offline";
-    }
-
-    return author.lastReceivedAt ? "Offline" : "No reports";
-  }
-
-  return "Online";
-}
-
-export function authorStatusBadgeClassName(status?: "online" | "stale", stalePresence?: AuthorRow["stalePresence"]) {
-  if (status === "stale") {
-    if (isTelegramSignedOff(stalePresence)) {
-      return "status-badge telegram-signed-off";
-    }
-
-    return "status-badge stale";
-  }
-
-  return "status-badge online";
-}
-
 export function authorCardClassName(author: AuthorRow, active: boolean) {
   let presenceClass = "is-online";
 
@@ -856,91 +832,6 @@ export function profileLocalTodayIso(profile: AuthorProfile) {
   }
 
   return toDateInputValue(now);
-}
-
-export function alertCardClassName(severity: AuthorAlert["severity"]) {
-  return `alert-card ${severity}`;
-}
-
-export function alertAuthorCardClassName(stats: AlertStats) {
-  if (stats.critical) {
-    return "alert-author-card critical";
-  }
-
-  if (stats.warning) {
-    return "alert-author-card warning";
-  }
-
-  return "alert-author-card healthy";
-}
-
-export function alertCountBadgeClassName(tone: "total" | "critical" | "warning" | "healthy" | "muted") {
-  return `alert-count-badge ${tone}`;
-}
-
-export function alertSeverityBadgeClassName(severity: AuthorAlert["severity"]) {
-  return `alert-severity-badge ${severity}`;
-}
-
-export function alertKey(alert: AuthorAlert, rawAuthor: string, index: number) {
-  return alert.id ?? `${rawAuthor}:${alert.type}:${alert.createdAt ?? ""}:${alert.source ?? ""}:${alert.deviceId ?? ""}:${index}`;
-}
-
-export function compareAlertAuthors(left: AuthorRow, right: AuthorRow) {
-  const leftStats = left.alertStats ?? { total: 0, critical: 0, warning: 0 };
-  const rightStats = right.alertStats ?? { total: 0, critical: 0, warning: 0 };
-
-  return (
-    rightStats.critical - leftStats.critical
-    || rightStats.warning - leftStats.warning
-    || rightStats.total - leftStats.total
-    || left.displayName.localeCompare(right.displayName)
-  );
-}
-
-export function formatAlertValue(alert: AuthorAlert) {
-  if (alert.type === "report_forgery_attempt") {
-    const parts = [alert.source, alert.pluginVersion, alert.deviceId ? `device ${alert.deviceId.slice(0, 8)}` : "", alert.createdAt ? formatTimestamp(alert.createdAt) : ""].filter(Boolean);
-    return parts.length ? parts.join(" · ") : "Suspicious report was rejected.";
-  }
-
-  if (alert.value === null || alert.value === undefined) {
-    return `Threshold: ${formatAlertThreshold(alert)}`;
-  }
-
-  if (alert.type === "reports_stopped") {
-    return `No reports for ${formatDuration(alert.value)}. Threshold: ${formatAlertThreshold(alert)}`;
-  }
-
-  if (alert.type === "long_break") {
-    return `Break: ${formatDuration(alert.value)}. Threshold: ${formatAlertThreshold(alert)}`;
-  }
-
-  if (alert.type === "telegram_day_open") {
-    return `Open for ${formatDuration(alert.value)}. Capped at ${formatAlertThreshold(alert)}`;
-  }
-
-  if (alert.type === "low_productivity" || alert.type === "select_heavy_activity") {
-    return `Value: ${alert.value}%. Threshold: ${formatAlertThreshold(alert)}`;
-  }
-
-  return `Value: ${alert.value}. Threshold: ${formatAlertThreshold(alert)}`;
-}
-
-export function formatAlertThreshold(alert: AuthorAlert) {
-  if (alert.threshold === null || alert.threshold === undefined) {
-    return "-";
-  }
-
-  if (alert.type === "reports_stopped" || alert.type === "long_break" || alert.type === "telegram_day_open") {
-    return formatDuration(alert.threshold);
-  }
-
-  if (alert.type === "low_productivity" || alert.type === "select_heavy_activity") {
-    return `${alert.threshold}%`;
-  }
-
-  return String(alert.threshold);
 }
 
 export function initials(value: string) {
