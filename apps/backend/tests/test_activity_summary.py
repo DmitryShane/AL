@@ -1928,6 +1928,23 @@ def test_stale_presence_reports_when_unity_reports_stop_without_telegram_signoff
     assert author["stalePresence"] == "reports"
 
 
+def test_reports_stopped_skipped_when_last_raw_report_recent_despite_stale_report_rows():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "lastRawReportReceivedAt": dt.datetime(2026, 4, 28, 18, 29, 0, tzinfo=dt.UTC),
+        }
+    )
+    _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC))
+
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC))
+    assert author["status"] == "online"
+    assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
+
+
 def test_historical_activity_summary_does_not_mark_stopped_reports_as_realtime_stale():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})

@@ -1563,6 +1563,21 @@ class ActivitySummaryService:
             author_row["lastRecordedAt"] = report.get("lastRecordedAt") or report.get("recordedAt") or author_row.get("lastRecordedAt")
             author_row["lastReceivedAt"] = _iso(report.get("lastReceivedAt") or report.get("receivedAt")) or author_row.get("lastReceivedAt")
 
+        for raw_author, author_row in authors_by_raw.items():
+            profile = profiles.get(raw_author, {})
+            profile_raw_dt = _coerce_datetime(profile.get("lastRawReportReceivedAt"))
+            row_dt = _coerce_datetime(author_row.get("lastReceivedAt"))
+            merged: list[dt.datetime] = []
+
+            if profile_raw_dt:
+                merged.append(profile_raw_dt)
+
+            if row_dt:
+                merged.append(row_dt)
+
+            if merged:
+                author_row["lastReceivedAt"] = _iso(max(merged))
+
     def _author_presence_overrides(
         self,
         raw_authors: Any,

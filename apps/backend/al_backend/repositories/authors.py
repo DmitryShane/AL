@@ -159,6 +159,27 @@ class AuthorRepository:
             upsert=True,
         )
 
+    def touch_last_raw_report_received_at(self, raw_author: str, received_at: dt.datetime) -> None:
+        raw_author = _normalize_author(raw_author)
+
+        if not raw_author or raw_author == "Unknown User":
+            return
+
+        self.db.author_profiles.update_one(
+            {"rawAuthor": raw_author},
+            {
+                "$max": {"lastRawReportReceivedAt": received_at},
+                "$set": {"updatedAt": dt.datetime.now(dt.UTC)},
+                "$setOnInsert": {
+                    "rawAuthor": raw_author,
+                    "displayName": raw_author,
+                    "team": "",
+                    "pluginEnabled": True,
+                },
+            },
+            upsert=True,
+        )
+
     def save_telegram_private_chat(self, telegram_username: str, chat_id: int) -> dict[str, Any]:
         normalized_username = _normalize_telegram_username(telegram_username)
 

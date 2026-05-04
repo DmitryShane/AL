@@ -107,6 +107,7 @@ class ReportIngestService:
                 "reportType": report_type,
             }
         )
+        self.touch_last_raw_report_received_at(str(payload.get("author") or "Unknown User"), now)
 
         if isinstance(payload.get("events"), list):
             self._save_event_batch(
