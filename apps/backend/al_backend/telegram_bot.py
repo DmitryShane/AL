@@ -130,6 +130,46 @@ def handle_update(config: BotConfig, update: dict[str, Any]) -> None:
     result = submit_break_event(config.backend_url, username, event_type, message.get("date"))
     LOGGER.info("Recorded %s for @%s: %s", event_type, username, result)
 
+    dup_status = result.get("status")
+
+    if config.bot_secret and config.allowed_chat_id is not None and chat_id == config.allowed_chat_id:
+        if dup_status == "duplicate_online":
+            since = str(result.get("sinceTimeLocal") or "unknown time")
+            dup_text = (
+                f"Hi @{username}. You're already counted as online for today since {since}. "
+                "Use AFK before writing online again after a break."
+            )
+            send_plain_message(config.token, config.allowed_chat_id, dup_text)
+            return
+
+        if dup_status == "duplicate_offline":
+            since = str(result.get("sinceOfflineTimeLocal") or "unknown time")
+            send_plain_message(
+                config.token,
+                config.allowed_chat_id,
+                f"Hi @{username}. You already closed your Telegram workday offline at {since}.",
+            )
+            return
+
+        if dup_status == "duplicate_afk":
+            duplicate_afk_prompt_id = str(result.get("reminderId") or "")
+            afk_time = str(result.get("afkStartedTimeLocal") or "unknown time")
+
+            if duplicate_afk_prompt_id:
+                dup_afk_body = (
+                    f"Hi @{username}. You're already on an AFK break that started at {afk_time}. "
+                    "Are you already back online, or are you still AFK?"
+                )
+                prompt_send = send_duplicate_afk_prompt_message(config.token, config.allowed_chat_id, dup_afk_body, duplicate_afk_prompt_id)
+                prompt_message_id = (prompt_send.get("result") or {}).get("message_id") if isinstance(prompt_send, dict) else None
+                mark_reminder_sent(
+                    config.backend_url,
+                    config.bot_secret,
+                    duplicate_afk_prompt_id,
+                    prompt_message_id,
+                    kind="duplicate_afk_prompt",
+                )
+
 
 def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> None:
     callback_id = str(callback_query.get("id") or "")
@@ -156,6 +196,8 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
         reminder_kind = "online_prompt"
     elif family == "altb":
         reminder_kind = "break_activity_prompt"
+    elif family == "altf":
+        reminder_kind = "duplicate_afk_prompt"
     else:
         reminder_kind = "day_end"
     reminder_username = reminder_username_from_message(message)
@@ -192,6 +234,11 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
             else:
                 answer_text = "Dismissed."
         elif reminder_kind == "break_activity_prompt":
+            if action == "confirm_online":
+                answer_text = "Online."
+            else:
+                answer_text = "Still AFK."
+        elif reminder_kind == "duplicate_afk_prompt":
             if action == "confirm_online":
                 answer_text = "Online."
             else:
@@ -274,6 +321,12 @@ def parse_callback_data(data: str) -> tuple[str, str, str] | None:
         return family, reminder_id, action
 
     if family == "altb":
+        if action not in {"confirm_online", "still_afk"}:
+            return None
+
+        return family, reminder_id, action
+
+    if family == "altf":
         if action not in {"confirm_online", "still_afk"}:
             return None
 
@@ -585,6 +638,26 @@ def send_break_activity_prompt_message(token: str, chat_id: int, text: str, remi
     )
 
 
+def send_duplicate_afk_prompt_message(token: str, chat_id: int, text: str, reminder_id: str) -> dict[str, Any]:
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "I'm online", "callback_data": f"altf:{reminder_id}:confirm_online"},
+                {"text": "Still AFK", "callback_data": f"altf:{reminder_id}:still_afk"},
+            ]
+        ]
+    }
+    return telegram_request(
+        token,
+        "sendMessage",
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": json.dumps(reply_markup),
+        },
+    )
+
+
 def send_plain_message(token: str, chat_id: int, text: str) -> dict[str, Any]:
     return telegram_request(
         token,
@@ -618,6 +691,11 @@ def edit_reminder_message(
         else:
             body = f"Done.{author} Still offline."
     elif reminder_kind == "break_activity_prompt":
+        if action == "confirm_online":
+            body = f"Done.{author} Online."
+        else:
+            body = f"Done.{author} Still AFK."
+    elif reminder_kind == "duplicate_afk_prompt":
         if action == "confirm_online":
             body = f"Done.{author} Online."
         else:

@@ -37,6 +37,7 @@ from al_backend.telegram_bot import (
     meeting_summary_chat_id,
     format_meeting_summary_message,
     send_break_activity_prompt_message,
+    send_duplicate_afk_prompt_message,
     send_online_prompt_message,
     send_plain_message,
     send_reminder_message,
@@ -220,6 +221,7 @@ class FakeDb:
         self.telegram_day_reminders = FakeCollection()
         self.telegram_online_prompts = FakeCollection()
         self.telegram_break_activity_prompts = FakeCollection()
+        self.telegram_duplicate_afk_prompts = FakeCollection()
         self.telegram_meeting_auto_afk_notifications = FakeCollection()
         self.meeting_recordings = FakeCollection()
         self.meeting_summaries = FakeCollection()
@@ -663,6 +665,8 @@ def test_telegram_bot_parses_online_prompt_callbacks():
     assert parse_callback_data("altb:break1:confirm_online") == ("altb", "break1", "confirm_online")
     assert parse_callback_data("altb:break1:still_afk") == ("altb", "break1", "still_afk")
     assert parse_callback_data("altb:break1:dismiss") is None
+    assert parse_callback_data("altf:d1:confirm_online") == ("altf", "d1", "confirm_online")
+    assert parse_callback_data("altf:d1:still_afk") == ("altf", "d1", "still_afk")
 
 
 def test_telegram_bot_update_polling_includes_callbacks(monkeypatch):
@@ -745,6 +749,21 @@ def test_telegram_bot_break_activity_prompt_message_has_buttons(monkeypatch):
     assert "altb:prompt-1:still_afk" in captured["params"]["reply_markup"]
     assert "I'm online" in captured["params"]["reply_markup"]
     assert "Still AFK" in captured["params"]["reply_markup"]
+
+
+def test_telegram_bot_duplicate_afk_prompt_message_has_buttons(monkeypatch):
+    captured = {}
+
+    def fake_request(token, method, params):
+        captured.update({"token": token, "method": method, "params": params})
+        return {"result": {"message_id": 101}}
+
+    monkeypatch.setattr("al_backend.telegram_bot.telegram_request", fake_request)
+    send_duplicate_afk_prompt_message("token", 123, "Hi @user. Duplicate AFK?", "prompt-2")
+
+    assert captured["method"] == "sendMessage"
+    assert "altf:prompt-2:confirm_online" in captured["params"]["reply_markup"]
+    assert "altf:prompt-2:still_afk" in captured["params"]["reply_markup"]
 
 
 def test_telegram_bot_plain_message_has_no_buttons(monkeypatch):
@@ -6513,8 +6532,77 @@ def test_repeated_afk_does_not_reset_break_start():
     closed = repo.record_break_event("dmitry_shane", "online", "2026-04-28T12:20:00Z")
 
     assert first["status"] == "break_started"
-    assert second["status"] == "break_already_started"
+    assert second["status"] == "duplicate_afk"
+    assert second.get("reminderId")
+    assert second["afkStartedTimeLocal"] == "12:00"
+    afk_reports = [
+        row
+        for row in repo.db.report_rows.items
+        if row.get("source") == "telegram" and row.get("telegramEventType") == "afk"
+    ]
+    assert len(afk_reports) == 1
+    assert len(repo.db.telegram_duplicate_afk_prompts.items) == 1
     assert closed["breakSeconds"] == 20 * 60
+
+
+def test_duplicate_telegram_online_skips_extra_report_and_break_event():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    assert repo.record_break_event("ta", "online", "2026-04-28T09:00:00Z")["status"] == "online_recorded"
+    dup = repo.record_break_event("ta", "online", "2026-04-28T10:00:00Z")
+    assert dup["status"] == "duplicate_online"
+    assert dup["sinceTimeLocal"] == "09:00"
+    online_rows = [
+        row
+        for row in repo.db.report_rows.items
+        if row.get("source") == "telegram" and row.get("telegramEventType") == "online"
+    ]
+    assert len(online_rows) == 1
+    assert len([b for b in repo.db.break_events.items if b.get("eventType") == "online"]) == 1
+
+
+def test_duplicate_telegram_offline_skips_extra_report():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    repo.record_break_event("ta", "online", "2026-04-28T09:00:00Z")
+    assert repo.record_break_event("ta", "offline", "2026-04-28T18:00:00Z")["status"] == "day_closed"
+    dup = repo.record_break_event("ta", "offline", "2026-04-28T19:00:00Z")
+    assert dup["status"] == "duplicate_offline"
+    assert dup["sinceOfflineTimeLocal"] == "18:00"
+    offline_rows = [row for row in repo.db.report_rows.items if row.get("telegramEventType") == "offline"]
+    assert len(offline_rows) == 1
+    assert len([b for b in repo.db.break_events.items if b.get("eventType") == "offline"]) == 1
+
+
+def test_duplicate_afk_prompt_confirm_online_records_break_closed():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    repo.record_break_event("ta", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("ta", "afk", "2026-04-28T12:00:00Z")
+    dup = repo.record_break_event("ta", "afk", "2026-04-28T12:05:00Z")
+    assert dup["status"] == "duplicate_afk"
+    rid = str(dup["reminderId"])
+    repo.db.telegram_duplicate_afk_prompts.items[0]["status"] = "sent"
+
+    result = repo.close_telegram_duplicate_afk_prompt(rid, "confirm_online", "2026-04-28T12:30:00Z", "ta")
+    assert result["ok"]
+    assert result["status"] == "duplicate_afk_prompt_confirmed_online"
+    assert not repo.db.break_sessions.items
+
+
+def test_duplicate_afk_prompt_still_afk_closes_prompt_without_online():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    repo.record_break_event("ta", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("ta", "afk", "2026-04-28T12:00:00Z")
+    dup = repo.record_break_event("ta", "afk", "2026-04-28T12:05:00Z")
+    rid = str(dup["reminderId"])
+    repo.db.telegram_duplicate_afk_prompts.items[0]["status"] = "sent"
+
+    result = repo.close_telegram_duplicate_afk_prompt(rid, "still_afk", "2026-04-28T12:06:00Z", "ta")
+    assert result["ok"]
+    assert result["status"] == "duplicate_afk_prompt_still_afk"
+    assert len(repo.db.break_sessions.items) == 1
 
 
 def test_break_close_handles_naive_mongo_datetime():

@@ -144,13 +144,21 @@ class BreakEventIn(ApiModel):
 class TelegramReminderSentIn(ApiModel):
     reminder_id: str = Field(alias="reminderId", min_length=1)
     message_id: int | None = Field(default=None, alias="messageId")
-    kind: str = Field(default="day_end", alias="kind", pattern="^(day_end|online_prompt|break_activity_prompt|meeting_auto_afk|meeting_summary)$")
+    kind: str = Field(
+        default="day_end",
+        alias="kind",
+        pattern="^(day_end|online_prompt|break_activity_prompt|duplicate_afk_prompt|meeting_auto_afk|meeting_summary)$",
+    )
 
 
 class TelegramReminderCloseIn(ApiModel):
     reminder_id: str = Field(alias="reminderId", min_length=1)
     action: str = Field(min_length=1)
-    kind: str = Field(default="day_end", alias="kind", pattern="^(day_end|online_prompt|break_activity_prompt)$")
+    kind: str = Field(
+        default="day_end",
+        alias="kind",
+        pattern="^(day_end|online_prompt|break_activity_prompt|duplicate_afk_prompt)$",
+    )
     timestamp: str | None = None
     actor_telegram_username: str | None = Field(default=None, alias="actorTelegramUsername")
 

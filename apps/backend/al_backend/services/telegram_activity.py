@@ -1,11 +1,163 @@
 from __future__ import annotations
 
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from ..activity_math import *
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
 
+def _event_clock_local(value: dt.datetime | None, time_zone_id: str) -> str:
+    if value is None:
+        return "unknown time"
+
+    zone_name = (_valid_time_zone_id(time_zone_id) or "").strip()
+
+    try:
+        if zone_name:
+            localized = value.astimezone(ZoneInfo(zone_name))
+        else:
+            localized = value.astimezone(dt.UTC)
+    except ZoneInfoNotFoundError:
+        localized = value.astimezone(dt.UTC)
+
+    return localized.strftime("%H:%M")
+
+
 class TelegramActivityService(MongoComposableMixin):
+    def _supersede_open_duplicate_afk_prompts(self, telegram_username: str, break_started_at: dt.datetime | None) -> None:
+        if not break_started_at:
+            return
+
+        now = dt.datetime.now(dt.UTC)
+
+        self.db.telegram_duplicate_afk_prompts.update_many(
+            {"telegramUsername": telegram_username, "breakStartedAt": break_started_at, "status": {"$in": ["pending_send", "sent"]}},
+            {
+                "$set": {
+                    "status": "closed",
+                    "closedAt": now,
+                    "closeAction": "break_closed_by_online",
+                    "updatedAt": now,
+                }
+            },
+        )
+
+    def _close_open_duplicate_afk_prompts_after_online_day(self, raw_author: str, day_date: str) -> None:
+        now = dt.datetime.now(dt.UTC)
+
+        self.db.telegram_duplicate_afk_prompts.update_many(
+            {"rawAuthor": raw_author, "date": day_date, "status": {"$in": ["pending_send", "sent"]}},
+            {
+                "$set": {
+                    "status": "closed",
+                    "closedAt": now,
+                    "closeAction": "cancelled_by_online",
+                    "updatedAt": now,
+                }
+            },
+        )
+
+    def mark_telegram_duplicate_afk_prompt_sent(self, reminder_id: str, message_id: int | None = None) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+
+        self.db.telegram_duplicate_afk_prompts.update_one(
+            {"reminderId": reminder_id},
+            {
+                "$set": {
+                    "status": "sent",
+                    "messageId": message_id,
+                    "sentAt": now,
+                    "updatedAt": now,
+                }
+            },
+        )
+        return {"ok": True}
+
+    def close_telegram_duplicate_afk_prompt(
+        self,
+        reminder_id: str,
+        action: str,
+        timestamp: str | None = None,
+        actor_telegram_username: str | None = None,
+    ) -> dict[str, Any]:
+        action = action if action in {"confirm_online", "still_afk"} else "still_afk"
+        reminder = self.db.telegram_duplicate_afk_prompts.find_one({"reminderId": reminder_id}, {"_id": 0})
+
+        if not reminder:
+            return {"ok": False, "error": "Unknown reminder", "status": "unknown_reminder"}
+
+        if reminder.get("status") == "closed":
+            return {
+                "ok": True,
+                "status": "duplicate_afk_prompt_already_closed",
+                "reminderAction": reminder.get("closeAction") or action,
+            }
+
+        telegram_username = _normalize_telegram_username(reminder.get("telegramUsername"))
+        actor_telegram_username = _normalize_telegram_username(actor_telegram_username)
+        received_at = dt.datetime.now(dt.UTC)
+
+        if actor_telegram_username and telegram_username and actor_telegram_username != telegram_username:
+            return {"ok": False, "error": "Reminder belongs to another Telegram user", "status": "wrong_user"}
+
+        if action == "still_afk":
+            self.db.telegram_duplicate_afk_prompts.update_one(
+                {"reminderId": reminder_id},
+                {
+                    "$set": {
+                        "status": "closed",
+                        "closedAt": received_at,
+                        "closeAction": "still_afk",
+                        "updatedAt": received_at,
+                    }
+                },
+            )
+            return {"ok": True, "status": "duplicate_afk_prompt_still_afk"}
+
+        resolved_ts = timestamp if timestamp else received_at.isoformat()
+        break_result = self.record_break_event(telegram_username, "online", resolved_ts)
+
+        if not break_result.get("ok"):
+            return {**break_result, "status": str(break_result.get("status") or "duplicate_afk_online_failed")}
+
+        result_status = break_result.get("status")
+
+        if result_status == "duplicate_online":
+            self.db.telegram_duplicate_afk_prompts.update_one(
+                {"reminderId": reminder_id},
+                {
+                    "$set": {
+                        "status": "closed",
+                        "closedAt": received_at,
+                        "closeAction": "closed_duplicate_online_via_confirm",
+                        "updatedAt": received_at,
+                    }
+                },
+            )
+            return {"ok": True, "status": "duplicate_afk_prompt_closed_already_online"}
+
+        if result_status != "break_closed":
+            return {
+                "ok": False,
+                "status": str(result_status or "unexpected_online_result"),
+                "error": break_result.get("error") or str(result_status),
+            }
+
+        self.db.telegram_duplicate_afk_prompts.update_one(
+            {"reminderId": reminder_id},
+            {
+                "$set": {
+                    "status": "closed",
+                    "closedAt": received_at,
+                    "closeAction": "confirm_online",
+                    "updatedAt": received_at,
+                }
+            },
+        )
+
+        return {**break_result, "ok": True, "status": "duplicate_afk_prompt_confirmed_online"}
+
     def record_break_event(
         self,
         telegram_username: str,
@@ -26,6 +178,74 @@ class TelegramActivityService(MongoComposableMixin):
         raw_author = profile["rawAuthor"]
         time_zone_id = _valid_time_zone_id(profile.get("timeZoneId")) or "UTC"
         event_date = _telegram_event_date(event_time, time_zone_id)
+
+        if event_type == "offline":
+            day_probe = self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": event_date}, {"_id": 0})
+            probe_offline_at = day_probe.get("lastOfflineAt") if day_probe else None
+            probe_offline_dt = _coerce_datetime(probe_offline_at)
+
+            if day_probe is not None and probe_offline_dt is not None:
+                return {
+                    "ok": True,
+                    "status": "duplicate_offline",
+                    "lastOfflineAt": probe_offline_dt.isoformat(),
+                    "sinceOfflineTimeLocal": _event_clock_local(probe_offline_dt, time_zone_id),
+                    "timeZoneId": time_zone_id,
+                }
+
+        if event_type == "online":
+            day_probe_on = self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": event_date}, {"_id": 0})
+            break_probe_on = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
+
+            if day_probe_on and not day_probe_on.get("lastOfflineAt") and not break_probe_on:
+                started_online = _coerce_datetime(day_probe_on.get("startedAt")) or event_time
+
+                return {
+                    "ok": True,
+                    "status": "duplicate_online",
+                    "dayStartedAt": started_online.isoformat(),
+                    "sinceTimeLocal": _event_clock_local(started_online, time_zone_id),
+                    "timeZoneId": time_zone_id,
+                }
+
+        if event_type == "afk":
+            break_probe_afk = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
+
+            if break_probe_afk:
+                now_close = audit_now
+
+                self.db.telegram_duplicate_afk_prompts.update_many(
+                    {"rawAuthor": raw_author, "telegramUsername": normalized_telegram, "status": {"$in": ["pending_send", "sent"]}},
+                    {"$set": {"status": "closed", "closedAt": now_close, "closeAction": "superseded", "updatedAt": now_close}},
+                )
+
+                dup_reminder_id = _new_id()
+                break_afk_started = _coerce_datetime(break_probe_afk.get("startedAt")) or event_time
+                sess_tz = _valid_time_zone_id(break_probe_afk.get("timeZoneId")) or time_zone_id
+
+                self.db.telegram_duplicate_afk_prompts.insert_one(
+                    {
+                        "reminderId": dup_reminder_id,
+                        "rawAuthor": raw_author,
+                        "telegramUsername": normalized_telegram,
+                        "date": event_date,
+                        "breakStartedAt": break_afk_started,
+                        "timeZoneId": sess_tz,
+                        "status": "pending_send",
+                        "createdAt": audit_now,
+                        "updatedAt": audit_now,
+                    }
+                )
+
+                return {
+                    "ok": True,
+                    "status": "duplicate_afk",
+                    "reminderId": dup_reminder_id,
+                    "breakStartedAt": break_afk_started.isoformat(),
+                    "afkStartedTimeLocal": _event_clock_local(break_afk_started, sess_tz),
+                    "timeZoneId": sess_tz,
+                }
+
         composed(self).invalidate_activity_summary_cache([event_date])
         self.db.break_events.insert_one(
             {
@@ -40,12 +260,6 @@ class TelegramActivityService(MongoComposableMixin):
         )
 
         if event_type == "afk":
-            session = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
-
-            if session:
-                self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, row_received_at, "break_already_started")
-                return {"ok": True, "status": "break_already_started"}
-
             self.db.break_sessions.update_one(
                 {"telegramUsername": normalized_telegram},
                 {
@@ -112,8 +326,14 @@ class TelegramActivityService(MongoComposableMixin):
         )
 
         self._invalidate_telegram_online_prompts_for_online_day(raw_author, online_date)
+        self._close_open_duplicate_afk_prompts_after_online_day(raw_author, online_date)
 
+        pending_break_snapshot = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
+        break_started_snap = _coerce_datetime((pending_break_snapshot or {}).get("startedAt"))
         break_result = self._close_break_session(normalized_telegram, raw_author, event_time)
+
+        if break_result:
+            self._supersede_open_duplicate_afk_prompts(normalized_telegram, break_started_snap)
 
         if not break_result:
             self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, row_received_at, "online_recorded")
@@ -360,6 +580,7 @@ class TelegramActivityService(MongoComposableMixin):
                 }
             },
         )
+        self._close_open_duplicate_afk_prompts_after_online_day(raw_author, day_date)
 
     def _schedule_telegram_break_activity_prompt_if_needed(
         self,
@@ -756,6 +977,21 @@ class TelegramActivityService(MongoComposableMixin):
 
         timestamp_str = aligned_at.isoformat().replace("+00:00", "Z")
         break_result = self.record_break_event(telegram_username, "online", timestamp_str, ingest_received_at=aligned_at)
+
+        if break_result.get("status") == "duplicate_online":
+            self.db.telegram_online_prompts.update_one(
+                {"reminderId": reminder_id},
+                {
+                    "$set": {
+                        "status": "closed",
+                        "closedAt": received_at,
+                        "closeAction": "closed_duplicate_online_confirm",
+                        "updatedAt": received_at,
+                    }
+                },
+            )
+            return {"ok": True, "status": "online_prompt_closed_duplicate_online", **{k: v for k, v in break_result.items() if k != "ok"}}
+
         if not break_result.get("ok"):
             return {**break_result, "status": str(break_result.get("status") or "online_failed")}
 
@@ -814,6 +1050,21 @@ class TelegramActivityService(MongoComposableMixin):
             return {"ok": True, "status": "break_activity_prompt_still_afk"}
 
         break_result = self.record_break_event(telegram_username, "online", timestamp)
+
+        if break_result.get("status") == "duplicate_online":
+            self.db.telegram_break_activity_prompts.update_one(
+                {"reminderId": reminder_id},
+                {
+                    "$set": {
+                        "status": "closed",
+                        "closedAt": received_at,
+                        "closeAction": "closed_duplicate_online_confirm",
+                        "updatedAt": received_at,
+                    }
+                },
+            )
+            return {"ok": True, "status": "break_activity_prompt_closed_duplicate_online", **{k: v for k, v in break_result.items() if k != "ok"}}
+
         if not break_result.get("ok"):
             return {**break_result, "status": str(break_result.get("status") or "online_failed")}
 

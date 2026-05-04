@@ -81,6 +81,7 @@ class IndexManager:
         )
         self.db.telegram_break_activity_prompts.create_index("reminderId", unique=True)
         self.db.telegram_break_activity_prompts.create_index([("rawAuthor", ASCENDING), ("breakStartedAt", ASCENDING)], unique=True)
+        self.db.telegram_duplicate_afk_prompts.create_index("reminderId", unique=True)
         self.db.interval_settings.create_index("kind", unique=True)
         self.db.interval_settings.create_index("author", unique=True, sparse=True)
         self.db.system_settings.create_index("kind", unique=True)

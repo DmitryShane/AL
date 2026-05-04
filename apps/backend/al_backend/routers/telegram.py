@@ -55,6 +55,9 @@ def telegram_reminder_sent(
     if sent.kind == "break_activity_prompt":
         return service.mark_telegram_break_activity_prompt_sent(sent.reminder_id, sent.message_id)
 
+    if sent.kind == "duplicate_afk_prompt":
+        return service.mark_telegram_duplicate_afk_prompt_sent(sent.reminder_id, sent.message_id)
+
     if sent.kind == "meeting_auto_afk":
         return service.mark_telegram_meeting_auto_afk_notification_sent(sent.reminder_id, sent.message_id)
 
@@ -84,6 +87,14 @@ def telegram_reminder_close(
             raise HTTPException(status_code=422, detail="Invalid action for break_activity_prompt")
 
         return service.close_telegram_break_activity_prompt(
+            close.reminder_id, close.action, close.timestamp, close.actor_telegram_username
+        )
+
+    if close.kind == "duplicate_afk_prompt":
+        if close.action not in {"confirm_online", "still_afk"}:
+            raise HTTPException(status_code=422, detail="Invalid action for duplicate_afk_prompt")
+
+        return service.close_telegram_duplicate_afk_prompt(
             close.reminder_id, close.action, close.timestamp, close.actor_telegram_username
         )
 

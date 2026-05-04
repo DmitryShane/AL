@@ -525,6 +525,7 @@ class AuthorRepository(MongoComposableMixin):
         counts["telegramDayReminders"] = self.db.telegram_day_reminders.delete_many(raw_author_query).deleted_count
         counts["telegramOnlinePrompts"] = self.db.telegram_online_prompts.delete_many(raw_author_query).deleted_count
         counts["telegramBreakActivityPrompts"] = self.db.telegram_break_activity_prompts.delete_many(raw_author_query).deleted_count
+        counts["telegramDuplicateAfkPrompts"] = self.db.telegram_duplicate_afk_prompts.delete_many(raw_author_query).deleted_count
         counts["telegramMeetingAutoAfkNotifications"] = self.db.telegram_meeting_auto_afk_notifications.delete_many(
             raw_author_query
         ).deleted_count
