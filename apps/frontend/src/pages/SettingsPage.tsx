@@ -66,6 +66,7 @@ export function SettingsPage({
   const profiles = summary?.activitySummary.profiles ?? [];
   const aliases = summary?.activitySummary.authorAliases ?? [];
   const canManageSettings = currentUser.role === "admin" || currentUser.role === "editor";
+  const settingsReadOnly = !canManageSettings;
   const avatarSettingsLockedTitle = "Only editors and admins can change GitHub avatar cache settings.";
   const [settingsTab, setSettingsTabState] = useState<SettingsTab>(() => loadSavedSettingsTab());
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
@@ -238,6 +239,10 @@ export function SettingsPage({
     telegramOnlinePromptDelayMinutes !== String(intervalSettingsTelegramOnlinePromptMinutes(summary));
 
   async function saveProfile(rawAuthor: string) {
+    if (settingsReadOnly) {
+      return;
+    }
+
     const profile = drafts[rawAuthor];
 
     if (!profile) {
@@ -271,6 +276,10 @@ export function SettingsPage({
   }
 
   async function createProfile() {
+    if (settingsReadOnly) {
+      return;
+    }
+
     const rawAuthor = normalizeAuthorInput(newProfile.rawAuthor);
 
     if (!rawAuthor) {
@@ -312,6 +321,10 @@ export function SettingsPage({
   }
 
   async function saveAvatarRefreshCadence() {
+    if (settingsReadOnly) {
+      return;
+    }
+
     setSaving("avatarCadence");
     setSaveStatus((items) => ({ ...items, avatarCadence: undefined }));
 
@@ -341,6 +354,10 @@ export function SettingsPage({
   }
 
   async function refreshAllGitHubAvatars() {
+    if (settingsReadOnly) {
+      return;
+    }
+
     setSaving("avatar-refresh-all");
     setSaveStatus((items) => ({ ...items, avatarRefreshAll: undefined }));
 
@@ -366,6 +383,10 @@ export function SettingsPage({
   }
 
   async function refreshAuthorGitHubAvatar(rawAuthor: string) {
+    if (settingsReadOnly) {
+      return;
+    }
+
     const key = `avatar-refresh:${rawAuthor}`;
     setSaving(key);
     setSaveStatus((items) => ({ ...items, [key]: undefined }));
@@ -394,6 +415,10 @@ export function SettingsPage({
   }
 
   async function saveInterval() {
+    if (settingsReadOnly) {
+      return;
+    }
+
     setSaving("interval");
     setSaveStatus((items) => ({ ...items, interval: undefined }));
 
@@ -426,6 +451,10 @@ export function SettingsPage({
   }
 
   async function saveTelegramPromptSettings() {
+    if (settingsReadOnly) {
+      return;
+    }
+
     setSaving("telegramPrompt");
     setSaveStatus((items) => ({ ...items, telegramPrompt: undefined }));
 
@@ -461,6 +490,10 @@ export function SettingsPage({
   }
 
   async function saveDiscordSettings() {
+    if (settingsReadOnly) {
+      return;
+    }
+
     setSaving("discord");
     setSaveStatus((items) => ({ ...items, discord: undefined }));
 
@@ -497,6 +530,10 @@ export function SettingsPage({
   }
 
   async function saveMeetingSummarySettings() {
+    if (settingsReadOnly) {
+      return;
+    }
+
     setSaving("meetingSummarySettings");
     setSaveStatus((items) => ({ ...items, meetingSummarySettings: undefined }));
 
@@ -533,6 +570,10 @@ export function SettingsPage({
   }
 
   async function saveMeetingSummaryPrompt() {
+    if (settingsReadOnly) {
+      return;
+    }
+
     setSaving("meetingSummaryPrompt");
     setSaveStatus((items) => ({ ...items, meetingSummaryPrompt: undefined }));
 
@@ -569,6 +610,10 @@ export function SettingsPage({
   }
 
   async function executeAuthorActivityDelete(pending: PendingAuthorActivityDelete) {
+    if (settingsReadOnly) {
+      return;
+    }
+
     const rawAuthor = pending.profile.rawAuthor;
     const deleteKey = `delete:${rawAuthor}`;
     setSaving(deleteKey);
@@ -607,6 +652,10 @@ export function SettingsPage({
   }
 
   async function executeBulkActivityDeleteAllAuthors(confirmPhrase: string) {
+    if (settingsReadOnly) {
+      return;
+    }
+
     setSaving("bulk-delete-all-authors");
     setSaveStatus((items) => ({ ...items, bulkDeleteAllAuthors: undefined }));
 
@@ -647,6 +696,10 @@ export function SettingsPage({
   }
 
   function requestAuthorActivityDelete(profile: AuthorProfile) {
+    if (settingsReadOnly) {
+      return;
+    }
+
     const draft: DeleteActivityDraft =
       deleteActivityDrafts[profile.rawAuthor] ?? { mode: "today", rangeStart: "", rangeEnd: "" };
 
@@ -687,6 +740,10 @@ export function SettingsPage({
   }
 
   function requestAuthorDeleteAllActivity(profile: AuthorProfile) {
+    if (settingsReadOnly) {
+      return;
+    }
+
     setDeleteActivityFieldError((items) => {
       const next = { ...items };
       delete next[profile.rawAuthor];
@@ -696,6 +753,10 @@ export function SettingsPage({
   }
 
   async function deleteAuthorProfile(rawAuthor: string) {
+    if (settingsReadOnly) {
+      return;
+    }
+
     const deleteKey = `delete-profile:${rawAuthor}`;
     setSaving(deleteKey);
     setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
@@ -723,6 +784,10 @@ export function SettingsPage({
   }
 
   async function saveAuthorAlias() {
+    if (settingsReadOnly) {
+      return;
+    }
+
     const sourceRawAuthor = normalizeAuthorInput(aliasSource);
     const targetRawAuthor = normalizeAuthorInput(aliasTarget);
 
@@ -762,6 +827,10 @@ export function SettingsPage({
   }
 
   async function deleteAuthorAlias(sourceRawAuthor: string) {
+    if (settingsReadOnly) {
+      return;
+    }
+
     const deleteKey = `alias-delete:${sourceRawAuthor}`;
     setSaving(deleteKey);
     setSaveStatus((items) => ({ ...items, [deleteKey]: undefined }));
@@ -833,15 +902,15 @@ export function SettingsPage({
             <div className="settings-row">
               <label>
                 Global interval, sec
-                <input value={globalInterval} onChange={(event) => setGlobalInterval(event.target.value)} type="number" min="30" />
+                <input value={globalInterval} onChange={(event) => setGlobalInterval(event.target.value)} type="number" min="30" disabled={settingsReadOnly} />
               </label>
               <label>
                 Idle threshold, sec
-                <input value={idleThreshold} onChange={(event) => setIdleThreshold(event.target.value)} type="number" min="30" />
+                <input value={idleThreshold} onChange={(event) => setIdleThreshold(event.target.value)} type="number" min="30" disabled={settingsReadOnly} />
               </label>
               <label>
                 Device idle threshold, sec
-                <input value={deviceIdleThreshold} onChange={(event) => setDeviceIdleThreshold(event.target.value)} type="number" min="30" />
+                <input value={deviceIdleThreshold} onChange={(event) => setDeviceIdleThreshold(event.target.value)} type="number" min="30" disabled={settingsReadOnly} />
               </label>
               <div className="plugin-ingest-field">
                 <span id="plugin-ingest-heading" className="plugin-ingest-field-heading">
@@ -858,6 +927,7 @@ export function SettingsPage({
                       name="plugin-ingest-enabled"
                       checked={pluginIngestEnabled}
                       onChange={() => setPluginIngestEnabled(true)}
+                      disabled={settingsReadOnly}
                     />
                     On
                   </label>
@@ -867,12 +937,13 @@ export function SettingsPage({
                       name="plugin-ingest-enabled"
                       checked={!pluginIngestEnabled}
                       onChange={() => setPluginIngestEnabled(false)}
+                      disabled={settingsReadOnly}
                     />
                     Off
                   </label>
                 </div>
               </div>
-              <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval" || !isIntervalSettingsDirty}>
+              <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={settingsReadOnly || saving === "interval" || !isIntervalSettingsDirty}>
                 {settingsSaveButtonLabel("interval", saving, saveStatus)}
               </button>
             </div>
@@ -912,6 +983,7 @@ export function SettingsPage({
                       <input
                         type="checkbox"
                         checked={draft.autoBreakEnabled ?? false}
+                        disabled={settingsReadOnly}
                         onChange={(event) =>
                           setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, autoBreakEnabled: event.target.checked } }))
                         }
@@ -922,7 +994,7 @@ export function SettingsPage({
                   <button
                     className={settingsSaveButtonClassName(saveStatus[profile.rawAuthor], true)}
                     onClick={() => void saveProfile(profile.rawAuthor)}
-                    disabled={saving === profile.rawAuthor || !profileDirty}
+                    disabled={settingsReadOnly || saving === profile.rawAuthor || !profileDirty}
                   >
                     {settingsSaveButtonLabel(profile.rawAuthor, saving, saveStatus)}
                   </button>
@@ -946,6 +1018,7 @@ export function SettingsPage({
                 onChange={(event) => setAliasSource(event.target.value)}
                 list="author-alias-source-list"
                 placeholder="Unknown User"
+                disabled={settingsReadOnly}
               />
               <datalist id="author-alias-source-list">
                 {profiles.map((profile) => (
@@ -955,7 +1028,7 @@ export function SettingsPage({
             </label>
             <label>
               Target profile
-              <select value={aliasTarget} onChange={(event) => setAliasTarget(event.target.value)}>
+              <select value={aliasTarget} onChange={(event) => setAliasTarget(event.target.value)} disabled={settingsReadOnly}>
                 {profiles.map((profile) => (
                   <option value={profile.rawAuthor} key={profile.rawAuthor}>{profile.displayName || profile.rawAuthor}</option>
                 ))}
@@ -964,7 +1037,7 @@ export function SettingsPage({
             <button
               className={settingsSaveButtonClassName(saveStatus.authorAlias)}
               onClick={() => void saveAuthorAlias()}
-              disabled={saving === "authorAlias" || !aliasSource.trim() || !aliasTarget.trim()}
+              disabled={settingsReadOnly || saving === "authorAlias" || !aliasSource.trim() || !aliasTarget.trim()}
             >
               {saving === "authorAlias" ? "Assigning..." : saveStatus.authorAlias === "saved" ? "Assigned" : saveStatus.authorAlias === "error" ? "Failed" : "Assign"}
             </button>
@@ -982,7 +1055,7 @@ export function SettingsPage({
                     <button
                       className={`${settingsSaveButtonClassName(saveStatus[deleteKey], true)} danger-button`}
                       onClick={() => void deleteAuthorAlias(alias.sourceRawAuthor)}
-                      disabled={saving === deleteKey}
+                      disabled={settingsReadOnly || saving === deleteKey}
                     >
                       {saving === deleteKey ? "Deleting..." : saveStatus[deleteKey] === "error" ? "Failed" : "Delete"}
                     </button>
@@ -1013,6 +1086,7 @@ export function SettingsPage({
               autoComplete="off"
               data-1p-ignore
               data-lpignore="true"
+              disabled={settingsReadOnly}
             />
           </label>
           <label>
@@ -1024,6 +1098,7 @@ export function SettingsPage({
               autoComplete="off"
               data-1p-ignore
               data-lpignore="true"
+              disabled={settingsReadOnly}
             />
           </label>
           <label>
@@ -1035,6 +1110,7 @@ export function SettingsPage({
               autoComplete="off"
               data-1p-ignore
               data-lpignore="true"
+              disabled={settingsReadOnly}
             />
           </label>
           <label>
@@ -1046,6 +1122,7 @@ export function SettingsPage({
               autoComplete="off"
               data-1p-ignore
               data-lpignore="true"
+              disabled={settingsReadOnly}
             />
           </label>
           <label>
@@ -1057,6 +1134,7 @@ export function SettingsPage({
               autoComplete="off"
               data-1p-ignore
               data-lpignore="true"
+              disabled={settingsReadOnly}
             />
           </label>
           <label>
@@ -1068,6 +1146,7 @@ export function SettingsPage({
               autoComplete="off"
               data-1p-ignore
               data-lpignore="true"
+              disabled={settingsReadOnly}
             />
           </label>
           <label>
@@ -1079,6 +1158,7 @@ export function SettingsPage({
               autoComplete="off"
               data-1p-ignore
               data-lpignore="true"
+              disabled={settingsReadOnly}
             />
           </label>
           <label>
@@ -1087,6 +1167,7 @@ export function SettingsPage({
               type="color"
               value={newProfile.authorColor ?? "#13a37b"}
               onChange={(event) => setNewProfile((profile) => ({ ...profile, authorColor: event.target.value }))}
+              disabled={settingsReadOnly}
             />
           </label>
           <label>
@@ -1096,6 +1177,7 @@ export function SettingsPage({
                 type="checkbox"
                 checked={newProfile.pluginEnabled ?? true}
                 onChange={(event) => setNewProfile((profile) => ({ ...profile, pluginEnabled: event.target.checked }))}
+                disabled={settingsReadOnly}
               />
               Enabled
             </span>
@@ -1103,7 +1185,7 @@ export function SettingsPage({
           <button
             className={settingsSaveButtonClassName(saveStatus.newProfile)}
             onClick={() => void createProfile()}
-            disabled={saving === "newProfile" || !newProfile.rawAuthor.trim()}
+            disabled={settingsReadOnly || saving === "newProfile" || !newProfile.rawAuthor.trim()}
           >
             {saving === "newProfile" ? "Creating..." : saveStatus.newProfile === "saved" ? "Created" : saveStatus.newProfile === "error" ? "Failed" : "Add profile"}
           </button>
@@ -1148,6 +1230,7 @@ export function SettingsPage({
                   autoComplete="off"
                   data-1p-ignore
                   data-lpignore="true"
+                  disabled={settingsReadOnly}
                 />
                 <input
                   value={draft.team ?? ""}
@@ -1155,6 +1238,7 @@ export function SettingsPage({
                   autoComplete="off"
                   data-1p-ignore
                   data-lpignore="true"
+                  disabled={settingsReadOnly}
                 />
                 <input
                   value={draft.githubUsername ?? ""}
@@ -1165,6 +1249,7 @@ export function SettingsPage({
                   autoComplete="off"
                   data-1p-ignore
                   data-lpignore="true"
+                  disabled={settingsReadOnly}
                 />
                 <input
                   value={draft.telegramUsername ?? ""}
@@ -1175,6 +1260,7 @@ export function SettingsPage({
                   autoComplete="off"
                   data-1p-ignore
                   data-lpignore="true"
+                  disabled={settingsReadOnly}
                 />
                 <input
                   value={draft.discordUserId ?? ""}
@@ -1185,6 +1271,7 @@ export function SettingsPage({
                   autoComplete="off"
                   data-1p-ignore
                   data-lpignore="true"
+                  disabled={settingsReadOnly}
                 />
                 <input
                   value={draft.discordUsername ?? ""}
@@ -1195,17 +1282,20 @@ export function SettingsPage({
                   autoComplete="off"
                   data-1p-ignore
                   data-lpignore="true"
+                  disabled={settingsReadOnly}
                 />
                 <span className="profile-readonly-cell" title={formatProfileTimeZoneTitle(profile)}>{formatProfileTimeZoneLabel(profile)}</span>
                 <input
                   type="color"
                   value={draft.authorColor ?? "#13a37b"}
                   onChange={(event) => setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, authorColor: event.target.value } }))}
+                  disabled={settingsReadOnly}
                 />
                 <label className="checkbox-cell">
                   <input
                     type="checkbox"
                     checked={draft.pluginEnabled ?? true}
+                    disabled={settingsReadOnly}
                     onChange={(event) =>
                       setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, pluginEnabled: event.target.checked } }))
                     }
@@ -1216,15 +1306,19 @@ export function SettingsPage({
                   <button
                     className={settingsSaveButtonClassName(saveStatus[profile.rawAuthor], true)}
                     onClick={() => void saveProfile(profile.rawAuthor)}
-                    disabled={saving === profile.rawAuthor || !profileDirty}
+                    disabled={settingsReadOnly || saving === profile.rawAuthor || !profileDirty}
                   >
                     {settingsSaveButtonLabel(profile.rawAuthor, saving, saveStatus)}
                   </button>
                   <button
                     type="button"
                     className="primary-button danger-solid-button delete-all-data-solid-button"
-                    onClick={() => setDeleteProfileTarget(profile)}
-                    disabled={saving === deleteProfileKey}
+                    onClick={() => {
+                      if (!settingsReadOnly) {
+                        setDeleteProfileTarget(profile);
+                      }
+                    }}
+                    disabled={settingsReadOnly || saving === deleteProfileKey}
                   >
                     {saving === deleteProfileKey ? "Deleting..." : "Delete profile"}
                   </button>
@@ -1344,6 +1438,7 @@ export function SettingsPage({
             <select
               value={bulkActivityDeletePreset}
               onChange={(event) => setBulkActivityDeletePreset(event.target.value as BulkActivityDeletePreset)}
+              disabled={settingsReadOnly}
             >
               <option value="1d">1 calendar day (today UTC)</option>
               <option value="2d">2 calendar days</option>
@@ -1356,8 +1451,12 @@ export function SettingsPage({
           <button
             type="button"
             className="primary-button danger-solid-button delete-all-data-solid-button"
-            onClick={() => setBulkActivityDeleteModalOpen(true)}
-            disabled={saving === "bulk-delete-all-authors" || profiles.length === 0}
+            onClick={() => {
+              if (!settingsReadOnly) {
+                setBulkActivityDeleteModalOpen(true);
+              }
+            }}
+            disabled={settingsReadOnly || saving === "bulk-delete-all-authors" || profiles.length === 0}
           >
             Delete for all authors…
           </button>
@@ -1395,6 +1494,7 @@ export function SettingsPage({
                           type="radio"
                           name={`delete-mode-${profile.rawAuthor}`}
                           checked={actDraft.mode === "today"}
+                          disabled={settingsReadOnly}
                           onChange={() =>
                             setDeleteActivityDrafts((items) => ({
                               ...items,
@@ -1409,6 +1509,7 @@ export function SettingsPage({
                           type="radio"
                           name={`delete-mode-${profile.rawAuthor}`}
                           checked={actDraft.mode === "range"}
+                          disabled={settingsReadOnly}
                           onChange={() =>
                             setDeleteActivityDrafts((items) => ({
                               ...items,
@@ -1425,6 +1526,7 @@ export function SettingsPage({
                             <input
                               type="date"
                               value={actDraft.rangeStart}
+                              disabled={settingsReadOnly}
                               onChange={(event) =>
                                 setDeleteActivityDrafts((items) => ({
                                   ...items,
@@ -1438,6 +1540,7 @@ export function SettingsPage({
                             <input
                               type="date"
                               value={actDraft.rangeEnd}
+                              disabled={settingsReadOnly}
                               onChange={(event) =>
                                 setDeleteActivityDrafts((items) => ({
                                   ...items,
@@ -1458,7 +1561,7 @@ export function SettingsPage({
                       type="button"
                       className={`${settingsSaveButtonClassName(saveStatus[deleteActivityKey], true)} danger-button`}
                       onClick={() => requestAuthorActivityDelete(profile)}
-                      disabled={saving === deleteActivityKey}
+                      disabled={settingsReadOnly || saving === deleteActivityKey}
                     >
                       {saving === deleteActivityKey ? "Deleting..." : saveStatus[deleteActivityKey] === "error" ? "Failed" : "Delete"}
                     </button>
@@ -1466,7 +1569,7 @@ export function SettingsPage({
                       type="button"
                       className="primary-button danger-solid-button delete-all-data-solid-button"
                       onClick={() => requestAuthorDeleteAllActivity(profile)}
-                      disabled={saving === deleteActivityKey}
+                      disabled={settingsReadOnly || saving === deleteActivityKey}
                     >
                       Delete all data
                     </button>
@@ -1478,7 +1581,7 @@ export function SettingsPage({
         </div>
       </div>
       </div>
-      {bulkActivityDeleteModalOpen ? (
+      {!settingsReadOnly && bulkActivityDeleteModalOpen ? (
         <BulkAllAuthorsActivityDeleteModal
           preset={bulkActivityDeletePreset}
           authorCount={profiles.length}
@@ -1487,7 +1590,7 @@ export function SettingsPage({
           onDelete={(confirmPhrase) => void executeBulkActivityDeleteAllAuthors(confirmPhrase)}
         />
       ) : null}
-      {pendingAuthorActivityDelete?.mode === "range" ? (
+      {!settingsReadOnly && pendingAuthorActivityDelete?.mode === "range" ? (
         <AuthorDeleteConfirm
           profile={pendingAuthorActivityDelete.profile}
           saving={saving === `delete:${pendingAuthorActivityDelete.profile.rawAuthor}`}
@@ -1499,7 +1602,7 @@ export function SettingsPage({
           confirmLabel="Delete activity for period"
         />
       ) : null}
-      {pendingAuthorActivityDelete?.mode === "all" ? (
+      {!settingsReadOnly && pendingAuthorActivityDelete?.mode === "all" ? (
         <AuthorDeleteAllActivityModal
           profile={pendingAuthorActivityDelete.profile}
           saving={saving === `delete:${pendingAuthorActivityDelete.profile.rawAuthor}`}
@@ -1507,7 +1610,7 @@ export function SettingsPage({
           onDelete={() => void executeAuthorActivityDelete(pendingAuthorActivityDelete)}
         />
       ) : null}
-      {deleteProfileTarget ? (
+      {!settingsReadOnly && deleteProfileTarget ? (
         <AuthorProfileDeleteModal
           profile={deleteProfileTarget}
           saving={saving === `delete-profile:${deleteProfileTarget.rawAuthor}`}
@@ -1532,9 +1635,10 @@ export function SettingsPage({
                 type="number"
                 min="60"
                 step="30"
+                disabled={settingsReadOnly}
               />
             </label>
-            <button className={settingsSaveButtonClassName(saveStatus.discord)} onClick={() => void saveDiscordSettings()} disabled={saving === "discord" || !discordSettingsDirty}>
+            <button className={settingsSaveButtonClassName(saveStatus.discord)} onClick={() => void saveDiscordSettings()} disabled={settingsReadOnly || saving === "discord" || !discordSettingsDirty}>
               {settingsSaveButtonLabel("discord", saving, saveStatus)}
             </button>
           </div>
@@ -1555,12 +1659,13 @@ export function SettingsPage({
                 min="1"
                 max="1440"
                 step="1"
+                disabled={settingsReadOnly}
               />
             </label>
             <button
               className={settingsSaveButtonClassName(saveStatus.telegramPrompt)}
               onClick={() => void saveTelegramPromptSettings()}
-              disabled={saving === "telegramPrompt" || !telegramPromptSettingsDirty}
+              disabled={settingsReadOnly || saving === "telegramPrompt" || !telegramPromptSettingsDirty}
             >
               {settingsSaveButtonLabel("telegramPrompt", saving, saveStatus)}
             </button>
@@ -1581,6 +1686,7 @@ export function SettingsPage({
                     type="checkbox"
                     checked={meetingSummariesEnabled}
                     onChange={(event) => setMeetingSummariesEnabled(event.target.checked)}
+                    disabled={settingsReadOnly}
                   />
                   Enabled
                 </span>
@@ -1592,6 +1698,7 @@ export function SettingsPage({
                   onChange={(event) => setMeetingSummaryMinParticipants(event.target.value)}
                   type="number"
                   min="1"
+                  disabled={settingsReadOnly}
                 />
               </label>
               <label>
@@ -1602,11 +1709,12 @@ export function SettingsPage({
                   type="number"
                   min="1"
                   step="30"
+                  disabled={settingsReadOnly}
                 />
               </label>
               <label>
                 <span className="meeting-summary-setting-label">Summary language</span>
-                <select value={meetingSummaryLanguage} onChange={(event) => setMeetingSummaryLanguage(event.target.value)}>
+                <select value={meetingSummaryLanguage} onChange={(event) => setMeetingSummaryLanguage(event.target.value)} disabled={settingsReadOnly}>
                   {MEETING_SUMMARY_LANGUAGES.map((language) => (
                     <option value={language} key={language}>{language}</option>
                   ))}
@@ -1614,7 +1722,7 @@ export function SettingsPage({
               </label>
               <label>
                 <span className="meeting-summary-setting-label">Send summaries to</span>
-                <select value={meetingSummaryRecipient} onChange={(event) => setMeetingSummaryRecipient(event.target.value)}>
+                <select value={meetingSummaryRecipient} onChange={(event) => setMeetingSummaryRecipient(event.target.value)} disabled={settingsReadOnly}>
                   <option value="work_chat">Work chat</option>
                   {profiles
                     .filter((profile) => profile.telegramUsername)
@@ -1628,7 +1736,7 @@ export function SettingsPage({
               </label>
               <label>
                 <span className="meeting-summary-setting-label">Keep audio on server</span>
-                <select value={meetingAudioRetention} onChange={(event) => setMeetingAudioRetention(event.target.value)}>
+                <select value={meetingAudioRetention} onChange={(event) => setMeetingAudioRetention(event.target.value)} disabled={settingsReadOnly}>
                   {MEETING_AUDIO_RETENTION_OPTIONS.map((option) => (
                     <option value={String(option.value)} key={option.value}>{option.label}</option>
                   ))}
@@ -1637,7 +1745,7 @@ export function SettingsPage({
               <button
                 className={settingsSaveButtonClassName(saveStatus.meetingSummarySettings)}
                 onClick={() => void saveMeetingSummarySettings()}
-                disabled={saving === "meetingSummarySettings" || !meetingSummarySettingsDirty}
+                disabled={settingsReadOnly || saving === "meetingSummarySettings" || !meetingSummarySettingsDirty}
               >
                 {settingsSaveButtonLabel("meetingSummarySettings", saving, saveStatus)}
               </button>
@@ -1680,12 +1788,13 @@ export function SettingsPage({
                   onChange={(event) => setMeetingSummaryPrompt(event.target.value)}
                   rows={12}
                   placeholder="Instructions for turning a meeting transcript into a Telegram summary. Participant names are added in the Telegram message header automatically; your text should only include the working sections (Discussed, Decisions, Action items, Open questions). The backend adds required section titles, language rules, expected participants for context, and the transcript."
+                  disabled={settingsReadOnly}
                 />
               </label>
               <button
                 className={settingsSaveButtonClassName(saveStatus.meetingSummaryPrompt)}
                 onClick={() => void saveMeetingSummaryPrompt()}
-                disabled={saving === "meetingSummaryPrompt" || !meetingSummaryPromptDirty}
+                disabled={settingsReadOnly || saving === "meetingSummaryPrompt" || !meetingSummaryPromptDirty}
               >
                 {settingsSaveButtonLabel("meetingSummaryPrompt", saving, saveStatus)}
               </button>
