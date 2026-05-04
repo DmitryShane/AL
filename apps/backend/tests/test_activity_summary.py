@@ -2582,6 +2582,38 @@ def test_device_source_uses_device_idle_threshold():
     assert deltas["idleDeltaSeconds"] == 90
 
 
+def test_author_local_today_includes_explicit_ui_date_for_device_local_timezone():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "dev",
+            "author": "Device1",
+            "projectId": "Bike Rush 2",
+            "date": "2026-05-05",
+            "timeZoneId": "Local",
+            "activeSeconds": 120,
+            "idleSeconds": 60,
+            "activityCounts": [{"type": "click", "count": 2}],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-05-05",
+        end_date="2026-05-05",
+        date_mode="authorLocalToday",
+        now=dt.datetime(2026, 5, 4, 22, 15, tzinfo=dt.UTC),
+    )
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Device1")
+
+    assert author["activeSeconds"] == 120
+    assert author["rawPluginDaySeconds"] == 180
+
+
 def test_heartbeat_idle_does_not_account_entire_delivery_gap_when_huge():
     repo = fake_repository()
     set_idle_threshold(repo, 120)

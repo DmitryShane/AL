@@ -739,6 +739,7 @@ def _report_date_query(
         return _date_query(start_date, end_date)
 
     dates = {now.astimezone(dt.UTC).date().isoformat()}
+    dates.update(_date_values_between(start_date, end_date))
 
     for profile in profiles.values():
         dates.add(_local_date_for_time_zone(now, _author_time_zone_id(profile.get("rawAuthor"), profiles)))

@@ -69,12 +69,14 @@ class ActivitySummaryService(MongoComposableMixin):
         break_lookup = self._break_lookup_for_reports(report_rows)
 
         for item in report_rows:
-            if date_mode == "authorLocalToday" and not _is_author_local_today(
+            if date_mode == "authorLocalToday" and not _is_live_date_match(
                 item.get("date"),
                 item.get("author") or "Unknown User",
                 profiles,
                 item.get("timeZoneId"),
                 now,
+                start_date,
+                end_date,
             ):
                 continue
 
@@ -175,12 +177,14 @@ class ActivitySummaryService(MongoComposableMixin):
         total = 0
 
         for item in candidate_rows:
-            if date_mode == "authorLocalToday" and not _is_author_local_today(
+            if date_mode == "authorLocalToday" and not _is_live_date_match(
                 item.get("date"),
                 item.get("author") or "Unknown User",
                 profiles,
                 item.get("timeZoneId"),
                 now,
+                start_date,
+                end_date,
             ):
                 continue
 
@@ -693,12 +697,14 @@ class ActivitySummaryService(MongoComposableMixin):
             daily_items = [
                 item
                 for item in daily_items
-                if _is_author_local_today(
+                if _is_live_date_match(
                     item.get("date"),
                     item.get("author") or "Unknown User",
                     profiles,
                     item.get("timeZoneId"),
                     now,
+                    start_date,
+                    end_date,
                 )
             ]
         break_buckets = composed(self)._break_buckets_for_daily_items(daily_items)
@@ -1842,6 +1848,24 @@ def _with_source_breakdowns(author: dict[str, Any]) -> dict[str, Any]:
     item["overtimeActivityMixBySource"] = _activity_mix_source_groups(overtime_activity_counts_by_source)
     item["overtimeSavedPrefabsBySource"] = _saved_prefab_source_groups(overtime_saved_prefabs_by_source)
     return item
+
+
+def _is_live_date_match(
+    value: Any,
+    raw_author: str,
+    profiles: dict[str, dict[str, Any]],
+    fallback_time_zone_id: Any,
+    now: dt.datetime,
+    start_date: str | None,
+    end_date: str | None,
+) -> bool:
+    if _is_author_local_today(value, raw_author, profiles, fallback_time_zone_id, now):
+        return True
+
+    if start_date or end_date:
+        return _date_in_range(str(value or ""), start_date, end_date)
+
+    return False
 
 
 def _activity_mix_source_groups(items_by_source: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
