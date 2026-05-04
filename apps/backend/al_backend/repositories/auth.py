@@ -114,6 +114,7 @@ class AuthRepository(MongoComposableMixin):
         email: str,
         display_name: str | None,
         role: str,
+        can_view_server_stats: bool,
         active: bool,
         password: str | None = None,
     ) -> dict[str, Any]:
@@ -135,6 +136,7 @@ class AuthRepository(MongoComposableMixin):
             "email": normalized_email,
             "displayName": (display_name or normalized_email).strip(),
             "role": role,
+            "canViewServerStats": can_view_server_stats,
             "active": active,
             "updatedAt": now,
         }

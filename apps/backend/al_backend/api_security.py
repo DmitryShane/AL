@@ -48,6 +48,15 @@ def require_permission(permission: str):
     return dependency
 
 
+def require_server_stats_permission(user: dict = Depends(current_site_user)) -> dict:
+    role = user.get("role", "viewer")
+
+    if "manageSettings" in ROLE_PERMISSIONS.get(role, set()) or user.get("canViewServerStats"):
+        return user
+
+    raise HTTPException(status_code=403, detail="Permission denied")
+
+
 def require_telegram_bot_secret(request: Request) -> None:
     settings = request.app.state.container.settings
 

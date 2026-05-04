@@ -26,6 +26,7 @@ def upsert_site_user(
         email=user_in.email,
         display_name=user_in.display_name,
         role=user_in.role,
+        can_view_server_stats=user_in.can_view_server_stats,
         active=user_in.active,
         password=user_in.password,
     )

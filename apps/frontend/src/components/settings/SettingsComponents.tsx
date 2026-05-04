@@ -144,6 +144,7 @@ export function SiteUsersPanel({
     email: "",
     displayName: "",
     role: "viewer",
+    canViewServerStats: false,
     active: true,
     password: ""
   });
@@ -196,6 +197,7 @@ export function SiteUsersPanel({
           email: user.email,
           displayName: user.displayName,
           role: user.role,
+          canViewServerStats: user.canViewServerStats,
           active: user.active,
           password: user.password || undefined
         })
@@ -206,7 +208,7 @@ export function SiteUsersPanel({
       }
 
       if (key === "newUser") {
-        setNewUser({ email: "", displayName: "", role: "viewer", active: true, password: "" });
+        setNewUser({ email: "", displayName: "", role: "viewer", canViewServerStats: false, active: true, password: "" });
       }
 
       setStatus((items) => ({ ...items, [key]: "saved" }));
@@ -252,6 +254,7 @@ export function SiteUsersPanel({
     return (
       (draft.displayName ?? "") !== (user.displayName ?? "") ||
       draft.role !== user.role ||
+      Boolean(draft.canViewServerStats) !== Boolean(user.canViewServerStats) ||
       Boolean(draft.active) !== Boolean(user.active) ||
       Boolean(draft.password)
     );
@@ -303,6 +306,14 @@ export function SiteUsersPanel({
             <option value="viewer">Viewer</option>
           </select>
         </label>
+        <label className="checkbox-cell">
+          <input
+            type="checkbox"
+            checked={newUser.canViewServerStats}
+            onChange={(event) => setNewUser((user) => ({ ...user, canViewServerStats: event.target.checked }))}
+          />
+          Server Stats
+        </label>
         <button
           className={settingsSaveButtonClassName(status.newUser)}
           onClick={() => void createUser()}
@@ -317,6 +328,7 @@ export function SiteUsersPanel({
             <span>Name</span>
             <span>Email</span>
             <span>Role</span>
+            <span>Server Stats</span>
             <span>Status</span>
             <span>New Password</span>
             <span>Actions</span>
@@ -324,6 +336,7 @@ export function SiteUsersPanel({
           {users.map((user) => {
           const draft = drafts[user.email] ?? user;
           const deleteKey = `delete:${user.email}`;
+          const isCurrentUser = user.email.trim().toLowerCase() === currentUser.email.trim().toLowerCase();
           const userDirty = isUserDirty(user);
           const profileLinkedName = authorProfileDisplayNameForSiteEmail(user.email, authorProfiles, authorProfileDrafts);
           const fallbackTableName = siteUserTableNameFallback(user.email);
@@ -374,6 +387,20 @@ export function SiteUsersPanel({
                 <option value="editor">Editor</option>
                 <option value="viewer">Viewer</option>
               </select>
+              {isCurrentUser ? (
+                <span />
+              ) : (
+                <label className="checkbox-cell">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(draft.canViewServerStats)}
+                    onChange={(event) =>
+                      setDrafts((items) => ({ ...items, [user.email]: { ...draft, canViewServerStats: event.target.checked } }))
+                    }
+                  />
+                  Allow
+                </label>
+              )}
               <label className="checkbox-cell">
                 <input
                   type="checkbox"
@@ -404,7 +431,7 @@ export function SiteUsersPanel({
                 >
                   {settingsSaveButtonLabel(user.email, saving, status)}
                 </button>
-                {user.email.trim().toLowerCase() !== currentUser.email.trim().toLowerCase() ? (
+                {!isCurrentUser ? (
                   <button
                     type="button"
                     className="primary-button danger-solid-button delete-all-data-solid-button"

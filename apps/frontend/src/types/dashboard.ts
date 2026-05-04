@@ -231,6 +231,7 @@ export type SiteUser = {
   email: string;
   displayName: string;
   role: SiteUserRole;
+  canViewServerStats: boolean;
   active: boolean;
   /** Linked author profile avatar (GitHub-backed), when site email matches author_profiles. */
   avatarUrl?: string;

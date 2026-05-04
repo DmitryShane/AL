@@ -77,6 +77,7 @@ function readStoredSessionUserPreview(): SiteUser | null {
       email: data.email,
       displayName: data.displayName,
       role: data.role as SiteUserRole,
+      canViewServerStats: data.canViewServerStats === true,
       active: data.active !== false,
       ...(avatarUrl ? { avatarUrl } : {})
     };
@@ -103,6 +104,7 @@ function writeStoredSessionUserPreview(user: SiteUser | null) {
         email: user.email,
         displayName: user.displayName,
         role: user.role,
+        canViewServerStats: user.canViewServerStats,
         active: user.active,
         ...(avatarUrl ? { avatarUrl } : {})
       })

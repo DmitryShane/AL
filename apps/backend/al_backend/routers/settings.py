@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
-from ..api_security import require_discord_bot_secret, require_permission
+from ..api_security import require_discord_bot_secret, require_permission, require_server_stats_permission
 from ..container import BackendServices
 from ..dependencies import get_settings_service
 from ..models import AvatarSettingsIn, DiscordSettingsIn, IntervalSettingsIn
@@ -13,7 +13,7 @@ router = APIRouter()
 
 @router.get("/api/v1/settings/server-stats")
 def server_stats(
-    _: dict = Depends(require_permission("manageSettings")),
+    _: dict = Depends(require_server_stats_permission),
     service: BackendServices = Depends(get_settings_service),
 ) -> dict:
     return service.get_server_stats()

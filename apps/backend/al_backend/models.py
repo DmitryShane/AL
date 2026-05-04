@@ -88,6 +88,7 @@ class SiteUserIn(ApiModel):
     password: str | None = Field(default=None, min_length=8)
     display_name: str | None = Field(default=None, alias="displayName")
     role: str = Field(default="viewer", pattern="^(admin|editor|viewer)$")
+    can_view_server_stats: bool = Field(default=False, alias="canViewServerStats")
     active: bool = True
 
 

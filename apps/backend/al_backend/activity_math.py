@@ -909,6 +909,7 @@ def _public_site_user(user: dict[str, Any]) -> dict[str, Any]:
         "email": user.get("email", ""),
         "displayName": user.get("displayName") or user.get("email", ""),
         "role": user.get("role", "viewer"),
+        "canViewServerStats": bool(user.get("canViewServerStats", False)),
         "active": user.get("active", True),
     }
 
