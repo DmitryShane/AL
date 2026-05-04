@@ -94,6 +94,14 @@ On Activity author cards, red offline is reserved for an active workday failure:
 
 Use grey offline for authors who have not started their current workday yet, authors after an explicit Telegram offline/sign-off, and historical snapshots. Do not mark those states as red `reports_stopped`.
 
+### Agents: red offline is not “Telegram offline”
+
+When debugging summaries, `status_events`, or idle accounting:
+
+- **Red author-card offline** maps to **`reports_stopped`** (plugin reports stopped while the workday expects them). It is **not** the same thing as Telegram chat offline or Telegram day boundaries.
+- Transitions are stored as **`status_events`** with `statusEventType` `offline`/`online` and **`reason` values such as `reports_stopped` / `reports_resumed`**. Activity aggregation treats these as generic offline/online intervals (`activity_aggregation._status_interval_context_for_event`); it does not branch on Telegram vs plugin semantics there.
+- Some writes still go through **`telegram_activity.py`** (`record_status_event`, `_record_status_transition_for_author`). That module name is historical — **do not infer “Telegram-only behaviour” from the filename** when reasoning about `reports_stopped` or red stale-plugin states.
+
 ## Terminology
 
 - **AL (Activity Logger)** — the product and service as a whole: this repository (FastAPI backend, web dashboard, Telegram/Discord bots, and how data is stored and summarized).

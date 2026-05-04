@@ -5093,6 +5093,145 @@ def test_rebuild_status_idle_batch_keeps_last_event_recorded_at():
     assert row["recordedAt"] == "2026-04-29T09:59:00+00:00"
 
 
+def test_reports_stopped_gap_heartbeats_do_not_double_status_idle():
+    """Heartbeats inside author status offline (reports_stopped window) must not add idle that later duplicates status reconciliation.
+
+    After deploying a fix for historical days, run rebuild_aggregates_for_dates for affected authors/dates so report_rows and daily_author_activity match.
+    """
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    day = "2026-05-04"
+    author = "Future Artist"
+    tz = "UTC"
+    offline_at = dt.datetime(2026, 5, 4, 0, 21, 45, 261000, tzinfo=dt.UTC)
+    online_at = dt.datetime(2026, 5, 4, 0, 41, 9, 809000, tzinfo=dt.UTC)
+    gap_seconds = int(round((online_at - offline_at).total_seconds()))
+
+    repo.db.status_events.insert_one(
+        {
+            "rawAuthor": author,
+            "date": day,
+            "statusEventType": "offline",
+            "transitionAt": offline_at,
+            "receivedAt": offline_at,
+            "timeZoneId": tz,
+            "reason": "reports_stopped",
+        }
+    )
+    repo.db.status_events.insert_one(
+        {
+            "rawAuthor": author,
+            "date": day,
+            "statusEventType": "online",
+            "transitionAt": online_at,
+            "receivedAt": online_at,
+            "timeZoneId": tz,
+            "reason": "reports_resumed",
+        }
+    )
+
+    def batch_doc(batch_id: str, received: dt.datetime) -> dict[str, Any]:
+        return {
+            "batchId": batch_id,
+            "source": "cur",
+            "pluginVersion": "cursor-plugin",
+            "author": author,
+            "authorEmail": "",
+            "projectId": "AL",
+            "sessionId": "cursor-session",
+            "deviceId": "device",
+            "receivedAt": received,
+            "reportType": "auto",
+        }
+
+    def evt(eid: str, batch_id: str, etype: str, occurred: dt.datetime, received: dt.datetime) -> dict[str, Any]:
+        return {
+            "eventId": eid,
+            "batchId": batch_id,
+            "source": "cur",
+            "author": author,
+            "projectId": "AL",
+            "sessionId": "cursor-session",
+            "deviceId": "device",
+            "date": day,
+            "eventType": etype,
+            "occurredAtUtc": occurred,
+            "occurredAtLocal": occurred.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00"),
+            "receivedAt": received,
+            "timeZoneId": tz,
+        }
+
+    bid_early = "rs-gap-early"
+    bid_gap = "rs-gap-mid"
+    bid_resume = "rs-gap-resume"
+
+    repo.db.raw_event_batches.insert_one(batch_doc(bid_early, dt.datetime(2026, 5, 4, 0, 20, 44, tzinfo=dt.UTC)))
+    repo.db.raw_event_batches.insert_one(batch_doc(bid_gap, dt.datetime(2026, 5, 4, 0, 22, 0, tzinfo=dt.UTC)))
+    repo.db.raw_event_batches.insert_one(batch_doc(bid_resume, online_at))
+
+    repo.db.raw_activity_events.insert_one(
+        evt(
+            "rs-pre-focus",
+            bid_early,
+            "focus",
+            dt.datetime(2026, 5, 4, 0, 20, 0, tzinfo=dt.UTC),
+            dt.datetime(2026, 5, 4, 0, 20, 44, tzinfo=dt.UTC),
+        )
+    )
+    repo.db.raw_activity_events.insert_one(
+        evt(
+            "rs-pre-hb",
+            bid_early,
+            "heartbeat",
+            dt.datetime(2026, 5, 4, 0, 20, 43, tzinfo=dt.UTC),
+            dt.datetime(2026, 5, 4, 0, 20, 44, tzinfo=dt.UTC),
+        )
+    )
+    repo.db.raw_activity_events.insert_one(
+        evt(
+            "rs-gap-hb-a",
+            bid_gap,
+            "heartbeat",
+            dt.datetime(2026, 5, 4, 0, 22, 0, tzinfo=dt.UTC),
+            dt.datetime(2026, 5, 4, 0, 22, 0, tzinfo=dt.UTC),
+        )
+    )
+    repo.db.raw_activity_events.insert_one(
+        evt(
+            "rs-gap-hb-b",
+            bid_gap,
+            "heartbeat",
+            dt.datetime(2026, 5, 4, 0, 30, 0, tzinfo=dt.UTC),
+            dt.datetime(2026, 5, 4, 0, 22, 5, tzinfo=dt.UTC),
+        )
+    )
+    repo.db.raw_activity_events.insert_one(
+        evt(
+            "rs-resume-focus",
+            bid_resume,
+            "focus",
+            dt.datetime(2026, 5, 4, 0, 40, 55, tzinfo=dt.UTC),
+            online_at,
+        )
+    )
+    repo.db.raw_activity_events.insert_one(
+        evt(
+            "rs-resume-hb",
+            bid_resume,
+            "heartbeat",
+            dt.datetime(2026, 5, 4, 0, 41, 9, 384000, tzinfo=dt.UTC),
+            online_at,
+        )
+    )
+
+    repo.rebuild_aggregates_if_needed(force=True)
+
+    rows = list(repo.db.report_rows.find({"source": "cur", "author": author, "date": day}, {"_id": 0, "idleDeltaSeconds": 1}))
+    total_idle = sum(int(r.get("idleDeltaSeconds") or 0) for r in rows)
+
+    assert total_idle == gap_seconds
+
+
 def test_status_events_rematerialize_report_rows_after_rebuild():
     repo = fake_repository()
     repo.record_status_event(

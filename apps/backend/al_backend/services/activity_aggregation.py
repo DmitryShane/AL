@@ -694,6 +694,7 @@ class ActivityAggregationService:
                 author_last_activity_scope = current_scope
         elif (
             event_type == "heartbeat"
+            and not is_inside_status_offline
             and first_activity_at
             and last_activity_at
             and last_accounting_at
