@@ -333,6 +333,7 @@ class MeetingClient(discord.Client):
         recording = self.recording
         self.recording = None
         ended_at = datetime.now(timezone.utc)
+        failure_error = ""
 
         try:
             cleanup_old_retained_recordings(self.config.recording_temp_dir)
@@ -370,16 +371,20 @@ class MeetingClient(discord.Client):
                 error = str(result.get("error") or "Meeting recording upload failed")
                 await asyncio.to_thread(submit_recording_failed, self.config, recording.recording_id, ended_at, error)
         except Exception as exc:
+            failure_error = str(exc)
             LOGGER.exception("Discord meeting recording %s failed.", recording.recording_id)
             await asyncio.to_thread(submit_recording_failed, self.config, recording.recording_id, ended_at, str(exc))
         finally:
             if self.meeting_audio_retention_seconds > 0:
                 retain_recording_audio(recording.audio_path, self.meeting_audio_retention_seconds)
+                if failure_error:
+                    retain_recording_recovery_files(recording, self.meeting_audio_retention_seconds, failure_error)
             else:
                 try:
                     os.remove(recording.audio_path)
                 except FileNotFoundError:
                     pass
+                recording.sink.delete_track_files()
 
     async def submit_voice_event(self, member: discord.Member, event_type: str) -> None:
         payload = {
@@ -577,14 +582,12 @@ class MeetingAudioSink(voice_recv.AudioSink):
             self._close_tracks()
             tracks = [track for track in self.tracks.values() if track.bytes_written > 0]
 
-        try:
-            if not tracks:
-                self._encode_silence()
-                return
+        if not tracks:
+            self._encode_silence()
+            return
 
-            self._mix_tracks(tracks)
-        finally:
-            self._delete_track_files()
+        self._mix_tracks(tracks)
+        self.delete_track_files()
 
     def _track_for(self, user: discord.Member | discord.User) -> UserPcmTrack:
         user_id = int(user.id)
@@ -720,7 +723,7 @@ class MeetingAudioSink(voice_recv.AudioSink):
             stderr = result.stderr.decode("utf-8", errors="replace").strip()
             raise RuntimeError(f"ffmpeg failed to create Discord meeting audio: {stderr}")
 
-    def _delete_track_files(self) -> None:
+    def delete_track_files(self) -> None:
         for track in self.tracks.values():
             try:
                 os.remove(track.path)
@@ -907,10 +910,49 @@ def retain_recording_audio(path: str, retention_seconds: int) -> None:
     LOGGER.info("Retained Discord meeting recording for debugging until %s: %s", expires_at, retained_path)
 
 
+def retain_recording_recovery_files(recording: RecordingSession, retention_seconds: int, error: str) -> None:
+    expires_at = int(time.time()) + max(0, retention_seconds)
+    retained_tracks = []
+
+    for track in recording.sink.tracks.values():
+        if not os.path.exists(track.path):
+            continue
+
+        retained_path = f"{track.path}.keep-until-{expires_at}"
+        os.replace(track.path, retained_path)
+        retained_tracks.append(
+            {
+                "userId": str(track.user_id),
+                "userName": track.user_name,
+                "path": retained_path,
+                "bytesWritten": track.bytes_written,
+                "frameCount": track.frame_count,
+                "nonSilentFrameCount": track.non_silent_frame_count,
+            }
+        )
+
+    manifest = {
+        "recordingId": recording.recording_id,
+        "audioPath": recording.audio_path,
+        "startedAt": recording.started_at.isoformat(),
+        "participantDiscordUserIds": [str(item) for item in sorted(recording.participant_ids)],
+        "participantNames": [recording.participant_names[item] for item in sorted(recording.participant_names.keys())],
+        "error": error[:1000],
+        "expiresAt": expires_at,
+        "tracks": retained_tracks,
+    }
+    manifest_path = f"{recording.audio_path}.recovery.json.keep-until-{expires_at}"
+
+    with open(manifest_path, "w", encoding="utf-8") as manifest_file:
+        json.dump(manifest, manifest_file, ensure_ascii=False, indent=2)
+
+    LOGGER.info("Retained Discord meeting recovery files until %s: %s", expires_at, manifest_path)
+
+
 def cleanup_old_retained_recordings(recording_temp_dir: str) -> None:
     now = int(time.time())
 
-    for path in Path(recording_temp_dir).glob("al-meeting-*.m4a.keep-until-*"):
+    for path in Path(recording_temp_dir).glob("al-meeting-*.keep-until-*"):
         try:
             expires_at = int(str(path).rsplit(".keep-until-", 1)[1])
         except (IndexError, ValueError):

@@ -29,6 +29,8 @@ PUBLIC_API_PATHS = {
     "/api/v1/discord/voice-events",
     "/api/v1/discord/meeting-auto-afk",
     "/api/v1/discord/meeting-recordings/start",
+    "/api/v1/discord/meeting-recordings/fail",
+    "/api/v1/discord/meeting-recordings/status",
     "/api/v1/discord/meeting-recordings/finish",
     "/api/v1/discord/settings",
     "/api/v1/auth/login",

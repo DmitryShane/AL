@@ -88,9 +88,6 @@ class ReportIngestService(MongoComposableMixin):
         now = dt.datetime.now(dt.UTC)
         payload = dict(payload)
 
-        if self._is_heartbeat_only_event_payload(payload):
-            return ""
-
         original_author = _normalize_author(payload.get("author") or "Unknown User")
         payload["author"] = composed(self).resolve_author_alias(original_author)
         normalized_time_zone = _author_configured_time_zone_id(payload["author"]) or _valid_time_zone_id(payload.get("timeZoneId"))

@@ -1615,6 +1615,11 @@ class ActivitySummaryService(MongoComposableMixin):
             return True
 
         time_zone_id = _author_time_zone_id(raw_author, profiles, author.get("timeZoneId"))
+        profile = profiles.get(raw_author, {})
+
+        if _author_has_summary_activity(author) and not str(profile.get("telegramUsername") or "").strip():
+            return True
+
         anchor_day = _local_date_for_time_zone(now, time_zone_id)
 
         if not _date_in_summary_scope(anchor_day, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):

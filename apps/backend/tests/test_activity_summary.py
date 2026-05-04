@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 import re
 import tempfile
 import unicodedata
@@ -6,7 +7,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from al_backend.app import PUBLIC_API_PATHS
 from al_backend.discord_author_mappings import apply_discord_author_mappings
+from al_backend.discord_bot import MeetingAudioSink, RecordingSession, UserPcmTrack, cleanup_old_retained_recordings, retain_recording_recovery_files
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, meeting_summary_sections, render_meeting_summary_prompt
 from al_backend.activity_math import (
     _add_break_interval_to_buckets,
@@ -4141,6 +4144,104 @@ def test_meeting_recording_tracks_openai_pipeline_status():
 
     assert result["status"] == "summary_created"
     assert repo.recent_meeting_recordings()[0]["status"] == "summary_pending"
+
+
+def test_discord_recording_fail_and_status_are_public_bot_paths():
+    assert "/api/v1/discord/meeting-recordings/fail" in PUBLIC_API_PATHS
+    assert "/api/v1/discord/meeting-recordings/status" in PUBLIC_API_PATHS
+
+
+def test_meeting_audio_finalize_deletes_pcm_after_success(tmp_path):
+    audio_path = tmp_path / "al-meeting-success.m4a"
+    track_path = tmp_path / "al-meeting-success.m4a.123.pcm"
+    track_path.write_bytes(b"\x01" * 8)
+
+    sink = MeetingAudioSink(audio_path=str(audio_path))
+    sink.tracks[123] = UserPcmTrack(
+        user_id=123,
+        user_name="Speaker",
+        path=str(track_path),
+        file=open(track_path, "ab"),
+        bytes_written=8,
+        frame_count=1,
+        non_silent_frame_count=1,
+    )
+
+    def fake_run_ffmpeg(args):
+        audio_path.write_bytes(b"audio")
+
+    sink._run_ffmpeg = fake_run_ffmpeg
+    sink.finalize()
+
+    assert audio_path.exists()
+    assert not track_path.exists()
+
+
+def test_meeting_audio_finalize_keeps_pcm_after_failure_for_retention(tmp_path):
+    audio_path = tmp_path / "al-meeting-failed.m4a"
+    track_path = tmp_path / "al-meeting-failed.m4a.123.pcm"
+    track_path.write_bytes(b"\x01" * 8)
+
+    sink = MeetingAudioSink(audio_path=str(audio_path))
+    sink.tracks[123] = UserPcmTrack(
+        user_id=123,
+        user_name="Speaker",
+        path=str(track_path),
+        file=open(track_path, "ab"),
+        bytes_written=8,
+        frame_count=1,
+        non_silent_frame_count=1,
+    )
+
+    def fake_run_ffmpeg(args):
+        raise RuntimeError("ffmpeg failed")
+
+    sink._run_ffmpeg = fake_run_ffmpeg
+
+    try:
+        sink.finalize()
+    except RuntimeError:
+        pass
+
+    assert track_path.exists()
+
+    recording = RecordingSession(
+        recording_id="recording-1",
+        started_at=dt.datetime(2026, 5, 4, 14, 52, tzinfo=dt.UTC),
+        audio_path=str(audio_path),
+        participant_ids={123},
+        participant_names={123: "Speaker"},
+        voice_client=None,
+        sink=sink,
+        cleanup_future=None,
+    )
+    retain_recording_recovery_files(recording, 3600, "ffmpeg failed")
+
+    retained_tracks = list(tmp_path.glob("al-meeting-failed.m4a.123.pcm.keep-until-*"))
+    manifests = list(tmp_path.glob("al-meeting-failed.m4a.recovery.json.keep-until-*"))
+
+    assert len(retained_tracks) == 1
+    assert len(manifests) == 1
+    assert not track_path.exists()
+
+    manifest = json.loads(manifests[0].read_text())
+    assert manifest["recordingId"] == "recording-1"
+    assert manifest["tracks"][0]["path"] == str(retained_tracks[0])
+
+
+def test_cleanup_old_retained_recordings_removes_recovery_files(tmp_path):
+    expired_track = tmp_path / "al-meeting-old.m4a.123.pcm.keep-until-1"
+    expired_manifest = tmp_path / "al-meeting-old.m4a.recovery.json.keep-until-1"
+    unrelated = tmp_path / "other.keep-until-1"
+    expired_track.write_bytes(b"pcm")
+    expired_manifest.write_text("{}")
+    unrelated.write_text("keep")
+
+    cleanup_old_retained_recordings(str(tmp_path))
+
+    assert not expired_track.exists()
+    assert not expired_manifest.exists()
+    assert unrelated.exists()
 
 
 def test_discord_author_mappings_update_known_telegram_profiles_only():
