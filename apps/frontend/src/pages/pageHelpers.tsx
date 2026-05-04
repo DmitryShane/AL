@@ -2,7 +2,7 @@ import React from "react";
 import { Activity, Box } from "lucide-react";
 import cursorIconUrl from "../assets/cursor-icon.png";
 import { REFRESH_INTERVAL_MS, REPORTS_PAGE_STORAGE_KEY, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
-import type { AuthorProfile, AuthorRow, DateRange, MeetingRecordingStatus, Report, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
+import type { AuthorProfile, AuthorRow, DateRange, MeetingActivityItem, MeetingRecordingStatus, Report, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
 export function settingsSaveButtonLabel(key: string, saving: string | null, statuses: Record<string, "saved" | "error" | undefined>) {
   if (saving === key) {
     return "Saving...";
@@ -161,6 +161,46 @@ export function meetingRecordingAudioStats(recording: MeetingRecordingStatus) {
   const listenErrors = recording.listenErrorCount ? `, listen errors ${recording.listenErrorCount}` : "";
   const sizeMb = recording.audioSizeBytes ? `, file ${(recording.audioSizeBytes / 1024 / 1024).toFixed(2)} MB` : "";
   return ` Audio frames: ${recording.nonSilentFrameCount ?? 0}/${recording.audioFrameCount ?? 0}, corrupted packets: ${recording.corruptedPacketCount ?? 0}${quality}${mixedUsers}${padding}${unknown}${listenErrors}${sizeMb}.`;
+}
+
+export function meetingActivityTitle(item: MeetingActivityItem) {
+  if (item.itemType === "recording") {
+    return meetingRecordingStatusLabel(item.recording);
+  }
+
+  if (item.itemType === "day_separator") {
+    return item.date;
+  }
+
+  if (item.eventType === "join") {
+    return "Joined meeting channel";
+  }
+
+  if (item.eventType === "leave") {
+    return "Left meeting channel";
+  }
+
+  if (item.eventType === "auto_afk") {
+    return "Moved to AFK";
+  }
+
+  return item.eventType.replaceAll("_", " ");
+}
+
+export function meetingActivityDetail(item: MeetingActivityItem) {
+  if (item.itemType === "recording") {
+    return meetingRecordingDetail(item.recording);
+  }
+
+  if (item.itemType === "day_separator") {
+    return "";
+  }
+
+  const person = item.rawAuthor || item.discordUsername || "Unknown participant";
+  const timestamp = item.timestamp ? formatTimestamp(item.timestamp) : "time unknown";
+  const duration = item.meetingSeconds ? `, meeting ${formatReportMinutes(item.meetingSeconds)}` : "";
+
+  return `${person} at ${timestamp}${duration}.`;
 }
 
 export function emptyAuthorProfile(): AuthorProfile {

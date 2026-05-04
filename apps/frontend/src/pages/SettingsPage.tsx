@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { AuthorAvatar } from "../components/AuthorAvatar";
 import { MEETING_AUDIO_RETENTION_OPTIONS, MEETING_SUMMARY_LANGUAGES, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
-import type { AuthorProfile, MeetingRecordingStatus, SettingsTab, SiteUser, Summary } from "../types/dashboard";
+import type { AuthorProfile, MeetingActivityItem, SettingsTab, SiteUser, Summary } from "../types/dashboard";
 import {
   autoBreakScheduleLabel,
   authorProfilePayload,
@@ -10,8 +10,8 @@ import {
   formatProfileTimeZoneLabel,
   formatProfileTimeZoneTitle,
   loadSavedSettingsTab,
-  meetingRecordingDetail,
-  meetingRecordingStatusLabel,
+  meetingActivityDetail,
+  meetingActivityTitle,
   normalizeAuthorInput,
   profileLocalTodayIso,
   settingsSaveButtonClassName,
@@ -95,7 +95,7 @@ export function SettingsPage({
   const [newProfile, setNewProfile] = useState<AuthorProfile>(() => emptyAuthorProfile());
   const [aliasSource, setAliasSource] = useState("");
   const [aliasTarget, setAliasTarget] = useState("");
-  const [meetingRecordings, setMeetingRecordings] = useState<MeetingRecordingStatus[]>([]);
+  const [meetingActivityItems, setMeetingActivityItems] = useState<MeetingActivityItem[]>([]);
   const [meetingRecordingsError, setMeetingRecordingsError] = useState("");
   const meetingSummaryWorkspaceRef = useRef<HTMLDivElement>(null);
   const meetingSummaryPromptPanelRef = useRef<HTMLDivElement>(null);
@@ -193,10 +193,10 @@ export function SettingsPage({
           throw new Error("Meeting recording status load failed");
         }
 
-        const data = await response.json() as { recordings?: MeetingRecordingStatus[] };
+        const data = await response.json() as { items?: MeetingActivityItem[] };
 
         if (!cancelled) {
-          setMeetingRecordings(data.recordings ?? []);
+          setMeetingActivityItems(data.items ?? []);
           setMeetingRecordingsError("");
         }
       } catch {
@@ -1558,13 +1558,13 @@ export function SettingsPage({
                 Process
                 {meetingRecordingsError ? (
                   <p className="empty">{meetingRecordingsError}</p>
-                ) : meetingRecordings.length ? (
+                ) : meetingActivityItems.length ? (
                   <div className="settings-list">
-                    {meetingRecordings.map((recording) => (
-                      <div className="settings-list-item" key={recording.recordingId}>
-                        <strong>{meetingRecordingStatusLabel(recording)}</strong>
-                        <span>{meetingRecordingDetail(recording)}</span>
-                        {recording.error ? <span className="alert-text">{recording.error}</span> : null}
+                    {meetingActivityItems.map((item) => (
+                      <div className={item.itemType === "day_separator" ? "settings-list-day-separator" : "settings-list-item"} key={item.id}>
+                        <strong>{meetingActivityTitle(item)}</strong>
+                        {item.itemType !== "day_separator" ? <span>{meetingActivityDetail(item)}</span> : null}
+                        {item.itemType === "recording" && item.recording.error ? <span className="alert-text">{item.recording.error}</span> : null}
                       </div>
                     ))}
                   </div>

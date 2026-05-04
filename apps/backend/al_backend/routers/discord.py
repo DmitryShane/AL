@@ -29,7 +29,10 @@ def recent_discord_meeting_recordings(
     _: dict = Depends(require_permission("manageSettings")),
     service: BackendServices = Depends(get_discord_service),
 ) -> dict:
-    return {"recordings": service.recent_meeting_recordings(limit=10)}
+    return {
+        "recordings": service.recent_meeting_recordings(limit=10),
+        "items": service.recent_meeting_activity(limit=40),
+    }
 
 
 @router.post("/api/v1/discord/voice-events")

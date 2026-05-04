@@ -241,6 +241,33 @@ export type MeetingRecordingStatus = {
   updatedAt?: string;
 };
 
+export type MeetingActivityItem =
+  | {
+      itemType: "day_separator";
+      id: string;
+      date: string;
+      timestamp?: string;
+    }
+  | {
+      itemType: "recording";
+      id: string;
+      date?: string;
+      timestamp?: string;
+      recording: MeetingRecordingStatus;
+    }
+  | {
+      itemType: "voice_event";
+      id: string;
+      date?: string;
+      timestamp?: string;
+      eventType: string;
+      rawAuthor?: string;
+      discordUsername?: string;
+      channelId?: string;
+      afkChannelId?: string;
+      meetingSeconds?: number;
+    };
+
 export type AnalyticsTotals = {
   daySeconds: number;
   activeSeconds: number;

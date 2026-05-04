@@ -2688,6 +2688,14 @@ p {
   font-size: 14px;
 }
 
+.settings-list-day-separator {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .alert-text {
   color: #b42318;
   font-weight: 700;

@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+import al_backend.discord_bot as discord_bot_module
 from al_backend.app import PUBLIC_API_PATHS
 from al_backend.discord_author_mappings import apply_discord_author_mappings
-from al_backend.discord_bot import MeetingAudioSink, RecordingSession, UserPcmTrack, cleanup_old_retained_recordings, retain_recording_recovery_files
+from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSession, UserPcmTrack, cleanup_old_retained_recordings, retain_recording_recovery_files
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, meeting_summary_sections, render_meeting_summary_prompt
 from al_backend.activity_math import (
     _add_break_interval_to_buckets,
@@ -4105,6 +4106,66 @@ def test_recent_meeting_recordings_include_summary_delivery_status():
     assert recordings[0]["summaryId"] == "summary-1"
     assert recordings[0]["status"] == "telegram_sent"
     assert recordings[0]["recipient"]["kind"] == "private"
+
+
+def test_recent_meeting_activity_includes_voice_events_recordings_and_day_separators():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+    repo.record_discord_voice_event("123", "future", "join", timestamp="2026-05-04T10:00:00+00:00")
+    repo.record_discord_voice_event("123", "future", "leave", timestamp="2026-05-04T10:30:00+00:00")
+    repo.db.meeting_recordings.insert_one(
+        {
+            "recordingId": "recording-1",
+            "status": "recording_failed",
+            "startedAt": dt.datetime(2026, 5, 3, 10, 0, tzinfo=dt.UTC),
+            "updatedAt": dt.datetime(2026, 5, 3, 10, 30, tzinfo=dt.UTC),
+            "participantNames": ["Future Artist"],
+        }
+    )
+
+    items = repo.recent_meeting_activity()
+
+    assert [item["date"] for item in items if item["itemType"] == "day_separator"] == ["2026-05-04", "2026-05-03"]
+    assert any(item["itemType"] == "voice_event" and item["eventType"] == "join" for item in items)
+    assert any(item["itemType"] == "voice_event" and item["eventType"] == "leave" for item in items)
+    assert any(item["itemType"] == "recording" and item["recording"]["recordingId"] == "recording-1" for item in items)
+
+
+def test_discord_recording_state_refreshes_settings_before_min_participant_check(monkeypatch):
+    class FakeMember:
+        id = 123
+        name = "solo"
+        bot = False
+
+    class FakeVoiceChannel:
+        members = [FakeMember()]
+
+    client = MeetingClient.__new__(MeetingClient)
+    client.config = type("Config", (), {"meeting_channel_id": 1})()
+    client.recording = None
+    client.meeting_summaries_enabled = True
+    client.meeting_summary_min_participants = 1
+    refresh_forces = []
+    starts = []
+
+    async def fake_refresh_settings_if_needed(*, force=False):
+        refresh_forces.append(force)
+        client.meeting_summary_min_participants = 5
+
+    async def fake_start_recording(channel, human_members):
+        starts.append(human_members)
+
+    client.get_channel = lambda channel_id: FakeVoiceChannel()
+    client.refresh_settings_if_needed = fake_refresh_settings_if_needed
+    client.start_recording = fake_start_recording
+    monkeypatch.setattr(discord_bot_module.discord, "VoiceChannel", FakeVoiceChannel)
+
+    import asyncio
+
+    asyncio.run(client.refresh_recording_state())
+
+    assert refresh_forces == [True]
+    assert starts == []
 
 
 def test_meeting_recording_tracks_openai_pipeline_status():

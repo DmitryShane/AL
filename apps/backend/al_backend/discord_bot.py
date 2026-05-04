@@ -248,10 +248,10 @@ class MeetingClient(discord.Client):
         await self.submit_auto_afk_event(member, solo_started_at, moved_at)
         await self.refresh_solo_state()
 
-    async def refresh_settings_if_needed(self) -> None:
+    async def refresh_settings_if_needed(self, *, force: bool = False) -> None:
         now = datetime.now(timezone.utc)
 
-        if self.settings_loaded_at and (now - self.settings_loaded_at).total_seconds() < SETTINGS_REFRESH_SECONDS:
+        if not force and self.settings_loaded_at and (now - self.settings_loaded_at).total_seconds() < SETTINGS_REFRESH_SECONDS:
             return
 
         settings = await asyncio.to_thread(fetch_discord_settings, self.config)
@@ -283,7 +283,18 @@ class MeetingClient(discord.Client):
 
             return
 
-        if not self.meeting_summaries_enabled or len(human_members) < self.meeting_summary_min_participants:
+        await self.refresh_settings_if_needed(force=True)
+
+        if not self.meeting_summaries_enabled:
+            return
+
+        if len(human_members) < self.meeting_summary_min_participants:
+            LOGGER.info(
+                "Waiting for Discord meeting participants before recording: current=%s minimum=%s members=%s",
+                len(human_members),
+                self.meeting_summary_min_participants,
+                ", ".join(member.name for member in human_members) or "none",
+            )
             return
 
         await self.start_recording(channel, human_members)

@@ -683,4 +683,75 @@ class DiscordMeetingService(MongoComposableMixin):
 
         return items
 
+    def recent_meeting_activity(self, limit: int = 40) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+
+        for recording in self.recent_meeting_recordings(limit=limit):
+            timestamp = recording.get("updatedAt") or recording.get("endedAt") or recording.get("startedAt") or ""
+            items.append(
+                {
+                    "itemType": "recording",
+                    "id": f"recording:{recording.get('recordingId', '')}",
+                    "date": _activity_item_date(timestamp),
+                    "timestamp": timestamp,
+                    "recording": recording,
+                }
+            )
+
+        for event in self.db.meeting_events.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(limit):
+            timestamp = _iso(event.get("timestamp"))
+            items.append(
+                {
+                    "itemType": "voice_event",
+                    "id": _meeting_event_item_id(event),
+                    "date": str(event.get("date") or _activity_item_date(timestamp)),
+                    "timestamp": timestamp,
+                    "eventType": event.get("eventType") or "",
+                    "rawAuthor": event.get("rawAuthor") or "",
+                    "discordUsername": event.get("discordUsername") or "",
+                    "channelId": event.get("channelId") or "",
+                    "afkChannelId": event.get("afkChannelId") or "",
+                    "meetingSeconds": int(event.get("meetingSeconds") or 0),
+                }
+            )
+
+        items.sort(key=lambda item: str(item.get("timestamp") or ""), reverse=True)
+        items = items[:limit]
+        result: list[dict[str, Any]] = []
+        current_date = ""
+
+        for item in items:
+            item_date = str(item.get("date") or _activity_item_date(item.get("timestamp")))
+
+            if item_date and item_date != current_date:
+                result.append(
+                    {
+                        "itemType": "day_separator",
+                        "id": f"day:{item_date}",
+                        "date": item_date,
+                        "timestamp": item.get("timestamp") or "",
+                    }
+                )
+                current_date = item_date
+
+            result.append(item)
+
+        return result
+
+
+def _activity_item_date(timestamp: Any) -> str:
+    value = _coerce_datetime(timestamp)
+
+    if not value:
+        return ""
+
+    return value.date().isoformat()
+
+
+def _meeting_event_item_id(event: dict[str, Any]) -> str:
+    timestamp = _iso(event.get("timestamp")) or _iso(event.get("createdAt")) or ""
+    discord_user_id = str(event.get("discordUserId") or "")
+    event_type = str(event.get("eventType") or "")
+    return f"voice:{event_type}:{discord_user_id}:{timestamp}"
+
 
