@@ -3789,6 +3789,8 @@ def test_default_meeting_summary_prompt_renders_sections():
     )
 
     assert "Expected participants: Dmitry, Igor" in prompt
+    assert "Return exactly these sections:\nDiscussed:\n" in prompt
+    assert "\nParticipants:\n" not in prompt.split("Return exactly these sections:")[1]
     assert "Action items:" in prompt
     assert "Transcript:\nWe agreed to fix Discord recordings." in prompt
 
@@ -3808,7 +3810,7 @@ def test_meeting_recording_finished_creates_summary_notification():
 
     class FakeSummary:
         transcript = "Dmitry and Igor agreed to create a Discord summary task."
-        summary = "Participants:\n- Dmitry\n- Igor\n\nDecisions:\n- Add Discord summaries.\n\nAction items:\n- Create a task.\n\nOpen questions:\n- None."
+        summary = "Discussed:\n- Plans for Discord summaries.\n\nDecisions:\n- Add Discord summaries.\n\nAction items:\n- Create a task.\n\nOpen questions:\n- None."
 
     result = repo.process_meeting_recording_finished(
         recording_id="recording-1",
@@ -3872,7 +3874,7 @@ def test_meeting_recording_finished_skips_empty_work_summary():
 
     class FakeSummary:
         transcript = "garbled text that is long enough but has no usable work content"
-        summary = "Участники:\nДмитрий\n\nОбсудили:\nНет\n\nРешения:\nНет\n\nЗадачи:\nНет\n\nОткрытые вопросы:\nНет"
+        summary = "Обсудили:\nНет\n\nРешения:\nНет\n\nЗадачи:\nНет\n\nОткрытые вопросы:\nНет"
 
     result = repo.process_meeting_recording_finished(
         recording_id="recording-empty-work",
@@ -4044,7 +4046,7 @@ def test_meeting_summary_message_includes_meeting_metadata():
             "durationSeconds": 180,
             "participantNames": ["Dmitry", "Igor"],
         },
-        "Participants:\n- Dmitry\n- Igor\n\nDiscussed:\n- Backend status UI.",
+        "Discussed:\n- Backend status UI.",
     )
 
     assert "Date: 2026-05-01" in message
@@ -4099,7 +4101,7 @@ def test_meeting_recording_tracks_openai_pipeline_status():
 
     class FakeSummary:
         transcript = "Dmitry agreed to create a task."
-        summary = "Participants:\n- Dmitry\n\nDecisions:\n- Create a task.\n\nAction items:\n- Create a task.\n\nOpen questions:\n- None."
+        summary = "Discussed:\n- Task creation.\n\nDecisions:\n- Create a task.\n\nAction items:\n- Create a task.\n\nOpen questions:\n- None."
 
     def fake_summary_generator(path, people, language, prompt_template, progress_callback=None):
         if progress_callback:

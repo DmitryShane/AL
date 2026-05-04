@@ -1584,7 +1584,7 @@ export function SettingsPage({
                   value={meetingSummaryPrompt}
                   onChange={(event) => setMeetingSummaryPrompt(event.target.value)}
                   rows={12}
-                  placeholder="Instructions for turning a meeting transcript into a Telegram summary. The backend adds participants, required sections, language, and transcript automatically."
+                  placeholder="Instructions for turning a meeting transcript into a Telegram summary. Participant names are added in the Telegram message header automatically; your text should only include the working sections (Discussed, Decisions, Action items, Open questions). The backend adds required section titles, language rules, expected participants for context, and the transcript."
                 />
               </label>
               <button
