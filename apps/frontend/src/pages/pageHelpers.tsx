@@ -243,13 +243,7 @@ export function paletteColor(index: number) {
 }
 
 export function savedFileLabel(prefab: SavedPrefab) {
-  const fileName = prefab.name || prefab.path;
-
-  if (!prefab.projectId || fileName === prefab.projectId) {
-    return fileName;
-  }
-
-  return `${fileName} · ${prefab.projectId}`;
+  return prefab.name || prefab.path;
 }
 
 export function formatDuration(seconds: number) {
