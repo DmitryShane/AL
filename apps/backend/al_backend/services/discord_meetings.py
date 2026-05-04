@@ -253,6 +253,12 @@ class DiscordMeetingService(MongoComposableMixin):
                 **deltas,
             }
         )
+        composed(self)._schedule_telegram_online_prompt_if_needed(
+            raw_author,
+            event_date,
+            "discord",
+            event_time,
+        )
 
     def record_discord_meeting_auto_afk(
         self,

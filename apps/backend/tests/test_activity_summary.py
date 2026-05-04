@@ -3736,6 +3736,56 @@ def test_discord_voice_events_open_and_close_meeting_session():
     assert repo.db.report_rows.items[-1]["reportType"] == "meeting"
 
 
+def test_discord_meeting_schedules_telegram_online_prompt_before_day_start():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "discordUserId": "123",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "UTC",
+        }
+    )
+
+    result = repo.record_discord_voice_event("123", "future", "join", timestamp="2026-04-29T10:00:00+00:00")
+
+    assert result["status"] == "meeting_started"
+    assert len(repo.db.telegram_online_prompts.items) == 1
+    prompt = repo.db.telegram_online_prompts.items[0]
+    assert prompt["rawAuthor"] == "Future Artist"
+    assert prompt["date"] == "2026-04-29"
+    assert prompt["telegramUsername"] == "future_artist"
+    assert prompt["firstReportReceivedAt"] == dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC)
+
+
+def test_discord_meeting_does_not_schedule_telegram_online_prompt_after_day_start():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "discordUserId": "123",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-04-29",
+            "startedAt": dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+            "telegramUsername": "future_artist",
+            "timeZoneId": "UTC",
+        }
+    )
+
+    result = repo.record_discord_voice_event("123", "future", "join", timestamp="2026-04-29T10:00:00+00:00")
+
+    assert result["status"] == "meeting_started"
+    assert repo.db.telegram_online_prompts.items == []
+
+
 def test_discord_auto_afk_closes_meeting_at_solo_start_and_schedules_notification():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
