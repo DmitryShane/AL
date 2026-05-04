@@ -135,7 +135,7 @@ class AuthorRepository(MongoComposableMixin):
         return {"ok": True, "attempted": attempted, "refreshed": refreshed, "failedRawAuthors": failed}
 
     def update_author_email(self, raw_author: str, author_email: str | None) -> None:
-        raw_author = _normalize_author(raw_author)
+        raw_author = composed(self).resolve_author_alias(_normalize_author(raw_author))
         normalized_email = (author_email or "").strip()
 
         if not raw_author or not normalized_email:
@@ -143,6 +143,31 @@ class AuthorRepository(MongoComposableMixin):
 
         if "@" not in normalized_email:
             return
+
+        existing_by_email = self.db.author_profiles.find_one(
+            {"authorEmail": normalized_email},
+            {"_id": 0, "rawAuthor": 1},
+        )
+
+        if existing_by_email:
+            existing_author = composed(self).resolve_author_alias(existing_by_email.get("rawAuthor"))
+
+            if existing_author and existing_author != raw_author:
+                self.db.report_security_events.insert_one(
+                    {
+                        "eventType": "author_email_conflict",
+                        "source": "",
+                        "pluginVersion": "",
+                        "author": raw_author,
+                        "message": f"Author email is already assigned to {existing_author}.",
+                        "createdAt": dt.datetime.now(dt.UTC),
+                    }
+                )
+                self.db.author_profiles.update_one(
+                    {"rawAuthor": existing_author},
+                    {"$set": {"authorEmail": normalized_email, "updatedAt": dt.datetime.now(dt.UTC)}},
+                )
+                return
 
         self.db.author_profiles.update_one(
             {"rawAuthor": raw_author},

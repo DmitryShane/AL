@@ -28,16 +28,17 @@ def plugin_config(
     project_id: str = Query(default="", alias="projectId"),
     service: BackendServices = Depends(get_report_service),
 ) -> PluginConfig:
-    service.update_author_email(author, author_email)
-    enabled = service.is_plugin_enabled_for_author(author)
-    submit_report_now = enabled and service.should_submit_report_now(author)
+    resolved_author = service.resolve_author_alias(author)
+    service.update_author_email(resolved_author, author_email)
+    enabled = service.is_plugin_enabled_for_author(resolved_author)
+    submit_report_now = enabled and service.should_submit_report_now(resolved_author)
 
     return PluginConfig(
         source=source,
-        author=author,
+        author=resolved_author,
         projectId=project_id,
         enabled=enabled,
-        sendIntervalSeconds=service.get_interval_for_author(author),
+        sendIntervalSeconds=service.get_interval_for_author(resolved_author),
         submitReportNow=submit_report_now,
     )
 

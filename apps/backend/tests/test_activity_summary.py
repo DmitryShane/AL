@@ -12,6 +12,7 @@ from al_backend.app import PUBLIC_API_PATHS
 from al_backend.discord_author_mappings import apply_discord_author_mappings
 from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSession, UserPcmTrack, cleanup_old_retained_recordings, retain_recording_recovery_files
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, meeting_summary_sections, render_meeting_summary_prompt
+from al_backend.routers.reports import plugin_config
 from al_backend.activity_math import (
     _add_break_interval_to_buckets,
     _apply_breaks_to_hourly_activity,
@@ -3790,6 +3791,49 @@ def test_discord_settings_default_and_save():
     assert result["meetingSummariesEnabled"] is True
     assert result["meetingSummaryPrompt"] == "Custom summary prompt."
     assert repo.get_discord_settings()["meetingAutoAfkTimeoutSeconds"] == 900
+
+
+def test_plugin_config_resolves_author_alias_before_profile_updates():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "displayName": "Denis Ostrovskiy",
+            "authorEmail": "vedamir.infinum@gmail.com",
+            "pluginEnabled": True,
+        }
+    )
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Vedamir", "targetRawAuthor": "Denis Ostrovskiy"})
+
+    config = plugin_config(
+        source="bal",
+        author="Vedamir",
+        author_email="vedamir.infinum@gmail.com",
+        project_id="project",
+        service=repo,
+    )
+
+    assert config.author == "Denis Ostrovskiy"
+    assert repo.db.author_profiles.count_documents({"rawAuthor": "Vedamir"}) == 0
+    assert repo.db.author_profiles.find_one({"rawAuthor": "Denis Ostrovskiy"})["authorEmail"] == "vedamir.infinum@gmail.com"
+
+
+def test_update_author_email_does_not_create_duplicate_profile_for_existing_email():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "displayName": "Denis Ostrovskiy",
+            "authorEmail": "vedamir.infinum@gmail.com",
+            "pluginEnabled": True,
+        }
+    )
+
+    repo.update_author_email("Vedamir", "vedamir.infinum@gmail.com")
+
+    assert repo.db.author_profiles.count_documents({"rawAuthor": "Vedamir"}) == 0
+    assert repo.db.author_profiles.count_documents({"rawAuthor": "Denis Ostrovskiy"}) == 1
+    assert repo.db.report_security_events.items[-1]["eventType"] == "author_email_conflict"
 
 
 def test_discord_settings_include_default_meeting_summary_prompt():
