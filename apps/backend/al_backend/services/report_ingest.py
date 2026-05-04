@@ -107,10 +107,10 @@ class ReportIngestService:
                 "reportType": report_type,
             }
         )
-        self.touch_last_raw_report_received_at(str(payload.get("author") or "Unknown User"), now)
+        author_for_stale_touch = str(payload.get("author") or "Unknown User")
 
         if isinstance(payload.get("events"), list):
-            self._save_event_batch(
+            meaningful_for_stale = self._save_event_batch(
                 source=source,
                 plugin_version=plugin_version,
                 payload=payload,
@@ -120,6 +120,8 @@ class ReportIngestService:
                 challenge_id=challenge_id,
                 device_id=device_id,
             )
+            if meaningful_for_stale:
+                self.touch_last_raw_report_received_at(author_for_stale_touch, now)
             self.invalidate_activity_summary_cache()
             return str(raw_result.inserted_id)
 
@@ -137,6 +139,7 @@ class ReportIngestService:
         )
         self.db.activity_snapshots.insert_one(snapshot)
         self._apply_snapshot_to_aggregates(snapshot)
+        self.touch_last_raw_report_received_at(author_for_stale_touch, now)
         self.invalidate_activity_summary_cache()
         return str(raw_result.inserted_id)
 
@@ -188,7 +191,7 @@ class ReportIngestService:
         received_at: dt.datetime,
         challenge_id: str,
         device_id: str | None,
-    ) -> None:
+    ) -> bool:
         author = self.resolve_author_alias(str(payload.get("author") or "Unknown User"))
         author_email = str(payload.get("authorEmail") or "")
         project_id = str(payload.get("projectId") or "")
@@ -269,7 +272,7 @@ class ReportIngestService:
         rows = self._build_event_batch_report_rows(batch, batch_delta_items)
 
         if not rows:
-            return
+            return False
 
         _insert_many_if_supported(self.db.report_rows, rows)
 
@@ -280,6 +283,8 @@ class ReportIngestService:
                 self._schedule_telegram_break_activity_prompt_if_needed(author, str(row.get("date") or ""), source, report_time)
 
             self._schedule_telegram_online_prompt_if_needed(author, str(row.get("date") or ""), source, received_at)
+
+        return True
 
     def _build_event_batch_report_rows(
         self,

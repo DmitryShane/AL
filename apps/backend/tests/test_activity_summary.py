@@ -6027,6 +6027,42 @@ def test_configured_author_time_zone_normalizes_saved_report_row():
     assert repo.db.report_rows.items[0]["timeZoneId"] == "Europe/Kyiv"
 
 
+def test_zero_delta_event_save_report_does_not_touch_last_raw_report_received_at():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "HB Author", "displayName": "HB Author"})
+    payload = {
+        "author": "HB Author",
+        "projectId": "figma",
+        "sessionId": "0885fd320d3941aab3469ed2dc50d199",
+        "timeZoneId": "Europe/Madrid",
+        "timeZoneDisplayName": "Europe/Madrid",
+        "events": [
+            {
+                "eventId": "evt-heartbeat-one",
+                "eventType": "heartbeat",
+                "occurredAtUtc": "2026-05-04T01:07:52.472Z",
+                "occurredAtLocal": "2026-05-04T03:07:52.472+02:00",
+            },
+            {
+                "eventId": "evt-heartbeat-two",
+                "eventType": "heartbeat",
+                "occurredAtUtc": "2026-05-04T01:08:52.454Z",
+                "occurredAtLocal": "2026-05-04T03:08:52.454+02:00",
+            },
+        ],
+    }
+
+    repo.save_report("fch", "0.1.0", "packet", payload, "challenge")
+
+    profile = repo.db.author_profiles.find_one({"rawAuthor": "HB Author"})
+    assert profile is not None
+    assert profile.get("lastRawReportReceivedAt") is None
+    assert repo.db.report_rows.items == []
+    assert len(repo.db.raw_reports.items) == 1
+    assert len(repo.db.raw_event_batches.items) == 1
+    assert len(repo.db.raw_activity_events.items) == 2
+
+
 def test_author_local_today_summary_includes_authors_on_different_local_dates():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Madrid Author", "displayName": "Madrid Author", "timeZoneId": "Europe/Madrid"})
