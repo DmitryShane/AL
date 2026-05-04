@@ -11,6 +11,14 @@ from ..models import AvatarSettingsIn, DiscordSettingsIn, IntervalSettingsIn
 router = APIRouter()
 
 
+@router.get("/api/v1/settings/server-stats")
+def server_stats(
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.get_server_stats()
+
+
 @router.put("/api/v1/settings/avatars")
 def update_avatar_settings(
     settings_in: AvatarSettingsIn,

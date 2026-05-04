@@ -1,0 +1,45 @@
+from __future__ import annotations
+
+from collections import namedtuple
+from pathlib import Path
+
+import al_backend.repositories.settings as settings_repo
+from al_backend.repositories.settings import SettingsRepository
+
+
+def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "root"
+    usr = root / "usr"
+    opt = root / "opt" / "al"
+    apt = root / "var" / "cache" / "apt"
+    logs = root / "var" / "log"
+    mongo = root / "var" / "lib" / "mongodb"
+
+    for path in (usr, opt, apt, logs, mongo):
+        path.mkdir(parents=True)
+        (path / "sample.bin").write_bytes(b"abc")
+
+    disk_usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(settings_repo.shutil, "disk_usage", lambda _path: disk_usage(409600, 245760, 163840))
+    monkeypatch.setattr(
+        settings_repo,
+        "SERVER_STATS_PATHS",
+        {
+            "system": usr,
+            "app": opt,
+            "mongo": mongo,
+            "aptCache": apt,
+            "logs": logs,
+            "missing": Path("/path/that/does/not/exist"),
+        },
+    )
+
+    repo = SettingsRepository.__new__(SettingsRepository)
+    stats = repo.get_server_stats()
+
+    assert stats["root"]["totalBytes"] == 409600
+    assert stats["root"]["usedBytes"] == 245760
+    assert stats["root"]["freeBytes"] == 163840
+    assert stats["root"]["warningLevel"] == "ok"
+    assert {item["key"] for item in stats["categories"]} >= {"system", "app", "mongo", "aptCache", "logs", "other"}
+    assert next(item for item in stats["categories"] if item["key"] == "missing")["exists"] is False

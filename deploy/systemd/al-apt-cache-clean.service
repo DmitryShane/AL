@@ -1,0 +1,6 @@
+[Unit]
+Description=AL apt cache cleanup
+
+[Service]
+Type=oneshot
+ExecStart=__APP_DIR__/scripts/clean-apt-cache.sh

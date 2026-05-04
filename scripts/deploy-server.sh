@@ -93,6 +93,8 @@ sudo -H -u "${APP_USER}" env \
   VITE_API_URL="${PUBLIC_API_URL}" \
   bash -lc "cd '${APP_DIR}/apps/frontend' && npm ci && npm run build"
 
+chmod 0755 "${APP_DIR}/scripts/clean-apt-cache.sh"
+
 sed \
   -e "s#__APP_DIR__#${APP_DIR}#g" \
   -e "s#__APP_USER__#${APP_USER}#g" \
@@ -110,6 +112,12 @@ sed \
   -e "s#__APP_USER__#${APP_USER}#g" \
   -e "s#__APP_ROOT__#${APP_ROOT}#g" \
   "${APP_DIR}/deploy/systemd/al-discord-bot.service" > /etc/systemd/system/al-discord-bot.service
+
+sed \
+  -e "s#__APP_DIR__#${APP_DIR}#g" \
+  "${APP_DIR}/deploy/systemd/al-apt-cache-clean.service" > /etc/systemd/system/al-apt-cache-clean.service
+
+cp "${APP_DIR}/deploy/systemd/al-apt-cache-clean.timer" /etc/systemd/system/al-apt-cache-clean.timer
 
 SSL_SERVER_BLOCK=""
 
@@ -162,7 +170,8 @@ ln -sf /etc/nginx/sites-available/al.conf /etc/nginx/sites-enabled/al.conf
 rm -f /etc/nginx/sites-enabled/default
 
 systemctl daemon-reload
-systemctl enable mongod nginx al-backend al-telegram-bot al-discord-bot
+systemctl enable mongod nginx al-backend al-telegram-bot al-discord-bot al-apt-cache-clean.timer
+systemctl start al-apt-cache-clean.timer
 systemctl restart mongod
 for attempt in {1..30}; do
   if mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' >/dev/null 2>&1; then

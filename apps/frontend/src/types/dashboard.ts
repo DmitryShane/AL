@@ -198,6 +198,30 @@ export type ReportsPage = {
 
 export type ReportsPageCache = Record<string, ReportsPage>;
 
+export type ServerStatsWarningLevel = "ok" | "warning" | "critical";
+
+export type ServerStatsCategory = {
+  key: string;
+  label: string;
+  path: string;
+  bytes: number;
+  exists: boolean;
+};
+
+export type ServerStats = {
+  generatedAt: string;
+  hostname: string;
+  root: {
+    path: string;
+    totalBytes: number;
+    usedBytes: number;
+    freeBytes: number;
+    usedPercent: number;
+    warningLevel: ServerStatsWarningLevel;
+  };
+  categories: ServerStatsCategory[];
+};
+
 export type SiteUserRole = "admin" | "editor" | "viewer";
 
 export type SiteUser = {

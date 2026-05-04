@@ -1,9 +1,58 @@
 from __future__ import annotations
 
+import shutil
+import socket
+from pathlib import Path
+
 from ..activity_math import *
 from ..author_avatar_cache import DEFAULT_AVATAR_REFRESH_CADENCE, normalize_avatar_refresh_cadence
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+
+
+SERVER_STATS_PATHS = {
+    "system": Path("/usr"),
+    "var": Path("/var"),
+    "app": Path("/opt/al"),
+    "mongo": Path("/var/lib/mongodb"),
+    "aptCache": Path("/var/cache/apt"),
+    "logs": Path("/var/log"),
+}
+
+
+def _server_stats_category(key: str, path: Path) -> dict[str, Any]:
+    labels = {
+        "system": "System /usr",
+        "var": "Variable /var",
+        "app": "App /opt/al",
+        "mongo": "MongoDB",
+        "aptCache": "apt cache",
+        "logs": "Logs",
+    }
+    exists = path.exists()
+    size = _path_size_bytes(path) if exists else 0
+    return {
+        "key": key,
+        "label": labels.get(key, key),
+        "path": str(path),
+        "bytes": size,
+        "exists": exists,
+    }
+
+
+def _path_size_bytes(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+
+    total = 0
+    for child in path.rglob("*"):
+        try:
+            if child.is_file() and not child.is_symlink():
+                total += child.stat().st_size
+        except OSError:
+            continue
+
+    return total
 
 
 class SettingsRepository(MongoComposableMixin):
@@ -253,6 +302,50 @@ class SettingsRepository(MongoComposableMixin):
             "telegramOnlinePromptDelayMinutes": telegram_online_prompt_delay_minutes,
             "authors": author_settings,
             "avatarRefreshCadence": self.get_avatar_refresh_cadence(),
+        }
+
+    def get_server_stats(self) -> dict[str, Any]:
+        usage = shutil.disk_usage("/")
+        total = int(usage.total)
+        used = int(usage.used)
+        free = int(usage.free)
+        percent = round((used / total) * 100, 1) if total else 0.0
+        categories = [
+            _server_stats_category(key, path)
+            for key, path in SERVER_STATS_PATHS.items()
+        ]
+        known_bytes = sum(int(item["bytes"]) for item in categories)
+        other_bytes = max(0, used - known_bytes)
+
+        categories.append(
+            {
+                "key": "other",
+                "label": "Other",
+                "path": "/",
+                "bytes": other_bytes,
+                "exists": True,
+            }
+        )
+
+        if percent >= 90:
+            warning_level = "critical"
+        elif percent >= 80:
+            warning_level = "warning"
+        else:
+            warning_level = "ok"
+
+        return {
+            "generatedAt": dt.datetime.now(dt.UTC).isoformat(),
+            "hostname": socket.gethostname(),
+            "root": {
+                "path": "/",
+                "totalBytes": total,
+                "usedBytes": used,
+                "freeBytes": free,
+                "usedPercent": percent,
+                "warningLevel": warning_level,
+            },
+            "categories": categories,
         }
 
     def upsert_discord_settings(self, meeting_auto_afk_timeout_seconds: int) -> dict[str, Any]:

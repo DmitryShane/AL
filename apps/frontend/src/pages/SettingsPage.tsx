@@ -7,6 +7,8 @@ import {
   autoBreakScheduleLabel,
   authorProfilePayload,
   emptyAuthorProfile,
+  formatReportMinutes,
+  formatTimestamp,
   formatProfileTimeZoneLabel,
   formatProfileTimeZoneTitle,
   loadSavedSettingsTab,
@@ -21,6 +23,7 @@ import {
 import { AuthorDeleteAllActivityModal } from "../components/settings/AuthorDeleteAllActivityModal";
 import { BulkAllAuthorsActivityDeleteModal } from "../components/settings/BulkAllAuthorsActivityDeleteModal";
 import { AuthorDeleteConfirm, AuthorProfileDeleteModal, SiteUsersPanel } from "../components/settings/SettingsComponents";
+import { ServerStatsPanel } from "../components/settings/ServerStatsPanel";
 
 type DeleteActivityDraft = {
   mode: "today" | "range";
@@ -226,8 +229,8 @@ export function SettingsPage({
     meetingSummaryMinDuration !== String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120) ||
     meetingSummaryLanguage !== (summary?.discordSettings.meetingSummaryLanguage ?? "English") ||
     meetingSummaryRecipient !== (summary?.discordSettings.meetingSummaryRecipient ?? "work_chat") ||
-    meetingAudioRetention !== String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0) ||
-    meetingSummaryPrompt !== (summary?.discordSettings.meetingSummaryPrompt ?? "");
+    meetingAudioRetention !== String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0);
+  const meetingSummaryPromptDirty = meetingSummaryPrompt !== (summary?.discordSettings.meetingSummaryPrompt ?? "");
   const discordSettingsDirty = discordAutoAfkTimeout !== String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600);
   const telegramPromptSettingsDirty =
     telegramOnlinePromptDelayMinutes !== String(intervalSettingsTelegramOnlinePromptMinutes(summary));
@@ -490,6 +493,78 @@ export function SettingsPage({
     }
   }
 
+  async function saveMeetingSummarySettings() {
+    setSaving("meetingSummarySettings");
+    setSaveStatus((items) => ({ ...items, meetingSummarySettings: undefined }));
+
+    try {
+      const response = await apiFetch(`/api/v1/settings/discord`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          meetingAutoAfkTimeoutSeconds: summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? Number(discordAutoAfkTimeout),
+          meetingSummariesEnabled,
+          meetingSummaryMinParticipants: Number(meetingSummaryMinParticipants),
+          meetingSummaryMinDurationSeconds: Number(meetingSummaryMinDuration),
+          meetingSummaryLanguage,
+          meetingSummaryRecipient,
+          meetingAudioRetentionSeconds: Number(meetingAudioRetention),
+          meetingSummaryPrompt: summary?.discordSettings.meetingSummaryPrompt ?? meetingSummaryPrompt
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Meeting summary settings save failed");
+      }
+
+      setSaveStatus((items) => ({ ...items, meetingSummarySettings: "saved" }));
+      onSaved();
+    } catch {
+      setSaveStatus((items) => ({ ...items, meetingSummarySettings: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, meetingSummarySettings: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function saveMeetingSummaryPrompt() {
+    setSaving("meetingSummaryPrompt");
+    setSaveStatus((items) => ({ ...items, meetingSummaryPrompt: undefined }));
+
+    try {
+      const response = await apiFetch(`/api/v1/settings/discord`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          meetingAutoAfkTimeoutSeconds: summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? Number(discordAutoAfkTimeout),
+          meetingSummariesEnabled: Boolean(summary?.discordSettings.meetingSummariesEnabled),
+          meetingSummaryMinParticipants: summary?.discordSettings.meetingSummaryMinParticipants ?? Number(meetingSummaryMinParticipants),
+          meetingSummaryMinDurationSeconds: summary?.discordSettings.meetingSummaryMinDurationSeconds ?? Number(meetingSummaryMinDuration),
+          meetingSummaryLanguage: summary?.discordSettings.meetingSummaryLanguage ?? meetingSummaryLanguage,
+          meetingSummaryRecipient: summary?.discordSettings.meetingSummaryRecipient ?? meetingSummaryRecipient,
+          meetingAudioRetentionSeconds: summary?.discordSettings.meetingAudioRetentionSeconds ?? Number(meetingAudioRetention),
+          meetingSummaryPrompt
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Meeting summary prompt save failed");
+      }
+
+      setSaveStatus((items) => ({ ...items, meetingSummaryPrompt: "saved" }));
+      onSaved();
+    } catch {
+      setSaveStatus((items) => ({ ...items, meetingSummaryPrompt: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, meetingSummaryPrompt: undefined }));
+      }, 2500);
+    }
+  }
+
   async function executeAuthorActivityDelete(pending: PendingAuthorActivityDelete) {
     const rawAuthor = pending.profile.rawAuthor;
     const deleteKey = `delete:${rawAuthor}`;
@@ -747,51 +822,54 @@ export function SettingsPage({
         <button className={settingsTab === "users" ? "active" : ""} onClick={() => setSettingsTab("users")}>Site Users</button>
       </div>
       {settingsTab === "general" ? (
-        <div className="panel">
-          <h2>Send Interval</h2>
-          <div className="settings-row">
-            <label>
-              Global interval, sec
-              <input value={globalInterval} onChange={(event) => setGlobalInterval(event.target.value)} type="number" min="30" />
-            </label>
-            <label>
-              Idle threshold, sec
-              <input value={idleThreshold} onChange={(event) => setIdleThreshold(event.target.value)} type="number" min="30" />
-            </label>
-            <div className="plugin-ingest-field">
-              <span id="plugin-ingest-heading" className="plugin-ingest-field-heading">
-                Plugin reports
-              </span>
-              <div
-                className="plugin-ingest-radios"
-                role="radiogroup"
-                aria-labelledby="plugin-ingest-heading"
-              >
-                <label className="radio-inline">
-                  <input
-                    type="radio"
-                    name="plugin-ingest-enabled"
-                    checked={pluginIngestEnabled}
-                    onChange={() => setPluginIngestEnabled(true)}
-                  />
-                  On
-                </label>
-                <label className="radio-inline">
-                  <input
-                    type="radio"
-                    name="plugin-ingest-enabled"
-                    checked={!pluginIngestEnabled}
-                    onChange={() => setPluginIngestEnabled(false)}
-                  />
-                  Off
-                </label>
+        <>
+          <div className="panel">
+            <h2>Send Interval</h2>
+            <div className="settings-row">
+              <label>
+                Global interval, sec
+                <input value={globalInterval} onChange={(event) => setGlobalInterval(event.target.value)} type="number" min="30" />
+              </label>
+              <label>
+                Idle threshold, sec
+                <input value={idleThreshold} onChange={(event) => setIdleThreshold(event.target.value)} type="number" min="30" />
+              </label>
+              <div className="plugin-ingest-field">
+                <span id="plugin-ingest-heading" className="plugin-ingest-field-heading">
+                  Plugin reports
+                </span>
+                <div
+                  className="plugin-ingest-radios"
+                  role="radiogroup"
+                  aria-labelledby="plugin-ingest-heading"
+                >
+                  <label className="radio-inline">
+                    <input
+                      type="radio"
+                      name="plugin-ingest-enabled"
+                      checked={pluginIngestEnabled}
+                      onChange={() => setPluginIngestEnabled(true)}
+                    />
+                    On
+                  </label>
+                  <label className="radio-inline">
+                    <input
+                      type="radio"
+                      name="plugin-ingest-enabled"
+                      checked={!pluginIngestEnabled}
+                      onChange={() => setPluginIngestEnabled(false)}
+                    />
+                    Off
+                  </label>
+                </div>
               </div>
+              <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval" || !isIntervalSettingsDirty}>
+                {settingsSaveButtonLabel("interval", saving, saveStatus)}
+              </button>
             </div>
-            <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval" || !isIntervalSettingsDirty}>
-              {settingsSaveButtonLabel("interval", saving, saveStatus)}
-            </button>
           </div>
-        </div>
+          <ServerStatsPanel />
+        </>
       ) : settingsTab === "autoBreak" ? (
         <div className="panel">
           <h2>Auto Break</h2>
@@ -1546,6 +1624,13 @@ export function SettingsPage({
                   ))}
                 </select>
               </label>
+              <button
+                className={settingsSaveButtonClassName(saveStatus.meetingSummarySettings)}
+                onClick={() => void saveMeetingSummarySettings()}
+                disabled={saving === "meetingSummarySettings" || !meetingSummarySettingsDirty}
+              >
+                {settingsSaveButtonLabel("meetingSummarySettings", saving, saveStatus)}
+              </button>
             </div>
           </div>
           <div className="meeting-summary-workspace" ref={meetingSummaryWorkspaceRef}>
@@ -1563,7 +1648,7 @@ export function SettingsPage({
                     {meetingActivityItems.map((item) => (
                       <div className={item.itemType === "day_separator" ? "settings-list-day-separator" : "settings-list-item"} key={item.id}>
                         <strong>{meetingActivityTitle(item)}</strong>
-                        {item.itemType !== "day_separator" ? <span>{meetingActivityDetail(item)}</span> : null}
+                        {item.itemType !== "day_separator" ? renderMeetingActivityDetail(item) : null}
                         {item.itemType === "recording" && item.recording.error ? <span className="alert-text">{item.recording.error}</span> : null}
                       </div>
                     ))}
@@ -1588,11 +1673,11 @@ export function SettingsPage({
                 />
               </label>
               <button
-                className={settingsSaveButtonClassName(saveStatus.discord)}
-                onClick={() => void saveDiscordSettings()}
-                disabled={saving === "discord" || !meetingSummarySettingsDirty}
+                className={settingsSaveButtonClassName(saveStatus.meetingSummaryPrompt)}
+                onClick={() => void saveMeetingSummaryPrompt()}
+                disabled={saving === "meetingSummaryPrompt" || !meetingSummaryPromptDirty}
               >
-                {settingsSaveButtonLabel("discord", saving, saveStatus)}
+                {settingsSaveButtonLabel("meetingSummaryPrompt", saving, saveStatus)}
               </button>
             </div>
           </div>
@@ -1612,5 +1697,56 @@ function intervalSettingsIdleThreshold(summary: Summary | null) {
 function intervalSettingsTelegramOnlinePromptMinutes(summary: Summary | null) {
   const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { telegramOnlinePromptDelayMinutes?: number }) | undefined;
   return intervalSettings?.telegramOnlinePromptDelayMinutes ?? 15;
+}
+
+function renderMeetingActivityDetail(item: MeetingActivityItem) {
+  if (item.itemType !== "recording") {
+    return <span>{meetingActivityDetail(item)}</span>;
+  }
+
+  const recording = item.recording;
+  const participants = recording.participantNames?.length ? recording.participantNames.join(", ") : "No participants";
+  const duration = recording.durationSeconds ? formatReportMinutes(recording.durationSeconds) : "-";
+  const recipient = recording.recipient?.kind === "private" ? recording.recipient.label || "private chat" : "work chat";
+  const audioFrames = `${recording.nonSilentFrameCount ?? 0}/${recording.audioFrameCount ?? 0}`;
+  const quality = recording.audioQualityStatus || "unknown";
+
+  return (
+    <div className="meeting-activity-detail-grid">
+      <div>
+        <span>Participants</span>
+        <strong>{participants}</strong>
+      </div>
+      <div>
+        <span>Timing</span>
+        <strong>
+          Started {formatTimestamp(recording.startedAt)}
+          {recording.telegramSentAt ? `, sent ${formatTimestamp(recording.telegramSentAt)}` : ""}
+          {recording.updatedAt ? `, updated ${formatTimestamp(recording.updatedAt)}` : ""}
+        </strong>
+      </div>
+      <div>
+        <span>Delivery</span>
+        <strong>
+          {recipient}, duration {duration}
+        </strong>
+      </div>
+      <div>
+        <span>Audio</span>
+        <strong>
+          Frames {audioFrames}, corrupted {recording.corruptedPacketCount ?? 0}, quality {quality}
+        </strong>
+      </div>
+      <div>
+        <span>Mix</span>
+        <strong>
+          Mixed users {recording.mixedUserCount ?? 0}
+          {recording.silencePaddingFrameCount ? `, padded ${recording.silencePaddingFrameCount}` : ""}
+          {recording.unknownSourceFrameCount ? `, unknown ${recording.unknownSourceFrameCount}` : ""}
+          {recording.listenErrorCount ? `, listen errors ${recording.listenErrorCount}` : ""}
+        </strong>
+      </div>
+    </div>
+  );
 }
 
