@@ -33,6 +33,7 @@ export type Report = {
 export type AuthorRow = {
   rawAuthor: string;
   authorEmail?: string;
+  deviceId?: string;
   displayName: string;
   team?: string;
   telegramUsername?: string;

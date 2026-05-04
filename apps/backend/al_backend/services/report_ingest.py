@@ -16,6 +16,29 @@ def _device_report_id_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _is_valid_device_id(value: Any) -> bool:
+    normalized = str(value or "").strip()
+    return bool(normalized) and normalized != "00000000-0000-0000-0000-000000000000"
+
+
+def _device_fallback_id_from_payload(payload: dict[str, Any]) -> str:
+    for event in payload.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+
+        metadata = event.get("metadata") or {}
+
+        if not isinstance(metadata, dict):
+            continue
+
+        fallback_id = str(metadata.get("deviceFallbackId") or "").strip()
+
+        if _is_valid_device_id(fallback_id):
+            return fallback_id
+
+    return ""
+
+
 class ReportIngestService(MongoComposableMixin):
     def create_report_challenge(self, challenge_in: Any, keys: Any) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
@@ -100,6 +123,12 @@ class ReportIngestService(MongoComposableMixin):
         payload = dict(payload)
         resolved_device_id = str(device_id or payload.get("deviceId") or "")
 
+        if source == "dev" and not _is_valid_device_id(resolved_device_id):
+            resolved_device_id = _device_fallback_id_from_payload(payload)
+
+        if resolved_device_id:
+            payload["deviceId"] = resolved_device_id
+
         if source == "dev" and self.is_unknown_device_author(payload.get("author")):
             payload["author"] = self.resolve_device_report_author(source, resolved_device_id)
 
@@ -136,7 +165,7 @@ class ReportIngestService(MongoComposableMixin):
                 report_type=report_type,
                 received_at=now,
                 challenge_id=challenge_id,
-                device_id=device_id,
+                device_id=resolved_device_id,
             )
             if meaningful_for_stale:
                 composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
@@ -152,7 +181,7 @@ class ReportIngestService(MongoComposableMixin):
                 "receivedAt": now,
                 "reportType": report_type,
                 "challengeId": challenge_id,
-                    "deviceId": resolved_device_id,
+                "deviceId": resolved_device_id,
             }
         )
         self.db.activity_snapshots.insert_one(snapshot)
@@ -167,7 +196,7 @@ class ReportIngestService(MongoComposableMixin):
     def resolve_device_report_author(self, source: str, device_id: str) -> str:
         normalized_device_id = str(device_id or "").strip()
 
-        if not normalized_device_id:
+        if not _is_valid_device_id(normalized_device_id):
             return "Device"
 
         device_id_hash = _device_report_id_hash(normalized_device_id)

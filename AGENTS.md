@@ -140,6 +140,7 @@ Production runs at `activity.mempic.com`. When the user asks to pull production 
 - Never run a full-history production aggregate rebuild by default. Only run a full production rebuild when the owner explicitly asks to rebuild the entire production history.
 - If the available code path only supports `rebuild_aggregates_if_needed(force=True)` as a full-history rebuild, stop instead of running it on production; implement or use a day/date-range scoped rebuild path first.
 - Production env lives in `/etc/al/backend.env`; the current production MongoDB defaults are `AL_MONGO_URI=mongodb://127.0.0.1:27017` and `AL_MONGO_DATABASE=al`.
+- The production server's system Python does not have `pymongo`; for direct production MongoDB inspection, use `mongosh` over SSH instead of trying to run ad hoc Python scripts or changing the production Python environment.
 - Store dump archives outside the repository, for example under `/tmp/al-prod-sync`. Never commit MongoDB dumps, restored data exports, secrets, or server env files.
 - Do not create a local backup before replacing the local `al` database unless the user explicitly asks for one. Local data is treated as disposable during production sync.
 - Create the production dump on the server with `mongodump --uri="mongodb://127.0.0.1:27017" --db="al" --archive="/tmp/al-prod-$(date +%Y%m%d-%H%M%S).archive.gz" --gzip`, copy it locally with `scp`, then remove the temporary server archive.

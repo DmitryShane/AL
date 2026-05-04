@@ -2545,6 +2545,70 @@ def test_device_report_author_is_stable_for_same_device_id():
     assert third == "Device2"
 
 
+def test_device_report_author_ignores_zero_advertising_id():
+    repo = fake_repository()
+
+    assert repo.resolve_device_report_author("dev", "00000000-0000-0000-0000-000000000000") == "Device"
+    assert repo.db.device_report_identities.count_documents({"source": "dev"}) == 0
+
+
+def test_device_report_uses_fallback_id_when_advertising_id_is_zero():
+    repo = fake_repository()
+
+    repo.save_report(
+        source="dev",
+        plugin_version="0.1.0",
+        encrypted_packet="packet",
+        challenge_id="challenge",
+        device_id="00000000-0000-0000-0000-000000000000",
+        payload={
+            "source": "dev",
+            "author": "",
+            "projectId": "Bike Rush 2",
+            "sessionId": "session-1",
+            "deviceId": "00000000-0000-0000-0000-000000000000",
+            "events": [
+                {
+                    "eventId": "device-click-1",
+                    "eventType": "click",
+                    "occurredAtUtc": "2026-05-04T10:00:00Z",
+                    "occurredAtLocal": "2026-05-04T10:00:00+00:00",
+                    "date": "2026-05-04",
+                    "metadata": {"deviceFallbackId": "keychain-device-id"},
+                }
+            ],
+        },
+    )
+
+    raw_report = repo.db.raw_reports.items[0]
+    raw_event = repo.db.raw_activity_events.items[0]
+
+    assert raw_report["deviceId"] == "keychain-device-id"
+    assert raw_event["deviceId"] == "keychain-device-id"
+    assert raw_event["author"] == "Device1"
+    assert repo.db.device_report_identities.items[0]["rawAuthor"] == "Device1"
+
+
+def test_device_profile_includes_latest_device_id():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
+    repo.db.device_report_identities.insert_one(
+        {"source": "dev", "deviceIdHash": "hash-1", "rawAuthor": "Device1"}
+    )
+    repo.db.raw_event_batches.insert_one(
+        {
+            "source": "dev",
+            "author": "Device1",
+            "deviceId": "keychain-device-id",
+            "receivedAt": dt.datetime(2026, 5, 4, 10, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    profile = next(item for item in repo.author_profiles() if item["rawAuthor"] == "Device1")
+
+    assert profile["deviceId"] == "keychain-device-id"
+
+
 def test_device_source_uses_device_idle_threshold():
     repo = fake_repository()
     repo.db.interval_settings.insert_one(

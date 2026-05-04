@@ -1127,9 +1127,10 @@ export function SettingsPage({
             const draft = drafts[profile.rawAuthor] ?? profile;
             const profileDirty = isProfileDirty(profile);
             const deleteProfileKey = `delete-profile:${profile.rawAuthor}`;
+            const profileSubline = profile.deviceId?.trim() || profile.authorEmail || "-";
             return (
               <div className="profile-row" key={profile.rawAuthor}>
-                <span className="profile-author-cell profile-author-cell--with-avatar" title={profile.authorEmail || profile.rawAuthor}>
+                <span className="profile-author-cell profile-author-cell--with-avatar" title={profileSubline || profile.rawAuthor}>
                   <AuthorAvatar
                     displayName={(draft.displayName || profile.rawAuthor).trim() || profile.rawAuthor}
                     authorColor={draft.authorColor ?? profile.authorColor}
@@ -1138,7 +1139,7 @@ export function SettingsPage({
                   />
                   <span className="profile-author-cell-text">
                     <strong>{profile.rawAuthor}</strong>
-                    <small>{profile.authorEmail || "-"}</small>
+                    <small>{profileSubline}</small>
                   </span>
                 </span>
                 <input
