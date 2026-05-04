@@ -1481,6 +1481,7 @@ class ActivitySummaryService(MongoComposableMixin):
         now: dt.datetime,
     ) -> None:
         latest_by_author: dict[str, dict[str, Any]] = {}
+        latest_daily_by_author: dict[str, dict[str, Any]] = {}
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
         report_rows = list(self.db.report_rows.find(query, {"_id": 0}))
         meeting_lookup = self._meeting_lookup_for_reports(report_rows)
@@ -1520,6 +1521,33 @@ class ActivitySummaryService(MongoComposableMixin):
 
             latest_by_author[raw_author] = {"report": report, "sortAt": report_sort_at}
 
+        for daily in self.db.daily_author_activity.find(query, {"_id": 0}):
+            raw_author = str(daily.get("author") or "Unknown User")
+
+            if raw_author not in authors_by_raw:
+                continue
+
+            if date_mode == "authorLocalToday" and not _is_author_local_today(
+                daily.get("date"),
+                raw_author,
+                profiles,
+                daily.get("timeZoneId"),
+                now,
+            ):
+                continue
+
+            received_at = _coerce_datetime(daily.get("lastReceivedAt") or daily.get("receivedAt"))
+
+            if not received_at:
+                continue
+
+            current = latest_daily_by_author.get(raw_author)
+
+            if current and received_at <= current["sortAt"]:
+                continue
+
+            latest_daily_by_author[raw_author] = {"daily": daily, "sortAt": received_at}
+
         for raw_author, latest in latest_by_author.items():
             report = latest["report"]
             author_row = authors_by_raw[raw_author]
@@ -1527,6 +1555,17 @@ class ActivitySummaryService(MongoComposableMixin):
             author_row["pluginVersion"] = report.get("pluginVersion") or author_row.get("pluginVersion")
             author_row["lastRecordedAt"] = report.get("lastRecordedAt") or report.get("recordedAt") or author_row.get("lastRecordedAt")
             author_row["lastReceivedAt"] = _iso(report.get("lastReceivedAt") or report.get("receivedAt")) or author_row.get("lastReceivedAt")
+
+        for raw_author, latest in latest_daily_by_author.items():
+            daily = latest["daily"]
+            author_row = authors_by_raw[raw_author]
+            row_received_at = _coerce_datetime(author_row.get("lastReceivedAt"))
+
+            if not row_received_at or latest["sortAt"] > row_received_at:
+                author_row["source"] = daily.get("source") or author_row.get("source")
+                author_row["pluginVersion"] = daily.get("pluginVersion") or author_row.get("pluginVersion")
+                author_row["lastRecordedAt"] = daily.get("lastRecordedAt") or author_row.get("lastRecordedAt")
+                author_row["lastReceivedAt"] = _iso(daily.get("lastReceivedAt") or daily.get("receivedAt")) or author_row.get("lastReceivedAt")
 
         for raw_author, author_row in authors_by_raw.items():
             profile = profiles.get(raw_author, {})

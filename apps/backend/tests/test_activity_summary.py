@@ -4965,6 +4965,91 @@ def test_status_online_row_sorts_before_returning_plugin_report():
     assert page["reports"][0]["statusEventType"] == "online"
 
 
+def test_fresh_daily_activity_without_report_row_resumes_reports_stopped_status():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.db.status_states.insert_one({"rawAuthor": "Future Artist", "status": "offline"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "status",
+            "pluginVersion": "status",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "receivedAt": dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+            "lastReceivedAt": dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+            "reportType": "status",
+            "statusEventType": "offline",
+            "statusReason": "reports_stopped",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "pluginVersion": "unity-plugin",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "receivedAt": dt.datetime(2026, 4, 29, 8, 58, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "pluginVersion": "cursor-plugin",
+            "author": "Future Artist",
+            "projectId": "AL",
+            "date": "2026-04-29",
+            "lastRecordedAt": "2026-04-29T09:05:00+00:00",
+            "lastReceivedAt": dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC),
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "activityCounts": [{"type": "focus", "count": 1}],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", now=dt.datetime(2026, 4, 29, 9, 5, 30, tzinfo=dt.UTC))
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+    assert author["status"] == "online"
+    assert author["lastReceivedAt"] == "2026-04-29T09:05:00+00:00"
+    assert repo.db.status_events.items[-1]["statusEventType"] == "online"
+    assert repo.db.status_events.items[-1]["reason"] == "reports_resumed"
+    assert repo.db.status_states.items[0]["status"] == "online"
+
+
+def test_stale_daily_activity_without_report_row_does_not_resume_reports_stopped_status():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.db.status_states.insert_one({"rawAuthor": "Future Artist", "status": "offline"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "pluginVersion": "cursor-plugin",
+            "author": "Future Artist",
+            "projectId": "AL",
+            "date": "2026-04-29",
+            "lastRecordedAt": "2026-04-29T09:05:00+00:00",
+            "lastReceivedAt": dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC),
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "activityCounts": [{"type": "focus", "count": 1}],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", now=dt.datetime(2026, 4, 29, 9, 8, tzinfo=dt.UTC))
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+    assert author["status"] == "stale"
+    assert not [event for event in repo.db.status_events.items if event.get("reason") == "reports_resumed"]
+    assert repo.db.status_states.items[0]["status"] == "offline"
+
+
 def test_reports_page_hides_source_rows_between_status_offline_and_online():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
