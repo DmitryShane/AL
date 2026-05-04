@@ -420,10 +420,33 @@ def meeting_summary_chat_id(default_chat_id: int, notification: dict[str, Any]) 
     return default_chat_id
 
 
+def _format_meeting_summary_participant_mentions(names: list[str]) -> str:
+    tokens: list[str] = []
+
+    for raw in names:
+        name = str(raw).strip()
+
+        if not name:
+            continue
+
+        while name.startswith("@"):
+            name = name[1:].strip()
+
+        if not name:
+            continue
+
+        tokens.append(f"@{name}")
+
+    if not tokens:
+        return "Unknown participants"
+
+    return ", ".join(tokens)
+
+
 def format_meeting_summary_message(notification: dict[str, Any], summary_text: str) -> str:
     started_at = format_meeting_summary_date(str(notification.get("startedAt") or ""))
     participants = notification.get("participantNames") if isinstance(notification.get("participantNames"), list) else []
-    participants_text = ", ".join(str(item) for item in participants if str(item).strip()) or "Unknown participants"
+    participants_text = _format_meeting_summary_participant_mentions([str(item) for item in participants])
 
     return (
         "Meeting summary\n"
