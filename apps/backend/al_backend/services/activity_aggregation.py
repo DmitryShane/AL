@@ -6,10 +6,29 @@ from ..mongo_composable import MongoComposableMixin
 
 
 class ActivityAggregationService(MongoComposableMixin):
-    def rebuild_aggregates_if_needed(self, force: bool = False) -> None:
+    def rebuild_aggregates_if_needed(self, force: bool = False, scope: str = "full") -> None:
         metadata = self.db.aggregate_metadata.find_one({"kind": "activity"})
 
         if not force and metadata and metadata.get("version") == composed(self).aggregates_version:
+            return
+
+        if not force and scope == "today":
+            target_dates = self._current_author_calendar_dates()
+            self.rebuild_aggregates_for_dates(target_dates[0], dates=target_dates)
+            self.db.aggregate_metadata.update_one(
+                {"kind": "activity"},
+                {
+                    "$set": {
+                        "kind": "activity",
+                        "version": composed(self).aggregates_version,
+                        "rebuiltAt": dt.datetime.now(dt.UTC),
+                        "rebuildScope": "today",
+                        "rebuildDates": target_dates,
+                    }
+                },
+                upsert=True,
+            )
+            composed(self).invalidate_activity_summary_cache(target_dates)
             return
 
         self._daily_consumed_microseconds_cache = {}
@@ -27,6 +46,22 @@ class ActivityAggregationService(MongoComposableMixin):
         )
         composed(self).invalidate_activity_summary_cache()
         self._daily_consumed_microseconds_cache = None
+
+    def _current_author_calendar_dates(self) -> list[str]:
+        now = dt.datetime.now(dt.UTC)
+        dates: set[str] = {now.date().isoformat()}
+
+        for profile in self.db.author_profiles.find({}, {"_id": 0, "timeZoneId": 1}):
+            time_zone_id = str(profile.get("timeZoneId") or "")
+
+            try:
+                zone = ZoneInfo(time_zone_id) if time_zone_id else dt.UTC
+            except ZoneInfoNotFoundError:
+                zone = dt.UTC
+
+            dates.add(now.astimezone(zone).date().isoformat())
+
+        return sorted(dates)
 
     def rebuild_aggregates_for_dates(
         self,
@@ -1012,7 +1047,6 @@ class ActivityAggregationService(MongoComposableMixin):
             "projectId": snapshot.get("projectId") or "",
             "date": snapshot.get("date") or "",
         }
-        self._apply_auto_break_to_deltas(key["author"], key["date"], deltas)
         current = self.db.daily_author_activity.find_one(key, {"_id": 0}) or {}
         hourly_activity = current.get("hourlyActivity") or _empty_hourly_activity()
         _merge_hourly_activity(hourly_activity, deltas.get("hourlyActivityDelta", []))
@@ -1031,7 +1065,6 @@ class ActivityAggregationService(MongoComposableMixin):
             deltas, "idleDeltaSeconds", "idleDeltaMicroseconds"
         )
         break_seconds = int(current.get("breakSeconds", 0)) + int(deltas.get("breakDeltaSeconds", 0))
-        auto_break_seconds = int(current.get("autoBreakSeconds", 0)) + int(deltas.get("autoBreakDeltaSeconds", 0))
         overtime_active_microseconds = _time_microseconds(
             current, "overtimeActiveSeconds", "overtimeActiveMicroseconds"
         ) + _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds")
@@ -1056,7 +1089,6 @@ class ActivityAggregationService(MongoComposableMixin):
                     "activeMicroseconds": active_microseconds,
                     "idleMicroseconds": idle_microseconds,
                     "breakSeconds": break_seconds,
-                    "autoBreakSeconds": auto_break_seconds,
                     "overtimeActiveMicroseconds": overtime_active_microseconds,
                     "activeSeconds": _seconds_from_microseconds(active_microseconds),
                     "idleSeconds": _seconds_from_microseconds(idle_microseconds),
@@ -1065,52 +1097,4 @@ class ActivityAggregationService(MongoComposableMixin):
             },
             upsert=True,
         )
-
-    def _apply_auto_break_to_deltas(self, raw_author: str, day_date: str, deltas: dict[str, Any]) -> None:
-        if not raw_author or not day_date:
-            return
-
-        profile = self.db.author_profiles.find_one(
-            {"rawAuthor": raw_author}, {"_id": 0, "autoBreakEnabled": 1, "autoBreakEffectiveDate": 1}
-        ) or {}
-
-        if not profile.get("autoBreakEnabled"):
-            return
-
-        effective_date = str(profile.get("autoBreakEffectiveDate") or "")
-
-        if not effective_date or day_date < effective_date:
-            return
-
-        idle_microseconds = _time_microseconds(deltas, "idleDeltaSeconds", "idleDeltaMicroseconds")
-
-        if idle_microseconds <= 0:
-            return
-
-        existing_break_seconds = 0
-
-        for item in self.db.daily_author_activity.find({"author": raw_author, "date": day_date}, {"_id": 0, "breakSeconds": 1}):
-            existing_break_seconds += int(item.get("breakSeconds", 0))
-
-        remaining_seconds = max(0, AUTO_BREAK_SECONDS - existing_break_seconds)
-
-        if remaining_seconds <= 0:
-            return
-
-        transfer_microseconds = min(idle_microseconds, remaining_seconds * MICROSECONDS_PER_SECOND)
-        transfer_seconds = _seconds_from_microseconds(transfer_microseconds)
-
-        if transfer_seconds <= 0:
-            return
-
-        deltas["idleDeltaMicroseconds"] = max(0, idle_microseconds - transfer_microseconds)
-        deltas["idleDeltaSeconds"] = _seconds_from_microseconds(deltas["idleDeltaMicroseconds"])
-        deltas["breakDeltaMicroseconds"] = _time_microseconds(
-            deltas, "breakDeltaSeconds", "breakDeltaMicroseconds"
-        ) + transfer_microseconds
-        deltas["breakDeltaSeconds"] = _seconds_from_microseconds(deltas["breakDeltaMicroseconds"])
-        deltas["autoBreakDeltaSeconds"] = int(deltas.get("autoBreakDeltaSeconds", 0)) + transfer_seconds
-        _move_hourly_idle_to_break(deltas.get("hourlyActivityDelta", []), transfer_seconds)
-
-
 

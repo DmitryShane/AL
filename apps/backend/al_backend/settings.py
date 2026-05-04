@@ -20,6 +20,7 @@ class Settings:
     admin_email: str
     admin_password: str
     avatar_cache_dir: Path
+    aggregate_version_rebuild_scope: str
 
 
 def load_settings() -> Settings:
@@ -46,4 +47,5 @@ def load_settings() -> Settings:
         admin_email=os.getenv("AL_ADMIN_EMAIL", "").strip(),
         admin_password=os.getenv("AL_ADMIN_PASSWORD", ""),
         avatar_cache_dir=avatar_cache_dir,
+        aggregate_version_rebuild_scope=os.getenv("AL_AGGREGATE_VERSION_REBUILD_SCOPE", "full").strip().lower(),
     )

@@ -2827,7 +2827,7 @@ def test_auto_break_disabled_keeps_idle_as_idle():
     assert daily.get("breakSeconds", 0) == 0
 
 
-def test_auto_break_moves_first_idle_hour_to_break():
+def test_auto_break_moves_first_idle_hour_to_break_in_summary_only():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
         {
@@ -2859,17 +2859,29 @@ def test_auto_break_moves_first_idle_hour_to_break():
     )
 
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
-    assert daily["idleSeconds"] == 3600
-    assert daily["breakSeconds"] == 3600
-    assert daily["autoBreakSeconds"] == 3600
-    assert sum(hour["idleSeconds"] for hour in daily["hourlyActivity"]) == 3600
-    assert sum(hour["breakSeconds"] for hour in daily["hourlyActivity"]) == 3600
+    assert daily["idleSeconds"] == 7200
+    assert daily.get("breakSeconds", 0) == 0
+    assert daily.get("autoBreakSeconds", 0) == 0
+    assert sum(hour["idleSeconds"] for hour in daily["hourlyActivity"]) == 7200
+    assert sum(hour.get("breakSeconds", 0) for hour in daily["hourlyActivity"]) == 0
+
+    report_page = repo.reports_page(start_date="2026-05-02", end_date="2026-05-02", author="Future Artist")
+    assert report_page["reports"][0]["idleDeltaSeconds"] == 7200
+    assert report_page["reports"][0].get("breakDeltaSeconds", 0) == 0
+
+    summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+    assert author["idleSeconds"] == 3600
+    assert author["breakSeconds"] == 3600
+    assert sum(hour["idleSeconds"] for hour in hourly) == 3600
+    assert sum(hour["breakSeconds"] for hour in hourly) == 3600
 
     repo.rebuild_aggregates_if_needed(force=True)
     rebuilt = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
-    assert rebuilt["idleSeconds"] == 3600
-    assert rebuilt["breakSeconds"] == 3600
-    assert rebuilt["autoBreakSeconds"] == 3600
+    assert rebuilt["idleSeconds"] == 7200
+    assert rebuilt.get("breakSeconds", 0) == 0
+    assert rebuilt.get("autoBreakSeconds", 0) == 0
 
 
 def test_auto_break_only_fills_remaining_legal_break():
@@ -2882,12 +2894,12 @@ def test_auto_break_only_fills_remaining_legal_break():
             "autoBreakEffectiveDate": "2026-05-02",
         }
     )
-    repo.db.daily_author_activity.insert_one(
+    repo.db.break_intervals.insert_one(
         {
-            "source": "telegram",
-            "author": "Future Artist",
-            "projectId": "",
-            "date": "2026-05-02",
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 5, 2, 7, 30, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 2, 8, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
             "breakSeconds": 1800,
         }
     )
@@ -2913,9 +2925,14 @@ def test_auto_break_only_fills_remaining_legal_break():
     )
 
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
-    assert daily["idleSeconds"] == 5400
-    assert daily["breakSeconds"] == 1800
-    assert daily["autoBreakSeconds"] == 1800
+    assert daily["idleSeconds"] == 7200
+    assert daily.get("breakSeconds", 0) == 0
+    assert daily.get("autoBreakSeconds", 0) == 0
+
+    summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    assert author["idleSeconds"] == 5400
+    assert author["breakSeconds"] == 3600
 
 
 def test_auto_break_waits_until_effective_date():

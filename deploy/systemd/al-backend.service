@@ -11,6 +11,7 @@ WorkingDirectory=__APP_DIR__/apps/backend
 EnvironmentFile=/etc/al/backend.env
 Environment=HOME=__APP_ROOT__
 Environment=UV_PYTHON_INSTALL_DIR=__APP_ROOT__/python
+Environment=AL_AGGREGATE_VERSION_REBUILD_SCOPE=today
 ExecStart=__APP_DIR__/apps/backend/.venv/bin/uvicorn al_backend.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5

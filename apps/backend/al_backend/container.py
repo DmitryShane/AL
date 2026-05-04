@@ -27,7 +27,7 @@ class BackendServices(
     AuthorStatusEventsService,
     ActivityAggregationService,
 ):
-    aggregates_version = 28
+    aggregates_version = 29
 
     def __init__(self, storage: MongoStorage, settings: Settings):
         self.storage = storage
@@ -35,6 +35,7 @@ class BackendServices(
         self.db = storage.db
         self.default_send_interval_seconds = settings.default_send_interval_seconds
         self.avatar_cache_dir = settings.avatar_cache_dir
+        self.aggregate_version_rebuild_scope = settings.aggregate_version_rebuild_scope
 
     def ping(self) -> bool:
         self.client.admin.command("ping")
@@ -59,7 +60,7 @@ class BackendContainer:
 
     def startup(self) -> None:
         self.indexes.ensure_indexes()
-        self.activity_aggregation.rebuild_aggregates_if_needed()
+        self.activity_aggregation.rebuild_aggregates_if_needed(scope=self.activity_aggregation.aggregate_version_rebuild_scope)
         self.auth.ensure_bootstrap_site_admin(self.settings.admin_email, self.settings.admin_password)
 
     def close(self) -> None:

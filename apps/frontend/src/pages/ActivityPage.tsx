@@ -131,35 +131,27 @@ export function ActivityPage({
     limit: reportsPageSize,
     page: reportsPage
   }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportHourFilter, reportsPageSize, reportsPage]);
-  const hasVisibleReports = !reportsLoading && !reportsError && reports.length > 0;
-  const visibleActivityMixItems = hasVisibleReports ? activityMixItems : [];
-  const visibleSavedPrefabItems = hasVisibleReports ? savedPrefabItems : [];
-  const visibleOvertimeActivityMixItems = hasVisibleReports ? overtimeActivityMixItems : [];
-  const visibleOvertimeSavedPrefabItems = hasVisibleReports ? overtimeSavedPrefabItems : [];
-  const visibleActivityMixGroups = hasVisibleReports ? activityMixGroups : [];
-  const visibleSavedPrefabGroups = hasVisibleReports ? savedPrefabGroups : [];
-  const visibleOvertimeActivityMixGroups = hasVisibleReports ? overtimeActivityMixGroups : [];
-  const visibleOvertimeSavedPrefabGroups = hasVisibleReports ? overtimeSavedPrefabGroups : [];
-
   useEffect(() => {
     let ignore = false;
 
     async function loadHourly() {
       const cachedRows = hourlyCacheRef.current[hourlyCacheKey];
+      let hasCachedRows = false;
 
       if (cachedRows) {
         setHourlyRows(cachedRows);
-        return;
+        hasCachedRows = true;
       }
 
       const persistedRows = loadCachedActivityHourly(hourlyCacheKey);
 
-      if (persistedRows) {
+      if (!cachedRows && persistedRows) {
         hourlyCacheRef.current = {
           ...hourlyCacheRef.current,
           [hourlyCacheKey]: persistedRows
         };
         setHourlyRows(persistedRows);
+        hasCachedRows = true;
       }
 
       const params = new URLSearchParams({
@@ -192,7 +184,9 @@ export function ActivityPage({
         setHourlyRows(payload.hourlyActivityByAuthor);
       } catch {
         if (!ignore) {
-          setHourlyRows(summary.hourlyActivityByAuthor);
+          if (summary.hourlyActivityByAuthor.length || !hasCachedRows) {
+            setHourlyRows(summary.hourlyActivityByAuthor);
+          }
         }
       }
     }
@@ -453,21 +447,21 @@ export function ActivityPage({
               <BreakdownPanel
                 key={`${author.rawAuthor}-activity-mix`}
                 title="Activity Mix"
-                items={visibleActivityMixItems}
-                groups={visibleActivityMixGroups}
+                items={activityMixItems}
+                groups={activityMixGroups}
               />
               <BreakdownPanel
                 key={`${author.rawAuthor}-saved-files`}
                 title="Saved Files"
-                items={visibleSavedPrefabItems}
-                groups={visibleSavedPrefabGroups}
+                items={savedPrefabItems}
+                groups={savedPrefabGroups}
               />
               <OvertimeBreakdownPanel
                 key={`${author.rawAuthor}-overtime`}
-                activityItems={visibleOvertimeActivityMixItems}
-                savedItems={visibleOvertimeSavedPrefabItems}
-                activityGroups={visibleOvertimeActivityMixGroups}
-                savedGroups={visibleOvertimeSavedPrefabGroups}
+                activityItems={overtimeActivityMixItems}
+                savedItems={overtimeSavedPrefabItems}
+                activityGroups={overtimeActivityMixGroups}
+                savedGroups={overtimeSavedPrefabGroups}
               />
             </div>
 
