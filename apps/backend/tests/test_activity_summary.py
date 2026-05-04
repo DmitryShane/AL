@@ -1893,6 +1893,19 @@ def test_fresh_normal_plugin_report_without_telegram_offline_keeps_author_online
     assert "stalePresence" not in author
 
 
+def test_stale_plugin_report_before_telegram_online_does_not_create_reports_stopped():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC))
+
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC))
+
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "telegram"
+    assert repo.db.status_events.count_documents({"rawAuthor": "Future Artist", "reason": "reports_stopped"}) == 0
+    assert repo.db.report_rows.count_documents({"author": "Future Artist", "source": "status", "statusReason": "reports_stopped"}) == 0
+
+
 def test_telegram_offline_after_fresh_plugin_report_marks_author_stale():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
@@ -1908,6 +1921,14 @@ def test_telegram_offline_after_fresh_plugin_report_marks_author_stale():
 def test_stale_presence_reports_when_unity_reports_stop_without_telegram_signoff():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "telegramUsername": "future_artist",
+            "date": "2026-04-28",
+            "startedAt": dt.datetime(2026, 4, 28, 16, 0, tzinfo=dt.UTC),
+        }
+    )
     _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC))
 
     author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC))
@@ -1964,6 +1985,14 @@ def test_regular_date_still_applies_reports_stopped_when_it_is_author_local_toda
             "displayName": "Future Artist",
             "telegramUsername": "future_artist",
             "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "telegramUsername": "future_artist",
+            "date": "2026-04-28",
+            "startedAt": dt.datetime(2026, 4, 28, 16, 0, tzinfo=dt.UTC),
         }
     )
     repo.db.daily_author_activity.insert_one(
@@ -2155,7 +2184,7 @@ def test_with_author_presence_stale_presence_both_when_telegram_offline_and_repo
     assert _author_status(repo, dt.datetime(2026, 4, 28, 18, 11, tzinfo=dt.UTC)) == "stale"
 
 
-def test_overtime_report_after_telegram_offline_keeps_author_gray_offline():
+def test_overtime_report_after_telegram_offline_keeps_author_online():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
     _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC))
@@ -2171,8 +2200,8 @@ def test_overtime_report_after_telegram_offline_keeps_author_gray_offline():
     )
 
     author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 11, tzinfo=dt.UTC))
-    assert author["status"] == "stale"
-    assert author["stalePresence"] == "telegram"
+    assert author["status"] == "online"
+    assert "stalePresence" not in author
 
 
 def test_overtime_report_after_telegram_offline_expires_with_stale_threshold():

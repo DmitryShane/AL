@@ -948,8 +948,12 @@ def _with_author_presence(
             seconds_since_overtime = max(0, int((presence_clock - overtime_received_at).total_seconds()))
             forced_offline = seconds_since_overtime > stale_threshold_seconds
 
-    if not track_plugin_staleness:
-        forced_offline = True
+    if not track_plugin_staleness and not active_meeting and not (presence_override and presence_override.get("offlineAt")):
+        if last_received_at:
+            seconds_since_report = max(0, int((presence_clock - last_received_at).total_seconds()))
+            forced_offline = seconds_since_report > stale_threshold_seconds
+        else:
+            forced_offline = True
 
     if active_meeting:
         forced_offline = False

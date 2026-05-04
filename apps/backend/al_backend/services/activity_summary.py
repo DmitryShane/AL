@@ -1637,11 +1637,7 @@ class ActivitySummaryService(MongoComposableMixin):
             if started_at:
                 return True
 
-        if _author_has_summary_activity(author):
-            return True
-
-        report_query = {"author": raw_author, "date": anchor_day, "source": {"$nin": ["telegram", "discord"]}}
-        return bool(self.db.report_rows.find_one(report_query, {"_id": 0}))
+        return False
 
     def analytics_summary(self, period: str = "7d") -> dict[str, Any]:
         year = dt.date.today().year
