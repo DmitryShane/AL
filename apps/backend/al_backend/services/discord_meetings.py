@@ -1,9 +1,29 @@
 from __future__ import annotations
 
-from ..activity_math import *
+import datetime as dt
+from typing import Any
+
+from pymongo import DESCENDING
+
+from ..activity_math import (
+    _coerce_datetime,
+    _empty_event_deltas,
+    _iso,
+    _looks_like_missing_transcript_summary,
+    _looks_like_no_work_content_summary,
+    _meeting_audio_quality_status,
+    _new_id,
+    _normalize_discord_user_id,
+    _normalize_telegram_username,
+    _parse_timestamp,
+    _telegram_event_date,
+    _valid_time_zone_id,
+)
+from ..backend_composable_host import composed
+from ..mongo_composable import MongoComposableMixin
 
 
-class DiscordMeetingService:
+class DiscordMeetingService(MongoComposableMixin):
     def record_discord_voice_event(
         self,
         discord_user_id: str,
@@ -26,7 +46,7 @@ class DiscordMeetingService:
         event_date = _telegram_event_date(event_time, time_zone_id)
         normalized_discord_username = str(discord_username or profile.get("discordUsername") or "").strip()
         event_type = event_type if event_type in {"join", "leave", "reconcile"} else "reconcile"
-        self.invalidate_activity_summary_cache([event_date])
+        composed(self).invalidate_activity_summary_cache([event_date])
 
         self.db.meeting_events.insert_one(
             {
@@ -177,7 +197,9 @@ class DiscordMeetingService:
         channel_id: str | None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        if hasattr(self, "_should_materialize_aggregate_date") and not self._should_materialize_aggregate_date(event_date, raw_author):
+        should_materialize = getattr(self, "_should_materialize_aggregate_date", None)
+
+        if callable(should_materialize) and not should_materialize(event_date, raw_author):
             return
 
         deltas = _empty_event_deltas()
@@ -234,12 +256,12 @@ class DiscordMeetingService:
         event_date = _telegram_event_date(solo_start, time_zone_id)
         normalized_discord_username = str(discord_username or profile.get("discordUsername") or "").strip()
         auto_afk_event_id = f"{normalized_discord_user_id}:{solo_start.isoformat()}"
-        threshold_seconds = int(threshold_seconds or self.get_discord_settings()["meetingAutoAfkTimeoutSeconds"])
+        threshold_seconds = int(threshold_seconds or composed(self).get_discord_settings()["meetingAutoAfkTimeoutSeconds"])
 
         if self.db.meeting_events.find_one({"autoAfkEventId": auto_afk_event_id}, {"_id": 1}):
             return {"ok": True, "status": "auto_afk_already_recorded"}
 
-        self.invalidate_activity_summary_cache([event_date])
+        composed(self).invalidate_activity_summary_cache([event_date])
         meeting_result: dict[str, Any] = {}
         session = self.db.meeting_sessions.find_one({"discordUserId": normalized_discord_user_id})
 
@@ -409,7 +431,7 @@ class DiscordMeetingService:
         started = _parse_timestamp(started_at)
         ended = _parse_timestamp(ended_at)
         duration_seconds = max(0, int((ended - started).total_seconds()))
-        settings = self.get_discord_settings()
+        settings = composed(self).get_discord_settings()
         audio_stats = {
             "audioFrameCount": max(0, int(audio_frame_count or 0)),
             "nonSilentFrameCount": max(0, int(non_silent_frame_count or 0)),

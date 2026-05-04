@@ -4,6 +4,8 @@ import datetime as dt
 
 from ..activity_math import *
 from ..author_avatar_cache import ensure_author_avatar_cached, remove_author_avatar_cache_file
+from ..backend_composable_host import composed
+from ..mongo_composable import MongoComposableMixin
 
 _BULK_ACTIVITY_PRESET_DAY_SPAN = {"1d": 0, "2d": 1, "3d": 2, "week": 6, "month": 29}
 
@@ -15,22 +17,22 @@ def utc_inclusive_range_for_bulk_activity_preset(preset: str) -> tuple[str, str]
     return start, today.isoformat()
 
 
-class AuthorRepository:
+class AuthorRepository(MongoComposableMixin):
     def list_authors(self) -> list[str]:
-        alias_sources = {item.get("sourceRawAuthor") for item in self.author_aliases()}
+        alias_sources = {item.get("sourceRawAuthor") for item in composed(self).author_aliases()}
         authors = set()
 
         for author in self.db.activity_snapshots.distinct("author"):
             if author:
-                authors.add(self.resolve_author_alias(author))
+                authors.add(composed(self).resolve_author_alias(author))
 
         for author in self.db.daily_author_activity.distinct("author"):
             if author:
-                authors.add(self.resolve_author_alias(author))
+                authors.add(composed(self).resolve_author_alias(author))
 
         for author in self.db.raw_activity_events.distinct("author"):
             if author:
-                authors.add(self.resolve_author_alias(author))
+                authors.add(composed(self).resolve_author_alias(author))
 
         for author in self.db.author_profiles.distinct("rawAuthor"):
             if author and author not in alias_sources:
@@ -40,7 +42,7 @@ class AuthorRepository:
 
     def author_profiles(self) -> list[dict[str, Any]]:
         known_authors = self.list_authors()
-        profiles = self._profiles_by_raw_author()
+        profiles = composed(self)._profiles_by_raw_author()
         profiles_by_normalized_key = {_normalize_author(k): v for k, v in profiles.items() if k}
         result = []
 
@@ -80,7 +82,7 @@ class AuthorRepository:
         return result
 
     def refresh_author_github_avatar(self, raw_author: str) -> dict[str, Any]:
-        resolved = self.resolve_author_alias(_normalize_author(raw_author))
+        resolved = composed(self).resolve_author_alias(_normalize_author(raw_author))
         profile = self.db.author_profiles.find_one(
             {"rawAuthor": resolved}, {"_id": 0, "githubUsername": 1, "github_username": 1}
         ) or {}
@@ -88,7 +90,7 @@ class AuthorRepository:
         if not _github_username_for_avatar_fetch(resolved, profile):
             return {"ok": False, "error": "GitHub username is not set for this profile"}
 
-        cadence = self.get_avatar_refresh_cadence()
+        cadence = composed(self).get_avatar_refresh_cadence()
         path, _ = ensure_author_avatar_cached(
             self.db,
             getattr(self, "avatar_cache_dir", None),
@@ -104,7 +106,7 @@ class AuthorRepository:
 
     def refresh_all_author_github_avatars(self) -> dict[str, Any]:
         cache_dir = getattr(self, "avatar_cache_dir", None)
-        cadence = self.get_avatar_refresh_cadence()
+        cadence = composed(self).get_avatar_refresh_cadence()
         attempted = 0
         refreshed = 0
         failed: list[str] = []
@@ -115,7 +117,7 @@ class AuthorRepository:
             if not raw_author or not _github_username_for_avatar_fetch(raw_author, doc):
                 continue
 
-            resolved = self.resolve_author_alias(_normalize_author(raw_author))
+            resolved = composed(self).resolve_author_alias(_normalize_author(raw_author))
             attempted += 1
             path, _ = ensure_author_avatar_cached(
                 self.db,
@@ -395,7 +397,7 @@ class AuthorRepository:
             operation.setdefault("$unset", {})["avatarMimeType"] = ""
 
         self.db.author_profiles.update_one({"rawAuthor": raw_author}, operation, upsert=True)
-        self.invalidate_activity_summary_cache()
+        composed(self).invalidate_activity_summary_cache()
         merged_profile = {**existing_profile, **update}
         if operation.get("$unset", {}).get("avatarRefreshedAt") == "":
             merged_profile.pop("avatarRefreshedAt", None)
@@ -457,7 +459,7 @@ class AuthorRepository:
             counts["breakEvents"] += self.db.break_events.delete_many({"telegramUsername": telegram_username}).deleted_count
             counts["breakSessions"] += self.db.break_sessions.delete_many({"telegramUsername": telegram_username}).deleted_count
 
-        self.invalidate_activity_summary_cache()
+        composed(self).invalidate_activity_summary_cache()
         return {"ok": True, "author": normalized_author, "deleted": counts}
 
     def delete_author_data_for_date_range(self, raw_author: str, start_date: str, end_date: str) -> dict[str, Any]:
@@ -585,7 +587,7 @@ class AuthorRepository:
 
         counts["meetingSummaries"] = meeting_summaries_deleted
 
-        rebuild_result = self.rebuild_aggregates_for_dates(
+        rebuild_result = composed(self).rebuild_aggregates_for_dates(
             start_date=start_date,
             end_date=end_date,
             authors=[normalized_author],
@@ -648,7 +650,7 @@ class AuthorRepository:
         counts["intervalSettings"] = self.db.interval_settings.delete_many({"kind": "author", "author": normalized_author}).deleted_count
         counts["calendarMarks"] = self.db.calendar_marks.delete_many({"rawAuthor": normalized_author}).deleted_count
 
-        self.invalidate_activity_summary_cache()
+        composed(self).invalidate_activity_summary_cache()
         return {"ok": True, "author": normalized_author, "deleted": counts}
 
 

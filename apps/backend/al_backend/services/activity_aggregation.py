@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from ..activity_math import *
+from ..backend_composable_host import composed
+from ..mongo_composable import MongoComposableMixin
 
 
-class ActivityAggregationService:
+class ActivityAggregationService(MongoComposableMixin):
     def rebuild_aggregates_if_needed(self, force: bool = False) -> None:
         metadata = self.db.aggregate_metadata.find_one({"kind": "activity"})
 
-        if not force and metadata and metadata.get("version") == self.aggregates_version:
+        if not force and metadata and metadata.get("version") == composed(self).aggregates_version:
             return
 
         self._daily_consumed_microseconds_cache = {}
@@ -20,10 +22,10 @@ class ActivityAggregationService:
 
         self.db.aggregate_metadata.update_one(
             {"kind": "activity"},
-            {"$set": {"kind": "activity", "version": self.aggregates_version, "rebuiltAt": dt.datetime.now(dt.UTC)}},
+            {"$set": {"kind": "activity", "version": composed(self).aggregates_version, "rebuiltAt": dt.datetime.now(dt.UTC)}},
             upsert=True,
         )
-        self.invalidate_activity_summary_cache()
+        composed(self).invalidate_activity_summary_cache()
         self._daily_consumed_microseconds_cache = None
 
     def rebuild_aggregates_for_dates(
@@ -34,7 +36,7 @@ class ActivityAggregationService:
         dates: list[str] | tuple[str, ...] | set[str] | None = None,
     ) -> dict[str, Any]:
         target_dates = self._aggregate_rebuild_dates(start_date, end_date, dates)
-        target_authors = {self.resolve_author_alias(str(author or "Unknown User")) for author in (authors or []) if str(author or "").strip()}
+        target_authors = {composed(self).resolve_author_alias(str(author or "Unknown User")) for author in (authors or []) if str(author or "").strip()}
         scoped_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
         raw_author_query = self._aggregate_rebuild_query(target_dates, target_authors, "rawAuthor")
         deleted_report_rows = self.db.report_rows.delete_many(scoped_query).deleted_count
@@ -65,7 +67,7 @@ class ActivityAggregationService:
             self._daily_consumed_microseconds_cache = None
 
         state_count = self._persist_aggregate_day_state(target_dates, target_authors)
-        self.invalidate_activity_summary_cache(target_dates)
+        composed(self).invalidate_activity_summary_cache(target_dates)
         return {
             "ok": True,
             "dates": target_dates,
@@ -126,7 +128,7 @@ class ActivityAggregationService:
 
     def purge_editor_plugin_activity_for_author_day(self, raw_author: str, day_date: str) -> dict[str, Any]:
         reminder_raw_author = str(raw_author or "").strip()
-        author = self.resolve_author_alias(reminder_raw_author or "Unknown User")
+        author = composed(self).resolve_author_alias(reminder_raw_author or "Unknown User")
         day_date = str(day_date or "").strip()
 
         if not author or author == "Unknown User" or not day_date:
@@ -265,7 +267,7 @@ class ActivityAggregationService:
             if not _has_time_delta(deltas):
                 continue
 
-            resolved_author = self.resolve_author_alias(event.get("author") or "Unknown User")
+            resolved_author = composed(self).resolve_author_alias(event.get("author") or "Unknown User")
             orphan_report_rows.append(
                 {
                     "source": event.get("source"),
@@ -299,7 +301,7 @@ class ActivityAggregationService:
 
             author = str(batch.get("author") or "Unknown User")
             cutoff = last_report_time_by_author.get(author)
-            rows = self._build_event_batch_report_rows(batch, batch_delta_items_by_batch_id.get(batch_id, []), cutoff)
+            rows = composed(self)._build_event_batch_report_rows(batch, batch_delta_items_by_batch_id.get(batch_id, []), cutoff)
             materialized_rows = [
                 row
                 for row in rows
@@ -323,7 +325,7 @@ class ActivityAggregationService:
 
             received_at = _coerce_datetime(event.get("createdAt")) or event_time
             time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
-            self._insert_telegram_report_row(
+            composed(self)._insert_telegram_report_row(
                 str(event.get("rawAuthor") or "Unknown User"),
                 str(event.get("telegramUsername") or ""),
                 str(event.get("eventType") or "telegram"),
@@ -342,7 +344,7 @@ class ActivityAggregationService:
 
             received_at = _coerce_datetime(event.get("createdAt")) or event_time
             time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
-            self._insert_discord_meeting_report_row(
+            composed(self)._insert_discord_meeting_report_row(
                 str(event.get("rawAuthor") or "Unknown User"),
                 str(event.get("discordUserId") or ""),
                 str(event.get("discordUsername") or ""),
@@ -356,7 +358,7 @@ class ActivityAggregationService:
                 str(event.get("channelId") or ""),
             )
 
-        self._materialize_status_report_rows()
+        composed(self)._materialize_status_report_rows()
 
     def _aggregate_rebuild_dates(
         self,
@@ -411,7 +413,7 @@ class ActivityAggregationService:
 
         target_authors = getattr(self, "_aggregate_rebuild_target_authors", None)
 
-        if target_authors and self.resolve_author_alias(author or "Unknown User") not in target_authors:
+        if target_authors and composed(self).resolve_author_alias(author or "Unknown User") not in target_authors:
             return False
 
         return True
@@ -426,7 +428,7 @@ class ActivityAggregationService:
             if state_date not in target_dates:
                 continue
 
-            state_author = self.resolve_author_alias(str(state.get("author") or "Unknown User"))
+            state_author = composed(self).resolve_author_alias(str(state.get("author") or "Unknown User"))
 
             if target_authors and state_author not in target_authors:
                 continue
@@ -451,8 +453,8 @@ class ActivityAggregationService:
 
     def _apply_snapshot_to_aggregates(self, snapshot: dict[str, Any]) -> None:
         snapshot = dict(snapshot)
-        snapshot["author"] = self.resolve_author_alias(snapshot.get("author") or "Unknown User")
-        self.update_author_time_zone(snapshot.get("author") or "Unknown User", snapshot.get("timeZoneId"), snapshot.get("timeZoneDisplayName"))
+        snapshot["author"] = composed(self).resolve_author_alias(snapshot.get("author") or "Unknown User")
+        composed(self).update_author_time_zone(snapshot.get("author") or "Unknown User", snapshot.get("timeZoneId"), snapshot.get("timeZoneDisplayName"))
         session_key = _session_key(snapshot)
         previous = self.db.aggregate_session_state.find_one({"_id": session_key}) or {}
         deltas = _build_deltas(snapshot, previous.get("snapshot", {}))
@@ -482,7 +484,7 @@ class ActivityAggregationService:
         received_at = _coerce_datetime(snapshot.get("receivedAt")) or dt.datetime.now(dt.UTC)
         report_time = _coerce_datetime(snapshot.get("recordedAt") or snapshot.get("lastRecordedAt") or snapshot.get("receivedAt")) or received_at
         if materialize and _has_active_or_overtime_delta(deltas):
-            self._schedule_telegram_break_activity_prompt_if_needed(
+            composed(self)._schedule_telegram_break_activity_prompt_if_needed(
                 str(snapshot.get("author") or "Unknown User"),
                 str(snapshot.get("date") or ""),
                 str(snapshot.get("source") or ""),
@@ -490,7 +492,7 @@ class ActivityAggregationService:
             )
 
         if materialize and _has_time_delta(deltas):
-            self._schedule_telegram_online_prompt_if_needed(
+            composed(self)._schedule_telegram_online_prompt_if_needed(
                 str(snapshot.get("author") or "Unknown User"),
                 str(snapshot.get("date") or ""),
                 str(snapshot.get("source") or ""),
@@ -559,8 +561,8 @@ class ActivityAggregationService:
 
     def _apply_raw_event_to_aggregates(self, event: dict[str, Any]) -> dict[str, Any]:
         event = dict(event)
-        event["author"] = self.resolve_author_alias(event.get("author") or "Unknown User")
-        self.update_author_time_zone(event.get("author") or "Unknown User", event.get("timeZoneId"), event.get("timeZoneDisplayName"))
+        event["author"] = composed(self).resolve_author_alias(event.get("author") or "Unknown User")
+        composed(self).update_author_time_zone(event.get("author") or "Unknown User", event.get("timeZoneId"), event.get("timeZoneDisplayName"))
         state_key = _raw_event_session_key(event)
         previous = self.db.aggregate_session_state.find_one({"_id": state_key}) or {}
         state = dict(previous.get("state", {}))
@@ -593,7 +595,7 @@ class ActivityAggregationService:
         is_activity = raw_is_activity and (source_is_focused is not False or event_type == "focus")
         consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
         overtime_window = self._overtime_window_for_event(event)
-        idle_threshold_seconds = self.get_idle_threshold_for_author(str(event.get("author") or "Unknown User"))
+        idle_threshold_seconds = composed(self).get_idle_threshold_for_author(str(event.get("author") or "Unknown User"))
         received_at = _coerce_datetime(event.get("receivedAt"))
         status_context = self._status_interval_context_for_event(event, occurred_at, received_at)
         status_offline_at = status_context.get("offlineAt") if status_context else None

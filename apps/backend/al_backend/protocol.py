@@ -78,8 +78,12 @@ def decode_alr1(private_key_pem: str, encrypted_packet: str) -> DecodedReport:
     if offset != len(packet):
         raise ValueError("Unexpected trailing packet data")
 
-    private_key = serialization.load_pem_private_key(private_key_pem.encode("utf-8"), password=None)
-    key_material = private_key.decrypt(encrypted_key, padding.PKCS1v15())
+    private_key_candidate = serialization.load_pem_private_key(private_key_pem.encode("utf-8"), password=None)
+
+    if not isinstance(private_key_candidate, rsa.RSAPrivateKey):
+        raise ValueError("ALR1 requires an RSA PEM private key")
+
+    key_material = private_key_candidate.decrypt(encrypted_key, padding.PKCS1v15())
 
     if len(key_material) != 64:
         raise ValueError("Unexpected decrypted key length")

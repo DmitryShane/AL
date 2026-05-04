@@ -412,7 +412,8 @@ def save_private_chat(backend_url: str, bot_secret: str, telegram_username_value
 
 
 def meeting_summary_chat_id(default_chat_id: int, notification: dict[str, Any]) -> int:
-    recipient = notification.get("recipient") if isinstance(notification.get("recipient"), dict) else {}
+    raw_recipient = notification.get("recipient")
+    recipient: dict[str, Any] = raw_recipient if isinstance(raw_recipient, dict) else {}
 
     if recipient.get("kind") == "private" and recipient.get("chatId"):
         return int(recipient["chatId"])
@@ -445,7 +446,8 @@ def _format_meeting_summary_participant_mentions(names: list[str]) -> str:
 
 def format_meeting_summary_message(notification: dict[str, Any], summary_text: str) -> str:
     started_at = format_meeting_summary_date(str(notification.get("startedAt") or ""))
-    participants = notification.get("participantNames") if isinstance(notification.get("participantNames"), list) else []
+    raw_participants = notification.get("participantNames")
+    participants = raw_participants if isinstance(raw_participants, list) else []
     participants_text = _format_meeting_summary_participant_mentions([str(item) for item in participants])
 
     return (

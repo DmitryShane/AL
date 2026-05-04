@@ -513,7 +513,7 @@ class MeetingAudioSink(voice_recv.AudioSink):
     def wants_opus(self) -> bool:
         return False
 
-    def write(self, user: discord.User | None, data: Any) -> None:
+    def write(self, user: discord.Member | discord.User | None, data: Any) -> None:
         with self._lock:
             self.frames_written += 1
 
@@ -586,7 +586,7 @@ class MeetingAudioSink(voice_recv.AudioSink):
         finally:
             self._delete_track_files()
 
-    def _track_for(self, user: discord.User) -> UserPcmTrack:
+    def _track_for(self, user: discord.Member | discord.User) -> UserPcmTrack:
         user_id = int(user.id)
         track = self.tracks.get(user_id)
 

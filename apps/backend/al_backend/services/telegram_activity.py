@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from ..activity_math import *
+from ..backend_composable_host import composed
+from ..mongo_composable import MongoComposableMixin
 
 
-class TelegramActivityService:
+class TelegramActivityService(MongoComposableMixin):
     def record_break_event(
         self,
         telegram_username: str,
@@ -24,7 +26,7 @@ class TelegramActivityService:
         raw_author = profile["rawAuthor"]
         time_zone_id = _valid_time_zone_id(profile.get("timeZoneId")) or "UTC"
         event_date = _telegram_event_date(event_time, time_zone_id)
-        self.invalidate_activity_summary_cache([event_date])
+        composed(self).invalidate_activity_summary_cache([event_date])
         self.db.break_events.insert_one(
             {
                 "telegramUsername": normalized_telegram,
@@ -428,7 +430,7 @@ class TelegramActivityService:
             if not raw_author or not day_date or not anchor:
                 continue
 
-            delay_seconds = self.get_telegram_online_prompt_delay_seconds()
+            delay_seconds = composed(self).get_telegram_online_prompt_delay_seconds()
 
             if (now - anchor).total_seconds() < delay_seconds:
                 continue
@@ -602,7 +604,7 @@ class TelegramActivityService:
             recording_id = str(doc.get("recordingId") or "")
 
             if recording_id:
-                self._update_meeting_recording_pipeline_status(recording_id, "telegram_claimed", updated_at=now)
+                composed(self)._update_meeting_recording_pipeline_status(recording_id, "telegram_claimed", updated_at=now)
 
             notifications.append(
                 {
@@ -620,7 +622,7 @@ class TelegramActivityService:
         return notifications
 
     def _meeting_summary_recipient(self) -> dict[str, Any]:
-        recipient = self.get_discord_settings()["meetingSummaryRecipient"]
+        recipient = composed(self).get_discord_settings()["meetingSummaryRecipient"]
 
         if recipient == "work_chat":
             return {"kind": "work_chat"}
@@ -653,7 +655,7 @@ class TelegramActivityService:
         )
 
         if summary and summary.get("recordingId"):
-            self._update_meeting_recording_pipeline_status(str(summary["recordingId"]), "telegram_sent", updated_at=now)
+            composed(self)._update_meeting_recording_pipeline_status(str(summary["recordingId"]), "telegram_sent", updated_at=now)
 
         return {"ok": True}
 
@@ -710,7 +712,7 @@ class TelegramActivityService:
 
         if action == "dismiss":
             day_date = str(reminder.get("date") or "")
-            purge_result = self.purge_editor_plugin_activity_for_author_day(raw_author, day_date)
+            purge_result = composed(self).purge_editor_plugin_activity_for_author_day(raw_author, day_date)
             self.db.telegram_online_prompts.update_one(
                 {"reminderId": reminder_id},
                 {
@@ -886,7 +888,9 @@ class TelegramActivityService:
         status: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        if hasattr(self, "_should_materialize_aggregate_date") and not self._should_materialize_aggregate_date(event_date, raw_author):
+        materialize_predicate = getattr(composed(self), "_should_materialize_aggregate_date", None)
+
+        if callable(materialize_predicate) and not materialize_predicate(event_date, raw_author):
             return
 
         deltas = _empty_event_deltas()
@@ -934,7 +938,7 @@ class TelegramActivityService:
         received_at = _coerce_datetime(received_at) or transition_at
         normalized_time_zone_id = _valid_time_zone_id(time_zone_id) or _author_configured_time_zone_id(raw_author) or "UTC"
         event_date = _telegram_event_date(transition_at, normalized_time_zone_id)
-        self.invalidate_activity_summary_cache([event_date])
+        composed(self).invalidate_activity_summary_cache([event_date])
         event = {
             "rawAuthor": raw_author,
             "date": event_date,
@@ -1010,7 +1014,7 @@ class TelegramActivityService:
                 upsert=True,
             )
 
-        if author.get("status") == "online" and previous_status == "offline" and self.get_plugin_ingest_enabled():
+        if author.get("status") == "online" and previous_status == "offline" and composed(self).get_plugin_ingest_enabled():
             transition_at = (_coerce_datetime(author.get("lastReceivedAt")) or now) + dt.timedelta(microseconds=1)
             self.record_status_event(raw_author, "online", transition_at, time_zone_id, "reports_resumed")
             self.db.status_states.update_one(
@@ -1044,7 +1048,9 @@ class TelegramActivityService:
         if event_type not in {"offline", "online"}:
             return
 
-        if hasattr(self, "_should_materialize_aggregate_date") and not self._should_materialize_aggregate_date(event_date, raw_author):
+        materialize_predicate = getattr(composed(self), "_should_materialize_aggregate_date", None)
+
+        if callable(materialize_predicate) and not materialize_predicate(event_date, raw_author):
             return
 
         self.db.report_rows.delete_many(
@@ -1111,7 +1117,7 @@ class TelegramActivityService:
 
     def _break_buckets_for_daily_items(self, daily_items: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, int]]]:
         author_dates = {
-            (item.get("author") or "Unknown User", item.get("date") or "")
+            (str(item.get("author") or "Unknown User"), str(item.get("date") or ""))
             for item in daily_items
             if item.get("date")
         }
@@ -1163,7 +1169,7 @@ class TelegramActivityService:
         self, daily_items: list[dict[str, Any]], now: dt.datetime | None = None
     ) -> dict[tuple[str, str], list[dict[str, int]]]:
         author_dates = {
-            (item.get("author") or "Unknown User", item.get("date") or "")
+            (str(item.get("author") or "Unknown User"), str(item.get("date") or ""))
             for item in daily_items
             if item.get("date")
         }
@@ -1377,8 +1383,8 @@ class TelegramActivityService:
         meeting_buckets = meeting_buckets if meeting_buckets is not None else {}
         totals.setdefault("meetingSeconds", 0)
         for session in self.db.day_sessions.find({}, {"_id": 0}):
-            raw_author = session.get("rawAuthor") or "Unknown User"
-            day_date = session.get("date") or ""
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            day_date = str(session.get("date") or "")
             started_at = _coerce_datetime(session.get("startedAt"))
 
             if not day_date or not started_at:
@@ -1392,6 +1398,7 @@ class TelegramActivityService:
             live_day_seconds = int(session.get("daySeconds", 0))
 
             is_open_day_over_cap = False
+            uncapped_live_day_seconds = 0
 
             if not ended_at:
                 uncapped_live_day_seconds = max(0, int((now - started_at).total_seconds()))
@@ -1444,7 +1451,7 @@ class TelegramActivityService:
         meeting_bucket_keys_from_daily_items = set(meeting_buckets)
 
         for interval in self.db.meeting_intervals.find(meeting_query, {"_id": 0}):
-            raw_author = interval.get("rawAuthor") or "Unknown User"
+            raw_author = str(interval.get("rawAuthor") or "Unknown User")
             time_zone_id = _author_time_zone_id(raw_author, profiles, interval.get("timeZoneId"))
             meeting_dates = _meeting_interval_scope_dates(start_date, end_date, date_mode, now, time_zone_id)
 

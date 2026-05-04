@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from ..activity_math import *
+from ..backend_composable_host import composed
+from ..mongo_composable import MongoComposableMixin
 
 
-class ActivitySummaryService:
+class ActivitySummaryService(MongoComposableMixin):
     SUMMARY_CACHE_TTL_SECONDS = 5
     REPORTS_PAGE_SCAN_MULTIPLIER = 5
     REPORTS_PAGE_SCAN_FLOOR = 50
@@ -48,12 +50,12 @@ class ActivitySummaryService:
             "workWindowSeconds": 0,
         }
 
-        profiles = self._profiles_by_raw_author()
+        profiles = composed(self)._profiles_by_raw_author()
         now = dt.datetime.now(dt.UTC)
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
         if author:
-            query["author"] = self.resolve_author_alias(author)
+            query["author"] = composed(self).resolve_author_alias(author)
 
         if source:
             query["source"] = source
@@ -102,12 +104,12 @@ class ActivitySummaryService:
         author: str | None = None,
         source: str | None = None,
     ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dt.datetime]:
-        profiles = self._profiles_by_raw_author()
+        profiles = composed(self)._profiles_by_raw_author()
         now = dt.datetime.now(dt.UTC)
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
         if author:
-            query["author"] = self.resolve_author_alias(author)
+            query["author"] = composed(self).resolve_author_alias(author)
 
         if source:
             query["source"] = source
@@ -348,7 +350,7 @@ class ActivitySummaryService:
         presence_alerts_for_selected_day: bool,
         now: dt.datetime,
     ) -> str:
-        profiles = self._profiles_by_raw_author()
+        profiles = composed(self)._profiles_by_raw_author()
         scope_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
         return "|".join(
             [
@@ -687,7 +689,7 @@ class ActivitySummaryService:
         meeting_seconds_by_author_date: dict[tuple[str, str], int] = {}
         break_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         meeting_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
-        profiles = self._profiles_by_raw_author()
+        profiles = composed(self)._profiles_by_raw_author()
         now = now or dt.datetime.now(dt.UTC)
         presence_calendar_anchor_day = (
             str(end_date or "").strip() if presence_alerts_for_selected_day and str(end_date or "").strip() else None
@@ -717,9 +719,9 @@ class ActivitySummaryService:
                     now,
                 )
             ]
-        break_buckets = self._break_buckets_for_daily_items(daily_items)
-        meeting_buckets = self._meeting_buckets_for_daily_items(daily_items, now)
-        telegram_gaps = self._telegram_gaps_for_daily_items(daily_items)
+        break_buckets = composed(self)._break_buckets_for_daily_items(daily_items)
+        meeting_buckets = composed(self)._meeting_buckets_for_daily_items(daily_items, now)
+        telegram_gaps = composed(self)._telegram_gaps_for_daily_items(daily_items)
         telegram_gap_counted: set[tuple[str, str]] = set()
 
         for item in daily_items:
@@ -944,7 +946,7 @@ class ActivitySummaryService:
         activity_mix = _activity_mix_from_counts(activity_counts)
         overtime_activity_mix = _activity_mix_from_counts(overtime_activity_counts)
 
-        self._apply_live_telegram_summary(
+        composed(self)._apply_live_telegram_summary(
             authors_by_raw,
             hourly_by_author,
             totals,
@@ -1023,8 +1025,8 @@ class ActivitySummaryService:
 
             author_row["securityAlerts"] = alerts
 
-        for raw_author in self.list_authors():
-            self._ensure_summary_author(authors_by_raw, raw_author, profiles)
+        for raw_author in composed(self).list_authors():
+            composed(self)._ensure_summary_author(authors_by_raw, raw_author, profiles)
 
         for raw_author, author_row in authors_by_raw.items():
             if raw_author in hourly_by_author:
@@ -1128,7 +1130,7 @@ class ActivitySummaryService:
             if presence_override and presence_override.get("offlineAt"):
                 include_report_stopped_alerts = False
 
-            send_interval_seconds = self.get_interval_for_author(raw_author)
+            send_interval_seconds = composed(self).get_interval_for_author(raw_author)
             summary_author = _with_alerts(
                 _with_source_breakdowns(_with_activity_mix(_with_productivity(author))),
                 send_interval_seconds,
@@ -1138,7 +1140,7 @@ class ActivitySummaryService:
                 evaluation_now=alerts_evaluation_now,
             )
             if not presence_alerts_for_selected_day:
-                self._record_status_transition_for_author(
+                composed(self)._record_status_transition_for_author(
                     summary_author,
                     send_interval_seconds,
                     now,
@@ -1157,8 +1159,8 @@ class ActivitySummaryService:
             "overtimeActivityMix": sorted(overtime_activity_mix, key=lambda item: item["count"], reverse=True) if include_breakdowns else [],
             "overtimeSavedPrefabs": sorted(overtime_saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True) if include_breakdowns else [],
             "authors": sorted(author_rows, key=lambda item: item["displayName"].lower()),
-            "profiles": self.author_profiles() if include_profiles else [],
-            "authorAliases": self.author_aliases() if include_profiles else [],
+            "profiles": composed(self).author_profiles() if include_profiles else [],
+            "authorAliases": composed(self).author_aliases() if include_profiles else [],
             "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]) if include_hourly else [],
         }
 
@@ -1721,11 +1723,11 @@ class ActivitySummaryService:
 
     def analytics_summary(self, period: str = "7d") -> dict[str, Any]:
         year = dt.date.today().year
-        profiles = self._profiles_by_raw_author()
+        profiles = composed(self)._profiles_by_raw_author()
         start_date = dt.date(year - 1, 12, 1).isoformat()
         end_date = dt.date(year, 12, 31).isoformat()
         docs = list(self.db.daily_author_activity.find(_date_query(start_date, end_date), {"_id": 0}))
-        authors = set(self.list_authors())
+        authors = set(composed(self).list_authors())
         docs_by_author: dict[str, list[dict[str, Any]]] = {}
 
         for item in docs:
@@ -1778,7 +1780,7 @@ class ActivitySummaryService:
             events = list(self.db.report_security_events.find({}, {"_id": 0}).sort("createdAt", DESCENDING).limit(100))
 
         for index, event in enumerate(events):
-            raw_author = self.resolve_author_alias(event.get("author") or "Unknown User")
+            raw_author = composed(self).resolve_author_alias(event.get("author") or "Unknown User")
             created_at = _iso(event.get("createdAt"))
             challenge_id = event.get("challengeId")
             device_id = event.get("deviceId")

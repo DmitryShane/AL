@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from ..activity_math import *
+from ..backend_composable_host import composed
+from ..mongo_composable import MongoComposableMixin
 
 
-class ReportIngestService:
+class ReportIngestService(MongoComposableMixin):
     def create_report_challenge(self, challenge_in: Any, keys: Any) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         expires_at = now + dt.timedelta(seconds=REPORT_CHALLENGE_TTL_SECONDS)
@@ -86,14 +88,14 @@ class ReportIngestService:
         now = dt.datetime.now(dt.UTC)
         payload = dict(payload)
         original_author = _normalize_author(payload.get("author") or "Unknown User")
-        payload["author"] = self.resolve_author_alias(original_author)
+        payload["author"] = composed(self).resolve_author_alias(original_author)
         normalized_time_zone = _author_configured_time_zone_id(payload["author"]) or _valid_time_zone_id(payload.get("timeZoneId"))
 
         if normalized_time_zone:
             payload["timeZoneId"] = normalized_time_zone
             payload["timeZoneDisplayName"] = str(payload.get("timeZoneDisplayName") or "").strip() or normalized_time_zone
 
-        self.update_author_time_zone(payload.get("author"), payload.get("timeZoneId"), payload.get("timeZoneDisplayName"))
+        composed(self).update_author_time_zone(str(payload.get("author") or "Unknown User"), payload.get("timeZoneId"), payload.get("timeZoneDisplayName"))
         report_type = self.consume_expected_report_type(payload.get("author"))
         raw_result = self.db.raw_reports.insert_one(
             {
@@ -121,8 +123,8 @@ class ReportIngestService:
                 device_id=device_id,
             )
             if meaningful_for_stale:
-                self.touch_last_raw_report_received_at(author_for_stale_touch, now)
-            self.invalidate_activity_summary_cache()
+                composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
+            composed(self).invalidate_activity_summary_cache()
             return str(raw_result.inserted_id)
 
         snapshot = dict(payload)
@@ -138,14 +140,14 @@ class ReportIngestService:
             }
         )
         self.db.activity_snapshots.insert_one(snapshot)
-        self._apply_snapshot_to_aggregates(snapshot)
-        self.touch_last_raw_report_received_at(author_for_stale_touch, now)
-        self.invalidate_activity_summary_cache()
+        composed(self)._apply_snapshot_to_aggregates(snapshot)
+        composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
+        composed(self).invalidate_activity_summary_cache()
         return str(raw_result.inserted_id)
 
     def request_report_refresh(self, author: str | None = None) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
-        authors = [author] if author else self.list_authors()
+        authors = [author] if author else composed(self).list_authors()
 
         for item in authors:
             self.db.report_refresh_requests.update_one(
@@ -192,7 +194,7 @@ class ReportIngestService:
         challenge_id: str,
         device_id: str | None,
     ) -> bool:
-        author = self.resolve_author_alias(str(payload.get("author") or "Unknown User"))
+        author = composed(self).resolve_author_alias(str(payload.get("author") or "Unknown User"))
         author_email = str(payload.get("authorEmail") or "")
         project_id = str(payload.get("projectId") or "")
         session_id = str(payload.get("sessionId") or "")
@@ -200,7 +202,7 @@ class ReportIngestService:
         batch_id = _new_id()
         batch_delta_items: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
-        self.update_author_email(author, author_email)
+        composed(self).update_author_email(author, author_email)
         batch = {
             "batchId": batch_id,
             "rawReportId": raw_report_id,
@@ -220,7 +222,7 @@ class ReportIngestService:
         self.db.raw_event_batches.insert_one(batch)
 
         events = sorted(payload.get("events") or [], key=lambda item: str(item.get("occurredAtUtc") or item.get("occurredAtLocal") or ""))
-        resume_cutoff = self.get_effective_plugin_ingest_resume_cutoff_utc(author)
+        resume_cutoff = composed(self).get_effective_plugin_ingest_resume_cutoff_utc(author)
 
         for raw_event in events:
             event = _normalize_raw_event(
@@ -266,7 +268,7 @@ class ReportIngestService:
                 )
                 continue
 
-            deltas = self._apply_raw_event_to_aggregates(event)
+            deltas = composed(self)._apply_raw_event_to_aggregates(event)
             batch_delta_items.append((event, deltas))
 
         rows = self._build_event_batch_report_rows(batch, batch_delta_items)
@@ -280,9 +282,9 @@ class ReportIngestService:
             report_time = _report_row_time(row) or received_at
 
             if _has_active_or_overtime_delta(row):
-                self._schedule_telegram_break_activity_prompt_if_needed(author, str(row.get("date") or ""), source, report_time)
+                composed(self)._schedule_telegram_break_activity_prompt_if_needed(author, str(row.get("date") or ""), source, report_time)
 
-            self._schedule_telegram_online_prompt_if_needed(author, str(row.get("date") or ""), source, received_at)
+            composed(self)._schedule_telegram_online_prompt_if_needed(author, str(row.get("date") or ""), source, received_at)
 
         return True
 

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import cast
 
 import pytest
+
+from pymongo.database import Database
 
 from al_backend.author_avatar_cache import _avatar_cache_stale, ensure_author_avatar_cached
 
@@ -68,7 +71,7 @@ def test_ensure_author_avatar_cached_force_calls_download(monkeypatch: pytest.Mo
     class FakeDb:
         author_profiles = FakeProfiles()
 
-    path, mime = ensure_author_avatar_cached(FakeDb(), tmp_path, "Alice Dev", cadence="month", force=True)
+    path, mime = ensure_author_avatar_cached(cast(Database, FakeDb()), tmp_path, "Alice Dev", cadence="month", force=True)
 
     assert path is not None and path.is_file()
     assert mime == "image/png"

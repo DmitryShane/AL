@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from ..activity_math import *
+from ..backend_composable_host import composed
+from ..mongo_composable import MongoComposableMixin
 
 
-class CalendarService:
+class CalendarService(MongoComposableMixin):
     def calendar_summary(self, year: int) -> dict[str, Any]:
         self._ensure_calendar_reasons()
         start_date = f"{year}-01-01"
         end_date = f"{year}-12-31"
         reasons = self.calendar_reasons()
         reasons_by_id = {item["id"]: item for item in reasons}
-        authors = self.author_profiles()
+        authors = composed(self).author_profiles()
         authors_by_raw = {item["rawAuthor"]: item for item in authors}
         marks = []
         stats_by_author: dict[str, dict[str, Any]] = {
@@ -123,12 +125,12 @@ class CalendarService:
                 )
                 saved_count += 1
 
-        self.invalidate_activity_summary_cache(dates)
+        composed(self).invalidate_activity_summary_cache(dates)
         return {"ok": True, "savedCount": saved_count}
 
     def delete_calendar_mark(self, raw_author: str, date: str) -> dict[str, Any]:
         self.db.calendar_marks.delete_one({"rawAuthor": raw_author, "date": date})
-        self.invalidate_activity_summary_cache([date])
+        composed(self).invalidate_activity_summary_cache([date])
         return {"ok": True}
 
     def delete_calendar_marks(self, raw_authors: list[str], dates: list[str]) -> dict[str, Any]:
@@ -139,7 +141,7 @@ class CalendarService:
             _parse_date(date)
 
         result = self.db.calendar_marks.delete_many({"rawAuthor": {"$in": raw_authors}, "date": {"$in": dates}})
-        self.invalidate_activity_summary_cache(dates)
+        composed(self).invalidate_activity_summary_cache(dates)
         return {"ok": True, "deletedCount": result.deleted_count}
 
     def _ensure_calendar_reasons(self) -> None:

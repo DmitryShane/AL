@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from ..activity_math import *
 from ..author_avatar_cache import DEFAULT_AVATAR_REFRESH_CADENCE, normalize_avatar_refresh_cadence
+from ..backend_composable_host import composed
+from ..mongo_composable import MongoComposableMixin
 
 
-class SettingsRepository:
+class SettingsRepository(MongoComposableMixin):
     def get_interval_for_author(self, author: str) -> int:
         author = _normalize_author(author)
         author_setting = self.db.interval_settings.find_one({"kind": "author", "author": author})
@@ -17,7 +19,7 @@ class SettingsRepository:
         if global_setting and global_setting.get("sendIntervalSeconds"):
             return int(global_setting["sendIntervalSeconds"])
 
-        return self.default_send_interval_seconds
+        return composed(self).default_send_interval_seconds
 
     def get_idle_threshold_for_author(self, author: str) -> int:
         global_setting = self.db.interval_settings.find_one({"kind": "global"}) or {}
@@ -85,7 +87,7 @@ class SettingsRepository:
         if source == target:
             return {"ok": False, "error": "Source and target authors must be different"}
 
-        if target not in self.list_authors():
+        if target not in composed(self).list_authors():
             return {"ok": False, "error": "Target profile does not exist"}
 
         now = dt.datetime.now(dt.UTC)
@@ -121,7 +123,7 @@ class SettingsRepository:
             upsert=True,
         )
         self.db.author_profiles.delete_many({"rawAuthor": source})
-        self.rebuild_aggregates_for_author_dates([source, target])
+        composed(self).rebuild_aggregates_for_author_dates([source, target])
         return {"ok": True, "alias": {"sourceRawAuthor": source, "targetRawAuthor": target}}
 
     def delete_author_alias(self, source_raw_author: str) -> dict[str, Any]:
@@ -131,7 +133,7 @@ class SettingsRepository:
             return {"ok": False, "error": "Source author is required"}
 
         result = self.db.author_aliases.delete_one({"sourceRawAuthor": source})
-        self.rebuild_aggregates_for_author_dates([source])
+        composed(self).rebuild_aggregates_for_author_dates([source])
         return {"ok": True, "deleted": getattr(result, "deleted_count", 0)}
 
     def upsert_interval_settings(
@@ -145,7 +147,7 @@ class SettingsRepository:
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
 
-        global_update = {"updatedAt": now}
+        global_update: dict[str, Any] = {"updatedAt": now}
 
         if default_send_interval_seconds is not None:
             global_update["sendIntervalSeconds"] = default_send_interval_seconds
@@ -198,7 +200,7 @@ class SettingsRepository:
                 upsert=True,
             )
 
-        self.invalidate_activity_summary_cache()
+        composed(self).invalidate_activity_summary_cache()
         return self.get_interval_settings()
 
     def get_avatar_refresh_cadence(self) -> str:
@@ -220,7 +222,7 @@ class SettingsRepository:
             },
             upsert=True,
         )
-        self.invalidate_activity_summary_cache()
+        composed(self).invalidate_activity_summary_cache()
         return {"ok": True, "avatarRefreshCadence": cadence}
 
     def get_telegram_online_prompt_delay_seconds(self) -> int:
@@ -244,7 +246,7 @@ class SettingsRepository:
 
         return {
             "defaultSendIntervalSeconds": int(
-                global_setting.get("sendIntervalSeconds", self.default_send_interval_seconds)
+                global_setting.get("sendIntervalSeconds", composed(self).default_send_interval_seconds)
             ),
             "idleThresholdSeconds": int(global_setting.get("idleThresholdSeconds", DEFAULT_IDLE_THRESHOLD_SECONDS)),
             "pluginIngestEnabled": self.get_plugin_ingest_enabled(),
@@ -274,7 +276,7 @@ class SettingsRepository:
             },
             upsert=True,
         )
-        self.invalidate_activity_summary_cache()
+        composed(self).invalidate_activity_summary_cache()
         return self.get_discord_settings()
 
     def upsert_discord_summary_settings(
@@ -308,7 +310,7 @@ class SettingsRepository:
             },
             upsert=True,
         )
-        self.invalidate_activity_summary_cache()
+        composed(self).invalidate_activity_summary_cache()
         return self.get_discord_settings()
 
     def get_discord_settings(self) -> dict[str, Any]:
