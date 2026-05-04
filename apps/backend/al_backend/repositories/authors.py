@@ -468,41 +468,51 @@ class AuthorRepository(MongoComposableMixin):
         if not normalized_author:
             return {"ok": False, "error": "Author is required"}
 
+        author_keys = composed(self).author_alias_keys(normalized_author)
+        author_query = {"author": {"$in": author_keys}}
+        raw_author_query = {"rawAuthor": {"$in": author_keys}}
         profile = self.db.author_profiles.find_one({"rawAuthor": normalized_author}, {"_id": 0, "telegramUsername": 1}) or {}
         raw_report_ids = set()
 
-        for snapshot in self.db.activity_snapshots.find({"author": normalized_author}, {"rawReportId": 1}):
+        for snapshot in self.db.activity_snapshots.find(author_query, {"rawReportId": 1}):
             if snapshot.get("rawReportId"):
                 raw_report_ids.add(snapshot["rawReportId"])
 
-        for batch in self.db.raw_event_batches.find({"author": normalized_author}, {"rawReportId": 1}):
+        for batch in self.db.raw_event_batches.find(author_query, {"rawReportId": 1}):
             if batch.get("rawReportId"):
                 raw_report_ids.add(batch["rawReportId"])
 
-        state_key_pattern = f"(^|\\|){re.escape(normalized_author)}\\|"
+        aggregate_session_state_deleted = 0
+
+        for author_key in author_keys:
+            state_key_pattern = f"(^|\\|){re.escape(author_key)}\\|"
+            aggregate_session_state_deleted += self.db.aggregate_session_state.delete_many(
+                {"_id": {"$regex": state_key_pattern}}
+            ).deleted_count
+
         counts = {
             "rawReports": self.db.raw_reports.delete_many({"_id": {"$in": list(raw_report_ids)}}).deleted_count if raw_report_ids else 0,
-            "activitySnapshots": self.db.activity_snapshots.delete_many({"author": normalized_author}).deleted_count,
-            "rawEventBatches": self.db.raw_event_batches.delete_many({"author": normalized_author}).deleted_count,
-            "rawActivityEvents": self.db.raw_activity_events.delete_many({"author": normalized_author}).deleted_count,
-            "reportRows": self.db.report_rows.delete_many({"author": normalized_author}).deleted_count,
-            "dailyAuthorActivity": self.db.daily_author_activity.delete_many({"author": normalized_author}).deleted_count,
-            "aggregateSessionState": self.db.aggregate_session_state.delete_many({"_id": {"$regex": state_key_pattern}}).deleted_count,
-            "reportSecurityEvents": self.db.report_security_events.delete_many({"author": normalized_author}).deleted_count,
-            "reportRefreshRequests": self.db.report_refresh_requests.delete_many({"author": normalized_author}).deleted_count,
-            "manualReportExpectations": self.db.manual_report_expectations.delete_many({"author": normalized_author}).deleted_count,
-            "breakEvents": self.db.break_events.delete_many({"rawAuthor": normalized_author}).deleted_count,
-            "breakSessions": self.db.break_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
-            "breakIntervals": self.db.break_intervals.delete_many({"rawAuthor": normalized_author}).deleted_count,
-            "daySessions": self.db.day_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
-            "telegramDayReminders": self.db.telegram_day_reminders.delete_many({"rawAuthor": normalized_author}).deleted_count,
-            "telegramOnlinePrompts": self.db.telegram_online_prompts.delete_many({"rawAuthor": normalized_author}).deleted_count,
-            "telegramMeetingAutoAfkNotifications": self.db.telegram_meeting_auto_afk_notifications.delete_many({"rawAuthor": normalized_author}).deleted_count,
-            "meetingEvents": self.db.meeting_events.delete_many({"rawAuthor": normalized_author}).deleted_count,
-            "meetingSessions": self.db.meeting_sessions.delete_many({"rawAuthor": normalized_author}).deleted_count,
-            "meetingIntervals": self.db.meeting_intervals.delete_many({"rawAuthor": normalized_author}).deleted_count,
-            "meetingSummaries": self.db.meeting_summaries.delete_many({"participantNames": normalized_author}).deleted_count,
-            "reportChallenges": self.db.report_challenges.delete_many({"author": normalized_author}).deleted_count,
+            "activitySnapshots": self.db.activity_snapshots.delete_many(author_query).deleted_count,
+            "rawEventBatches": self.db.raw_event_batches.delete_many(author_query).deleted_count,
+            "rawActivityEvents": self.db.raw_activity_events.delete_many(author_query).deleted_count,
+            "reportRows": self.db.report_rows.delete_many(author_query).deleted_count,
+            "dailyAuthorActivity": self.db.daily_author_activity.delete_many(author_query).deleted_count,
+            "aggregateSessionState": aggregate_session_state_deleted,
+            "reportSecurityEvents": self.db.report_security_events.delete_many(author_query).deleted_count,
+            "reportRefreshRequests": self.db.report_refresh_requests.delete_many(author_query).deleted_count,
+            "manualReportExpectations": self.db.manual_report_expectations.delete_many(author_query).deleted_count,
+            "breakEvents": self.db.break_events.delete_many(raw_author_query).deleted_count,
+            "breakSessions": self.db.break_sessions.delete_many(raw_author_query).deleted_count,
+            "breakIntervals": self.db.break_intervals.delete_many(raw_author_query).deleted_count,
+            "daySessions": self.db.day_sessions.delete_many(raw_author_query).deleted_count,
+            "telegramDayReminders": self.db.telegram_day_reminders.delete_many(raw_author_query).deleted_count,
+            "telegramOnlinePrompts": self.db.telegram_online_prompts.delete_many(raw_author_query).deleted_count,
+            "telegramMeetingAutoAfkNotifications": self.db.telegram_meeting_auto_afk_notifications.delete_many(raw_author_query).deleted_count,
+            "meetingEvents": self.db.meeting_events.delete_many(raw_author_query).deleted_count,
+            "meetingSessions": self.db.meeting_sessions.delete_many(raw_author_query).deleted_count,
+            "meetingIntervals": self.db.meeting_intervals.delete_many(raw_author_query).deleted_count,
+            "meetingSummaries": self.db.meeting_summaries.delete_many({"participantNames": {"$in": author_keys}}).deleted_count,
+            "reportChallenges": self.db.report_challenges.delete_many(author_query).deleted_count,
         }
 
         telegram_username = profile.get("telegramUsername")
@@ -512,7 +522,7 @@ class AuthorRepository(MongoComposableMixin):
             counts["breakSessions"] += self.db.break_sessions.delete_many({"telegramUsername": telegram_username}).deleted_count
 
         composed(self).invalidate_activity_summary_cache()
-        return {"ok": True, "author": normalized_author, "deleted": counts}
+        return {"ok": True, "author": normalized_author, "authorKeys": author_keys, "deleted": counts}
 
     def delete_author_data_for_date_range(self, raw_author: str, start_date: str, end_date: str) -> dict[str, Any]:
         normalized_author = _normalize_author(raw_author)
@@ -532,10 +542,13 @@ class AuthorRepository(MongoComposableMixin):
         profile = (
             self.db.author_profiles.find_one({"rawAuthor": normalized_author}, {"_id": 0, "telegramUsername": 1, "timeZoneId": 1}) or {}
         )
+        author_keys = composed(self).author_alias_keys(normalized_author)
+        author_filter = {"author": {"$in": author_keys}}
+        raw_author_filter = {"rawAuthor": {"$in": author_keys}}
         author_tz = _valid_time_zone_id(profile.get("timeZoneId")) or "UTC"
         date_filter = {"date": {"$gte": start_date, "$lte": end_date}}
 
-        event_query = {"author": normalized_author, **date_filter}
+        event_query = {**author_filter, **date_filter}
         batch_ids: set[str] = set()
 
         for event in self.db.raw_activity_events.find(event_query, {"_id": 0, "batchId": 1}):
@@ -567,9 +580,11 @@ class AuthorRepository(MongoComposableMixin):
 
         counts["rawEventBatches"] = deleted_batches
         counts["rawReports"] = deleted_raw_reports
-        counts["activitySnapshots"] = self.db.activity_snapshots.delete_many({"author": normalized_author, **date_filter}).deleted_count
+        counts["activitySnapshots"] = self.db.activity_snapshots.delete_many({**author_filter, **date_filter}).deleted_count
+        counts["reportRows"] = self.db.report_rows.delete_many({**author_filter, **date_filter}).deleted_count
+        counts["dailyAuthorActivity"] = self.db.daily_author_activity.delete_many({**author_filter, **date_filter}).deleted_count
 
-        raw_author_query = {"rawAuthor": normalized_author, **date_filter}
+        raw_author_query = {**raw_author_filter, **date_filter}
         counts["breakEvents"] = self.db.break_events.delete_many(raw_author_query).deleted_count
         counts["breakIntervals"] = self.db.break_intervals.delete_many(raw_author_query).deleted_count
         counts["breakSessions"] = self.db.break_sessions.delete_many(raw_author_query).deleted_count
@@ -595,7 +610,7 @@ class AuthorRepository(MongoComposableMixin):
 
         meeting_sessions_deleted = 0
 
-        for session in list(self.db.meeting_sessions.find({"rawAuthor": normalized_author}, {"_id": 0})):
+        for session in list(self.db.meeting_sessions.find(raw_author_filter, {"_id": 0})):
             discord_uid = session.get("discordUserId")
 
             if not discord_uid:
@@ -623,7 +638,7 @@ class AuthorRepository(MongoComposableMixin):
 
         meeting_summaries_deleted = 0
 
-        for summary in list(self.db.meeting_summaries.find({"participantNames": normalized_author}, {"_id": 0})):
+        for summary in list(self.db.meeting_summaries.find({"participantNames": {"$in": author_keys}}, {"_id": 0})):
             started_at = _coerce_datetime(summary.get("startedAt"))
 
             if not started_at:
@@ -643,12 +658,13 @@ class AuthorRepository(MongoComposableMixin):
         rebuild_result = composed(self).rebuild_aggregates_for_dates(
             start_date=start_date,
             end_date=end_date,
-            authors=[normalized_author],
+            authors=author_keys,
         )
 
         return {
             "ok": True,
             "author": normalized_author,
+            "authorKeys": author_keys,
             "startDate": start_date,
             "endDate": end_date,
             "deleted": counts,

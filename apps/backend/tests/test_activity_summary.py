@@ -7367,6 +7367,34 @@ def test_delete_author_data_preserves_profile_but_delete_profile_removes_it():
     assert repo.db.report_rows.items == []
 
 
+def test_delete_author_data_removes_alias_source_activity():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "telegramUsername": "dmitry_shane"})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device2", "targetRawAuthor": "Dmitry Shane"})
+    repo.db.raw_reports.insert_one({"_id": "raw-device"})
+    repo.db.raw_event_batches.insert_one({"author": "Device2", "rawReportId": "raw-device", "batchId": "device-batch"})
+    repo.db.raw_activity_events.insert_one({"author": "Device2", "batchId": "device-batch", "date": "2026-05-05"})
+    repo.db.activity_snapshots.insert_one({"author": "Device2", "rawReportId": "raw-device"})
+    repo.db.report_rows.insert_one({"author": "Device2", "date": "2026-05-05", "source": "dev"})
+    repo.db.daily_author_activity.insert_one({"author": "Device2", "date": "2026-05-05", "source": "dev"})
+    repo.db.day_sessions.insert_one({"rawAuthor": "Device2", "date": "2026-05-05"})
+    repo.db.report_rows.insert_one({"author": "Other Author", "date": "2026-05-05", "source": "ual"})
+
+    result = repo.delete_author_data("Dmitry Shane")
+
+    assert result["ok"] is True
+    assert result["authorKeys"] == ["Device2", "Dmitry Shane"]
+    assert repo.db.author_profiles.find_one({"rawAuthor": "Dmitry Shane"}) is not None
+    assert repo.db.raw_reports.items == []
+    assert repo.db.raw_event_batches.find_one({"author": "Device2"}) is None
+    assert repo.db.raw_activity_events.find_one({"author": "Device2"}) is None
+    assert repo.db.activity_snapshots.find_one({"author": "Device2"}) is None
+    assert repo.db.report_rows.find_one({"author": "Device2"}) is None
+    assert repo.db.daily_author_activity.find_one({"author": "Device2"}) is None
+    assert repo.db.day_sessions.find_one({"rawAuthor": "Device2"}) is None
+    assert repo.db.report_rows.find_one({"author": "Other Author"}) is not None
+
+
 def test_delete_author_data_for_date_range_keeps_outside_dates_and_profile():
     repo = fake_repository()
     set_idle_threshold(repo, 300)
@@ -7446,6 +7474,57 @@ def test_delete_author_data_for_date_range_keeps_outside_dates_and_profile():
         daily = repo.db.daily_author_activity.find_one({"author": raw_author, "date": day, "source": "cur"})
         assert daily is not None
         assert daily["activeSeconds"] == 120
+
+
+def test_delete_author_data_for_date_range_removes_alias_source_scope_only():
+    repo = fake_repository()
+    raw_author = "Dmitry Shane"
+    alias_author = "Device2"
+    repo.db.author_profiles.insert_one({"rawAuthor": raw_author, "displayName": raw_author})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": alias_author, "targetRawAuthor": raw_author})
+
+    def insert_alias_day(day: str) -> None:
+        repo.db.raw_activity_events.insert_one(
+            {
+                "eventId": f"{day}-device-focus",
+                "source": "dev",
+                "author": alias_author,
+                "projectId": "al",
+                "deviceId": "device",
+                "batchId": f"batch-{day}",
+                "rawReportId": f"raw-{day}",
+                "date": day,
+                "eventType": "focus",
+                "occurredAtUtc": dt.datetime.fromisoformat(f"{day}T08:00:00+00:00"),
+                "occurredAtLocal": f"{day}T08:00:00+00:00",
+                "receivedAt": dt.datetime.fromisoformat(f"{day}T08:00:01+00:00"),
+            }
+        )
+        repo.db.raw_event_batches.insert_one({"author": alias_author, "batchId": f"batch-{day}", "rawReportId": f"raw-{day}"})
+        repo.db.raw_reports.insert_one({"_id": f"raw-{day}"})
+        repo.db.report_rows.insert_one({"author": alias_author, "date": day, "source": "dev"})
+        repo.db.daily_author_activity.insert_one({"author": alias_author, "date": day, "source": "dev"})
+        repo.db.day_sessions.insert_one({"rawAuthor": alias_author, "date": day})
+
+    insert_alias_day("2026-05-01")
+    insert_alias_day("2026-05-02")
+    insert_alias_day("2026-05-03")
+
+    result = repo.delete_author_data_for_date_range(raw_author, "2026-05-02", "2026-05-02")
+
+    assert result["ok"] is True
+    assert result["authorKeys"] == ["Device2", "Dmitry Shane"]
+    assert repo.db.raw_activity_events.find_one({"author": alias_author, "date": "2026-05-02"}) is None
+    assert repo.db.raw_event_batches.find_one({"batchId": "batch-2026-05-02"}) is None
+    assert repo.db.raw_reports.find_one({"_id": "raw-2026-05-02"}) is None
+    assert repo.db.report_rows.find_one({"author": alias_author, "date": "2026-05-02"}) is None
+    assert repo.db.daily_author_activity.find_one({"author": alias_author, "date": "2026-05-02"}) is None
+    assert repo.db.day_sessions.find_one({"rawAuthor": alias_author, "date": "2026-05-02"}) is None
+
+    for day in ("2026-05-01", "2026-05-03"):
+        assert repo.db.raw_activity_events.find_one({"author": alias_author, "date": day}) is not None
+        assert repo.db.raw_event_batches.find_one({"batchId": f"batch-{day}"}) is not None
+        assert repo.db.raw_reports.find_one({"_id": f"raw-{day}"}) is not None
 
 
 def test_break_event_flow_records_day_and_break():
