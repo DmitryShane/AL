@@ -24,6 +24,30 @@ from ..mongo_composable import MongoComposableMixin
 
 
 class DiscordMeetingService(MongoComposableMixin):
+    def _meeting_participant_telegram_usernames(
+        self,
+        participant_discord_user_ids: list[str],
+        participant_names: list[str],
+    ) -> list[str]:
+        discord_ids = [_normalize_discord_user_id(item) for item in participant_discord_user_ids]
+        lookup_ids = [item for item in discord_ids if item]
+        profiles_by_discord_id = {
+            str(profile.get("discordUserId") or ""): profile
+            for profile in self.db.author_profiles.find(
+                {"discordUserId": {"$in": lookup_ids}},
+                {"_id": 0, "discordUserId": 1, "telegramUsername": 1},
+            )
+        }
+        resolved: list[str] = []
+
+        for index, discord_id in enumerate(discord_ids):
+            fallback_name = participant_names[index] if index < len(participant_names) else ""
+            profile = profiles_by_discord_id.get(discord_id, {})
+            telegram_username = _normalize_telegram_username(profile.get("telegramUsername"))
+            resolved.append(telegram_username or str(fallback_name or "").strip())
+
+        return [item for item in resolved if item]
+
     def record_discord_voice_event(
         self,
         discord_user_id: str,
@@ -515,6 +539,10 @@ class DiscordMeetingService(MongoComposableMixin):
             return {"ok": True, "status": status}
 
         summary_id = _new_id()
+        participant_telegram_usernames = self._meeting_participant_telegram_usernames(
+            participant_discord_user_ids,
+            participant_names,
+        )
         self.db.meeting_summaries.insert_one(
             {
                 "summaryId": summary_id,
@@ -526,6 +554,7 @@ class DiscordMeetingService(MongoComposableMixin):
                 "durationSeconds": duration_seconds,
                 "participantDiscordUserIds": participant_discord_user_ids,
                 "participantNames": participant_names,
+                "participantTelegramUsernames": participant_telegram_usernames,
                 "summary": summary,
                 "status": "pending",
                 "createdAt": now,

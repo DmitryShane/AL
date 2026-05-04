@@ -524,7 +524,12 @@ def format_meeting_summary_message(notification: dict[str, Any], summary_text: s
     started_at = format_meeting_summary_date(str(notification.get("startedAt") or ""))
     duration_seconds = int(notification.get("durationSeconds") or 0)
     duration_label = format_meeting_duration_label(duration_seconds)
-    raw_participants = notification.get("participantNames")
+    raw_telegram_participants = notification.get("participantTelegramUsernames")
+    raw_participants = (
+        raw_telegram_participants
+        if isinstance(raw_telegram_participants, list) and raw_telegram_participants
+        else notification.get("participantNames")
+    )
     participants = raw_participants if isinstance(raw_participants, list) else []
     participants_text = _format_meeting_summary_participant_mentions([str(item) for item in participants])
 

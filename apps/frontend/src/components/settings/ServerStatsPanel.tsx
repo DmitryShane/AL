@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { apiFetch } from "../../api/client";
 import type { ServerStats } from "../../types/dashboard";
 
 const REFRESH_INTERVAL_MS = 60_000;
+const SERVER_STATS_CACHE_KEY = "al.serverStats.cache";
+let cachedServerStats: ServerStats | null = readCachedServerStats();
 
 export function ServerStatsPanel() {
-  const [stats, setStats] = useState<ServerStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<ServerStats | null>(() => cachedServerStats);
+  const [loading, setLoading] = useState(() => cachedServerStats === null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
@@ -25,6 +27,8 @@ export function ServerStatsPanel() {
       }
 
       const payload = (await response.json()) as ServerStats;
+      cachedServerStats = payload;
+      writeCachedServerStats(payload);
       setStats(payload);
       setError("");
     } catch {
@@ -36,7 +40,7 @@ export function ServerStatsPanel() {
   }
 
   useEffect(() => {
-    void loadStats();
+    void loadStats(cachedServerStats !== null);
     const intervalId = window.setInterval(() => void loadStats(true), REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(intervalId);
@@ -51,18 +55,22 @@ export function ServerStatsPanel() {
   }, [stats]);
 
   const usedPercent = Math.max(0, Math.min(100, stats?.root.usedPercent ?? 0));
+  const accentColor = serverStatsAccentColor(usedPercent);
+  const panelStyle = {
+    "--server-stats-accent": accentColor
+  } as CSSProperties;
   const donutStyle = {
     background: `conic-gradient(var(--server-stats-accent) ${usedPercent * 3.6}deg, rgba(148, 163, 184, 0.18) 0deg)`
   };
 
   return (
-    <section className={`panel server-stats-panel server-stats-panel-${stats?.root.warningLevel ?? "ok"}`}>
+    <section className={`panel server-stats-panel server-stats-panel-${stats?.root.warningLevel ?? "ok"}`} style={panelStyle}>
       <div className="server-stats-header">
         <div>
           <h2>Server Stats</h2>
           <p className="settings-caption">Read-only production disk usage overview.</p>
         </div>
-        <button className="ghost-button" onClick={() => void loadStats(true)} disabled={refreshing}>
+        <button className="server-stats-refresh-button" onClick={() => void loadStats(true)} disabled={refreshing}>
           {refreshing ? "Refreshing..." : "Refresh"}
         </button>
       </div>
@@ -142,6 +150,48 @@ function formatBytes(bytes: number): string {
 
 function formatPercent(value: number): string {
   return `${Math.round(value * 10) / 10}%`;
+}
+
+function serverStatsAccentColor(usedPercent: number): string {
+  if (usedPercent >= 95) {
+    return "#dc2626";
+  }
+
+  if (usedPercent >= 85) {
+    return "#ef4444";
+  }
+
+  if (usedPercent >= 70) {
+    return "#f59e0b";
+  }
+
+  return "#35a86b";
+}
+
+function readCachedServerStats(): ServerStats | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const value = window.sessionStorage.getItem(SERVER_STATS_CACHE_KEY);
+
+    if (!value) {
+      return null;
+    }
+
+    return JSON.parse(value) as ServerStats;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedServerStats(stats: ServerStats): void {
+  try {
+    window.sessionStorage.setItem(SERVER_STATS_CACHE_KEY, JSON.stringify(stats));
+  } catch {
+    // Storage can be unavailable in private mode; in-memory cache still works.
+  }
 }
 
 function formatDateTime(value: string): string {

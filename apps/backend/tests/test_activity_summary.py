@@ -3863,6 +3863,22 @@ def test_default_meeting_summary_prompt_renders_sections():
 
 def test_meeting_recording_finished_creates_summary_notification():
     repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "displayName": "Dmitry Shane",
+            "telegramUsername": "dmitryshane",
+            "discordUserId": "1",
+        }
+    )
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "telegramUsername": "igormats",
+            "discordUserId": "2",
+        }
+    )
     repo.upsert_discord_summary_settings(
         meeting_auto_afk_timeout_seconds=600,
         meeting_summaries_enabled=True,
@@ -3893,6 +3909,7 @@ def test_meeting_recording_finished_creates_summary_notification():
 
     assert result["status"] == "summary_created"
     assert notifications[0]["summaryId"] == result["summaryId"]
+    assert notifications[0]["participantTelegramUsernames"] == ["dmitryshane", "igormats"]
     assert "Discord summaries" in notifications[0]["summary"]
 
 
@@ -4111,14 +4128,28 @@ def test_meeting_summary_message_includes_meeting_metadata():
             "startedAt": "2026-05-01T10:00:00+00:00",
             "durationSeconds": 180,
             "participantNames": ["Dmitry", "Igor"],
+            "participantTelegramUsernames": ["dmitryshane", "igormats"],
         },
         "Discussed:\n- Backend status UI.",
     )
 
     assert "Date: 2026-05-01" in message
     assert "Duration: 3m" in message
-    assert "Participants: @Dmitry, @Igor" in message
+    assert "Participants: @dmitryshane, @igormats" in message
     assert "Discussed:" in message
+
+
+def test_meeting_summary_message_falls_back_to_participant_names():
+    message = format_meeting_summary_message(
+        {
+            "startedAt": "2026-05-01T10:00:00+00:00",
+            "durationSeconds": 180,
+            "participantNames": ["Dmitry", "Igor"],
+        },
+        "Discussed:\n- Backend status UI.",
+    )
+
+    assert "Participants: @Dmitry, @Igor" in message
 
 
 def test_recent_meeting_recordings_include_summary_delivery_status():

@@ -832,6 +832,7 @@ class TelegramActivityService(MongoComposableMixin):
                     "summaryId": summary_id,
                     "recordingId": doc.get("recordingId"),
                     "participantNames": doc.get("participantNames", []),
+                    "participantTelegramUsernames": doc.get("participantTelegramUsernames", []),
                     "startedAt": _isoformat_or_none(doc.get("startedAt")),
                     "endedAt": _isoformat_or_none(doc.get("endedAt")),
                     "durationSeconds": int(doc.get("durationSeconds", 0)),

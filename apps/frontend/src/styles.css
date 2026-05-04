@@ -2329,19 +2329,20 @@ p {
   margin-bottom: 4px;
 }
 
-.server-stats-header .ghost-button {
+.server-stats-refresh-button {
   min-height: 38px;
-  border: 1px solid #d8e0e8;
+  border: 1px solid #202a36;
   border-radius: 8px;
-  background: #ffffff;
-  color: #202a36;
+  background: #202a36;
+  color: #ffffff;
   padding: 8px 14px;
   font-size: 12px;
   font-weight: 600;
 }
 
-.server-stats-header .ghost-button:disabled {
-  color: #718093;
+.server-stats-refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .server-stats-donut {
