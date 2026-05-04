@@ -29,6 +29,7 @@ from al_backend.telegram_bot import (
     edit_reminder_message,
     format_prompt_time,
     format_duration_label,
+    format_meeting_duration_label,
     get_updates,
     handle_callback_query,
     parse_callback_data,
@@ -788,6 +789,19 @@ def test_telegram_bot_formats_duration_labels():
     assert format_duration_label(60) == "1 minute"
     assert format_duration_label(600) == "10 minutes"
     assert format_duration_label(75) == "75 seconds"
+
+
+def test_telegram_bot_formats_meeting_duration_labels():
+    assert format_meeting_duration_label(-1) == "unknown"
+    assert format_meeting_duration_label(0) == "0m"
+    assert format_meeting_duration_label(45) == "45s"
+    assert format_meeting_duration_label(60) == "1m"
+    assert format_meeting_duration_label(65) == "1m 5s"
+    assert format_meeting_duration_label(180) == "3m"
+    assert format_meeting_duration_label(3600) == "1h"
+    assert format_meeting_duration_label(3605) == "1h 5s"
+    assert format_meeting_duration_label(3660) == "1h 1m"
+    assert format_meeting_duration_label(3661) == "1h 1m 1s"
 
 
 def test_telegram_bot_callback_edits_online_prompt(monkeypatch):
@@ -4025,8 +4039,8 @@ def test_meeting_summary_message_includes_meeting_metadata():
     )
 
     assert "Date: 2026-05-01" in message
+    assert "Duration: 3m" in message
     assert "Participants: @Dmitry, @Igor" in message
-    assert "Duration:" not in message
     assert "Discussed:" in message
 
 

@@ -289,6 +289,29 @@ def format_duration_label(seconds: int) -> str:
     return f"{seconds} {unit}"
 
 
+def format_meeting_duration_label(total_seconds: int) -> str:
+    if total_seconds < 0:
+        return "unknown"
+
+    if total_seconds == 0:
+        return "0m"
+
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    parts: list[str] = []
+
+    if hours:
+        parts.append(f"{hours}h")
+
+    if minutes:
+        parts.append(f"{minutes}m")
+
+    if seconds or not parts:
+        parts.append(f"{seconds}s")
+
+    return " ".join(parts)
+
+
 def reminder_username_from_message(message: dict[str, Any]) -> str:
     text = str(message.get("text") or "")
     match = re.search(r"Hi\s+@([A-Za-z0-9_]{5,32})\b", text)
@@ -499,6 +522,8 @@ def _format_meeting_summary_participant_mentions(names: list[str]) -> str:
 
 def format_meeting_summary_message(notification: dict[str, Any], summary_text: str) -> str:
     started_at = format_meeting_summary_date(str(notification.get("startedAt") or ""))
+    duration_seconds = int(notification.get("durationSeconds") or 0)
+    duration_label = format_meeting_duration_label(duration_seconds)
     raw_participants = notification.get("participantNames")
     participants = raw_participants if isinstance(raw_participants, list) else []
     participants_text = _format_meeting_summary_participant_mentions([str(item) for item in participants])
@@ -506,6 +531,7 @@ def format_meeting_summary_message(notification: dict[str, Any], summary_text: s
     return (
         "Meeting summary\n"
         f"Date: {started_at}\n"
+        f"Duration: {duration_label}\n"
         f"Participants: {participants_text}\n\n"
         f"{summary_text}"
     )
