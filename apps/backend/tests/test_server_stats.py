@@ -21,6 +21,7 @@ def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> N
 
     disk_usage = namedtuple("usage", "total used free")
     monkeypatch.setattr(settings_repo.shutil, "disk_usage", lambda _path: disk_usage(409600, 245760, 163840))
+    monkeypatch.setattr(settings_repo, "_du_size_bytes", lambda _path: None)
     monkeypatch.setattr(
         settings_repo,
         "SERVER_STATS_PATHS",
@@ -43,3 +44,13 @@ def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> N
     assert stats["root"]["warningLevel"] == "ok"
     assert {item["key"] for item in stats["categories"]} >= {"system", "app", "mongo", "aptCache", "logs", "other"}
     assert next(item for item in stats["categories"] if item["key"] == "missing")["exists"] is False
+
+
+def test_server_stats_path_size_prefers_privileged_du(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "mongodb"
+    path.mkdir()
+    (path / "visible.bin").write_bytes(b"abc")
+
+    monkeypatch.setattr(settings_repo, "_du_size_bytes", lambda _path: 370009988)
+
+    assert settings_repo._path_size_bytes(path) == 370009988

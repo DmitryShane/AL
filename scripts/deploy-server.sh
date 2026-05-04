@@ -95,6 +95,12 @@ sudo -H -u "${APP_USER}" env \
 
 chmod 0755 "${APP_DIR}/scripts/clean-apt-cache.sh"
 
+cat > /etc/sudoers.d/al-server-stats-du <<EOF
+${APP_USER} ALL=(root) NOPASSWD: /usr/bin/du -sb -- /usr, /usr/bin/du -sb -- /var, /usr/bin/du -sb -- /opt/al, /usr/bin/du -sb -- /var/lib/mongodb, /usr/bin/du -sb -- /var/cache/apt, /usr/bin/du -sb -- /var/log
+EOF
+chmod 0440 /etc/sudoers.d/al-server-stats-du
+visudo -cf /etc/sudoers.d/al-server-stats-du
+
 sed \
   -e "s#__APP_DIR__#${APP_DIR}#g" \
   -e "s#__APP_USER__#${APP_USER}#g" \

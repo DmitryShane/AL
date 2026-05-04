@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import socket
+import subprocess
 from pathlib import Path
 
 from ..activity_math import *
@@ -41,6 +42,10 @@ def _server_stats_category(key: str, path: Path) -> dict[str, Any]:
 
 
 def _path_size_bytes(path: Path) -> int:
+    du_size = _du_size_bytes(path)
+    if du_size is not None:
+        return du_size
+
     if path.is_file():
         return path.stat().st_size
 
@@ -53,6 +58,25 @@ def _path_size_bytes(path: Path) -> int:
             continue
 
     return total
+
+
+def _du_size_bytes(path: Path) -> int | None:
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "du", "-sb", "--", str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    first_field = result.stdout.split(maxsplit=1)[0] if result.stdout.strip() else ""
+    try:
+        return int(first_field)
+    except ValueError:
+        return None
 
 
 class SettingsRepository(MongoComposableMixin):
