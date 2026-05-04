@@ -1957,6 +1957,26 @@ def test_historical_activity_summary_does_not_mark_stopped_reports_as_realtime_s
     assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
 
 
+def test_alerts_presence_selected_day_reports_stopped_uses_evaluation_cap():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC))
+
+    summary = repo.activity_summary(
+        start_date="2026-04-28",
+        end_date="2026-04-28",
+        now=dt.datetime(2026, 4, 29, 18, 30, tzinfo=dt.UTC),
+        presence_alerts_for_selected_day=True,
+        include_profiles=False,
+        include_hourly=False,
+        include_breakdowns=False,
+    )
+    author = next(row for row in summary["authors"] if row["rawAuthor"] == "Future Artist")
+
+    assert [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
+    assert author["stalePresence"] == "reports"
+
+
 def test_historical_activity_summary_keeps_selected_day_telegram_offline_gray():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
@@ -1970,7 +1990,6 @@ def test_historical_activity_summary_keeps_selected_day_telegram_offline_gray():
     assert author["status"] == "stale"
     assert author["stalePresence"] == "telegram"
     assert not [alert for alert in author["alerts"] if alert["type"] == "reports_stopped"]
-
 
 def test_regular_date_still_applies_reports_stopped_when_it_is_author_local_today():
     repo = fake_repository()

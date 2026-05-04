@@ -821,7 +821,11 @@ def _should_apply_realtime_presence_alerts(
     date_mode: str | None,
     now: dt.datetime,
     workday_started: bool,
+    presence_alerts_for_selected_day: bool = False,
 ) -> bool:
+    if presence_alerts_for_selected_day:
+        return workday_started
+
     if date_mode == "authorLocalToday":
         return workday_started
 
@@ -919,10 +923,13 @@ def _with_alerts(
     now: dt.datetime,
     presence_override: dict[str, Any] | None = None,
     include_report_stopped_alerts: bool = True,
+    *,
+    evaluation_now: dt.datetime | None = None,
 ) -> dict[str, Any]:
     item = dict(author)
     alerts = list(item.get("securityAlerts") or [])
     alerts.extend(item.get("telegramAlerts") or [])
+    alert_clock = evaluation_now if evaluation_now is not None else now
     last_received_at = _coerce_datetime(item.get("lastReceivedAt"))
     stale_threshold_seconds = max(0, send_interval_seconds * 2)
     active_meeting = bool(item.get("activeMeeting"))
@@ -933,7 +940,7 @@ def _with_alerts(
     elif not include_report_stopped_alerts:
         pass
     elif last_received_at:
-        seconds_since_report = max(0, int((now - last_received_at).total_seconds()))
+        seconds_since_report = max(0, int((alert_clock - last_received_at).total_seconds()))
 
         if seconds_since_report > stale_threshold_seconds:
             alerts.append(
@@ -965,7 +972,7 @@ def _with_alerts(
         forced_offline = True
 
         if overtime_received_at:
-            seconds_since_overtime = max(0, int((now - overtime_received_at).total_seconds()))
+            seconds_since_overtime = max(0, int((alert_clock - overtime_received_at).total_seconds()))
             forced_offline = seconds_since_overtime > stale_threshold_seconds
 
     if not include_report_stopped_alerts:
@@ -1986,6 +1993,18 @@ def _add_meeting_interval_to_buckets(
 
 def _date_start(value: str) -> dt.datetime:
     return dt.datetime.fromisoformat(value).replace(tzinfo=dt.UTC)
+
+
+def _alerts_evaluation_cap_utc(real_now: dt.datetime, end_date_iso: str) -> dt.datetime:
+    """Latest instant where alert staleness toward plugin reports uses selected calendar endDate (UTC day end)."""
+    exclusive_next_midnight = _date_start(end_date_iso) + dt.timedelta(days=1)
+    cap = exclusive_next_midnight - dt.timedelta(microseconds=1)
+    if real_now.tzinfo is None:
+        real_now = real_now.replace(tzinfo=dt.UTC)
+    else:
+        real_now = real_now.astimezone(dt.UTC)
+
+    return min(real_now, cap)
 
 
 def _merge_count_list(

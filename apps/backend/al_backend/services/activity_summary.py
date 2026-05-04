@@ -271,6 +271,12 @@ class ActivitySummaryService:
         include_breakdowns: bool = True,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
+        presence_alerts_for_selected_day = (
+            view == "alerts"
+            and date_mode != "authorLocalToday"
+            and bool(str(start_date or "").strip())
+            and bool(str(end_date or "").strip())
+        )
         cache_key = self._activity_summary_cache_key(
             view,
             start_date,
@@ -279,6 +285,7 @@ class ActivitySummaryService:
             include_profiles,
             include_hourly,
             include_breakdowns,
+            presence_alerts_for_selected_day,
             now,
         )
         cached = self.db.activity_summary_cache.find_one(
@@ -299,6 +306,7 @@ class ActivitySummaryService:
             include_profiles=include_profiles,
             include_hourly=include_hourly,
             include_breakdowns=include_breakdowns,
+            presence_alerts_for_selected_day=presence_alerts_for_selected_day,
         )
         expires_at = now + dt.timedelta(seconds=self.SUMMARY_CACHE_TTL_SECONDS)
         self.db.activity_summary_cache.update_one(
@@ -337,6 +345,7 @@ class ActivitySummaryService:
         include_profiles: bool,
         include_hourly: bool,
         include_breakdowns: bool,
+        presence_alerts_for_selected_day: bool,
         now: dt.datetime,
     ) -> str:
         profiles = self._profiles_by_raw_author()
@@ -350,6 +359,7 @@ class ActivitySummaryService:
                 "profiles" if include_profiles else "no-profiles",
                 "hourly" if include_hourly else "no-hourly",
                 "breakdowns" if include_breakdowns else "no-breakdowns",
+                "psa1" if presence_alerts_for_selected_day else "psa0",
                 repr(scope_query.get("date", "")),
             ]
         )
@@ -651,6 +661,7 @@ class ActivitySummaryService:
         include_profiles: bool = True,
         include_hourly: bool = True,
         include_breakdowns: bool = True,
+        presence_alerts_for_selected_day: bool = False,
     ) -> dict[str, Any]:
         totals = {
             "daySeconds": 0,
@@ -678,6 +689,14 @@ class ActivitySummaryService:
         meeting_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         profiles = self._profiles_by_raw_author()
         now = now or dt.datetime.now(dt.UTC)
+        presence_calendar_anchor_day = (
+            str(end_date or "").strip() if presence_alerts_for_selected_day and str(end_date or "").strip() else None
+        )
+        alerts_evaluation_now = (
+            _alerts_evaluation_cap_utc(now, str(end_date or "").strip())
+            if presence_alerts_for_selected_day and str(end_date or "").strip()
+            else None
+        )
         daily_items = sorted(
             self.db.daily_author_activity.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0}),
             key=lambda item: (
@@ -1051,7 +1070,15 @@ class ActivitySummaryService:
         )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
-        self._apply_latest_report_metadata(authors_by_raw, start_date, end_date, date_mode, profiles, now)
+        self._apply_latest_report_metadata(
+            authors_by_raw,
+            start_date,
+            end_date,
+            date_mode,
+            profiles,
+            now,
+            omit_profile_raw_report_merge=presence_alerts_for_selected_day,
+        )
         _clear_inactive_author_report_metadata(authors_by_raw.values())
         presence_overrides = self._author_presence_overrides(
             authors_by_raw.keys(),
@@ -1075,6 +1102,7 @@ class ActivitySummaryService:
         for author in authors_by_raw.values():
             raw_author = author["rawAuthor"]
             presence_override = presence_overrides.get(raw_author)
+            calendar_anchor_day = presence_calendar_anchor_day if presence_alerts_for_selected_day else None
             workday_started = self._author_workday_started_for_summary(
                 raw_author,
                 author,
@@ -1083,6 +1111,7 @@ class ActivitySummaryService:
                 end_date,
                 date_mode,
                 now,
+                calendar_anchor_day=calendar_anchor_day,
             )
             include_report_stopped_alerts = _should_apply_realtime_presence_alerts(
                 raw_author,
@@ -1093,6 +1122,7 @@ class ActivitySummaryService:
                 date_mode,
                 now,
                 workday_started,
+                presence_alerts_for_selected_day=presence_alerts_for_selected_day,
             )
 
             if presence_override and presence_override.get("offlineAt"):
@@ -1105,13 +1135,15 @@ class ActivitySummaryService:
                 now,
                 presence_override,
                 include_report_stopped_alerts,
+                evaluation_now=alerts_evaluation_now,
             )
-            self._record_status_transition_for_author(
-                summary_author,
-                send_interval_seconds,
-                now,
-                include_report_stopped_alerts,
-            )
+            if not presence_alerts_for_selected_day:
+                self._record_status_transition_for_author(
+                    summary_author,
+                    send_interval_seconds,
+                    now,
+                    include_report_stopped_alerts,
+                )
             author_rows.append(summary_author)
         hourly_author_rows = [
             {**item, "hourlyActivity": _public_hourly_activity(item.get("hourlyActivity", []))}
@@ -1514,6 +1546,8 @@ class ActivitySummaryService:
         date_mode: str | None,
         profiles: dict[str, dict[str, Any]],
         now: dt.datetime,
+        *,
+        omit_profile_raw_report_merge: bool = False,
     ) -> None:
         latest_by_author: dict[str, dict[str, Any]] = {}
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
@@ -1569,14 +1603,17 @@ class ActivitySummaryService:
             row_dt = _coerce_datetime(author_row.get("lastReceivedAt"))
             merged: list[dt.datetime] = []
 
-            if profile_raw_dt:
-                merged.append(profile_raw_dt)
+            if not omit_profile_raw_report_merge:
+                if profile_raw_dt:
+                    merged.append(profile_raw_dt)
 
-            if row_dt:
-                merged.append(row_dt)
+                if row_dt:
+                    merged.append(row_dt)
 
-            if merged:
-                author_row["lastReceivedAt"] = _iso(max(merged))
+                if merged:
+                    author_row["lastReceivedAt"] = _iso(max(merged))
+            elif row_dt:
+                author_row["lastReceivedAt"] = _iso(row_dt)
 
     def _author_presence_overrides(
         self,
@@ -1645,18 +1682,22 @@ class ActivitySummaryService:
         end_date: str | None,
         date_mode: str | None,
         now: dt.datetime,
+        calendar_anchor_day: str | None = None,
     ) -> bool:
         if bool(author.get("activeMeeting")):
             return True
 
         time_zone_id = _author_time_zone_id(raw_author, profiles, author.get("timeZoneId"))
-        local_today = _local_date_for_time_zone(now, time_zone_id)
+        if calendar_anchor_day:
+            anchor_day = calendar_anchor_day
+        else:
+            anchor_day = _local_date_for_time_zone(now, time_zone_id)
 
-        if not _date_in_summary_scope(local_today, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+        if not _date_in_summary_scope(anchor_day, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
             return False
 
         session = self.db.day_sessions.find_one(
-            {"rawAuthor": raw_author, "date": local_today},
+            {"rawAuthor": raw_author, "date": anchor_day},
             {"_id": 0, "startedAt": 1, "lastOfflineAt": 1, "lastOnlineAt": 1},
         )
 
@@ -1675,7 +1716,7 @@ class ActivitySummaryService:
         if _author_has_summary_activity(author):
             return True
 
-        report_query = {"author": raw_author, "date": local_today, "source": {"$nin": ["telegram", "discord"]}}
+        report_query = {"author": raw_author, "date": anchor_day, "source": {"$nin": ["telegram", "discord"]}}
         return bool(self.db.report_rows.find_one(report_query, {"_id": 0}))
 
     def analytics_summary(self, period: str = "7d") -> dict[str, Any]:
