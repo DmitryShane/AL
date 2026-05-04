@@ -589,6 +589,49 @@ def test_reports_page_filters_by_author_local_hour():
     assert page["reports"][0]["recordedAt"] == "2026-05-01T13:30:00Z"
 
 
+def test_reports_page_includes_alias_source_rows_for_selected_author():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "displayName": "Dmitry Shane",
+            "team": "Core",
+            "timeZoneId": "Europe/Sofia",
+            "timeZoneDisplayName": "EET",
+        }
+    )
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device2", "targetRawAuthor": "Dmitry Shane"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "dev",
+            "author": "Device2",
+            "date": "2026-05-05",
+            "recordedAt": "2026-05-05T01:11:23+02:00",
+            "receivedAt": dt.datetime(2026, 5, 4, 23, 11, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Other Author",
+            "date": "2026-05-05",
+            "recordedAt": "2026-05-05T01:12:23+02:00",
+            "receivedAt": dt.datetime(2026, 5, 4, 23, 12, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+        }
+    )
+
+    page = repo.reports_page(start_date="2026-05-05", end_date="2026-05-05", author="Dmitry Shane")
+
+    assert page["total"] == 1
+    assert page["sources"] == ["dev"]
+    assert page["reports"][0]["author"] == "Device2"
+    assert page["reports"][0]["displayName"] == "Dmitry Shane"
+    assert page["reports"][0]["team"] == "Core"
+    assert page["reports"][0]["timeZoneId"] == "Europe/Sofia"
+
+
 def test_reports_page_enriches_report_timezone_from_author_profile():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(

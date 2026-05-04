@@ -150,6 +150,19 @@ class SettingsRepository(MongoComposableMixin):
 
         return normalized_author
 
+    def author_alias_keys(self, raw_author: str | None) -> list[str]:
+        canonical = self.resolve_author_alias(raw_author)
+        keys = {canonical}
+
+        for alias in self.db.author_aliases.find({"targetRawAuthor": canonical}, {"_id": 0, "sourceRawAuthor": 1}):
+            source = _normalize_author(alias.get("sourceRawAuthor"))
+
+            if source:
+                keys.add(source)
+
+        keys.discard("")
+        return sorted(keys)
+
     def author_aliases(self) -> list[dict[str, Any]]:
         return list(self.db.author_aliases.find({}, {"_id": 0}).sort("sourceRawAuthor", ASCENDING))
 

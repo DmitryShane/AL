@@ -55,7 +55,7 @@ class ActivitySummaryService(MongoComposableMixin):
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
         if author:
-            query["author"] = composed(self).resolve_author_alias(author)
+            query["author"] = {"$in": composed(self).author_alias_keys(author)}
 
         if source:
             query["source"] = source
@@ -111,7 +111,7 @@ class ActivitySummaryService(MongoComposableMixin):
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
         if author:
-            query["author"] = composed(self).resolve_author_alias(author)
+            query["author"] = {"$in": composed(self).author_alias_keys(author)}
 
         if source:
             query["source"] = source
@@ -202,8 +202,9 @@ class ActivitySummaryService(MongoComposableMixin):
                 continue
 
             if total >= offset and len(reports) < limit:
-                profile = profiles.get(item.get("author") or "Unknown User", {})
-                item["displayName"] = _display_name(item.get("author"), profile)
+                resolved_author = composed(self).resolve_author_alias(item.get("author") or "Unknown User")
+                profile = profiles.get(resolved_author, {})
+                item["displayName"] = _display_name(resolved_author, profile)
                 item["team"] = profile.get("team", "")
                 item["timeZoneId"] = profile.get("timeZoneId") or item.get("timeZoneId")
                 item["timeZoneDisplayName"] = profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName")
