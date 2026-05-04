@@ -100,7 +100,7 @@ When debugging summaries, `status_events`, or idle accounting:
 
 - **Red author-card offline** maps to **`reports_stopped`** (plugin reports stopped while the workday expects them). It is **not** the same thing as Telegram chat offline or Telegram day boundaries.
 - Transitions are stored as **`status_events`** with `statusEventType` `offline`/`online` and **`reason` values such as `reports_stopped` / `reports_resumed`**. Activity aggregation treats these as generic offline/online intervals (`activity_aggregation._status_interval_context_for_event`); it does not branch on Telegram vs plugin semantics there.
-- Some writes still go through **`telegram_activity.py`** (`record_status_event`, `_record_status_transition_for_author`). That module name is historical — **do not infer “Telegram-only behaviour” from the filename** when reasoning about `reports_stopped` or red stale-plugin states.
+- Persisting plugin stale transitions (`status_events`, status `report_rows`) is implemented in **`author_status_events.py`** (`record_status_event`, `_record_status_transition_for_author`).
 
 ## Terminology
 

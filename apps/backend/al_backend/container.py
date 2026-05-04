@@ -5,6 +5,7 @@ from .repositories.settings import SettingsRepository
 from .repositories.authors import AuthorRepository
 from .services.report_ingest import ReportIngestService
 from .services.activity_summary import ActivitySummaryService
+from .services.author_status_events import AuthorStatusEventsService
 from .services.calendar import CalendarService
 from .services.discord_meetings import DiscordMeetingService
 from .services.telegram_activity import TelegramActivityService
@@ -23,6 +24,7 @@ class BackendServices(
     CalendarService,
     DiscordMeetingService,
     TelegramActivityService,
+    AuthorStatusEventsService,
     ActivityAggregationService,
 ):
     aggregates_version = 28
