@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from typing import Any
 
 from pymongo import DESCENDING
@@ -21,6 +22,17 @@ from ..activity_math import (
 )
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+
+
+MEETING_RECORDING_SUCCESS_STATUSES = {
+    "queued_for_summary",
+    "uploading_audio",
+    "transcribing_openai",
+    "summarizing_openai",
+    "waiting_for_telegram",
+    "telegram_claimed",
+    "telegram_sent",
+}
 
 
 class DiscordMeetingService(MongoComposableMixin):
@@ -576,11 +588,78 @@ class DiscordMeetingService(MongoComposableMixin):
                     "durationSeconds": duration_seconds,
                     "summaryId": summary_id,
                     "updatedAt": now,
-                }
+                },
+                "$unset": {"error": ""},
             },
             upsert=True,
         )
         return {"ok": True, "status": "summary_created", "summaryId": summary_id}
+
+    def queue_meeting_recording_summary_processing(
+        self,
+        *,
+        recording_id: str,
+        ended_at: str,
+        duration_seconds: int,
+        audio_frame_count: int = 0,
+        non_silent_frame_count: int = 0,
+        corrupted_packet_count: int = 0,
+        unknown_source_frame_count: int = 0,
+        bot_frame_count: int = 0,
+        empty_pcm_frame_count: int = 0,
+        silence_padding_frame_count: int = 0,
+        out_of_order_frame_count: int = 0,
+        mixed_user_count: int = 0,
+        per_user_frame_counts: dict[str, int] | None = None,
+        per_user_non_silent_frame_counts: dict[str, int] | None = None,
+        listen_error_count: int = 0,
+        listen_error: str = "",
+        audio_quality_status: str = "",
+        audio_size_bytes: int = 0,
+    ) -> dict[str, Any]:
+        audio_stats = {
+            "audioFrameCount": max(0, int(audio_frame_count or 0)),
+            "nonSilentFrameCount": max(0, int(non_silent_frame_count or 0)),
+            "corruptedPacketCount": max(0, int(corrupted_packet_count or 0)),
+            "unknownSourceFrameCount": max(0, int(unknown_source_frame_count or 0)),
+            "botFrameCount": max(0, int(bot_frame_count or 0)),
+            "emptyPcmFrameCount": max(0, int(empty_pcm_frame_count or 0)),
+            "silencePaddingFrameCount": max(0, int(silence_padding_frame_count or 0)),
+            "outOfOrderFrameCount": max(0, int(out_of_order_frame_count or 0)),
+            "mixedUserCount": max(0, int(mixed_user_count or 0)),
+            "perUserFrameCounts": per_user_frame_counts or {},
+            "perUserNonSilentFrameCounts": per_user_non_silent_frame_counts or {},
+            "listenErrorCount": max(0, int(listen_error_count or 0)),
+            "listenError": str(listen_error or "")[:1000],
+            "audioSizeBytes": max(0, int(audio_size_bytes or 0)),
+        }
+        audio_stats["audioQualityStatus"] = audio_quality_status or _meeting_audio_quality_status(audio_stats)
+        self._update_meeting_recording_pipeline_status(
+            recording_id,
+            "queued_for_summary",
+            ended_at=_parse_timestamp(ended_at),
+            duration_seconds=duration_seconds,
+            extra_fields=audio_stats,
+        )
+        return {"ok": True, "status": "summary_queued"}
+
+    def process_queued_meeting_recording_summary(
+        self,
+        *,
+        delete_audio_after_processing: bool = True,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        try:
+            return self.process_meeting_recording_finished(**kwargs)
+        finally:
+            if delete_audio_after_processing:
+                audio_path = str(kwargs.get("audio_path") or "")
+
+                if audio_path:
+                    try:
+                        os.remove(audio_path)
+                    except FileNotFoundError:
+                        pass
 
     def _update_meeting_recording_pipeline_status(
         self,
@@ -607,11 +686,12 @@ class DiscordMeetingService(MongoComposableMixin):
         if extra_fields:
             fields.update(extra_fields)
 
-        self.db.meeting_recordings.update_one(
-            {"recordingId": recording_id},
-            {"$set": fields},
-            upsert=True,
-        )
+        operation: dict[str, Any] = {"$set": fields}
+
+        if status in MEETING_RECORDING_SUCCESS_STATUSES:
+            operation["$unset"] = {"error": ""}
+
+        self.db.meeting_recordings.update_one({"recordingId": recording_id}, operation, upsert=True)
 
     def _mark_meeting_recording_finished(
         self,

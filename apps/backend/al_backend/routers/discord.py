@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import tempfile
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, UploadFile
 
 from ..api_security import require_discord_bot_secret, require_permission
 from ..container import BackendServices
@@ -117,6 +118,7 @@ def update_discord_meeting_recording_status(
 
 @router.post("/api/v1/discord/meeting-recordings/finish")
 def record_discord_meeting_recording_finished(
+    background_tasks: BackgroundTasks,
     request: Request,
     recording_id: str = Form(alias="recordingId"),
     guild_id: str | None = Form(default=None, alias="guildId"),
@@ -147,7 +149,11 @@ def record_discord_meeting_recording_finished(
     require_discord_bot_secret(request)
     participant_ids = json.loads(participant_discord_user_ids or "[]")
     names = json.loads(participant_names or "[]")
+    parsed_per_user_frame_counts = parse_json_object(per_user_frame_counts)
+    parsed_per_user_non_silent_frame_counts = parse_json_object(per_user_non_silent_frame_counts)
+    duration_seconds = max(0, int((_parse_timestamp_for_duration(ended_at) - _parse_timestamp_for_duration(started_at)).total_seconds()))
     temp_path = ""
+    queued = False
 
     try:
         suffix = os.path.splitext(audio.filename or "meeting.wav")[1] or ".wav"
@@ -155,14 +161,43 @@ def record_discord_meeting_recording_finished(
             temp_path = temp_file.name
             temp_file.write(audio.file.read())
 
-        return service.process_meeting_recording_finished(
+        processing_kwargs = {
+            "recording_id": recording_id,
+            "guild_id": guild_id,
+            "channel_id": channel_id,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "participant_discord_user_ids": [str(item) for item in participant_ids],
+            "participant_names": [str(item) for item in names],
+            "audio_frame_count": audio_frame_count,
+            "non_silent_frame_count": non_silent_frame_count,
+            "corrupted_packet_count": corrupted_packet_count,
+            "unknown_source_frame_count": unknown_source_frame_count,
+            "bot_frame_count": bot_frame_count,
+            "empty_pcm_frame_count": empty_pcm_frame_count,
+            "silence_padding_frame_count": silence_padding_frame_count,
+            "out_of_order_frame_count": out_of_order_frame_count,
+            "mixed_user_count": mixed_user_count,
+            "per_user_frame_counts": parsed_per_user_frame_counts,
+            "per_user_non_silent_frame_counts": parsed_per_user_non_silent_frame_counts,
+            "listen_error_count": listen_error_count,
+            "listen_error": listen_error,
+            "audio_quality_status": audio_quality_status,
+            "audio_size_bytes": audio_size_bytes,
+            "audio_path": temp_path,
+            "summary_generator": lambda path, people, language, prompt_template, progress_callback=None: generate_meeting_summary(
+                settings,
+                path,
+                participant_names=people,
+                language=language,
+                prompt_template=prompt_template,
+                progress_callback=progress_callback,
+            ),
+        }
+        result = service.queue_meeting_recording_summary_processing(
             recording_id=recording_id,
-            guild_id=guild_id,
-            channel_id=channel_id,
-            started_at=started_at,
             ended_at=ended_at,
-            participant_discord_user_ids=[str(item) for item in participant_ids],
-            participant_names=[str(item) for item in names],
+            duration_seconds=duration_seconds,
             audio_frame_count=audio_frame_count,
             non_silent_frame_count=non_silent_frame_count,
             corrupted_packet_count=corrupted_packet_count,
@@ -172,25 +207,25 @@ def record_discord_meeting_recording_finished(
             silence_padding_frame_count=silence_padding_frame_count,
             out_of_order_frame_count=out_of_order_frame_count,
             mixed_user_count=mixed_user_count,
-            per_user_frame_counts=parse_json_object(per_user_frame_counts),
-            per_user_non_silent_frame_counts=parse_json_object(per_user_non_silent_frame_counts),
+            per_user_frame_counts=parsed_per_user_frame_counts,
+            per_user_non_silent_frame_counts=parsed_per_user_non_silent_frame_counts,
             listen_error_count=listen_error_count,
             listen_error=listen_error,
             audio_quality_status=audio_quality_status,
             audio_size_bytes=audio_size_bytes,
-            audio_path=temp_path,
-            summary_generator=lambda path, people, language, prompt_template, progress_callback=None: generate_meeting_summary(
-                settings,
-                path,
-                participant_names=people,
-                language=language,
-                prompt_template=prompt_template,
-                progress_callback=progress_callback,
-            ),
         )
-    finally:
-        if temp_path:
+        queued = True
+        background_tasks.add_task(service.process_queued_meeting_recording_summary, **processing_kwargs)
+        return result
+    except Exception:
+        if temp_path and not queued:
             try:
                 os.remove(temp_path)
             except FileNotFoundError:
                 pass
+
+        raise
+
+
+def _parse_timestamp_for_duration(value: str) -> dt.datetime:
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))

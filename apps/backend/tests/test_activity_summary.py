@@ -3980,6 +3980,148 @@ def test_meeting_recording_finished_creates_summary_notification():
     assert "Discord summaries" in notifications[0]["summary"]
 
 
+def test_meeting_recording_summary_queue_stores_audio_stats_and_clears_error():
+    repo = fake_repository()
+    repo.db.meeting_recordings.insert_one(
+        {
+            "recordingId": "recording-queued",
+            "status": "recording_failed",
+            "error": "<html>504 Gateway Time-out</html>",
+        }
+    )
+
+    result = repo.queue_meeting_recording_summary_processing(
+        recording_id="recording-queued",
+        ended_at="2026-04-29T10:03:00+00:00",
+        duration_seconds=180,
+        audio_frame_count=100,
+        non_silent_frame_count=80,
+        mixed_user_count=2,
+        audio_quality_status="ok",
+    )
+    recording = repo.db.meeting_recordings.find_one({"recordingId": "recording-queued"})
+
+    assert result == {"ok": True, "status": "summary_queued"}
+    assert recording["status"] == "queued_for_summary"
+    assert recording["durationSeconds"] == 180
+    assert recording["audioFrameCount"] == 100
+    assert recording["nonSilentFrameCount"] == 80
+    assert recording["mixedUserCount"] == 2
+    assert recording["audioQualityStatus"] == "ok"
+    assert "error" not in recording
+
+
+def test_queued_meeting_recording_summary_worker_creates_summary_and_deletes_audio():
+    repo = fake_repository()
+    repo.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=600,
+        meeting_summaries_enabled=True,
+        meeting_summary_min_participants=2,
+        meeting_summary_min_duration_seconds=60,
+        meeting_summary_language="English",
+        meeting_summary_recipient="work_chat",
+        meeting_audio_retention_seconds=0,
+        meeting_summary_prompt="",
+    )
+
+    class FakeSummary:
+        transcript = "Dmitry and Igor agreed to create a Discord summary task."
+        summary = "Discussed:\n- Plans for Discord summaries.\n\nDecisions:\n- Add Discord summaries.\n\nAction items:\n- Create a task.\n\nOpen questions:\n- None."
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as audio_file:
+        audio_path = audio_file.name
+        audio_file.write(b"audio")
+
+    result = repo.process_queued_meeting_recording_summary(
+        recording_id="recording-worker",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        ended_at="2026-04-29T10:03:00+00:00",
+        participant_discord_user_ids=["1", "2"],
+        participant_names=["Dmitry", "Igor"],
+        audio_path=audio_path,
+        summary_generator=lambda path, people, language, prompt_template, progress_callback=None: FakeSummary(),
+    )
+    recording = repo.db.meeting_recordings.find_one({"recordingId": "recording-worker"})
+
+    assert result["status"] == "summary_created"
+    assert recording["status"] == "waiting_for_telegram"
+    assert recording["summaryId"] == result["summaryId"]
+    assert Path(audio_path).exists() is False
+
+
+def test_meeting_recording_summary_worker_keeps_existing_summary_idempotent():
+    repo = fake_repository()
+    repo.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=600,
+        meeting_summaries_enabled=True,
+        meeting_summary_min_participants=2,
+        meeting_summary_min_duration_seconds=60,
+        meeting_summary_language="English",
+        meeting_summary_recipient="work_chat",
+        meeting_audio_retention_seconds=0,
+        meeting_summary_prompt="",
+    )
+    repo.db.meeting_summaries.insert_one(
+        {
+            "summaryId": "summary-existing",
+            "recordingId": "recording-existing",
+            "status": "pending",
+        }
+    )
+    called = False
+
+    def fake_summary_generator(path, people, language, prompt_template, progress_callback=None):
+        nonlocal called
+        called = True
+
+    result = repo.process_meeting_recording_finished(
+        recording_id="recording-existing",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        ended_at="2026-04-29T10:03:00+00:00",
+        participant_discord_user_ids=["1", "2"],
+        participant_names=["Dmitry", "Igor"],
+        audio_path="/tmp/missing.wav",
+        summary_generator=fake_summary_generator,
+    )
+
+    assert result == {"ok": True, "status": "summary_already_created", "summaryId": "summary-existing"}
+    assert called is False
+    assert len(repo.db.meeting_summaries.items) == 1
+
+
+def test_meeting_summary_sent_clears_stale_recording_error():
+    repo = fake_repository()
+    repo.db.meeting_recordings.insert_one(
+        {
+            "recordingId": "recording-sent",
+            "status": "recording_failed",
+            "startedAt": dt.datetime(2026, 5, 1, 10, 0, tzinfo=dt.UTC),
+            "error": "<html>504 Gateway Time-out</html>",
+        }
+    )
+    repo.db.meeting_summaries.insert_one(
+        {
+            "summaryId": "summary-sent",
+            "recordingId": "recording-sent",
+            "status": "claimed",
+        }
+    )
+
+    result = repo.mark_telegram_meeting_summary_sent("summary-sent", message_id=123)
+    recording = repo.db.meeting_recordings.find_one({"recordingId": "recording-sent"})
+    recent = repo.recent_meeting_recordings()[0]
+
+    assert result["ok"] is True
+    assert recording["status"] == "telegram_sent"
+    assert "error" not in recording
+    assert recent["status"] == "telegram_sent"
+    assert recent["error"] is None
+
+
 def test_meeting_recording_finished_skips_solo_recording():
     repo = fake_repository()
     repo.upsert_discord_summary_settings(
