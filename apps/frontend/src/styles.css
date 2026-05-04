@@ -2674,7 +2674,7 @@ p {
   }
 }
 
-.settings-row label,
+.settings-row label:not(.radio-inline),
 .profile-create-card label,
 .site-user-create-card label,
 .profile-row label:not(.checkbox-cell):not(.radio-inline),
@@ -2730,6 +2730,46 @@ p {
 
 .settings-row .wide-field {
   flex-basis: 100%;
+}
+
+.settings-row .plugin-ingest-field {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-row .plugin-ingest-field-heading {
+  color: #718093;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.settings-row .plugin-ingest-radios {
+  display: inline-flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 38px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 12px;
+  box-sizing: border-box;
+}
+
+.settings-row .plugin-ingest-radios label.radio-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #202a36;
+  font-weight: 600;
+}
+
+.settings-row .plugin-ingest-radios input[type="radio"] {
+  min-height: auto;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  width: auto;
 }
 
 .meeting-summary-settings-row {

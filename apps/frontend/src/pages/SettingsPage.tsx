@@ -758,17 +758,35 @@ export function SettingsPage({
               Idle threshold, sec
               <input value={idleThreshold} onChange={(event) => setIdleThreshold(event.target.value)} type="number" min="30" />
             </label>
-            <label>
-              Plugin reports
-              <span className="checkbox-cell plugin-ingest-toggle">
-                <input
-                  type="checkbox"
-                  checked={pluginIngestEnabled}
-                  onChange={(event) => setPluginIngestEnabled(event.target.checked)}
-                />
-                {pluginIngestEnabled ? "On" : "Off"}
+            <div className="plugin-ingest-field">
+              <span id="plugin-ingest-heading" className="plugin-ingest-field-heading">
+                Plugin reports
               </span>
-            </label>
+              <div
+                className="plugin-ingest-radios"
+                role="radiogroup"
+                aria-labelledby="plugin-ingest-heading"
+              >
+                <label className="radio-inline">
+                  <input
+                    type="radio"
+                    name="plugin-ingest-enabled"
+                    checked={pluginIngestEnabled}
+                    onChange={() => setPluginIngestEnabled(true)}
+                  />
+                  On
+                </label>
+                <label className="radio-inline">
+                  <input
+                    type="radio"
+                    name="plugin-ingest-enabled"
+                    checked={!pluginIngestEnabled}
+                    onChange={() => setPluginIngestEnabled(false)}
+                  />
+                  Off
+                </label>
+              </div>
+            </div>
             <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={saving === "interval" || !isIntervalSettingsDirty}>
               {settingsSaveButtonLabel("interval", saving, saveStatus)}
             </button>
