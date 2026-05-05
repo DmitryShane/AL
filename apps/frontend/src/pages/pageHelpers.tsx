@@ -648,9 +648,11 @@ export function formatDiscordEvent(eventType?: string, status?: string) {
   const labels: Record<string, string> = {
     join: "meeting join",
     leave: "meeting leave",
+    live: "live",
     reconcile: "meeting live",
     meeting_join: "meeting join",
     meeting_leave: "meeting leave",
+    meeting_live: "live",
     meeting_reconcile: "meeting live"
   };
 
