@@ -39,6 +39,7 @@ from al_backend.telegram_bot import (
     parse_event_type,
     parse_reminder_callback,
     meeting_summary_chat_id,
+    format_meeting_recording_notification_message,
     format_meeting_summary_message,
     send_break_activity_prompt_message,
     send_duplicate_afk_prompt_message,
@@ -4220,6 +4221,93 @@ def test_meeting_recording_finished_creates_summary_notification():
     assert "Discord summaries" in notifications[0]["summary"]
 
 
+def test_meeting_recording_start_and_finish_create_telegram_notifications():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "displayName": "Dmitry Shane",
+            "telegramUsername": "dmitryshane",
+            "discordUserId": "1",
+        }
+    )
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "telegramUsername": "igormats",
+            "discordUserId": "2",
+        }
+    )
+    repo.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=600,
+        meeting_summaries_enabled=True,
+        meeting_summary_min_participants=3,
+        meeting_summary_min_duration_seconds=60,
+        meeting_summary_language="English",
+        meeting_summary_recipient="work_chat",
+        meeting_audio_retention_seconds=0,
+        meeting_summary_prompt="",
+    )
+
+    start_result = repo.record_meeting_recording_started(
+        recording_id="recording-telegram",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        participant_discord_user_ids=["1", "2"],
+        participant_names=["Dmitry", "Igor"],
+    )
+    finish_result = repo.process_meeting_recording_finished(
+        recording_id="recording-telegram",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        ended_at="2026-04-29T10:03:00+00:00",
+        participant_discord_user_ids=["1", "2"],
+        participant_names=["Dmitry", "Igor"],
+        audio_path="/tmp/missing.wav",
+        summary_generator=lambda path, people, language, prompt_template, progress_callback=None: None,
+    )
+    notifications = repo.claim_due_telegram_meeting_recording_notifications()
+
+    assert start_result["status"] == "recording_started"
+    assert finish_result["status"] == "skipped_not_enough_participants"
+    assert [item["kind"] for item in notifications] == ["started", "ended"]
+    assert notifications[0]["participantTelegramUsernames"] == ["dmitryshane", "igormats"]
+    assert notifications[1]["durationSeconds"] == 180
+
+    repo.record_meeting_recording_started(
+        recording_id="recording-telegram",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        participant_discord_user_ids=["1", "2"],
+        participant_names=["Dmitry", "Igor"],
+    )
+
+    assert len(repo.db.telegram_meeting_recording_notifications.items) == 2
+
+
+def test_meeting_recording_notification_mark_sent():
+    repo = fake_repository()
+    repo.db.telegram_meeting_recording_notifications.insert_one(
+        {
+            "reminderId": "meeting-recording-reminder",
+            "recordingId": "recording-1",
+            "kind": "started",
+            "status": "pending",
+        }
+    )
+
+    result = repo.mark_telegram_meeting_recording_notification_sent("meeting-recording-reminder", message_id=321)
+    notification = repo.db.telegram_meeting_recording_notifications.find_one({"reminderId": "meeting-recording-reminder"})
+
+    assert result["ok"] is True
+    assert notification["status"] == "sent"
+    assert notification["messageId"] == 321
+
+
 def test_meeting_recording_summary_queue_stores_audio_stats_and_clears_error():
     repo = fake_repository()
     repo.db.meeting_recordings.insert_one(
@@ -4599,6 +4687,26 @@ def test_meeting_summary_message_falls_back_to_participant_names():
     )
 
     assert "Participants: @Dmitry, @Igor" in message
+
+
+def test_meeting_recording_notification_message_starts_with_hi_and_mentions_participants():
+    start_message = format_meeting_recording_notification_message(
+        {
+            "kind": "started",
+            "participantNames": ["Dmitry", "Igor"],
+            "participantTelegramUsernames": ["dmitryshane", "igormats"],
+        }
+    )
+    end_message = format_meeting_recording_notification_message(
+        {
+            "kind": "ended",
+            "participantNames": ["Dmitry", "Igor"],
+            "participantTelegramUsernames": ["dmitryshane", "igormats"],
+        }
+    )
+
+    assert start_message == "Hi @dmitryshane, @igormats. Your meeting has started. Hope it goes smoothly!"
+    assert end_message == "Hi @dmitryshane, @igormats. Your meeting has ended. Thanks everyone, please wait for the summary."
 
 
 def test_recent_meeting_recordings_include_summary_delivery_status():

@@ -149,7 +149,7 @@ class TelegramReminderSentIn(ApiModel):
     kind: str = Field(
         default="day_end",
         alias="kind",
-        pattern="^(day_end|online_prompt|break_activity_prompt|duplicate_afk_prompt|meeting_auto_afk|meeting_summary)$",
+        pattern="^(day_end|online_prompt|break_activity_prompt|duplicate_afk_prompt|meeting_auto_afk|meeting_recording|meeting_summary)$",
     )
 
 

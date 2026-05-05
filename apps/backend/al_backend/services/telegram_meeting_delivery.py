@@ -8,6 +8,52 @@ from ..mongo_composable import MongoComposableMixin
 
 
 class TelegramMeetingDeliveryService(MongoComposableMixin):
+    def claim_due_telegram_meeting_recording_notifications(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
+        now = now or dt.datetime.now(dt.UTC)
+        notifications: list[dict[str, Any]] = []
+
+        for doc in self.db.telegram_meeting_recording_notifications.find({"status": "pending"}, {"_id": 0}):
+            reminder_id = str(doc.get("reminderId") or "")
+
+            if not reminder_id:
+                continue
+
+            self.db.telegram_meeting_recording_notifications.update_one(
+                {"reminderId": reminder_id},
+                {"$set": {"status": "claimed", "lastClaimedAt": now, "updatedAt": now}},
+            )
+            notifications.append(
+                {
+                    "reminderId": reminder_id,
+                    "recordingId": doc.get("recordingId"),
+                    "kind": doc.get("kind"),
+                    "participantNames": doc.get("participantNames", []),
+                    "participantTelegramUsernames": doc.get("participantTelegramUsernames", []),
+                    "startedAt": _isoformat_or_none(doc.get("startedAt")),
+                    "endedAt": _isoformat_or_none(doc.get("endedAt")),
+                    "durationSeconds": int(doc.get("durationSeconds", 0)),
+                }
+            )
+
+        return notifications
+
+    def mark_telegram_meeting_recording_notification_sent(
+        self, reminder_id: str, message_id: int | None = None
+    ) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_meeting_recording_notifications.update_one(
+            {"reminderId": reminder_id},
+            {
+                "$set": {
+                    "status": "sent",
+                    "messageId": message_id,
+                    "sentAt": now,
+                    "updatedAt": now,
+                }
+            },
+        )
+        return {"ok": True}
+
     def claim_due_telegram_meeting_auto_afk_notifications(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
         now = now or dt.datetime.now(dt.UTC)
         notifications: list[dict[str, Any]] = []

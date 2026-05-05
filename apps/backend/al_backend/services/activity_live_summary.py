@@ -125,7 +125,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
 
         def is_after_first_online(key: tuple[str, str], occurred_at: dt.datetime) -> bool:
             first_online = first_online_by_key.get(key)
-            return bool(first_online and occurred_at > first_online["timestamp"])
+            return bool(first_online and occurred_at >= first_online["timestamp"])
 
         for event in self.db.break_events.find(
             {"rawAuthor": {"$in": authors}, "date": {"$in": dates}, "eventType": {"$in": ["online", "offline"]}},

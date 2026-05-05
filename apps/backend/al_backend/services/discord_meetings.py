@@ -543,6 +543,18 @@ class DiscordMeetingService(MongoComposableMixin):
             },
             upsert=True,
         )
+        self._schedule_telegram_meeting_recording_notification(
+            recording_id=recording_id,
+            kind="started",
+            guild_id=guild_id,
+            channel_id=channel_id,
+            started_at=started,
+            ended_at=None,
+            duration_seconds=0,
+            participant_discord_user_ids=participant_discord_user_ids,
+            participant_names=participant_names,
+            now=now,
+        )
         return {"ok": True, "status": "recording_started"}
 
     def process_meeting_recording_finished(
@@ -578,6 +590,18 @@ class DiscordMeetingService(MongoComposableMixin):
         ended = _parse_timestamp(ended_at)
         duration_seconds = max(0, int((ended - started).total_seconds()))
         settings = composed(self).get_discord_settings()
+        self._schedule_telegram_meeting_recording_notification(
+            recording_id=recording_id,
+            kind="ended",
+            guild_id=guild_id,
+            channel_id=channel_id,
+            started_at=started,
+            ended_at=ended,
+            duration_seconds=duration_seconds,
+            participant_discord_user_ids=participant_discord_user_ids,
+            participant_names=participant_names,
+            now=now,
+        )
         audio_stats = {
             "audioFrameCount": max(0, int(audio_frame_count or 0)),
             "nonSilentFrameCount": max(0, int(non_silent_frame_count or 0)),
@@ -764,6 +788,50 @@ class DiscordMeetingService(MongoComposableMixin):
                         os.remove(audio_path)
                     except FileNotFoundError:
                         pass
+
+    def _schedule_telegram_meeting_recording_notification(
+        self,
+        *,
+        recording_id: str,
+        kind: str,
+        guild_id: str | None,
+        channel_id: str | None,
+        started_at: dt.datetime,
+        ended_at: dt.datetime | None,
+        duration_seconds: int,
+        participant_discord_user_ids: list[str],
+        participant_names: list[str],
+        now: dt.datetime,
+    ) -> None:
+        if kind not in {"started", "ended"}:
+            return
+
+        participant_telegram_usernames = self._meeting_participant_telegram_usernames(
+            participant_discord_user_ids,
+            participant_names,
+        )
+        self.db.telegram_meeting_recording_notifications.update_one(
+            {"recordingId": recording_id, "kind": kind},
+            {
+                "$setOnInsert": {
+                    "reminderId": _new_id(),
+                    "recordingId": recording_id,
+                    "kind": kind,
+                    "guildId": str(guild_id or ""),
+                    "channelId": str(channel_id or ""),
+                    "startedAt": started_at,
+                    "endedAt": ended_at,
+                    "durationSeconds": max(0, int(duration_seconds or 0)),
+                    "participantDiscordUserIds": participant_discord_user_ids,
+                    "participantNames": participant_names,
+                    "participantTelegramUsernames": participant_telegram_usernames,
+                    "status": "pending",
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+            },
+            upsert=True,
+        )
 
     def _update_meeting_recording_pipeline_status(
         self,

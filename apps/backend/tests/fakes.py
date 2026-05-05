@@ -186,6 +186,7 @@ class FakeDb:
         self.telegram_break_activity_prompts = FakeCollection()
         self.telegram_duplicate_afk_prompts = FakeCollection()
         self.telegram_meeting_auto_afk_notifications = FakeCollection()
+        self.telegram_meeting_recording_notifications = FakeCollection()
         self.meeting_recordings = FakeCollection()
         self.meeting_summaries = FakeCollection()
         self.break_intervals = FakeCollection()
