@@ -598,6 +598,21 @@ class SettingsRepository(MongoComposableMixin):
             ],
         }
 
+    def reboot_server(self) -> dict[str, Any]:
+        requested_at = dt.datetime.now(dt.UTC)
+
+        try:
+            subprocess.Popen(
+                ["sudo", "-n", "systemctl", "reboot"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "error": str(exc), "requestedAt": requested_at.isoformat()}
+
+        return {"ok": True, "status": "reboot_requested", "requestedAt": requested_at.isoformat()}
+
     def upsert_discord_settings(self, meeting_auto_afk_timeout_seconds: int) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         current = self.get_discord_settings()

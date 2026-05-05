@@ -19,6 +19,14 @@ def server_stats(
     return service.get_server_stats()
 
 
+@router.post("/api/v1/settings/server-reboot")
+def server_reboot(
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.reboot_server()
+
+
 @router.get("/api/v1/settings/openai-stats")
 def openai_stats(
     _: dict = Depends(require_permission("manageSettings")),

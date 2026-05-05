@@ -2345,6 +2345,13 @@ p {
   margin-bottom: 4px;
 }
 
+.server-stats-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
 .server-stats-grid {
   display: grid;
   align-items: start;
@@ -2381,6 +2388,48 @@ p {
 }
 
 .server-stats-refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.server-stats-reboot-button {
+  min-height: 38px;
+  border: 1px solid #dc2626;
+  border-radius: 8px;
+  background: #dc2626;
+  color: #ffffff;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.server-stats-reboot-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.server-reboot-cancel-button,
+.server-reboot-confirm-button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.server-reboot-cancel-button {
+  background: #e8edf5;
+  color: #202a36;
+}
+
+.server-reboot-confirm-button {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.server-reboot-cancel-button:disabled,
+.server-reboot-confirm-button:disabled {
   cursor: wait;
   opacity: 0.72;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { apiFetch } from "../../api/client";
 import type { ServerStats, ServerStatsService } from "../../types/dashboard";
+import { Modal } from "../ui/Modal";
 
 const REFRESH_INTERVAL_MS = 60_000;
 const SERVER_STATS_CACHE_KEY = "al.serverStats.cache";
@@ -10,7 +11,10 @@ export function ServerStatsPanel() {
   const [stats, setStats] = useState<ServerStats | null>(() => cachedServerStats);
   const [loading, setLoading] = useState(() => cachedServerStats === null);
   const [refreshing, setRefreshing] = useState(false);
+  const [rebootModalOpen, setRebootModalOpen] = useState(false);
+  const [rebooting, setRebooting] = useState(false);
   const [error, setError] = useState("");
+  const [rebootMessage, setRebootMessage] = useState("");
 
   async function loadStats(isRefresh = false) {
     if (isRefresh) {
@@ -36,6 +40,26 @@ export function ServerStatsPanel() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  }
+
+  async function requestReboot() {
+    setRebooting(true);
+    setRebootMessage("");
+
+    try {
+      const response = await apiFetch("/api/v1/settings/server-reboot", { method: "POST" });
+
+      if (!response.ok) {
+        throw new Error("Server reboot request failed");
+      }
+
+      setRebootMessage("Server reboot requested. The dashboard may disconnect for a few minutes.");
+      setRebootModalOpen(false);
+    } catch {
+      setRebootMessage("Could not request server reboot.");
+    } finally {
+      setRebooting(false);
     }
   }
 
@@ -70,13 +94,19 @@ export function ServerStatsPanel() {
           <h2>Server Stats</h2>
           <p className="settings-caption">Read-only production disk usage overview.</p>
         </div>
-        <button className="server-stats-refresh-button" onClick={() => void loadStats(true)} disabled={refreshing}>
-          {refreshing ? "Refreshing..." : "Refresh"}
-        </button>
+        <div className="server-stats-actions">
+          <button className="server-stats-refresh-button" onClick={() => void loadStats(true)} disabled={refreshing || rebooting}>
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
+          <button className="server-stats-reboot-button" onClick={() => setRebootModalOpen(true)} disabled={rebooting}>
+            {rebooting ? "Rebooting..." : "Reboot"}
+          </button>
+        </div>
       </div>
 
       {loading && !stats ? <p className="notice">Loading server statistics...</p> : null}
       {error ? <p className="notice error">{error}</p> : null}
+      {rebootMessage ? <p className="notice">{rebootMessage}</p> : null}
 
       {stats ? (
         <>
@@ -134,7 +164,60 @@ export function ServerStatsPanel() {
           </p>
         </>
       ) : null}
+
+      {rebootModalOpen ? (
+        <ServerRebootConfirmModal
+          saving={rebooting}
+          onCancel={() => setRebootModalOpen(false)}
+          onConfirm={() => void requestReboot()}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function ServerRebootConfirmModal({
+  saving,
+  onCancel,
+  onConfirm
+}: {
+  saving: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Modal
+      onBackdropClose={onCancel}
+      backdropDisabled={saving}
+      panelClassName="calendar-modal--scoped-activity-delete"
+      ariaLabelledBy="server-reboot-title"
+      ariaDescribedBy="server-reboot-desc"
+    >
+      <div className="scoped-delete-modal__accent" aria-hidden="true" />
+      <div className="scoped-delete-modal__body">
+        <header className="scoped-delete-modal__header">
+          <span className="scoped-delete-modal__badge">Server action</span>
+          <h2 id="server-reboot-title">Reboot production server</h2>
+          <p id="server-reboot-desc" className="scoped-delete-modal__lead">
+            This will reboot the host machine and restart all system services, including the backend, bots, MongoDB, and Nginx.
+            The dashboard will be unavailable while the server comes back online.
+          </p>
+        </header>
+
+        <p className="scoped-delete-modal__description">
+          Use this only when you need a full server restart. The request is sent immediately after confirmation.
+        </p>
+
+        <div className="modal-actions scoped-delete-modal__actions">
+          <button className="server-reboot-cancel-button" type="button" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+          <button className="server-reboot-confirm-button" type="button" onClick={onConfirm} disabled={saving}>
+            {saving ? "Requesting..." : "Reboot server"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
