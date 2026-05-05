@@ -54,6 +54,7 @@ const emptyActivitySummary: ActivitySummary = {
 };
 
 const LAST_AUTHORS_CACHE_PREFIX = "AL.Dashboard.LastAuthors.";
+const ACTIVITY_SUMMARY_CACHE_PREFIX = "AL.Dashboard.ActivitySummary.";
 const SETTINGS_SUMMARY_CACHE_KEY = "AL.Dashboard.SettingsSummary";
 
 function readStoredSessionUserPreview(): SiteUser | null {
@@ -150,6 +151,33 @@ function saveCachedAuthors(dateRange: DateRange, authors: AuthorRow[]) {
   }
 }
 
+function activitySummaryCacheKey(dateRange: DateRange) {
+  const dateMode = dateRange.preset === "live" ? "authorLocalToday" : "";
+  return `${ACTIVITY_SUMMARY_CACHE_PREFIX}${dateRange.startDate}.${dateRange.endDate}.${dateMode}`;
+}
+
+function readCachedActivitySummary(dateRange: DateRange): ActivitySummary | null {
+  try {
+    const raw = localStorage.getItem(activitySummaryCacheKey(dateRange));
+
+    if (!raw) {
+      return null;
+    }
+
+    return JSON.parse(raw) as ActivitySummary;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedActivitySummary(dateRange: DateRange, summary: ActivitySummary) {
+  try {
+    localStorage.setItem(activitySummaryCacheKey(dateRange), JSON.stringify(summary));
+  } catch {
+    // Browsers can reject storage writes in private mode or when the quota is full.
+  }
+}
+
 function readCachedSettingsSummary(): Summary | null {
   try {
     const raw = localStorage.getItem(SETTINGS_SUMMARY_CACHE_KEY);
@@ -188,6 +216,7 @@ function App() {
   const [search, setSearch] = useState("");
   const [selectedAuthor, setSelectedAuthorState] = useState<string | null>(() => loadSavedActivityAuthor());
   const [cachedAuthors, setCachedAuthors] = useState<AuthorRow[]>(() => readCachedAuthors(loadSavedDateRange()));
+  const [cachedActivitySummary, setCachedActivitySummary] = useState<ActivitySummary | null>(() => readCachedActivitySummary(loadSavedDateRange()));
   const [cachedSettingsSummary, setCachedSettingsSummary] = useState<Summary | null>(() => readCachedSettingsSummary());
   const [loading, setLoading] = useState(true);
   const [refreshingReports, setRefreshingReports] = useState(false);
@@ -328,6 +357,11 @@ function App() {
       setCachedAuthors(nextAuthors);
       saveCachedAuthors(requestedDateRange, nextAuthors);
 
+      if (requestedPage === "activity") {
+        setCachedActivitySummary(nextSummary.activitySummary);
+        saveCachedActivitySummary(requestedDateRange, nextSummary.activitySummary);
+      }
+
       if (requestedPage === "settings") {
         setCachedSettingsSummary(nextSummary);
         saveCachedSettingsSummary(nextSummary);
@@ -390,6 +424,7 @@ function App() {
 
   const canShowCachedDashboard = Boolean(authUser) || (authLoading && hasAuthHint);
   const activitySummary = canShowCachedDashboard ? (summary?.activitySummary ?? emptyActivitySummary) : emptyActivitySummary;
+  const activityDisplaySummary = canShowCachedDashboard ? (summary?.activitySummary ?? cachedActivitySummary ?? emptyActivitySummary) : emptyActivitySummary;
   const settingsDisplaySummary = canShowCachedDashboard ? (summary ?? cachedSettingsSummary) : null;
   const isVisualLoading = canShowCachedDashboard && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
   const authorsSource = isVisualLoading && !activitySummary.authors.length ? cachedAuthors : activitySummary.authors;
@@ -400,6 +435,7 @@ function App() {
 
   useEffect(() => {
     setCachedAuthors(readCachedAuthors(dateRange));
+    setCachedActivitySummary(readCachedActivitySummary(dateRange));
   }, [dateRange.startDate, dateRange.endDate, dateRange.preset]);
 
   useEffect(() => {
@@ -586,7 +622,7 @@ function App() {
         ) : null}
         {page === "activity" ? (
           <ActivityPage
-            summary={activitySummary}
+            summary={activityDisplaySummary}
             dateRange={appliedDateRange}
             datePickerValue={dateRange}
             onDatePickerChange={setDateRange}
@@ -679,7 +715,13 @@ function clearDashboardSessionCaches() {
     "AL.Dashboard.AnalyticsSummary",
     "AL.Dashboard.CalendarSummary"
   ];
-  const localPrefixes = [LAST_AUTHORS_CACHE_PREFIX, SETTINGS_SUMMARY_CACHE_KEY];
+  const localPrefixes = [
+    LAST_AUTHORS_CACHE_PREFIX,
+    ACTIVITY_SUMMARY_CACHE_PREFIX,
+    "AL.Dashboard.ActivityHourly.",
+    "AL.Dashboard.ActivityReports.",
+    SETTINGS_SUMMARY_CACHE_KEY
+  ];
 
   for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
     const key = sessionStorage.key(index);

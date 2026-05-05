@@ -441,8 +441,10 @@ function activityCacheKey(prefix: string, key: string) {
 }
 
 function loadCachedActivityHourly(key: string) {
+  const storageKey = activityCacheKey(ACTIVITY_HOURLY_CACHE_PREFIX, key);
+
   try {
-    const cached = sessionStorage.getItem(activityCacheKey(ACTIVITY_HOURLY_CACHE_PREFIX, key));
+    const cached = localStorage.getItem(storageKey) ?? sessionStorage.getItem(storageKey);
 
     if (!cached) {
       return null;
@@ -456,15 +458,17 @@ function loadCachedActivityHourly(key: string) {
 
 function saveCachedActivityHourly(key: string, rows: AuthorHourlyActivity[]) {
   try {
-    sessionStorage.setItem(activityCacheKey(ACTIVITY_HOURLY_CACHE_PREFIX, key), JSON.stringify(rows));
+    localStorage.setItem(activityCacheKey(ACTIVITY_HOURLY_CACHE_PREFIX, key), JSON.stringify(rows));
   } catch {
     // Ignore storage failures; live API data is still shown.
   }
 }
 
 function loadCachedReportsPage(key: string) {
+  const storageKey = activityCacheKey(ACTIVITY_REPORTS_CACHE_PREFIX, key);
+
   try {
-    const cached = sessionStorage.getItem(activityCacheKey(ACTIVITY_REPORTS_CACHE_PREFIX, key));
+    const cached = localStorage.getItem(storageKey) ?? sessionStorage.getItem(storageKey);
 
     if (!cached) {
       return null;
@@ -478,7 +482,7 @@ function loadCachedReportsPage(key: string) {
 
 function saveCachedReportsPage(key: string, page: ReportsPage) {
   try {
-    sessionStorage.setItem(activityCacheKey(ACTIVITY_REPORTS_CACHE_PREFIX, key), JSON.stringify(page));
+    localStorage.setItem(activityCacheKey(ACTIVITY_REPORTS_CACHE_PREFIX, key), JSON.stringify(page));
   } catch {
     // Ignore storage failures; live API data is still shown.
   }
