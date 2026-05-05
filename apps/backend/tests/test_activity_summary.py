@@ -8125,6 +8125,22 @@ def test_figma_activity_file_metadata_is_counted_as_saved_file_breakdown_item():
     }
 
 
+def test_non_figma_activity_file_metadata_is_not_counted_as_saved_file_breakdown_item():
+    worked = _worked_file_delta(
+        {
+            "source": "cur",
+            "eventType": "selection",
+            "projectId": "AL",
+            "metadata": {
+                "path": "/projects/AL/apps/backend/al_backend/activity_math.py",
+                "name": "activity_math.py",
+            },
+        }
+    )
+
+    assert worked is None
+
+
 def test_vscode_file_saved_is_counted_as_saved_file():
     saved = _saved_prefab_delta(
         {

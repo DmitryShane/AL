@@ -487,6 +487,10 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
 
 def _worked_file_delta(event: dict[str, Any]) -> dict[str, Any] | None:
     event_type = str(event.get("eventType") or "")
+    source = str(event.get("source") or "")
+
+    if source not in {"fch", "fig"}:
+        return None
 
     if event_type in {"prefab_saved", "asset_saved", "file_saved"}:
         return None
@@ -502,16 +506,11 @@ def _worked_file_delta(event: dict[str, Any]) -> dict[str, Any] | None:
 
     lower_path = path.lower()
 
-    if event.get("source") == "fch" and "figma.com/" not in lower_path and not metadata.get("fileKey"):
+    if source == "fch" and "figma.com/" not in lower_path and not metadata.get("fileKey"):
         return None
 
     name = str(metadata.get("name") or path.rsplit("/", 1)[-1])
-    worked_file = {"path": path, "name": name, "saveCount": 1}
-
-    if event.get("source") in {"cur", "vsc"}:
-        worked_file["projectId"] = str(event.get("projectId") or "")
-
-    return worked_file
+    return {"path": path, "name": name, "saveCount": 1}
 
 
 def _is_overtime_event_delta(
