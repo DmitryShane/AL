@@ -568,10 +568,34 @@ function loadCachedDashboardSummary(page: Page, dateRange: DateRange) {
       return null;
     }
 
-    return JSON.parse(cached) as Summary;
+    return sanitizeCachedDashboardSummary(JSON.parse(cached) as Summary);
   } catch {
     return null;
   }
+}
+
+function sanitizeCachedDashboardSummary(summary: Summary): Summary {
+  if (!summary.activitySummary?.authors) {
+    return summary;
+  }
+
+  return {
+    ...summary,
+    activitySummary: {
+      ...summary.activitySummary,
+      authors: summary.activitySummary.authors.map((author) => {
+        if (author.status === "online") {
+          const cachedAuthor = { ...author };
+          delete cachedAuthor.status;
+          delete cachedAuthor.stalePresence;
+
+          return cachedAuthor;
+        }
+
+        return author;
+      })
+    }
+  };
 }
 
 function saveCachedDashboardSummary(page: Page, dateRange: DateRange, summary: Summary) {

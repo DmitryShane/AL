@@ -755,9 +755,11 @@ export function matchesAuthorSearch(author: AuthorRow, search: string) {
 }
 
 export function authorCardClassName(author: AuthorRow, active: boolean) {
-  let presenceClass = "is-online";
+  let presenceClass = "is-offline";
 
-  if (author.status === "stale") {
+  if (author.status === "online") {
+    presenceClass = "is-online";
+  } else if (author.status === "stale") {
     presenceClass = isTelegramSignedOff(author.stalePresence) ? "is-telegram-offline" : "is-offline";
   }
 
@@ -765,9 +767,11 @@ export function authorCardClassName(author: AuthorRow, active: boolean) {
 }
 
 export function authorMiniCardClassName(author: AuthorRow, active: boolean) {
-  let presenceClass = "is-online";
+  let presenceClass = "is-offline";
 
-  if (author.status === "stale") {
+  if (author.status === "online") {
+    presenceClass = "is-online";
+  } else if (author.status === "stale") {
     presenceClass = isTelegramSignedOff(author.stalePresence) ? "is-telegram-offline" : "is-offline";
   }
 

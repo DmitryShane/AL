@@ -67,7 +67,20 @@ class IndexManager:
         self.db.meeting_summaries.create_index("recordingId", unique=True)
         self.db.meeting_summaries.create_index([("status", ASCENDING), ("createdAt", ASCENDING)])
         self.db.telegram_day_reminders.create_index("reminderId", unique=True)
-        self.db.telegram_day_reminders.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
+        for spec in list(self.db.telegram_day_reminders.list_indexes()):
+            key = spec.get("key")
+
+            if dict(key or {}) == {"rawAuthor": 1, "date": 1}:
+                try:
+                    self.db.telegram_day_reminders.drop_index(spec["name"])
+                except Exception:
+                    pass
+
+        self.db.telegram_day_reminders.create_index(
+            [("rawAuthor", ASCENDING), ("date", ASCENDING), ("postOfflineActivityAt", ASCENDING)],
+            unique=True,
+            name="telegram_day_reminders_window_unique",
+        )
         self.db.telegram_online_prompts.create_index("reminderId", unique=True)
         for spec in list(self.db.telegram_online_prompts.list_indexes()):
             key = spec.get("key")
