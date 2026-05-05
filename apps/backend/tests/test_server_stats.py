@@ -34,6 +34,26 @@ def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> N
             "missing": Path("/path/that/does/not/exist"),
         },
     )
+    monkeypatch.setattr(
+        settings_repo,
+        "SERVER_STATS_SERVICES",
+        (("backend", "AL Backend API", "al-backend.service"),),
+    )
+    monkeypatch.setattr(
+        settings_repo,
+        "_server_stats_service",
+        lambda key, label, unit: {
+            "key": key,
+            "label": label,
+            "unit": unit,
+            "status": "running",
+            "activeState": "active",
+            "subState": "running",
+            "loadState": "loaded",
+            "unitFileState": "enabled",
+            "activeEnteredAt": "Tue 2026-05-05 19:00:00 UTC",
+        },
+    )
 
     repo = SettingsRepository.__new__(SettingsRepository)
     stats = repo.get_server_stats()
@@ -44,6 +64,19 @@ def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> N
     assert stats["root"]["warningLevel"] == "ok"
     assert {item["key"] for item in stats["categories"]} >= {"system", "app", "mongo", "aptCache", "logs", "other"}
     assert next(item for item in stats["categories"] if item["key"] == "missing")["exists"] is False
+    assert stats["services"] == [
+        {
+            "key": "backend",
+            "label": "AL Backend API",
+            "unit": "al-backend.service",
+            "status": "running",
+            "activeState": "active",
+            "subState": "running",
+            "loadState": "loaded",
+            "unitFileState": "enabled",
+            "activeEnteredAt": "Tue 2026-05-05 19:00:00 UTC",
+        }
+    ]
 
 
 def test_server_stats_path_size_prefers_privileged_du(monkeypatch, tmp_path) -> None:
@@ -54,3 +87,24 @@ def test_server_stats_path_size_prefers_privileged_du(monkeypatch, tmp_path) -> 
     monkeypatch.setattr(settings_repo, "_du_size_bytes", lambda _path: 370009988)
 
     assert settings_repo._path_size_bytes(path) == 370009988
+
+
+def test_server_stats_service_falls_back_when_systemd_is_unavailable(monkeypatch) -> None:
+    def raise_systemctl_error(*_args, **_kwargs):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(settings_repo.subprocess, "run", raise_systemctl_error)
+
+    service = settings_repo._server_stats_service("backend", "AL Backend API", "al-backend.service")
+
+    assert service == {
+        "key": "backend",
+        "label": "AL Backend API",
+        "unit": "al-backend.service",
+        "status": "unknown",
+        "activeState": "unknown",
+        "subState": None,
+        "loadState": "unknown",
+        "unitFileState": "unknown",
+        "activeEnteredAt": None,
+    }

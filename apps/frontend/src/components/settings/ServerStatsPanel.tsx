@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { apiFetch } from "../../api/client";
-import type { ServerStats } from "../../types/dashboard";
+import type { ServerStats, ServerStatsService } from "../../types/dashboard";
 
 const REFRESH_INTERVAL_MS = 60_000;
 const SERVER_STATS_CACHE_KEY = "al.serverStats.cache";
@@ -80,37 +80,53 @@ export function ServerStatsPanel() {
 
       {stats ? (
         <>
-          <div className="server-stats-summary">
-            <div className="server-stats-donut" style={donutStyle}>
-              <div>
-                <strong>{formatPercent(usedPercent)}</strong>
-                <span>used</span>
-              </div>
-            </div>
-            <div className="server-stats-metrics">
-              <Metric label="Used" value={formatBytes(stats.root.usedBytes)} />
-              <Metric label="Free" value={formatBytes(stats.root.freeBytes)} />
-              <Metric label="Total" value={formatBytes(stats.root.totalBytes)} />
-              <Metric label="Host" value={stats.hostname || "server"} />
-            </div>
-          </div>
-
-          <div className="server-stats-categories">
-            {categories.map((category) => {
-              const categoryPercent = stats.root.usedBytes > 0 ? Math.min(100, (category.bytes / stats.root.usedBytes) * 100) : 0;
-
-              return (
-                <div className="server-stats-category" key={category.key}>
-                  <div className="server-stats-category-label">
-                    <span>{category.label}</span>
-                    <strong>{category.exists ? formatBytes(category.bytes) : "Not found"}</strong>
-                  </div>
-                  <div className="server-stats-bar" title={category.path}>
-                    <span style={{ width: `${category.exists ? categoryPercent : 0}%` }} />
+          <div className="server-stats-grid">
+            <div className="server-stats-disk-column">
+              <div className="server-stats-summary">
+                <div className="server-stats-donut" style={donutStyle}>
+                  <div>
+                    <strong>{formatPercent(usedPercent)}</strong>
+                    <span>used</span>
                   </div>
                 </div>
-              );
-            })}
+                <div className="server-stats-metrics">
+                  <Metric label="Used" value={formatBytes(stats.root.usedBytes)} />
+                  <Metric label="Free" value={formatBytes(stats.root.freeBytes)} />
+                  <Metric label="Total" value={formatBytes(stats.root.totalBytes)} />
+                  <Metric label="Host" value={stats.hostname || "server"} />
+                </div>
+              </div>
+
+              <div className="server-stats-categories">
+                {categories.map((category) => {
+                  const categoryPercent = stats.root.usedBytes > 0 ? Math.min(100, (category.bytes / stats.root.usedBytes) * 100) : 0;
+
+                  return (
+                    <div className="server-stats-category" key={category.key}>
+                      <div className="server-stats-category-label">
+                        <span>{category.label}</span>
+                        <strong>{category.exists ? formatBytes(category.bytes) : "Not found"}</strong>
+                      </div>
+                      <div className="server-stats-bar" title={category.path}>
+                        <span style={{ width: `${category.exists ? categoryPercent : 0}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="server-stats-services-column">
+              <div>
+                <h3>Services</h3>
+                <p className="settings-caption">Runtime status of server processes.</p>
+              </div>
+              <div className="server-stats-services">
+                {(stats.services ?? []).map((service) => (
+                  <ServiceStatus key={service.key} service={service} />
+                ))}
+              </div>
+            </div>
           </div>
 
           <p className="server-stats-footnote">
@@ -119,6 +135,24 @@ export function ServerStatsPanel() {
         </>
       ) : null}
     </section>
+  );
+}
+
+function ServiceStatus({ service }: { service: ServerStatsService }) {
+  return (
+    <div className={`server-stats-service server-stats-service-${service.status}`}>
+      <div className="server-stats-service-main">
+        <span className="server-stats-service-dot" aria-hidden="true" />
+        <div>
+          <strong>{service.label}</strong>
+          <span>{service.unit}</span>
+        </div>
+      </div>
+      <div className="server-stats-service-meta">
+        <strong>{formatServiceStatus(service)}</strong>
+        <span>{formatServiceDetail(service)}</span>
+      </div>
+    </div>
   );
 }
 
@@ -166,6 +200,28 @@ function serverStatsAccentColor(usedPercent: number): string {
   }
 
   return "#35a86b";
+}
+
+function formatServiceStatus(service: ServerStatsService): string {
+  if (service.status === "running") {
+    return "Running";
+  }
+
+  if (service.status === "stopped") {
+    return "Stopped";
+  }
+
+  return "Unknown";
+}
+
+function formatServiceDetail(service: ServerStatsService): string {
+  const state = service.subState ? `${service.activeState} / ${service.subState}` : service.activeState;
+
+  if (service.status === "running" && service.activeEnteredAt) {
+    return `${state}, since ${formatDateTime(service.activeEnteredAt)}`;
+  }
+
+  return state;
 }
 
 function readCachedServerStats(): ServerStats | null {

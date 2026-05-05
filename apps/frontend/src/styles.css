@@ -2341,6 +2341,30 @@ p {
   margin-bottom: 4px;
 }
 
+.server-stats-grid {
+  display: grid;
+  align-items: start;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  gap: 22px;
+}
+
+.server-stats-disk-column,
+.server-stats-services-column {
+  display: grid;
+  gap: 18px;
+}
+
+.server-stats-services-column {
+  border-left: 1px solid #edf2f7;
+  padding-left: 22px;
+}
+
+.server-stats-services-column h3 {
+  margin: 0 0 4px;
+  color: #202a36;
+  font-size: 18px;
+}
+
 .server-stats-refresh-button {
   min-height: 38px;
   border: 1px solid #202a36;
@@ -2460,7 +2484,92 @@ p {
   margin: 0;
 }
 
+.server-stats-services {
+  display: grid;
+  gap: 10px;
+}
+
+.server-stats-service {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #edf2f7;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 12px;
+}
+
+.server-stats-service-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.server-stats-service-main strong,
+.server-stats-service-main span,
+.server-stats-service-meta strong,
+.server-stats-service-meta span {
+  display: block;
+}
+
+.server-stats-service-main strong {
+  overflow: hidden;
+  color: #202a36;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-stats-service-main span,
+.server-stats-service-meta span {
+  color: #718093;
+  font-size: 12px;
+}
+
+.server-stats-service-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #94a3b8;
+  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.14);
+}
+
+.server-stats-service-running .server-stats-service-dot {
+  background: #35a86b;
+  box-shadow: 0 0 0 4px rgba(53, 168, 107, 0.14);
+}
+
+.server-stats-service-stopped .server-stats-service-dot {
+  background: #ef4444;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.14);
+}
+
+.server-stats-service-meta {
+  min-width: 92px;
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.server-stats-service-meta strong {
+  color: #202a36;
+  font-size: 12px;
+}
+
 @media (max-width: 900px) {
+  .server-stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .server-stats-services-column {
+    border-left: 0;
+    border-top: 1px solid #edf2f7;
+    padding-top: 18px;
+    padding-left: 0;
+  }
+
   .server-stats-summary {
     align-items: flex-start;
     flex-direction: column;

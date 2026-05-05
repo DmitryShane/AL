@@ -236,6 +236,20 @@ export type ServerStatsCategory = {
   exists: boolean;
 };
 
+export type ServerStatsServiceStatus = "running" | "stopped" | "unknown";
+
+export type ServerStatsService = {
+  key: string;
+  label: string;
+  unit: string;
+  status: ServerStatsServiceStatus;
+  activeState: string;
+  subState?: string | null;
+  loadState: string;
+  unitFileState: string;
+  activeEnteredAt?: string | null;
+};
+
 export type ServerStats = {
   generatedAt: string;
   hostname: string;
@@ -248,6 +262,7 @@ export type ServerStats = {
     warningLevel: ServerStatsWarningLevel;
   };
   categories: ServerStatsCategory[];
+  services: ServerStatsService[];
 };
 
 export type SiteUserRole = "admin" | "editor" | "viewer";

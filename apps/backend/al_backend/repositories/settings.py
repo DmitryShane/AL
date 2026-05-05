@@ -23,6 +23,13 @@ SERVER_STATS_PATHS = {
     "aptCache": Path("/var/cache/apt"),
     "logs": Path("/var/log"),
 }
+SERVER_STATS_SERVICES = (
+    ("backend", "AL Backend API", "al-backend.service"),
+    ("telegram", "AL Telegram Bot", "al-telegram-bot.service"),
+    ("discord", "AL Discord Bot", "al-discord-bot.service"),
+    ("mongo", "MongoDB", "mongod.service"),
+    ("nginx", "Nginx", "nginx.service"),
+)
 OPENAI_STATS_CACHE_TTL_SECONDS = 300
 OPENAI_STATS_USAGE_ENDPOINTS = ("completions", "audio_transcriptions")
 
@@ -83,6 +90,65 @@ def _du_size_bytes(path: Path) -> int | None:
         return int(first_field)
     except ValueError:
         return None
+
+
+def _server_stats_service(key: str, label: str, unit: str) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            [
+                "systemctl",
+                "show",
+                unit,
+                "--property=ActiveState,SubState,LoadState,UnitFileState,ActiveEnterTimestamp",
+                "--value",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return _unknown_server_stats_service(key, label, unit)
+
+    values = result.stdout.splitlines()
+    active_state = values[0].strip() if len(values) > 0 else "unknown"
+    sub_state = values[1].strip() if len(values) > 1 else ""
+    load_state = values[2].strip() if len(values) > 2 else "unknown"
+    unit_file_state = values[3].strip() if len(values) > 3 else "unknown"
+    active_entered_at = values[4].strip() if len(values) > 4 else ""
+
+    if active_state == "active":
+        status = "running"
+    elif active_state in {"inactive", "failed", "deactivating"}:
+        status = "stopped"
+    else:
+        status = "unknown"
+
+    return {
+        "key": key,
+        "label": label,
+        "unit": unit,
+        "status": status,
+        "activeState": active_state or "unknown",
+        "subState": sub_state or None,
+        "loadState": load_state or "unknown",
+        "unitFileState": unit_file_state or "unknown",
+        "activeEnteredAt": active_entered_at or None,
+    }
+
+
+def _unknown_server_stats_service(key: str, label: str, unit: str) -> dict[str, Any]:
+    return {
+        "key": key,
+        "label": label,
+        "unit": unit,
+        "status": "unknown",
+        "activeState": "unknown",
+        "subState": None,
+        "loadState": "unknown",
+        "unitFileState": "unknown",
+        "activeEnteredAt": None,
+    }
 
 
 def _fetch_openai_stats(api_key: str, project_id: str, now: dt.datetime) -> dict[str, Any]:
@@ -511,6 +577,10 @@ class SettingsRepository(MongoComposableMixin):
                 "warningLevel": warning_level,
             },
             "categories": categories,
+            "services": [
+                _server_stats_service(key, label, unit)
+                for key, label, unit in SERVER_STATS_SERVICES
+            ],
         }
 
     def upsert_discord_settings(self, meeting_auto_afk_timeout_seconds: int) -> dict[str, Any]:
