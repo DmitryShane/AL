@@ -4122,6 +4122,30 @@ def test_discord_voice_events_open_and_close_meeting_session():
     assert repo.db.report_rows.items[-1]["reportType"] == "meeting"
 
 
+def test_live_discord_meeting_reports_follow_send_interval():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one({"kind": "global", "sendIntervalSeconds": 300})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+    repo.record_discord_voice_event("123", "future", "join", timestamp="2026-04-29T10:00:00+00:00")
+
+    inserted = repo.materialize_live_meeting_reports(dt.datetime(2026, 4, 29, 10, 12, tzinfo=dt.UTC))
+
+    live_reports = [item for item in repo.db.report_rows.items if item.get("discordStatus") == "meeting_live"]
+    daily = repo.db.daily_author_activity.find_one({"source": "discord", "author": "Future Artist", "date": "2026-04-29"})
+    hour = daily["hourlyActivity"][10]
+    session = repo.db.meeting_sessions.find_one({"discordUserId": "123"})
+
+    assert inserted == 2
+    assert [item["meetingSeconds"] for item in live_reports] == [300, 300]
+    assert [item["recordedAt"] for item in live_reports] == [
+        "2026-04-29T10:05:00+00:00",
+        "2026-04-29T10:10:00+00:00",
+    ]
+    assert all(item["activityType"] == "meeting_live" for item in live_reports)
+    assert hour["meetingSeconds"] == 600
+    assert session["lastLiveReportAt"] == dt.datetime(2026, 4, 29, 10, 10, tzinfo=dt.UTC)
+
+
 def test_discord_meeting_schedules_telegram_online_prompt_before_day_start():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(

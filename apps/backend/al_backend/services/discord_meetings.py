@@ -7,8 +7,11 @@ from typing import Any
 from pymongo import DESCENDING
 
 from ..activity_math import (
+    MICROSECONDS_PER_SECOND,
+    _add_meeting_interval_to_buckets,
     _coerce_datetime,
     _empty_event_deltas,
+    _empty_hourly_activity,
     _iso,
     _looks_like_missing_transcript_summary,
     _looks_like_no_work_content_summary,
@@ -36,6 +39,34 @@ MEETING_RECORDING_SUCCESS_STATUSES = {
 
 
 class DiscordMeetingService(MongoComposableMixin):
+    def materialize_live_meeting_reports(self, now: dt.datetime | None = None) -> int:
+        now = now or dt.datetime.now(dt.UTC)
+        inserted = 0
+
+        for session in self.db.meeting_sessions.find({}, {"_id": 0}):
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            started_at = _coerce_datetime(session.get("startedAt"))
+
+            if not started_at:
+                continue
+
+            interval_seconds = max(1, int(composed(self).get_interval_for_author(raw_author)))
+            last_report_at = _coerce_datetime(session.get("lastLiveReportAt")) or started_at
+            next_report_at = last_report_at + dt.timedelta(seconds=interval_seconds)
+
+            while next_report_at <= now:
+                inserted += self._insert_discord_meeting_live_report_row(session, last_report_at, next_report_at)
+                last_report_at = next_report_at
+                next_report_at = last_report_at + dt.timedelta(seconds=interval_seconds)
+
+            if last_report_at != (_coerce_datetime(session.get("lastLiveReportAt")) or started_at):
+                self.db.meeting_sessions.update_one(
+                    {"discordUserId": session.get("discordUserId")},
+                    {"$set": {"lastLiveReportAt": last_report_at, "updatedAt": now}},
+                )
+
+        return inserted
+
     def _meeting_participant_telegram_usernames(
         self,
         participant_discord_user_ids: list[str],
@@ -271,6 +302,79 @@ class DiscordMeetingService(MongoComposableMixin):
             "discord",
             event_time,
         )
+
+    def _insert_discord_meeting_live_report_row(
+        self,
+        session: dict[str, Any],
+        started_at: dt.datetime,
+        ended_at: dt.datetime,
+    ) -> int:
+        raw_author = str(session.get("rawAuthor") or "Unknown User")
+        time_zone_id = _valid_time_zone_id(session.get("timeZoneId")) or "UTC"
+        event_date = _telegram_event_date(ended_at, time_zone_id)
+        discord_user_id = str(session.get("discordUserId") or "")
+        meeting_seconds = max(0, int((ended_at - started_at).total_seconds()))
+
+        if meeting_seconds <= 0:
+            return 0
+
+        should_materialize = getattr(self, "_should_materialize_aggregate_date", None)
+
+        if callable(should_materialize) and not should_materialize(event_date, raw_author):
+            return 0
+
+        report_id = f"discord-meeting-live:{discord_user_id}:{ended_at.isoformat()}"
+
+        if self.db.report_rows.find_one({"reportId": report_id}, {"_id": 1}):
+            return 0
+
+        hourly_activity_delta = _empty_hourly_activity()
+        _add_meeting_interval_to_buckets(
+            {(raw_author, event_date): hourly_activity_delta},
+            raw_author,
+            started_at,
+            ended_at,
+            time_zone_id,
+        )
+        deltas = _empty_event_deltas()
+        deltas["meetingSeconds"] = meeting_seconds
+        deltas["meetingMicroseconds"] = meeting_seconds * MICROSECONDS_PER_SECOND
+        deltas["hourlyActivityDelta"] = hourly_activity_delta
+        row = {
+            "reportId": report_id,
+            "source": "discord",
+            "pluginVersion": "discord-bot",
+            "author": raw_author,
+            "authorEmail": "",
+            "projectId": "discord",
+            "sessionId": discord_user_id,
+            "deviceId": "",
+            "date": event_date,
+            "recordedAt": ended_at.isoformat(),
+            "receivedAt": ended_at,
+            "lastRecordedAt": ended_at.isoformat(),
+            "lastReceivedAt": ended_at,
+            "timeZoneId": time_zone_id,
+            "timeZoneDisplayName": time_zone_id,
+            "reportType": "meeting",
+            "activityType": "meeting_live",
+            "discordEventType": "live",
+            "discordStatus": "meeting_live",
+            "discordUserId": discord_user_id,
+            "discordUsername": str(session.get("discordUsername") or ""),
+            "metadata": {
+                "guildId": str(session.get("guildId") or ""),
+                "channelId": str(session.get("channelId") or ""),
+                "live": True,
+                "startedAt": started_at.isoformat(),
+                "endedAt": ended_at.isoformat(),
+            },
+            **deltas,
+        }
+        self.db.report_rows.insert_one(row)
+        composed(self)._update_daily_author_activity(row, deltas)
+        composed(self).invalidate_activity_summary_cache([event_date])
+        return 1
 
     def record_discord_meeting_auto_afk(
         self,

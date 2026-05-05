@@ -20,6 +20,7 @@ class ActivitySummaryService(MongoComposableMixin):
         author: str | None = None,
         source: str | None = None,
     ) -> list[dict[str, Any]]:
+        composed(self).materialize_live_meeting_reports()
         reports = []
         projection = {
             "_id": 0,
@@ -162,6 +163,7 @@ class ActivitySummaryService(MongoComposableMixin):
         limit = max(1, min(int(limit), 200))
         offset = max(0, int(offset))
         hour = _normalize_report_hour_filter(hour)
+        composed(self).materialize_live_meeting_reports()
         query, profiles, now = self._reports_query_context(start_date, end_date, date_mode, author, source)
         source_query, _, _ = self._reports_query_context(start_date, end_date, date_mode, author)
         sources = sorted(
@@ -277,6 +279,7 @@ class ActivitySummaryService(MongoComposableMixin):
         include_hourly: bool = True,
         include_breakdowns: bool = True,
     ) -> dict[str, Any]:
+        composed(self).materialize_live_meeting_reports()
         now = dt.datetime.now(dt.UTC)
         cache_key = self._activity_summary_cache_key(
             view,
@@ -659,6 +662,7 @@ class ActivitySummaryService(MongoComposableMixin):
         include_hourly: bool = True,
         include_breakdowns: bool = True,
     ) -> dict[str, Any]:
+        composed(self).materialize_live_meeting_reports(now)
         totals = {
             "daySeconds": 0,
             "telegramDaySeconds": 0,
@@ -937,7 +941,7 @@ class ActivitySummaryService(MongoComposableMixin):
         activity_mix = _activity_mix_from_counts(activity_counts)
         overtime_activity_mix = _activity_mix_from_counts(overtime_activity_counts)
 
-        composed(self)._apply_live_telegram_summary(
+        composed(self)._apply_live_activity_summary(
             authors_by_raw,
             hourly_by_author,
             totals,

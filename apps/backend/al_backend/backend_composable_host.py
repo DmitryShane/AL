@@ -17,6 +17,22 @@ class BackendComposableHost(Protocol):
     default_send_interval_seconds: int
     db: Database
 
+    def _apply_live_activity_summary(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        telegram_seconds_by_author_date: dict[tuple[str, str], int],
+        break_seconds_by_author_date: dict[tuple[str, str], int],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+        meeting_seconds_by_author_date: dict[tuple[str, str], int] | None = None,
+        meeting_buckets: dict[tuple[str, str], list[dict[str, int]]] | None = None,
+    ) -> None: ...
+
     def _apply_live_telegram_summary(
         self,
         authors_by_raw: dict[str, dict[str, Any]],
@@ -52,6 +68,8 @@ class BackendComposableHost(Protocol):
         self, authors_by_raw: dict[str, dict[str, Any]], raw_author: str, profiles: dict[str, dict[str, Any]]
     ) -> dict[str, Any]: ...
 
+    def _close_break_session(self, normalized_telegram: str, raw_author: str, event_time: dt.datetime) -> dict[str, Any]: ...
+
     def _insert_discord_meeting_report_row(
         self,
         raw_author: str,
@@ -82,6 +100,8 @@ class BackendComposableHost(Protocol):
     ) -> None: ...
 
     def _materialize_status_report_rows(self) -> None: ...
+
+    def materialize_live_meeting_reports(self, now: dt.datetime | None = None) -> int: ...
 
     def _meeting_buckets_for_daily_items(
         self, daily_items: list[dict[str, Any]], now: dt.datetime | None = None

@@ -6,9 +6,12 @@ from .repositories.authors import AuthorRepository
 from .services.report_ingest import ReportIngestService
 from .services.activity_summary import ActivitySummaryService
 from .services.author_status_events import AuthorStatusEventsService
+from .services.activity_live_summary import ActivityLiveSummaryService
 from .services.calendar import CalendarService
 from .services.discord_meetings import DiscordMeetingService
+from .services.discord_meeting_notifications import DiscordMeetingNotificationsService
 from .services.telegram_activity import TelegramActivityService
+from .services.workday_sessions import WorkdaySessionsService
 from .services.activity_aggregation import ActivityAggregationService
 from .storage import MongoStorage
 from .settings import Settings
@@ -20,9 +23,12 @@ class BackendServices(
     SettingsRepository,
     AuthorRepository,
     ReportIngestService,
+    ActivityLiveSummaryService,
     ActivitySummaryService,
     CalendarService,
     DiscordMeetingService,
+    DiscordMeetingNotificationsService,
+    WorkdaySessionsService,
     TelegramActivityService,
     AuthorStatusEventsService,
     ActivityAggregationService,
