@@ -1249,7 +1249,7 @@ class ActivitySummaryService(MongoComposableMixin):
 
             for hour_index in range(0, min(local_latest_report_at.hour, len(hourly_activity))):
                 hour = hourly_activity[hour_index]
-                accounted_seconds = _visual_hour_occupied_seconds(hour)
+                accounted_seconds = _visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
 
                 if accounted_seconds <= 0:
                     continue
@@ -1367,7 +1367,9 @@ class ActivitySummaryService(MongoComposableMixin):
 
                     expected_end = hour_end
                     expected_seconds = max(0, int((expected_end - expected_start).total_seconds()))
-                    occupied_seconds = _visual_hour_occupied_seconds(hourly_activity[hour_index])
+                    occupied_seconds = _visual_hour_occupied_seconds(hourly_activity[hour_index]) + int(
+                        hourly_activity[hour_index].get("missedSeconds", 0)
+                    )
 
                     if occupied_seconds <= 0:
                         current_hour += dt.timedelta(hours=1)
@@ -1499,6 +1501,7 @@ class ActivitySummaryService(MongoComposableMixin):
         hour_start = local_start.replace(minute=0, second=0, microsecond=0)
         missed_seconds = max(0, int((local_start - hour_start).total_seconds()))
         _add_visual_missed_seconds(hourly_activity, local_start.hour, missed_seconds, "missedStartSeconds")
+        self._trim_visual_idle_overflow(hourly_activity, local_start.hour)
 
     def _add_visual_missed_end(
         self,
@@ -1523,6 +1526,23 @@ class ActivitySummaryService(MongoComposableMixin):
             target_hour_index = local_end.hour
 
         _add_visual_missed_seconds(hourly_activity, target_hour_index, missed_seconds, "missedEndSeconds")
+        self._trim_visual_idle_overflow(hourly_activity, target_hour_index)
+
+    def _trim_visual_idle_overflow(self, hourly_activity: list[dict[str, Any]], hour_index: int) -> None:
+        if hour_index < 0 or hour_index >= len(hourly_activity):
+            return
+
+        hour = hourly_activity[hour_index]
+        occupied_seconds = _visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
+        overflow_seconds = max(0, occupied_seconds - 3600)
+
+        if overflow_seconds <= 0:
+            return
+
+        idle_microseconds = _time_microseconds(hour, "idleSeconds", "idleMicroseconds")
+        overflow_microseconds = overflow_seconds * MICROSECONDS_PER_SECOND
+        hour["idleMicroseconds"] = max(0, idle_microseconds - overflow_microseconds)
+        hour["idleSeconds"] = _seconds_from_microseconds(hour["idleMicroseconds"])
 
     def _apply_visual_overtime_hour_gaps(
         self,

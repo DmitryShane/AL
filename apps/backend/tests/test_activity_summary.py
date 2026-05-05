@@ -1047,6 +1047,18 @@ def test_activity_summary_fills_hourly_idle_from_telegram_online_to_first_raw_ac
             "receivedAt": dt.datetime(2026, 5, 5, 10, 54, 32, tzinfo=dt.UTC),
         }
     )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry Shane",
+            "date": "2026-05-05",
+            "recordedAt": "2026-05-05T10:54:32Z",
+            "receivedAt": dt.datetime(2026, 5, 5, 10, 54, 32, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
 
     summary = repo.activity_summary(start_date="2026-05-05", end_date="2026-05-05")
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry Shane")
@@ -1055,6 +1067,7 @@ def test_activity_summary_fills_hourly_idle_from_telegram_online_to_first_raw_ac
 
     assert author["telegramToFirstActivitySeconds"] == 88 * 60 + 8
     assert hourly_by_hour[11]["idleSeconds"] == 57 * 60 + 1
+    assert hourly_by_hour[11]["missedStartSeconds"] == 2 * 60 + 59
     assert hourly_by_hour[12]["idleSeconds"] == 31 * 60 + 7
 
 
