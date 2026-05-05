@@ -53,6 +53,8 @@ const emptyActivitySummary: ActivitySummary = {
   hourlyActivityByAuthor: []
 };
 
+const LAST_AUTHORS_CACHE_KEY = "AL.Dashboard.LastAuthors";
+
 function readStoredSessionUserPreview(): SiteUser | null {
   if (typeof window === "undefined" || localStorage.getItem(AUTH_HINT_STORAGE_KEY) !== "true") {
     return null;
@@ -114,6 +116,38 @@ function writeStoredSessionUserPreview(user: SiteUser | null) {
   }
 }
 
+function readCachedAuthors(): AuthorRow[] {
+  try {
+    const raw = sessionStorage.getItem(LAST_AUTHORS_CACHE_KEY);
+
+    if (!raw) {
+      return [];
+    }
+
+    const authors = JSON.parse(raw) as unknown;
+
+    if (!Array.isArray(authors)) {
+      return [];
+    }
+
+    return authors as AuthorRow[];
+  } catch {
+    return [];
+  }
+}
+
+function saveCachedAuthors(authors: AuthorRow[]) {
+  if (!authors.length) {
+    return;
+  }
+
+  try {
+    sessionStorage.setItem(LAST_AUTHORS_CACHE_KEY, JSON.stringify(authors));
+  } catch {
+    // Browsers can reject storage writes in private mode or when the quota is full.
+  }
+}
+
 function App() {
   const [page, setPage] = useState<Page>(() => loadSavedPage());
   const [isRestoringScroll, setIsRestoringScroll] = useState(() => getSavedPageScroll(loadSavedPage()) > 0);
@@ -129,6 +163,7 @@ function App() {
   const [summary, setSummary] = useState<Summary | null>(() => loadCachedDashboardSummary(loadSavedPage(), loadSavedDateRange()));
   const [search, setSearch] = useState("");
   const [selectedAuthor, setSelectedAuthorState] = useState<string | null>(() => loadSavedActivityAuthor());
+  const [cachedAuthors, setCachedAuthors] = useState<AuthorRow[]>(() => readCachedAuthors());
   const [loading, setLoading] = useState(true);
   const [refreshingReports, setRefreshingReports] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -190,7 +225,9 @@ function App() {
 
   async function load(showLoading = true) {
     if (!authUser) {
-      setLoading(false);
+      if (!authLoading) {
+        setLoading(false);
+      }
       return;
     }
 
@@ -272,7 +309,7 @@ function App() {
 
   useEffect(() => {
     void load();
-  }, [authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset, page]);
+  }, [authLoading, authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset, page]);
 
   useEffect(() => {
     localStorage.setItem(DATE_RANGE_STORAGE_KEY, JSON.stringify(dateRange));
@@ -319,11 +356,21 @@ function App() {
 
   const canShowCachedDashboard = Boolean(authUser) || (authLoading && hasAuthHint);
   const activitySummary = canShowCachedDashboard ? (summary?.activitySummary ?? emptyActivitySummary) : emptyActivitySummary;
-  const isVisualLoading = loading && !summary;
-  const authors = useMemo(() => activitySummary.authors.filter((author) => matchesAuthorSearch(author, search)), [activitySummary, search]);
+  const isVisualLoading = canShowCachedDashboard && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
+  const authorsSource = isVisualLoading && !activitySummary.authors.length ? cachedAuthors : activitySummary.authors;
+  const authors = useMemo(() => authorsSource.filter((author) => matchesAuthorSearch(author, search)), [authorsSource, search]);
   const activeAuthor = activitySummary.authors.some((author) => author.rawAuthor === selectedAuthor)
     ? selectedAuthor
-    : authors[0]?.rawAuthor ?? activitySummary.authors[0]?.rawAuthor ?? null;
+    : activitySummary.authors[0]?.rawAuthor ?? null;
+
+  useEffect(() => {
+    if (!activitySummary.authors.length) {
+      return;
+    }
+
+    setCachedAuthors(activitySummary.authors);
+    saveCachedAuthors(activitySummary.authors);
+  }, [activitySummary.authors]);
 
   useEffect(() => {
     if (!activeAuthor && activitySummary.authors.length) {
