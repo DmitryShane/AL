@@ -319,6 +319,7 @@ function App() {
 
   const canShowCachedDashboard = Boolean(authUser) || (authLoading && hasAuthHint);
   const activitySummary = canShowCachedDashboard ? (summary?.activitySummary ?? emptyActivitySummary) : emptyActivitySummary;
+  const isVisualLoading = loading && !summary;
   const authors = useMemo(() => activitySummary.authors.filter((author) => matchesAuthorSearch(author, search)), [activitySummary, search]);
   const activeAuthor = activitySummary.authors.some((author) => author.rawAuthor === selectedAuthor)
     ? selectedAuthor
@@ -331,21 +332,23 @@ function App() {
   }, [activeAuthor, activitySummary.authors]);
 
   useEffect(() => {
-    const savePageScroll = () => {
-      if (isRestoringScrollRef.current) {
+    const savePageScroll = (force = false) => {
+      if (!force && isRestoringScrollRef.current) {
         return;
       }
 
       sessionStorage.setItem(pageScrollStorageKey(page), String(window.scrollY));
     };
+    const savePageScrollOnScroll = () => savePageScroll();
+    const savePageScrollBeforeUnload = () => savePageScroll(true);
 
-    window.addEventListener("scroll", savePageScroll, { passive: true });
-    window.addEventListener("beforeunload", savePageScroll);
+    window.addEventListener("scroll", savePageScrollOnScroll, { passive: true });
+    window.addEventListener("beforeunload", savePageScrollBeforeUnload);
 
     return () => {
-      savePageScroll();
-      window.removeEventListener("scroll", savePageScroll);
-      window.removeEventListener("beforeunload", savePageScroll);
+      savePageScroll(true);
+      window.removeEventListener("scroll", savePageScrollOnScroll);
+      window.removeEventListener("beforeunload", savePageScrollBeforeUnload);
     };
   }, [page]);
 
@@ -477,7 +480,7 @@ function App() {
         <header className="workspace-topbar">
           <div className="topbar-title-block">
             <h1>{pageTitle(page)}</h1>
-            {!authLoading && loading && pageUsesDashboardSummary(page) ? <span className="topbar-loading-popover">Loading dashboard data...</span> : null}
+            {!authLoading && isVisualLoading && pageUsesDashboardSummary(page) ? <span className="topbar-loading-popover">Loading dashboard data...</span> : null}
             <p>{pageSubtitle(page)}</p>
           </div>
           {page === "authors" || page === "activity" ? (
@@ -513,7 +516,7 @@ function App() {
             onDatePickerChange={setDateRange}
             selectedAuthor={activeAuthor}
             setSelectedAuthor={setSelectedAuthor}
-            loading={loading}
+            loading={isVisualLoading}
             restoringScroll={isRestoringScroll}
             refreshing={refreshingReports}
             onRefreshAuthor={(author) => void requestReportRefresh(author)}
@@ -596,7 +599,6 @@ function clearDashboardSessionCaches() {
   const prefixes = [
     DASHBOARD_SUMMARY_CACHE_PREFIX,
     "AL.Dashboard.ActivityHourly.",
-    "AL.Dashboard.ActivityFloatingAuthors.",
     "AL.Dashboard.ActivityReports.",
     "AL.Dashboard.AnalyticsSummary",
     "AL.Dashboard.CalendarSummary"

@@ -130,6 +130,10 @@ export function ActivityPage({
     let ignore = false;
 
     async function loadHourly() {
+      if (loading && !summary.hourlyActivityByAuthor.length) {
+        return;
+      }
+
       const cachedRows = hourlyCacheRef.current[hourlyCacheKey];
       let hasCachedRows = false;
 
@@ -191,7 +195,7 @@ export function ActivityPage({
     return () => {
       ignore = true;
     };
-  }, [dateRange.startDate, dateRange.endDate, dateRange.preset, hourlyCacheKey, summary.hourlyActivityByAuthor]);
+  }, [dateRange.startDate, dateRange.endDate, dateRange.preset, hourlyCacheKey, loading, summary.hourlyActivityByAuthor]);
 
   useEffect(() => {
     if (!author?.rawAuthor) {
@@ -223,6 +227,10 @@ export function ActivityPage({
 
     async function loadReports() {
       if (!author?.rawAuthor) {
+        if (loading) {
+          return;
+        }
+
         setReports([]);
         setReportsTotal(0);
         setReportSources([]);
@@ -315,7 +323,7 @@ export function ActivityPage({
     return () => {
       ignore = true;
     };
-  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportsPage, reportsPageSize, reportSourceFilter, reportHourFilter, reportsCacheKey]);
+  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, loading, reportsPage, reportsPageSize, reportSourceFilter, reportHourFilter, reportsCacheKey]);
 
   return (
     <>
@@ -327,7 +335,6 @@ export function ActivityPage({
         onDatePickerChange={onDatePickerChange}
         selectedAuthor={author?.rawAuthor ?? null}
         setSelectedAuthor={setSelectedAuthor}
-        loading={loading}
         restoringScroll={restoringScroll}
       />
       <section className="page-section">
