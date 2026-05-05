@@ -25,25 +25,6 @@ def _event_clock_local(value: dt.datetime | None, time_zone_id: str) -> str:
 
 
 class TelegramActivityService(MongoComposableMixin):
-    def _latest_plugin_activity_after_offline(self, raw_author: str, day_date: str, offline_at: dt.datetime) -> dt.datetime | None:
-        latest_activity_at: dt.datetime | None = None
-
-        for item in self.db.daily_author_activity.find(
-            {
-                "author": raw_author,
-                "date": day_date,
-                "source": {"$nin": ["telegram", "discord", "status"]},
-                "lastReceivedAt": {"$gt": offline_at},
-            },
-            {"_id": 0, "lastReceivedAt": 1},
-        ):
-            received_at = _coerce_datetime(item.get("lastReceivedAt"))
-
-            if received_at and (latest_activity_at is None or received_at > latest_activity_at):
-                latest_activity_at = received_at
-
-        return latest_activity_at
-
     def _supersede_open_duplicate_afk_prompts(self, telegram_username: str, break_started_at: dt.datetime | None) -> None:
         if not break_started_at:
             return
@@ -367,34 +348,23 @@ class TelegramActivityService(MongoComposableMixin):
         profiles = self._profiles_by_raw_author()
 
         for session in self.db.day_sessions.find({}, {"_id": 0}):
+            if session.get("lastOfflineAt"):
+                continue
+
             raw_author = str(session.get("rawAuthor") or "")
             telegram_username = _normalize_telegram_username(session.get("telegramUsername") or profiles.get(raw_author, {}).get("telegramUsername"))
             day_date = str(session.get("date") or "")
             started_at = _coerce_datetime(session.get("startedAt"))
-            last_offline_at = _coerce_datetime(session.get("lastOfflineAt"))
 
             if not raw_author or not telegram_username or not day_date or not started_at:
                 continue
 
-            post_offline_activity_at = None
-            reminder_window_started_at = started_at
+            elapsed_seconds = max(0, int((now - started_at).total_seconds()))
 
-            if last_offline_at:
-                post_offline_activity_at = self._latest_plugin_activity_after_offline(raw_author, day_date, last_offline_at)
-
-                if not post_offline_activity_at:
-                    continue
-
-                reminder_window_started_at = post_offline_activity_at
-
-            elapsed_seconds = max(0, int((now - reminder_window_started_at).total_seconds()))
-
-            if not last_offline_at and elapsed_seconds < TELEGRAM_DAY_REMINDER_SECONDS:
+            if elapsed_seconds < TELEGRAM_DAY_REMINDER_SECONDS:
                 continue
 
             reminder_key = {"rawAuthor": raw_author, "date": day_date}
-            if post_offline_activity_at:
-                reminder_key["postOfflineActivityAt"] = post_offline_activity_at
             current = self.db.telegram_day_reminders.find_one(reminder_key, {"_id": 0}) or {}
 
             if current.get("status") in {"sent", "closed"}:
@@ -409,8 +379,6 @@ class TelegramActivityService(MongoComposableMixin):
                         "reminderId": reminder_id,
                         "telegramUsername": telegram_username,
                         "startedAt": started_at,
-                        "lastOfflineAt": last_offline_at,
-                        "postOfflineActivityAt": post_offline_activity_at,
                         "elapsedSeconds": elapsed_seconds,
                         "status": "claimed",
                         "lastClaimedAt": now,
@@ -425,8 +393,6 @@ class TelegramActivityService(MongoComposableMixin):
                     "telegramUsername": telegram_username,
                     "date": day_date,
                     "startedAt": started_at.isoformat(),
-                    "lastOfflineAt": last_offline_at.isoformat() if last_offline_at else None,
-                    "postOfflineActivityAt": post_offline_activity_at.isoformat() if post_offline_activity_at else None,
                     "elapsedSeconds": elapsed_seconds,
                 }
             )

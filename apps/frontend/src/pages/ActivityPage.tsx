@@ -455,28 +455,6 @@ function saveCachedActivityHourly(key: string, rows: AuthorHourlyActivity[]) {
   }
 }
 
-function loadCachedFloatingAuthors(key: string) {
-  try {
-    const cached = sessionStorage.getItem(activityCacheKey(ACTIVITY_FLOATING_AUTHORS_CACHE_PREFIX, key));
-
-    if (!cached) {
-      return [];
-    }
-
-    return JSON.parse(cached) as AuthorRow[];
-  } catch {
-    return [];
-  }
-}
-
-function saveCachedFloatingAuthors(key: string, authors: AuthorRow[]) {
-  try {
-    sessionStorage.setItem(activityCacheKey(ACTIVITY_FLOATING_AUTHORS_CACHE_PREFIX, key), JSON.stringify(authors));
-  } catch {
-    // Ignore storage failures; the main dashboard summary remains the source of truth.
-  }
-}
-
 function loadCachedReportsPage(key: string) {
   try {
     const cached = sessionStorage.getItem(activityCacheKey(ACTIVITY_REPORTS_CACHE_PREFIX, key));

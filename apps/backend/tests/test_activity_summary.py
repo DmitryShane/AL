@@ -6559,32 +6559,6 @@ def test_telegram_reminder_close_is_idempotent():
     assert repo.db.day_sessions.items[0]["daySeconds"] == 10 * 3600 + 15 * 60
 
 
-def test_telegram_reminder_repeats_after_activity_following_offline_close():
-    repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
-    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
-    first_reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC))[0]
-    repo.close_telegram_day_from_reminder(first_reminder["reminderId"], "offline", "2026-04-28T19:15:00Z")
-
-    repo.db.daily_author_activity.insert_one(
-        {
-            "source": "ual",
-            "author": "Future Artist",
-            "projectId": "unity",
-            "date": "2026-04-28",
-            "lastReceivedAt": dt.datetime(2026, 4, 28, 19, 30, tzinfo=dt.UTC),
-            "activeSeconds": 60,
-            "idleSeconds": 0,
-        }
-    )
-
-    reminders = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 31, tzinfo=dt.UTC))
-
-    assert len(reminders) == 1
-    assert reminders[0]["reminderId"] != first_reminder["reminderId"]
-    assert reminders[0]["postOfflineActivityAt"] == "2026-04-28T19:30:00+00:00"
-
-
 def test_telegram_reminder_does_not_repeat_after_offline_without_new_activity():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
@@ -6595,12 +6569,12 @@ def test_telegram_reminder_does_not_repeat_after_offline_without_new_activity():
     assert repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 31, tzinfo=dt.UTC)) == []
 
 
-def test_repeated_telegram_reminder_closes_new_activity_window():
+def test_telegram_reminder_does_not_repeat_after_activity_following_offline_close():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
     repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
-    first_reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC))[0]
-    repo.close_telegram_day_from_reminder(first_reminder["reminderId"], "offline", "2026-04-28T19:15:00Z")
+    reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC))[0]
+    repo.close_telegram_day_from_reminder(reminder["reminderId"], "offline", "2026-04-28T19:15:00Z")
     repo.db.daily_author_activity.insert_one(
         {
             "source": "ual",
@@ -6612,13 +6586,8 @@ def test_repeated_telegram_reminder_closes_new_activity_window():
             "idleSeconds": 0,
         }
     )
-    second_reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 31, tzinfo=dt.UTC))[0]
 
-    result = repo.close_telegram_day_from_reminder(second_reminder["reminderId"], "offline", "2026-04-28T19:45:00Z")
-
-    assert result["status"] == "reminder_offline"
-    assert repo.db.day_sessions.items[0]["lastOfflineAt"] == dt.datetime(2026, 4, 28, 19, 45, tzinfo=dt.UTC)
-    assert repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 46, tzinfo=dt.UTC)) == []
+    assert repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 31, tzinfo=dt.UTC)) == []
 
 
 def test_telegram_reminder_close_rejects_wrong_actor():

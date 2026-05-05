@@ -8,7 +8,7 @@ const ACTIVITY_FLOATING_AUTHORS_CACHE_PREFIX = "AL.Dashboard.ActivityFloatingAut
 const ACTIVITY_FLOATING_STRIP_EXIT_MS = 220;
 
 type ActivityAuthorFloatingStripProps = {
-  anchorRef: RefObject<HTMLDivElement>;
+  anchorRef: RefObject<HTMLDivElement | null>;
   authors: AuthorRow[];
   dateRange: DateRange;
   datePickerValue: DateRange;
