@@ -1845,7 +1845,22 @@ class ActivitySummaryService(MongoComposableMixin):
             merged: list[dt.datetime] = []
 
             if profile_raw_dt:
-                merged.append(profile_raw_dt)
+                profile_raw_date = _local_date_for_time_zone(
+                    profile_raw_dt,
+                    _author_time_zone_id(raw_author, profiles, author_row.get("timeZoneId")),
+                )
+
+                if _date_in_summary_scope(
+                    profile_raw_date,
+                    raw_author,
+                    profiles,
+                    author_row.get("timeZoneId"),
+                    now,
+                    start_date,
+                    end_date,
+                    date_mode,
+                ):
+                    merged.append(profile_raw_dt)
 
             if row_dt:
                 merged.append(row_dt)

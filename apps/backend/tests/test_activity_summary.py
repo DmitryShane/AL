@@ -1880,6 +1880,60 @@ def test_historical_activity_summary_keeps_selected_day_telegram_offline_gray():
     assert author["stalePresence"] == "telegram"
 
 
+def test_historical_activity_summary_ignores_current_profile_raw_report_presence():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "Europe/Kyiv",
+            "lastRawReportReceivedAt": dt.datetime(2026, 5, 5, 17, 49, 35, tzinfo=dt.UTC),
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-05-04",
+        end_date="2026-05-04",
+        now=dt.datetime(2026, 5, 5, 17, 50, tzinfo=dt.UTC),
+    )
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "telegram"
+    assert repo.db.status_events.count_documents({"rawAuthor": "Future Artist", "reason": "reports_stopped"}) == 0
+    assert repo.db.report_rows.count_documents({"author": "Future Artist", "source": "status", "statusReason": "reports_stopped"}) == 0
+
+
+def test_live_activity_summary_keeps_current_profile_raw_report_presence_online():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "Europe/Kyiv",
+            "lastRawReportReceivedAt": dt.datetime(2026, 5, 5, 17, 49, 35, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "telegramUsername": "future_artist",
+            "date": "2026-05-05",
+            "startedAt": dt.datetime(2026, 5, 5, 8, 47, 44, tzinfo=dt.UTC),
+        }
+    )
+
+    summary = repo.activity_summary(
+        date_mode="authorLocalToday",
+        now=dt.datetime(2026, 5, 5, 17, 50, tzinfo=dt.UTC),
+    )
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+    assert author["status"] == "online"
+
+
 def test_regular_date_still_applies_reports_stopped_when_it_is_author_local_today():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
