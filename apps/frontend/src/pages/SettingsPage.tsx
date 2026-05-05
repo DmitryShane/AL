@@ -29,6 +29,9 @@ type PendingAuthorActivityDelete =
   | { mode: "range"; profile: AuthorProfile; startDate: string; endDate: string }
   | { mode: "all"; profile: AuthorProfile };
 
+const OPENAI_STATS_CACHE_KEY = "al.openAIStats.cache";
+let cachedOpenAIStats: OpenAIStats | null = readCachedOpenAIStats();
+
 async function apiErrorDetail(response: Response, fallback: string): Promise<string> {
   try {
     const payload = (await response.json()) as { detail?: unknown };
@@ -96,9 +99,10 @@ export function SettingsPage({
   const [aliasTarget, setAliasTarget] = useState("");
   const [meetingActivityItems, setMeetingActivityItems] = useState<MeetingActivityItem[]>([]);
   const [meetingRecordingsError, setMeetingRecordingsError] = useState("");
-  const [openAIStats, setOpenAIStats] = useState<OpenAIStats | null>(null);
+  const [openAIStats, setOpenAIStats] = useState<OpenAIStats | null>(() => cachedOpenAIStats);
   const [openAIStatsError, setOpenAIStatsError] = useState("");
-  const [openAIStatsLoading, setOpenAIStatsLoading] = useState(false);
+  const [openAIStatsLoading, setOpenAIStatsLoading] = useState(() => cachedOpenAIStats === null);
+  const openAIStatsAutoLoadStartedRef = useRef(cachedOpenAIStats !== null);
   const meetingSummaryWorkspaceRef = useRef<HTMLDivElement>(null);
   const meetingSummaryPromptPanelRef = useRef<HTMLDivElement>(null);
 
@@ -223,6 +227,11 @@ export function SettingsPage({
       return;
     }
 
+    if (openAIStatsAutoLoadStartedRef.current) {
+      return;
+    }
+
+    openAIStatsAutoLoadStartedRef.current = true;
     void loadOpenAIStats();
   }, [settingsTab]);
 
@@ -242,6 +251,8 @@ export function SettingsPage({
       }
 
       const data = await response.json() as OpenAIStats;
+      cachedOpenAIStats = data;
+      writeCachedOpenAIStats(data);
       setOpenAIStats(data);
       setOpenAIStatsError(data.error || "");
     } catch (error) {
@@ -1073,4 +1084,30 @@ function intervalSettingsDeviceIdleThreshold(summary: Summary | null) {
 function intervalSettingsTelegramOnlinePromptMinutes(summary: Summary | null) {
   const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { telegramOnlinePromptDelayMinutes?: number }) | undefined;
   return intervalSettings?.telegramOnlinePromptDelayMinutes ?? 15;
+}
+
+function readCachedOpenAIStats(): OpenAIStats | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const value = window.sessionStorage.getItem(OPENAI_STATS_CACHE_KEY);
+
+    if (!value) {
+      return null;
+    }
+
+    return JSON.parse(value) as OpenAIStats;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedOpenAIStats(stats: OpenAIStats): void {
+  try {
+    window.sessionStorage.setItem(OPENAI_STATS_CACHE_KEY, JSON.stringify(stats));
+  } catch {
+    // Storage can be unavailable in private mode; in-memory cache still keeps the card populated.
+  }
 }
