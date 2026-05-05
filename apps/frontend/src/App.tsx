@@ -658,7 +658,7 @@ function pageSubtitle(page: Page) {
   }
 
   if (page === "settings") {
-    return "Manage author display names, teams, Telegram mapping, and report intervals.";
+    return "Manage workspace configuration, integrations, and dashboard behavior.";
   }
 
   return "Team activity overview for the selected period.";
