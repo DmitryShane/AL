@@ -178,14 +178,14 @@ rm -f /etc/nginx/sites-enabled/default
 systemctl daemon-reload
 systemctl enable mongod nginx al-backend al-telegram-bot al-discord-bot al-apt-cache-clean.timer
 systemctl start al-apt-cache-clean.timer
-systemctl restart mongod
+systemctl start mongod
 for attempt in {1..30}; do
   if mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' >/dev/null 2>&1; then
     break
   fi
 
   if [[ "${attempt}" -eq 30 ]]; then
-    echo "MongoDB did not become ready after restart." >&2
+    echo "MongoDB did not become ready." >&2
     exit 1
   fi
 
