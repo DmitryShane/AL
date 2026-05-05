@@ -601,12 +601,17 @@ class SettingsRepository(MongoComposableMixin):
     def reboot_server(self) -> dict[str, Any]:
         requested_at = dt.datetime.now(dt.UTC)
         services = ["mongod", "nginx", "al-backend", "al-telegram-bot", "al-discord-bot"]
+        unit_name = f"al-dashboard-reboot-{requested_at.strftime('%Y%m%d%H%M%S')}"
 
         try:
             subprocess.run(
                 [
                     "/usr/bin/sudo",
                     "-n",
+                    "/usr/bin/systemd-run",
+                    "--unit",
+                    unit_name,
+                    "--on-active=2s",
                     "/usr/bin/systemctl",
                     "restart",
                     *services,
@@ -619,7 +624,7 @@ class SettingsRepository(MongoComposableMixin):
         except (OSError, subprocess.SubprocessError) as exc:
             return {"ok": False, "error": str(exc), "requestedAt": requested_at.isoformat()}
 
-        return {"ok": True, "status": "services_restarted", "requestedAt": requested_at.isoformat(), "services": services}
+        return {"ok": True, "status": "services_restart_scheduled", "requestedAt": requested_at.isoformat(), "services": services}
 
     def upsert_discord_settings(self, meeting_auto_afk_timeout_seconds: int) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)

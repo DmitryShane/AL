@@ -502,10 +502,9 @@ function App() {
         {page === "authors" ? (
           <AuthorsPage
             authors={authors}
+            loading={isVisualLoading}
             search={search}
             setSearch={setSearch}
-            refreshing={refreshingReports}
-            onRefresh={() => void requestReportRefresh()}
           />
         ) : null}
         {page === "activity" ? (

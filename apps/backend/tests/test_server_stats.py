@@ -133,3 +133,32 @@ def test_server_stats_service_parses_named_systemd_fields(monkeypatch) -> None:
     assert service["loadState"] == "loaded"
     assert service["unitFileState"] == "enabled"
     assert service["activeEnteredAt"] == "Tue 2026-05-05 19:00:00 UTC"
+
+
+def test_server_reboot_schedules_delayed_systemd_restart(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace()
+
+    monkeypatch.setattr(settings_repo.subprocess, "run", fake_run)
+
+    repo = SettingsRepository.__new__(SettingsRepository)
+    result = repo.reboot_server()
+
+    assert result["ok"] is True
+    assert result["status"] == "services_restart_scheduled"
+    args, kwargs = calls[0]
+    assert args[:7] == [
+        "/usr/bin/sudo",
+        "-n",
+        "/usr/bin/systemd-run",
+        "--unit",
+        args[4],
+        "--on-active=2s",
+        "/usr/bin/systemctl",
+    ]
+    assert args[4].startswith("al-dashboard-reboot-")
+    assert args[7:] == ["restart", "mongod", "nginx", "al-backend", "al-telegram-bot", "al-discord-bot"]
+    assert kwargs["check"] is True

@@ -102,7 +102,7 @@ chmod 0440 /etc/sudoers.d/al-server-stats-du
 visudo -cf /etc/sudoers.d/al-server-stats-du
 
 cat > /etc/sudoers.d/al-server-reboot <<EOF
-${APP_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart mongod nginx al-backend al-telegram-bot al-discord-bot
+${APP_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit al-dashboard-reboot-* --on-active=2s /usr/bin/systemctl restart mongod nginx al-backend al-telegram-bot al-discord-bot
 EOF
 chmod 0440 /etc/sudoers.d/al-server-reboot
 visudo -cf /etc/sudoers.d/al-server-reboot
