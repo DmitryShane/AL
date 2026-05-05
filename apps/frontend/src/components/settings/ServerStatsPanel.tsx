@@ -54,6 +54,12 @@ export function ServerStatsPanel() {
         throw new Error("Server reboot request failed");
       }
 
+      const payload = (await response.json()) as { ok?: boolean; error?: string };
+
+      if (!payload.ok) {
+        throw new Error(payload.error || "Server reboot request failed");
+      }
+
       setRebootMessage("Server reboot requested. The dashboard may disconnect for a few minutes.");
       setRebootModalOpen(false);
     } catch {
