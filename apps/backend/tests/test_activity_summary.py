@@ -1031,6 +1031,16 @@ def test_activity_summary_fills_hourly_idle_from_telegram_online_to_first_raw_ac
         {
             "author": "Dmitry Shane",
             "date": "2026-05-05",
+            "source": "cur",
+            "eventType": "focus",
+            "occurredAtUtc": dt.datetime(2026, 5, 5, 1, 55, 29, tzinfo=dt.UTC),
+            "receivedAt": dt.datetime(2026, 5, 5, 1, 56, 1, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "author": "Dmitry Shane",
+            "date": "2026-05-05",
             "source": "ual",
             "eventType": "focus",
             "occurredAtUtc": dt.datetime(2026, 5, 5, 10, 31, 7, tzinfo=dt.UTC),

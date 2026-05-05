@@ -123,6 +123,10 @@ class ActivityLiveSummaryService(MongoComposableMixin):
         latest_offline_by_key: dict[tuple[str, str], dt.datetime] = {}
         first_activity_by_key: dict[tuple[str, str], dt.datetime] = {}
 
+        def is_after_first_online(key: tuple[str, str], occurred_at: dt.datetime) -> bool:
+            first_online = first_online_by_key.get(key)
+            return bool(first_online and occurred_at > first_online["timestamp"])
+
         for event in self.db.break_events.find(
             {"rawAuthor": {"$in": authors}, "date": {"$in": dates}, "eventType": {"$in": ["online", "offline"]}},
             {"_id": 0},
@@ -175,6 +179,9 @@ class ActivityLiveSummaryService(MongoComposableMixin):
                 or _coerce_datetime(event.get("receivedAt"))
             )
 
+            if occurred_at and not is_after_first_online(key, occurred_at):
+                continue
+
             if occurred_at and (key not in first_activity_by_key or occurred_at < first_activity_by_key[key]):
                 first_activity_by_key[key] = occurred_at
 
@@ -222,6 +229,9 @@ class ActivityLiveSummaryService(MongoComposableMixin):
 
             if occurred_at and active_delta_microseconds > 0 and latest_offline_at and latest_offline_at > occurred_at:
                 occurred_at = occurred_at - dt.timedelta(microseconds=active_delta_microseconds)
+
+            if occurred_at and not is_after_first_online(key, occurred_at):
+                continue
 
             if occurred_at and (key not in first_activity_by_key or occurred_at < first_activity_by_key[key]):
                 first_activity_by_key[key] = occurred_at
