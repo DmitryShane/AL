@@ -90,7 +90,10 @@ export function ReasonEditor({
 }) {
   return (
     <div className="calendar-reasons">
-      <h2>Reasons</h2>
+      <div className="calendar-section-heading">
+        <h2>Reasons</h2>
+        <span>{reasons.length} options</span>
+      </div>
       <div className="reason-list">
         {reasons.map((reason) => (
           <button
@@ -124,11 +127,14 @@ export function CalendarStats({ stats, reasons }: { stats: CalendarAuthorStats[]
     <div className="calendar-stats-grid">
       {stats.map((stat) => (
         <article className="calendar-stat-card" key={stat.rawAuthor}>
-          <div>
-            <span className="color-dot" style={{ background: stat.authorColor }} />
-            <strong>{stat.displayName}</strong>
+          <div className="calendar-stat-card-header">
+            <div>
+              <span className="color-dot" style={{ background: stat.authorColor }} />
+              <strong>{stat.displayName}</strong>
+            </div>
+            <span>{stat.totalMarkedDays}</span>
           </div>
-          <span>{stat.totalMarkedDays} marked days</span>
+          <small className="calendar-stat-card-subtitle">marked days</small>
           <div className="stat-reasons">
             {reasons.map((reason) => <small key={reason.id}>{reason.label}: {stat.byReason[reason.id] ?? 0}</small>)}
           </div>
@@ -177,7 +183,13 @@ export function CalendarMarkEditor({
   return (
     <div className="modal-backdrop" role="presentation" onClick={onCancel}>
       <div className="calendar-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-        <h2>Mark {selectedDates.length} days</h2>
+        <div className="calendar-modal-header">
+          <div>
+            <span>Calendar marks</span>
+            <h2>Mark {selectedDates.length} days</h2>
+          </div>
+          <strong>{selectedAuthors.length} authors</strong>
+        </div>
         <div className="modal-author-list">
           {authors.map((author) => (
             <label key={author.rawAuthor}>
@@ -201,11 +213,11 @@ export function CalendarMarkEditor({
         </label>
         <label>
           Note
-          <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Required note" />
+          <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional note" />
         </label>
         <div className="modal-actions">
           <button className="primary-outline-button" onClick={onCancel}>Cancel</button>
-          <button className="primary-button" onClick={onSave} disabled={!selectedAuthors.length || !note.trim() || !reasonId}>Save marks</button>
+          <button className="primary-button" onClick={onSave} disabled={!selectedAuthors.length || !reasonId}>Save marks</button>
         </div>
       </div>
     </div>
@@ -236,7 +248,13 @@ export function CalendarClearEditor({
   return (
     <div className="modal-backdrop" role="presentation" onClick={onCancel}>
       <div className="calendar-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-        <h2>Clear marks for {selectedDates.length} days</h2>
+        <div className="calendar-modal-header">
+          <div>
+            <span>Calendar marks</span>
+            <h2>Clear marks for {selectedDates.length} days</h2>
+          </div>
+          <strong>{selectedAuthors.length} authors</strong>
+        </div>
         <p className="calendar-helper">This removes saved marks for selected dates and selected authors.</p>
         <div className="modal-author-list">
           {authors.map((author) => (

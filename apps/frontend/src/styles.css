@@ -3216,23 +3216,37 @@ p {
 .calendar-management {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
+  gap: 18px;
   align-items: start;
   border: 1px solid #e5eaf0;
-  border-radius: 16px;
-  background: #ffffff;
-  padding: 14px;
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.96) 0%, #ffffff 58%),
+    #ffffff;
+  padding: 16px;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.07);
 }
 
 .calendar-toolbar {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  border-bottom: 1px solid #edf2f7;
+  padding-bottom: 16px;
 }
 
 .calendar-toolbar strong {
   grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d8e0e8;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #202a36;
+  font-size: 13px;
+  font-weight: 900;
+  padding: 8px 12px;
 }
 
 .calendar-toolbar button {
@@ -3449,11 +3463,30 @@ p {
 
 .calendar-reasons {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .calendar-reasons h2 {
+  margin: 0;
   font-size: 16px;
+}
+
+.calendar-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.calendar-section-heading span {
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #718093;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 5px 8px;
+  text-transform: uppercase;
 }
 
 .calendar-helper {
@@ -3479,13 +3512,56 @@ p {
 
 .calendar-stat-card {
   display: grid;
+  gap: 12px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.9) 0%, #ffffff 62%),
+    #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.055);
+}
+
+.calendar-stat-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
 }
 
-.calendar-stat-card > div:first-child {
+.calendar-stat-card-header > div {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 8px;
+}
+
+.calendar-stat-card-header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #202a36;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-stat-card-header > span {
+  display: inline-flex;
+  min-width: 42px;
+  justify-content: center;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 13px;
+  font-weight: 900;
+  padding: 5px 9px;
+}
+
+.calendar-stat-card-subtitle {
+  margin-top: -8px;
+  color: #718093;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .stat-reasons,
@@ -3507,9 +3583,45 @@ p {
 
 .calendar-modal {
   display: grid;
-  width: min(560px, 100%);
-  gap: 14px;
-  padding: 18px;
+  width: min(600px, 100%);
+  gap: 16px;
+  border-radius: 22px;
+  padding: 20px;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.24);
+}
+
+.calendar-modal-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #edf2f7;
+  padding-bottom: 14px;
+}
+
+.calendar-modal-header span {
+  color: #718093;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.calendar-modal-header h2 {
+  margin: 4px 0 0;
+  color: #202a36;
+  font-size: 22px;
+  letter-spacing: -0.03em;
+}
+
+.calendar-modal-header > strong {
+  flex: none;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #425466;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 7px 10px;
 }
 
 .calendar-modal label {
@@ -3522,19 +3634,32 @@ p {
 
 .calendar-modal textarea {
   min-height: 90px;
+  resize: vertical;
 }
 
 .modal-author-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 10px;
+  border: 1px solid #edf2f7;
+  border-radius: 14px;
+  background: #f8fafc;
+  padding: 10px;
 }
 
 .modal-author-list label {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
+  border: 1px solid #e5eaf0;
+  border-radius: 12px;
+  background: #ffffff;
   color: #202a36;
+  padding: 8px 10px;
+}
+
+.modal-author-list input {
+  accent-color: #5b4dff;
 }
 
 .modal-actions {

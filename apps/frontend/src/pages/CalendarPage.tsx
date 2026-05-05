@@ -124,8 +124,8 @@ export function CalendarPage() {
   }
 
   async function saveMarks() {
-    if (!markAuthors.length || !selectedDates.length || !markReason || !markNote.trim()) {
-      setError("Select authors, dates, reason, and note.");
+    if (!markAuthors.length || !selectedDates.length || !markReason) {
+      setError("Select authors, dates, and reason.");
       return;
     }
 
