@@ -99,8 +99,11 @@ def _server_stats_service(key: str, label: str, unit: str) -> dict[str, Any]:
                 "systemctl",
                 "show",
                 unit,
-                "--property=ActiveState,SubState,LoadState,UnitFileState,ActiveEnterTimestamp",
-                "--value",
+                "--property=ActiveState",
+                "--property=SubState",
+                "--property=LoadState",
+                "--property=UnitFileState",
+                "--property=ActiveEnterTimestamp",
             ],
             check=True,
             capture_output=True,
@@ -110,12 +113,12 @@ def _server_stats_service(key: str, label: str, unit: str) -> dict[str, Any]:
     except (OSError, subprocess.SubprocessError):
         return _unknown_server_stats_service(key, label, unit)
 
-    values = result.stdout.splitlines()
-    active_state = values[0].strip() if len(values) > 0 else "unknown"
-    sub_state = values[1].strip() if len(values) > 1 else ""
-    load_state = values[2].strip() if len(values) > 2 else "unknown"
-    unit_file_state = values[3].strip() if len(values) > 3 else "unknown"
-    active_entered_at = values[4].strip() if len(values) > 4 else ""
+    values = _parse_systemctl_show(result.stdout)
+    active_state = values.get("ActiveState") or "unknown"
+    sub_state = values.get("SubState") or ""
+    load_state = values.get("LoadState") or "unknown"
+    unit_file_state = values.get("UnitFileState") or "unknown"
+    active_entered_at = values.get("ActiveEnterTimestamp") or ""
 
     if active_state == "active":
         status = "running"
@@ -135,6 +138,18 @@ def _server_stats_service(key: str, label: str, unit: str) -> dict[str, Any]:
         "unitFileState": unit_file_state or "unknown",
         "activeEnteredAt": active_entered_at or None,
     }
+
+
+def _parse_systemctl_show(output: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+
+    for line in output.splitlines():
+        key, separator, value = line.partition("=")
+
+        if separator:
+            values[key] = value.strip()
+
+    return values
 
 
 def _unknown_server_stats_service(key: str, label: str, unit: str) -> dict[str, Any]:

@@ -2542,9 +2542,19 @@ p {
   box-shadow: 0 0 0 4px rgba(53, 168, 107, 0.14);
 }
 
+.server-stats-service-running .server-stats-service-meta strong,
+.server-stats-service-running .server-stats-service-meta span {
+  color: #2f8f5d;
+}
+
 .server-stats-service-stopped .server-stats-service-dot {
   background: #ef4444;
   box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.14);
+}
+
+.server-stats-service-stopped .server-stats-service-meta strong,
+.server-stats-service-stopped .server-stats-service-meta span {
+  color: #dc2626;
 }
 
 .server-stats-service-meta {

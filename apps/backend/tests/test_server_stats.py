@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import namedtuple
 from pathlib import Path
+from types import SimpleNamespace
 
 import al_backend.repositories.settings as settings_repo
 from al_backend.repositories.settings import SettingsRepository
@@ -108,3 +109,27 @@ def test_server_stats_service_falls_back_when_systemd_is_unavailable(monkeypatch
         "unitFileState": "unknown",
         "activeEnteredAt": None,
     }
+
+
+def test_server_stats_service_parses_named_systemd_fields(monkeypatch) -> None:
+    def fake_systemctl(*_args, **_kwargs):
+        return SimpleNamespace(
+            stdout=(
+                "LoadState=loaded\n"
+                "ActiveState=active\n"
+                "SubState=running\n"
+                "UnitFileState=enabled\n"
+                "ActiveEnterTimestamp=Tue 2026-05-05 19:00:00 UTC\n"
+            )
+        )
+
+    monkeypatch.setattr(settings_repo.subprocess, "run", fake_systemctl)
+
+    service = settings_repo._server_stats_service("backend", "AL Backend API", "al-backend.service")
+
+    assert service["status"] == "running"
+    assert service["activeState"] == "active"
+    assert service["subState"] == "running"
+    assert service["loadState"] == "loaded"
+    assert service["unitFileState"] == "enabled"
+    assert service["activeEnteredAt"] == "Tue 2026-05-05 19:00:00 UTC"
