@@ -1,29 +1,23 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
-import { AuthorAvatar } from "../components/AuthorAvatar";
-import { MEETING_AUDIO_RETENTION_OPTIONS, MEETING_SUMMARY_LANGUAGES, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
-import type { AuthorProfile, MeetingActivityItem, SettingsTab, SiteUser, Summary } from "../types/dashboard";
+import { SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
+import type { AuthorProfile, MeetingActivityItem, OpenAIStats, SettingsTab, SiteUser, Summary } from "../types/dashboard";
 import {
-  autoBreakScheduleLabel,
   authorProfilePayload,
   emptyAuthorProfile,
-  formatReportMinutes,
-  formatTimestamp,
-  formatProfileTimeZoneLabel,
-  formatProfileTimeZoneTitle,
   loadSavedSettingsTab,
-  meetingActivityDetail,
-  meetingActivityTitle,
   normalizeAuthorInput,
   profileLocalTodayIso,
-  settingsSaveButtonClassName,
-  settingsSaveButtonLabel,
   type BulkActivityDeletePreset
 } from "./pageHelpers";
-import { AuthorDeleteAllActivityModal } from "../components/settings/AuthorDeleteAllActivityModal";
-import { BulkAllAuthorsActivityDeleteModal } from "../components/settings/BulkAllAuthorsActivityDeleteModal";
-import { AuthorDeleteConfirm, AuthorProfileDeleteModal, SiteUsersPanel } from "../components/settings/SettingsComponents";
-import { ServerStatsPanel } from "../components/settings/ServerStatsPanel";
+import { SiteUsersPanel } from "../components/settings/SettingsComponents";
+import { AuthorProfilesTab } from "../components/settings/tabs/authors/AuthorProfilesTab";
+import { AutoBreakTab } from "../components/settings/tabs/autoBreak/AutoBreakTab";
+import { DiscordSettingsTab } from "../components/settings/tabs/discord/DiscordSettingsTab";
+import { GeneralSettingsTab } from "../components/settings/tabs/general/GeneralSettingsTab";
+import { MeetingSummariesTab } from "../components/settings/tabs/meetingSummaries/MeetingSummariesTab";
+import { AuthorRedirectsTab } from "../components/settings/tabs/redirects/AuthorRedirectsTab";
+import { TelegramSettingsTab } from "../components/settings/tabs/telegram/TelegramSettingsTab";
 
 type DeleteActivityDraft = {
   mode: "today" | "range";
@@ -102,6 +96,9 @@ export function SettingsPage({
   const [aliasTarget, setAliasTarget] = useState("");
   const [meetingActivityItems, setMeetingActivityItems] = useState<MeetingActivityItem[]>([]);
   const [meetingRecordingsError, setMeetingRecordingsError] = useState("");
+  const [openAIStats, setOpenAIStats] = useState<OpenAIStats | null>(null);
+  const [openAIStatsError, setOpenAIStatsError] = useState("");
+  const [openAIStatsLoading, setOpenAIStatsLoading] = useState(false);
   const meetingSummaryWorkspaceRef = useRef<HTMLDivElement>(null);
   const meetingSummaryPromptPanelRef = useRef<HTMLDivElement>(null);
 
@@ -221,9 +218,37 @@ export function SettingsPage({
     };
   }, [settingsTab]);
 
+  useEffect(() => {
+    if (settingsTab !== "meetingSummaries") {
+      return;
+    }
+
+    void loadOpenAIStats();
+  }, [settingsTab]);
+
   function setSettingsTab(tab: SettingsTab) {
     setSettingsTabState(tab);
     localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, tab);
+  }
+
+  async function loadOpenAIStats() {
+    setOpenAIStatsLoading(true);
+
+    try {
+      const response = await apiFetch("/api/v1/settings/openai-stats");
+
+      if (!response.ok) {
+        throw new Error(await apiErrorDetail(response, "OpenAI stats load failed"));
+      }
+
+      const data = await response.json() as OpenAIStats;
+      setOpenAIStats(data);
+      setOpenAIStatsError(data.error || "");
+    } catch (error) {
+      setOpenAIStatsError(error instanceof Error ? error.message : "OpenAI stats load failed");
+    } finally {
+      setOpenAIStatsLoading(false);
+    }
   }
 
   const meetingSummarySettingsDirty =
@@ -896,911 +921,138 @@ export function SettingsPage({
         <button className={settingsTab === "users" ? "active" : ""} onClick={() => setSettingsTab("users")}>Site Users</button>
       </div>
       {settingsTab === "general" ? (
-        <>
-          <div className="panel">
-            <h2>Send Interval</h2>
-            <div className="settings-row">
-              <label>
-                Global interval, sec
-                <input value={globalInterval} onChange={(event) => setGlobalInterval(event.target.value)} type="number" min="30" disabled={settingsReadOnly} />
-              </label>
-              <label>
-                Idle threshold, sec
-                <input value={idleThreshold} onChange={(event) => setIdleThreshold(event.target.value)} type="number" min="30" disabled={settingsReadOnly} />
-              </label>
-              <label>
-                Device idle threshold, sec
-                <input value={deviceIdleThreshold} onChange={(event) => setDeviceIdleThreshold(event.target.value)} type="number" min="30" disabled={settingsReadOnly} />
-              </label>
-              <div className="plugin-ingest-field">
-                <span id="plugin-ingest-heading" className="plugin-ingest-field-heading">
-                  Plugin reports
-                </span>
-                <div
-                  className="plugin-ingest-radios"
-                  role="radiogroup"
-                  aria-labelledby="plugin-ingest-heading"
-                >
-                  <label className="radio-inline">
-                    <input
-                      type="radio"
-                      name="plugin-ingest-enabled"
-                      checked={pluginIngestEnabled}
-                      onChange={() => setPluginIngestEnabled(true)}
-                      disabled={settingsReadOnly}
-                    />
-                    On
-                  </label>
-                  <label className="radio-inline">
-                    <input
-                      type="radio"
-                      name="plugin-ingest-enabled"
-                      checked={!pluginIngestEnabled}
-                      onChange={() => setPluginIngestEnabled(false)}
-                      disabled={settingsReadOnly}
-                    />
-                    Off
-                  </label>
-                </div>
-              </div>
-              <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={() => void saveInterval()} disabled={settingsReadOnly || saving === "interval" || !isIntervalSettingsDirty}>
-                {settingsSaveButtonLabel("interval", saving, saveStatus)}
-              </button>
-            </div>
-          </div>
-          <ServerStatsPanel />
-        </>
+        <GeneralSettingsTab
+          globalInterval={globalInterval}
+          idleThreshold={idleThreshold}
+          deviceIdleThreshold={deviceIdleThreshold}
+          pluginIngestEnabled={pluginIngestEnabled}
+          settingsReadOnly={settingsReadOnly}
+          saving={saving}
+          saveStatus={saveStatus}
+          isIntervalSettingsDirty={isIntervalSettingsDirty}
+          onGlobalIntervalChange={setGlobalInterval}
+          onIdleThresholdChange={setIdleThreshold}
+          onDeviceIdleThresholdChange={setDeviceIdleThreshold}
+          onPluginIngestEnabledChange={setPluginIngestEnabled}
+          onSaveInterval={() => void saveInterval()}
+        />
       ) : settingsTab === "autoBreak" ? (
-        <div className="panel">
-          <h2>Auto Break</h2>
-          <p className="settings-caption">
-            Assign authors whose first idle time during a work day should count as break time until the legal 60 minute break is filled.
-          </p>
-          <div className="profile-table-shell">
-            <div className="auto-break-list">
-            {profiles.map((profile) => {
-              const draft = drafts[profile.rawAuthor] ?? profile;
-              const profileDirty = isProfileDirty(profile);
-              return (
-                <div className="auto-break-row" key={profile.rawAuthor}>
-                  <div className="auto-break-identity">
-                    <AuthorAvatar
-                      displayName={profile.displayName || profile.rawAuthor}
-                      authorColor={profile.authorColor}
-                      avatarUrl={profile.avatarUrl}
-                      variant="mini"
-                    />
-                    <div className="auto-break-identity-text">
-                      <strong>{profile.displayName || profile.rawAuthor}</strong>
-                      <small className="auto-break-raw-id">
-                        {(draft.authorEmail ?? profile.authorEmail ?? "").trim() || profile.rawAuthor}
-                      </small>
-                    </div>
-                  </div>
-                  <div className="auto-break-actions">
-                    <small className="auto-break-schedule">{autoBreakScheduleLabel(draft)}</small>
-                    <label className="checkbox-cell">
-                      <input
-                        type="checkbox"
-                        checked={draft.autoBreakEnabled ?? false}
-                        disabled={settingsReadOnly}
-                        onChange={(event) =>
-                          setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, autoBreakEnabled: event.target.checked } }))
-                        }
-                      />
-                      Auto break
-                    </label>
-                  </div>
-                  <button
-                    className={settingsSaveButtonClassName(saveStatus[profile.rawAuthor], true)}
-                    onClick={() => void saveProfile(profile.rawAuthor)}
-                    disabled={settingsReadOnly || saving === profile.rawAuthor || !profileDirty}
-                  >
-                    {settingsSaveButtonLabel(profile.rawAuthor, saving, saveStatus)}
-                  </button>
-                </div>
-              );
-            })}
-            </div>
-          </div>
-        </div>
+        <AutoBreakTab
+          profiles={profiles}
+          drafts={drafts}
+          settingsReadOnly={settingsReadOnly}
+          saving={saving}
+          saveStatus={saveStatus}
+          isProfileDirty={isProfileDirty}
+          onDraftChange={(rawAuthor, draft) => setDrafts((items) => ({ ...items, [rawAuthor]: draft }))}
+          onSaveProfile={(rawAuthor) => void saveProfile(rawAuthor)}
+        />
       ) : settingsTab === "redirects" ? (
-        <div className="panel">
-          <h2>Author Redirects</h2>
-          <p className="settings-caption">
-            Redirect a trash raw author from plugin reports to the correct author profile. The source profile is removed and future reports aggregate into the target profile.
-          </p>
-          <div className="profile-create-card author-alias-card">
-            <label>
-              Source raw author
-              <input
-                value={aliasSource}
-                onChange={(event) => setAliasSource(event.target.value)}
-                list="author-alias-source-list"
-                placeholder="Unknown User"
-                disabled={settingsReadOnly}
-              />
-              <datalist id="author-alias-source-list">
-                {profiles.map((profile) => (
-                  <option value={profile.rawAuthor} key={profile.rawAuthor} />
-                ))}
-              </datalist>
-            </label>
-            <label>
-              Target profile
-              <select value={aliasTarget} onChange={(event) => setAliasTarget(event.target.value)} disabled={settingsReadOnly}>
-                {profiles.map((profile) => (
-                  <option value={profile.rawAuthor} key={profile.rawAuthor}>{profile.displayName || profile.rawAuthor}</option>
-                ))}
-              </select>
-            </label>
-            <button
-              className={settingsSaveButtonClassName(saveStatus.authorAlias)}
-              onClick={() => void saveAuthorAlias()}
-              disabled={settingsReadOnly || saving === "authorAlias" || !aliasSource.trim() || !aliasTarget.trim()}
-            >
-              {saving === "authorAlias" ? "Assigning..." : saveStatus.authorAlias === "saved" ? "Assigned" : saveStatus.authorAlias === "error" ? "Failed" : "Assign"}
-            </button>
-          </div>
-          {aliasError ? <p className="notice error">{aliasError}</p> : null}
-          <div className="profile-table-shell">
-            <div className="alias-list">
-            {aliases.length ? (
-              aliases.map((alias) => {
-                const target = profiles.find((profile) => profile.rawAuthor === alias.targetRawAuthor);
-                const deleteKey = `alias-delete:${alias.sourceRawAuthor}`;
-                return (
-                  <div className="alias-row" key={alias.sourceRawAuthor}>
-                    <span><strong>{alias.sourceRawAuthor}</strong> redirects to <strong>{target?.displayName || alias.targetRawAuthor}</strong></span>
-                    <button
-                      className={`${settingsSaveButtonClassName(saveStatus[deleteKey], true)} danger-button`}
-                      onClick={() => void deleteAuthorAlias(alias.sourceRawAuthor)}
-                      disabled={settingsReadOnly || saving === deleteKey}
-                    >
-                      {saving === deleteKey ? "Deleting..." : saveStatus[deleteKey] === "error" ? "Failed" : "Delete"}
-                    </button>
-                  </div>
-                );
-              })
-            ) : (
-              <p className="empty alias-list-empty">No redirects yet.</p>
-            )}
-            </div>
-          </div>
-        </div>
+        <AuthorRedirectsTab
+          profiles={profiles}
+          aliases={aliases}
+          aliasSource={aliasSource}
+          aliasTarget={aliasTarget}
+          aliasError={aliasError}
+          settingsReadOnly={settingsReadOnly}
+          saving={saving}
+          saveStatus={saveStatus}
+          onAliasSourceChange={setAliasSource}
+          onAliasTargetChange={setAliasTarget}
+          onSaveAuthorAlias={() => void saveAuthorAlias()}
+          onDeleteAuthorAlias={(sourceRawAuthor) => void deleteAuthorAlias(sourceRawAuthor)}
+        />
       ) : settingsTab === "authors" ? (
-        <>
-      <div className="panel">
-        <h2>Author Profiles</h2>
-        <p className="settings-caption">
-          Telegram and Discord mappings link chat and meeting events to the author.
-          Raw Author must exactly match the value sent by activity logger plugins.
-        </p>
-        <div className="profile-create-card">
-          <label>
-            Raw Author
-            <input
-              value={newProfile.rawAuthor}
-              onChange={(event) => setNewProfile((profile) => ({ ...profile, rawAuthor: event.target.value }))}
-              placeholder="Git user.name"
-              autoComplete="off"
-              data-1p-ignore
-              data-lpignore="true"
-              disabled={settingsReadOnly}
-            />
-          </label>
-          <label>
-            Display Name
-            <input
-              value={newProfile.displayName}
-              onChange={(event) => setNewProfile((profile) => ({ ...profile, displayName: event.target.value }))}
-              placeholder="Shown on dashboard"
-              autoComplete="off"
-              data-1p-ignore
-              data-lpignore="true"
-              disabled={settingsReadOnly}
-            />
-          </label>
-          <label>
-            Team
-            <input
-              value={newProfile.team ?? ""}
-              onChange={(event) => setNewProfile((profile) => ({ ...profile, team: event.target.value }))}
-              placeholder="Team"
-              autoComplete="off"
-              data-1p-ignore
-              data-lpignore="true"
-              disabled={settingsReadOnly}
-            />
-          </label>
-          <label>
-            GitHub
-            <input
-              value={newProfile.githubUsername ?? ""}
-              onChange={(event) => setNewProfile((profile) => ({ ...profile, githubUsername: event.target.value }))}
-              placeholder="username"
-              autoComplete="off"
-              data-1p-ignore
-              data-lpignore="true"
-              disabled={settingsReadOnly}
-            />
-          </label>
-          <label>
-            Telegram
-            <input
-              value={newProfile.telegramUsername ?? ""}
-              onChange={(event) => setNewProfile((profile) => ({ ...profile, telegramUsername: event.target.value }))}
-              placeholder="@username"
-              autoComplete="off"
-              data-1p-ignore
-              data-lpignore="true"
-              disabled={settingsReadOnly}
-            />
-          </label>
-          <label>
-            Discord ID
-            <input
-              value={newProfile.discordUserId ?? ""}
-              onChange={(event) => setNewProfile((profile) => ({ ...profile, discordUserId: event.target.value }))}
-              placeholder="User ID"
-              autoComplete="off"
-              data-1p-ignore
-              data-lpignore="true"
-              disabled={settingsReadOnly}
-            />
-          </label>
-          <label>
-            Discord Name
-            <input
-              value={newProfile.discordUsername ?? ""}
-              onChange={(event) => setNewProfile((profile) => ({ ...profile, discordUsername: event.target.value }))}
-              placeholder="username"
-              autoComplete="off"
-              data-1p-ignore
-              data-lpignore="true"
-              disabled={settingsReadOnly}
-            />
-          </label>
-          <label>
-            Color
-            <input
-              type="color"
-              value={newProfile.authorColor ?? "#13a37b"}
-              onChange={(event) => setNewProfile((profile) => ({ ...profile, authorColor: event.target.value }))}
-              disabled={settingsReadOnly}
-            />
-          </label>
-          <label>
-            Plugin
-            <span className="checkbox-cell">
-              <input
-                type="checkbox"
-                checked={newProfile.pluginEnabled ?? true}
-                onChange={(event) => setNewProfile((profile) => ({ ...profile, pluginEnabled: event.target.checked }))}
-                disabled={settingsReadOnly}
-              />
-              Enabled
-            </span>
-          </label>
-          <button
-            className={settingsSaveButtonClassName(saveStatus.newProfile)}
-            onClick={() => void createProfile()}
-            disabled={settingsReadOnly || saving === "newProfile" || !newProfile.rawAuthor.trim()}
-          >
-            {saving === "newProfile" ? "Creating..." : saveStatus.newProfile === "saved" ? "Created" : saveStatus.newProfile === "error" ? "Failed" : "Add profile"}
-          </button>
-        </div>
-        <div className="profile-table-shell">
-          <div className="profile-table">
-            <div className="profile-table-head">
-              <span>Raw Author</span>
-              <span>Display Name</span>
-              <span>Team</span>
-              <span>GitHub</span>
-              <span>Telegram</span>
-              <span>Discord ID</span>
-              <span>Discord Name</span>
-              <span>Timezone</span>
-              <span>Color</span>
-              <span>Plugin</span>
-              <span>Actions</span>
-            </div>
-            {profiles.map((profile) => {
-            const draft = drafts[profile.rawAuthor] ?? profile;
-            const profileDirty = isProfileDirty(profile);
-            const deleteProfileKey = `delete-profile:${profile.rawAuthor}`;
-            const profileSubline = profile.deviceId?.trim() || profile.authorEmail || "-";
-            return (
-              <div className="profile-row" key={profile.rawAuthor}>
-                <span className="profile-author-cell profile-author-cell--with-avatar" title={profileSubline || profile.rawAuthor}>
-                  <AuthorAvatar
-                    displayName={(draft.displayName || profile.rawAuthor).trim() || profile.rawAuthor}
-                    authorColor={draft.authorColor ?? profile.authorColor}
-                    avatarUrl={draft.avatarUrl ?? profile.avatarUrl}
-                    variant="mini"
-                  />
-                  <span className="profile-author-cell-text">
-                    <strong>{profile.rawAuthor}</strong>
-                    <small>{profileSubline}</small>
-                  </span>
-                </span>
-                <input
-                  value={draft.displayName}
-                  onChange={(event) => setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, displayName: event.target.value } }))}
-                  autoComplete="off"
-                  data-1p-ignore
-                  data-lpignore="true"
-                  disabled={settingsReadOnly}
-                />
-                <input
-                  value={draft.team ?? ""}
-                  onChange={(event) => setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, team: event.target.value } }))}
-                  autoComplete="off"
-                  data-1p-ignore
-                  data-lpignore="true"
-                  disabled={settingsReadOnly}
-                />
-                <input
-                  value={draft.githubUsername ?? ""}
-                  onChange={(event) =>
-                    setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, githubUsername: event.target.value } }))
-                  }
-                  placeholder="username"
-                  autoComplete="off"
-                  data-1p-ignore
-                  data-lpignore="true"
-                  disabled={settingsReadOnly}
-                />
-                <input
-                  value={draft.telegramUsername ?? ""}
-                  onChange={(event) =>
-                    setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, telegramUsername: event.target.value } }))
-                  }
-                  placeholder="@username"
-                  autoComplete="off"
-                  data-1p-ignore
-                  data-lpignore="true"
-                  disabled={settingsReadOnly}
-                />
-                <input
-                  value={draft.discordUserId ?? ""}
-                  onChange={(event) =>
-                    setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, discordUserId: event.target.value } }))
-                  }
-                  placeholder="User ID"
-                  autoComplete="off"
-                  data-1p-ignore
-                  data-lpignore="true"
-                  disabled={settingsReadOnly}
-                />
-                <input
-                  value={draft.discordUsername ?? ""}
-                  onChange={(event) =>
-                    setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, discordUsername: event.target.value } }))
-                  }
-                  placeholder="username"
-                  autoComplete="off"
-                  data-1p-ignore
-                  data-lpignore="true"
-                  disabled={settingsReadOnly}
-                />
-                <span className="profile-readonly-cell" title={formatProfileTimeZoneTitle(profile)}>{formatProfileTimeZoneLabel(profile)}</span>
-                <input
-                  type="color"
-                  value={draft.authorColor ?? "#13a37b"}
-                  onChange={(event) => setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, authorColor: event.target.value } }))}
-                  disabled={settingsReadOnly}
-                />
-                <label className="checkbox-cell">
-                  <input
-                    type="checkbox"
-                    checked={draft.pluginEnabled ?? true}
-                    disabled={settingsReadOnly}
-                    onChange={(event) =>
-                      setDrafts((items) => ({ ...items, [profile.rawAuthor]: { ...draft, pluginEnabled: event.target.checked } }))
-                    }
-                  />
-                  Enabled
-                </label>
-                <div className="profile-actions">
-                  <button
-                    className={settingsSaveButtonClassName(saveStatus[profile.rawAuthor], true)}
-                    onClick={() => void saveProfile(profile.rawAuthor)}
-                    disabled={settingsReadOnly || saving === profile.rawAuthor || !profileDirty}
-                  >
-                    {settingsSaveButtonLabel(profile.rawAuthor, saving, saveStatus)}
-                  </button>
-                  <button
-                    type="button"
-                    className="primary-button danger-solid-button delete-all-data-solid-button"
-                    onClick={() => {
-                      if (!settingsReadOnly) {
-                        setDeleteProfileTarget(profile);
-                      }
-                    }}
-                    disabled={settingsReadOnly || saving === deleteProfileKey}
-                  >
-                    {saving === deleteProfileKey ? "Deleting..." : "Delete profile"}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-          </div>
-        </div>
-      </div>
-      <div className="settings-card-row settings-author-avatars-delete-row">
-        <div className="panel github-avatars-panel">
-        <h2>GitHub avatars</h2>
-        <p className="settings-caption">
-          Profile pictures are cached from GitHub when a login is set. Use the buttons below to fetch the latest image immediately.
-          Between manual refreshes, cached images renew automatically at the start of a new calendar period (UTC), depending on the setting below.
-          Rows without a GitHub login are skipped.
-        </p>
-        <div className="settings-row github-avatars-toolbar">
-          <label title={canManageSettings ? undefined : avatarSettingsLockedTitle}>
-            Auto-refresh cadence (UTC)
-            <select
-              value={avatarRefreshCadence}
-              onChange={(event) => setAvatarRefreshCadence(event.target.value === "week" ? "week" : "month")}
-              disabled={!canManageSettings}
-            >
-              <option value="week">Week (ISO week)</option>
-              <option value="month">Month</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className={settingsSaveButtonClassName(saveStatus.avatarCadence)}
-            onClick={() => void saveAvatarRefreshCadence()}
-            disabled={saving === "avatarCadence" || !isAvatarCadenceDirty || !canManageSettings}
-            title={canManageSettings ? undefined : avatarSettingsLockedTitle}
-          >
-            {saving === "avatarCadence" ? "Saving..." : saveStatus.avatarCadence === "saved" ? "Saved" : saveStatus.avatarCadence === "error" ? "Failed" : "Save"}
-          </button>
-          <button
-            type="button"
-            className={`github-avatars-refresh-all ${settingsSaveButtonClassName(saveStatus.avatarRefreshAll)}`}
-            onClick={() => void refreshAllGitHubAvatars()}
-            disabled={saving === "avatar-refresh-all" || !canManageSettings}
-            title={canManageSettings ? undefined : avatarSettingsLockedTitle}
-          >
-            {saving === "avatar-refresh-all"
-              ? "Refreshing..."
-              : saveStatus.avatarRefreshAll === "saved"
-                ? "Done"
-                : saveStatus.avatarRefreshAll === "error"
-                  ? "Failed"
-                  : "Refresh avatars for all"}
-          </button>
-        </div>
-        <div className="profile-table-shell profile-table-shell--compact">
-          <div className="profile-table profile-table--github-avatars">
-            <div className="profile-table-head">
-              <span>Raw Author</span>
-              <span>GitHub</span>
-              <span>Actions</span>
-            </div>
-            {profiles.map((profile) => {
-              const draft = drafts[profile.rawAuthor] ?? profile;
-              const githubLogin = (draft.githubUsername ?? "").trim();
-              const hasGithub = Boolean(githubLogin);
-              const refreshKey = `avatar-refresh:${profile.rawAuthor}`;
-              return (
-                <div className="profile-row" key={`avatar-refresh:${profile.rawAuthor}`}>
-                  <span className="profile-author-cell profile-author-cell--with-avatar" title={draft.authorEmail || profile.rawAuthor}>
-                    <AuthorAvatar
-                      displayName={(draft.displayName || profile.rawAuthor).trim() || profile.rawAuthor}
-                      authorColor={draft.authorColor ?? profile.authorColor}
-                      avatarUrl={draft.avatarUrl ?? profile.avatarUrl}
-                      variant="mini"
-                    />
-                    <span className="profile-author-cell-text">
-                      <strong>{profile.rawAuthor}</strong>
-                      <small>{draft.authorEmail || profile.authorEmail || "-"}</small>
-                    </span>
-                  </span>
-                  <span className="profile-readonly-cell" title={githubLogin}>
-                    {githubLogin || "—"}
-                  </span>
-                  <div className="profile-actions">
-                    <button
-                      type="button"
-                      className={settingsSaveButtonClassName(saveStatus[refreshKey], true)}
-                      onClick={() => void refreshAuthorGitHubAvatar(profile.rawAuthor)}
-                      disabled={!hasGithub || saving === refreshKey || !canManageSettings}
-                      title={canManageSettings ? undefined : avatarSettingsLockedTitle}
-                    >
-                      {saving === refreshKey
-                        ? "Refreshing..."
-                        : saveStatus[refreshKey] === "saved"
-                          ? "Refreshed"
-                          : saveStatus[refreshKey] === "error"
-                            ? "Failed"
-                            : "Refresh"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-      <div className="panel delete-activity-data-panel">
-        <h2>Delete activity data</h2>
-        <p className="settings-caption">
-          Delete data for today or a custom date range using the controls below. To wipe everything for an author, use <strong>Delete all data</strong> — that opens a separate confirmation step (you must type <strong>delete</strong>). The profile row stays unchanged unless you delete the profile above.
-          &quot;Today&quot; uses each author&apos;s timezone when set on the profile; otherwise your browser&apos;s local calendar date.
-        </p>
-        <div className="settings-row github-avatars-toolbar delete-activity-bulk-toolbar">
-          <label>
-            Bulk delete for every author (UTC window)
-            <select
-              value={bulkActivityDeletePreset}
-              onChange={(event) => setBulkActivityDeletePreset(event.target.value as BulkActivityDeletePreset)}
-              disabled={settingsReadOnly}
-            >
-              <option value="1d">1 calendar day (today UTC)</option>
-              <option value="2d">2 calendar days</option>
-              <option value="3d">3 calendar days</option>
-              <option value="week">7 calendar days</option>
-              <option value="month">30 calendar days</option>
-              <option value="full">All activity history (every author)</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className="primary-button danger-solid-button delete-all-data-solid-button"
-            onClick={() => {
-              if (!settingsReadOnly) {
-                setBulkActivityDeleteModalOpen(true);
-              }
-            }}
-            disabled={settingsReadOnly || saving === "bulk-delete-all-authors" || profiles.length === 0}
-          >
-            Delete for all authors…
-          </button>
-        </div>
-        <div className="profile-table-shell profile-table-shell--compact">
-          <div className="profile-table profile-table--delete-activity">
-            <div className="profile-table-head">
-              <span>Raw Author</span>
-              <span>Period</span>
-              <span>Actions</span>
-            </div>
-            {profiles.map((profile) => {
-              const actDraft =
-                deleteActivityDrafts[profile.rawAuthor] ?? { mode: "today" as const, rangeStart: "", rangeEnd: "" };
-              const deleteActivityKey = `delete:${profile.rawAuthor}`;
-              const draft = drafts[profile.rawAuthor] ?? profile;
-              return (
-                <div className="profile-row" key={`delete-activity:${profile.rawAuthor}`}>
-                  <span className="profile-author-cell profile-author-cell--with-avatar" title={profile.authorEmail || profile.rawAuthor}>
-                    <AuthorAvatar
-                      displayName={(draft.displayName || profile.rawAuthor).trim() || profile.rawAuthor}
-                      authorColor={draft.authorColor ?? profile.authorColor}
-                      avatarUrl={draft.avatarUrl ?? profile.avatarUrl}
-                      variant="mini"
-                    />
-                    <span className="profile-author-cell-text">
-                      <strong>{profile.rawAuthor}</strong>
-                      <small>{profile.authorEmail?.trim() ? profile.authorEmail.trim() : "—"}</small>
-                    </span>
-                  </span>
-                  <div className="profile-delete-activity-period-cell">
-                    <div className="delete-activity-controls">
-                      <label className="radio-inline">
-                        <input
-                          type="radio"
-                          name={`delete-mode-${profile.rawAuthor}`}
-                          checked={actDraft.mode === "today"}
-                          disabled={settingsReadOnly}
-                          onChange={() =>
-                            setDeleteActivityDrafts((items) => ({
-                              ...items,
-                              [profile.rawAuthor]: { ...actDraft, mode: "today" }
-                            }))
-                          }
-                        />
-                        Today
-                      </label>
-                      <label className="radio-inline">
-                        <input
-                          type="radio"
-                          name={`delete-mode-${profile.rawAuthor}`}
-                          checked={actDraft.mode === "range"}
-                          disabled={settingsReadOnly}
-                          onChange={() =>
-                            setDeleteActivityDrafts((items) => ({
-                              ...items,
-                              [profile.rawAuthor]: { ...actDraft, mode: "range" }
-                            }))
-                          }
-                        />
-                        Custom range
-                      </label>
-                      {actDraft.mode === "range" ? (
-                        <>
-                          <label>
-                            Start
-                            <input
-                              type="date"
-                              value={actDraft.rangeStart}
-                              disabled={settingsReadOnly}
-                              onChange={(event) =>
-                                setDeleteActivityDrafts((items) => ({
-                                  ...items,
-                                  [profile.rawAuthor]: { ...actDraft, rangeStart: event.target.value }
-                                }))
-                              }
-                            />
-                          </label>
-                          <label>
-                            End
-                            <input
-                              type="date"
-                              value={actDraft.rangeEnd}
-                              disabled={settingsReadOnly}
-                              onChange={(event) =>
-                                setDeleteActivityDrafts((items) => ({
-                                  ...items,
-                                  [profile.rawAuthor]: { ...actDraft, rangeEnd: event.target.value }
-                                }))
-                              }
-                            />
-                          </label>
-                        </>
-                      ) : null}
-                    </div>
-                    {deleteActivityFieldError[profile.rawAuthor] ? (
-                      <p className="alert-text delete-activity-row-error">{deleteActivityFieldError[profile.rawAuthor]}</p>
-                    ) : null}
-                  </div>
-                  <div className="profile-actions">
-                    <button
-                      type="button"
-                      className={`${settingsSaveButtonClassName(saveStatus[deleteActivityKey], true)} danger-button`}
-                      onClick={() => requestAuthorActivityDelete(profile)}
-                      disabled={settingsReadOnly || saving === deleteActivityKey}
-                    >
-                      {saving === deleteActivityKey ? "Deleting..." : saveStatus[deleteActivityKey] === "error" ? "Failed" : "Delete"}
-                    </button>
-                    <button
-                      type="button"
-                      className="primary-button danger-solid-button delete-all-data-solid-button"
-                      onClick={() => requestAuthorDeleteAllActivity(profile)}
-                      disabled={settingsReadOnly || saving === deleteActivityKey}
-                    >
-                      Delete all data
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-      </div>
-      {!settingsReadOnly && bulkActivityDeleteModalOpen ? (
-        <BulkAllAuthorsActivityDeleteModal
-          preset={bulkActivityDeletePreset}
-          authorCount={profiles.length}
-          saving={saving === "bulk-delete-all-authors"}
-          onCancel={() => setBulkActivityDeleteModalOpen(false)}
-          onDelete={(confirmPhrase) => void executeBulkActivityDeleteAllAuthors(confirmPhrase)}
+        <AuthorProfilesTab
+          profiles={profiles}
+          drafts={drafts}
+          newProfile={newProfile}
+          avatarRefreshCadence={avatarRefreshCadence}
+          deleteActivityDrafts={deleteActivityDrafts}
+          pendingAuthorActivityDelete={pendingAuthorActivityDelete}
+          deleteActivityFieldError={deleteActivityFieldError}
+          deleteProfileTarget={deleteProfileTarget}
+          bulkActivityDeletePreset={bulkActivityDeletePreset}
+          bulkActivityDeleteModalOpen={bulkActivityDeleteModalOpen}
+          canManageSettings={canManageSettings}
+          settingsReadOnly={settingsReadOnly}
+          avatarSettingsLockedTitle={avatarSettingsLockedTitle}
+          saving={saving}
+          saveStatus={saveStatus}
+          isAvatarCadenceDirty={isAvatarCadenceDirty}
+          isProfileDirty={isProfileDirty}
+          onDraftChange={(rawAuthor, draft) => setDrafts((items) => ({ ...items, [rawAuthor]: draft }))}
+          onNewProfileChange={setNewProfile}
+          onAvatarRefreshCadenceChange={setAvatarRefreshCadence}
+          onDeleteActivityDraftChange={(rawAuthor, draft) => setDeleteActivityDrafts((items) => ({ ...items, [rawAuthor]: draft }))}
+          onBulkActivityDeletePresetChange={setBulkActivityDeletePreset}
+          onBulkActivityDeleteModalOpenChange={setBulkActivityDeleteModalOpen}
+          onPendingAuthorActivityDeleteChange={setPendingAuthorActivityDelete}
+          onDeleteProfileTargetChange={setDeleteProfileTarget}
+          onCreateProfile={() => void createProfile()}
+          onSaveProfile={(rawAuthor) => void saveProfile(rawAuthor)}
+          onSaveAvatarRefreshCadence={() => void saveAvatarRefreshCadence()}
+          onRefreshAllGitHubAvatars={() => void refreshAllGitHubAvatars()}
+          onRefreshAuthorGitHubAvatar={(rawAuthor) => void refreshAuthorGitHubAvatar(rawAuthor)}
+          onRequestAuthorActivityDelete={requestAuthorActivityDelete}
+          onRequestAuthorDeleteAllActivity={requestAuthorDeleteAllActivity}
+          onExecuteBulkActivityDeleteAllAuthors={(confirmPhrase) => void executeBulkActivityDeleteAllAuthors(confirmPhrase)}
+          onExecuteAuthorActivityDelete={(pending) => void executeAuthorActivityDelete(pending)}
+          onDeleteAuthorProfile={(rawAuthor) => void deleteAuthorProfile(rawAuthor)}
         />
-      ) : null}
-      {!settingsReadOnly && pendingAuthorActivityDelete?.mode === "range" ? (
-        <AuthorDeleteConfirm
-          profile={pendingAuthorActivityDelete.profile}
-          saving={saving === `delete:${pendingAuthorActivityDelete.profile.rawAuthor}`}
-          onCancel={() => setPendingAuthorActivityDelete(null)}
-          onDelete={() => void executeAuthorActivityDelete(pendingAuthorActivityDelete)}
-          periodStartDate={pendingAuthorActivityDelete.startDate}
-          periodEndDate={pendingAuthorActivityDelete.endDate}
-          description={`This will remove reports, raw activity events, Telegram day/break data, Discord meeting activity in range, calendar marks, status events, and activity statistics for ${pendingAuthorActivityDelete.profile.rawAuthor} from ${pendingAuthorActivityDelete.startDate} through ${pendingAuthorActivityDelete.endDate} (inclusive). The author profile will stay unchanged. Aggregates will be rebuilt for those dates. This action cannot be undone.`}
-          confirmLabel="Delete activity for period"
-        />
-      ) : null}
-      {!settingsReadOnly && pendingAuthorActivityDelete?.mode === "all" ? (
-        <AuthorDeleteAllActivityModal
-          profile={pendingAuthorActivityDelete.profile}
-          saving={saving === `delete:${pendingAuthorActivityDelete.profile.rawAuthor}`}
-          onCancel={() => setPendingAuthorActivityDelete(null)}
-          onDelete={() => void executeAuthorActivityDelete(pendingAuthorActivityDelete)}
-        />
-      ) : null}
-      {!settingsReadOnly && deleteProfileTarget ? (
-        <AuthorProfileDeleteModal
-          profile={deleteProfileTarget}
-          saving={saving === `delete-profile:${deleteProfileTarget.rawAuthor}`}
-          deleteError={saveStatus[`delete-profile:${deleteProfileTarget.rawAuthor}`] === "error"}
-          onCancel={() => setDeleteProfileTarget(null)}
-          onDelete={() => void deleteAuthorProfile(deleteProfileTarget.rawAuthor)}
-        />
-      ) : null}
-        </>
       ) : settingsTab === "discord" ? (
-        <div className="panel">
-          <h2>Discord</h2>
-          <p className="settings-caption">
-            Configure meeting channel automation. The Discord bot refreshes this value from the backend while it is running.
-          </p>
-          <div className="settings-row">
-            <label>
-              Auto-AFK timeout, sec
-              <input
-                value={discordAutoAfkTimeout}
-                onChange={(event) => setDiscordAutoAfkTimeout(event.target.value)}
-                type="number"
-                min="60"
-                step="30"
-                disabled={settingsReadOnly}
-              />
-            </label>
-            <button className={settingsSaveButtonClassName(saveStatus.discord)} onClick={() => void saveDiscordSettings()} disabled={settingsReadOnly || saving === "discord" || !discordSettingsDirty}>
-              {settingsSaveButtonLabel("discord", saving, saveStatus)}
-            </button>
-          </div>
-        </div>
+        <DiscordSettingsTab
+          discordAutoAfkTimeout={discordAutoAfkTimeout}
+          settingsReadOnly={settingsReadOnly}
+          saving={saving}
+          saveStatus={saveStatus}
+          discordSettingsDirty={discordSettingsDirty}
+          onDiscordAutoAfkTimeoutChange={setDiscordAutoAfkTimeout}
+          onSaveDiscordSettings={() => void saveDiscordSettings()}
+        />
       ) : settingsTab === "telegram" ? (
-        <div className="panel">
-          <h2>Telegram</h2>
-          <p className="settings-caption">
-            Minutes to wait after the first plugin activity on a day before the bot asks in the work chat whether you are online or whether activity was a mistake (requires Telegram username on the profile).
-          </p>
-          <div className="settings-row">
-            <label>
-              Online confirmation delay, minutes
-              <input
-                value={telegramOnlinePromptDelayMinutes}
-                onChange={(event) => setTelegramOnlinePromptDelayMinutes(event.target.value)}
-                type="number"
-                min="1"
-                max="1440"
-                step="1"
-                disabled={settingsReadOnly}
-              />
-            </label>
-            <button
-              className={settingsSaveButtonClassName(saveStatus.telegramPrompt)}
-              onClick={() => void saveTelegramPromptSettings()}
-              disabled={settingsReadOnly || saving === "telegramPrompt" || !telegramPromptSettingsDirty}
-            >
-              {settingsSaveButtonLabel("telegramPrompt", saving, saveStatus)}
-            </button>
-          </div>
-        </div>
+        <TelegramSettingsTab
+          telegramOnlinePromptDelayMinutes={telegramOnlinePromptDelayMinutes}
+          settingsReadOnly={settingsReadOnly}
+          saving={saving}
+          saveStatus={saveStatus}
+          telegramPromptSettingsDirty={telegramPromptSettingsDirty}
+          onTelegramOnlinePromptDelayMinutesChange={setTelegramOnlinePromptDelayMinutes}
+          onSaveTelegramPromptSettings={() => void saveTelegramPromptSettings()}
+        />
       ) : settingsTab === "meetingSummaries" ? (
-        <>
-          <div className="panel">
-            <h2>Meeting Summaries</h2>
-            <p className="settings-caption">
-              Configure automatic Discord meeting summaries sent to the work Telegram chat.
-            </p>
-            <div className="settings-row meeting-summary-settings-row">
-              <label>
-                <span className="meeting-summary-setting-label">Meeting summaries</span>
-                <span className="checkbox-cell">
-                  <input
-                    type="checkbox"
-                    checked={meetingSummariesEnabled}
-                    onChange={(event) => setMeetingSummariesEnabled(event.target.checked)}
-                    disabled={settingsReadOnly}
-                  />
-                  Enabled
-                </span>
-              </label>
-              <label>
-                <span className="meeting-summary-setting-label">Min participants</span>
-                <input
-                  value={meetingSummaryMinParticipants}
-                  onChange={(event) => setMeetingSummaryMinParticipants(event.target.value)}
-                  type="number"
-                  min="1"
-                  disabled={settingsReadOnly}
-                />
-              </label>
-              <label>
-                <span className="meeting-summary-setting-label">Min duration, sec</span>
-                <input
-                  value={meetingSummaryMinDuration}
-                  onChange={(event) => setMeetingSummaryMinDuration(event.target.value)}
-                  type="number"
-                  min="1"
-                  step="30"
-                  disabled={settingsReadOnly}
-                />
-              </label>
-              <label>
-                <span className="meeting-summary-setting-label">Summary language</span>
-                <select value={meetingSummaryLanguage} onChange={(event) => setMeetingSummaryLanguage(event.target.value)} disabled={settingsReadOnly}>
-                  {MEETING_SUMMARY_LANGUAGES.map((language) => (
-                    <option value={language} key={language}>{language}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span className="meeting-summary-setting-label">Send summaries to</span>
-                <select value={meetingSummaryRecipient} onChange={(event) => setMeetingSummaryRecipient(event.target.value)} disabled={settingsReadOnly}>
-                  <option value="work_chat">Work chat</option>
-                  {profiles
-                    .filter((profile) => profile.telegramUsername)
-                    .map((profile) => (
-                      <option value={profile.rawAuthor} key={profile.rawAuthor}>
-                        {profile.displayName || profile.rawAuthor}
-                        {profile.telegramPrivateChatId ? "" : " (send /start first)"}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <label>
-                <span className="meeting-summary-setting-label">Keep audio on server</span>
-                <select value={meetingAudioRetention} onChange={(event) => setMeetingAudioRetention(event.target.value)} disabled={settingsReadOnly}>
-                  {MEETING_AUDIO_RETENTION_OPTIONS.map((option) => (
-                    <option value={String(option.value)} key={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <button
-                className={settingsSaveButtonClassName(saveStatus.meetingSummarySettings)}
-                onClick={() => void saveMeetingSummarySettings()}
-                disabled={settingsReadOnly || saving === "meetingSummarySettings" || !meetingSummarySettingsDirty}
-              >
-                {settingsSaveButtonLabel("meetingSummarySettings", saving, saveStatus)}
-              </button>
-            </div>
-          </div>
-          <div className="meeting-summary-workspace" ref={meetingSummaryWorkspaceRef}>
-            <div className="panel meeting-summary-activity-panel">
-              <h3>Recent meeting summary activity</h3>
-              <p className="settings-caption">
-                Live status for the Discord recording, OpenAI summary, and Telegram delivery pipeline.
-              </p>
-              <div className="meeting-summary-recordings-field">
-                Process
-                {meetingRecordingsError ? (
-                  <p className="empty">{meetingRecordingsError}</p>
-                ) : meetingActivityItems.length ? (
-                  <div className="settings-list">
-                    {meetingActivityItems.map((item) => (
-                      <div className={item.itemType === "day_separator" ? "settings-list-day-separator" : "settings-list-item"} key={item.id}>
-                        <strong>{meetingActivityTitle(item)}</strong>
-                        {item.itemType !== "day_separator" ? renderMeetingActivityDetail(item) : null}
-                        {item.itemType === "recording" && item.recording.error ? <span className="alert-text">{item.recording.error}</span> : null}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="empty">No meeting summary activity yet.</p>
-                )}
-              </div>
-            </div>
-            <div className="panel meeting-summary-prompt-panel" ref={meetingSummaryPromptPanelRef}>
-              <h3>Summary instructions</h3>
-              <p className="settings-caption">
-                Prompt text used before the backend adds participants, required sections, language, and transcript automatically.
-              </p>
-              <label className="meeting-summary-prompt-field">
-                Prompt
-                <textarea
-                  value={meetingSummaryPrompt}
-                  onChange={(event) => setMeetingSummaryPrompt(event.target.value)}
-                  rows={12}
-                  placeholder="Instructions for turning a meeting transcript into a Telegram summary. Participant names are added in the Telegram message header automatically; your text should only include the working sections (Discussed, Decisions, Action items, Open questions). The backend adds required section titles, language rules, expected participants for context, and the transcript."
-                  disabled={settingsReadOnly}
-                />
-              </label>
-              <button
-                className={settingsSaveButtonClassName(saveStatus.meetingSummaryPrompt)}
-                onClick={() => void saveMeetingSummaryPrompt()}
-                disabled={settingsReadOnly || saving === "meetingSummaryPrompt" || !meetingSummaryPromptDirty}
-              >
-                {settingsSaveButtonLabel("meetingSummaryPrompt", saving, saveStatus)}
-              </button>
-            </div>
-          </div>
-        </>
+        <MeetingSummariesTab
+          workspaceRef={meetingSummaryWorkspaceRef}
+          promptPanelRef={meetingSummaryPromptPanelRef}
+          profiles={profiles}
+          meetingSummariesEnabled={meetingSummariesEnabled}
+          meetingSummaryMinParticipants={meetingSummaryMinParticipants}
+          meetingSummaryMinDuration={meetingSummaryMinDuration}
+          meetingSummaryLanguage={meetingSummaryLanguage}
+          meetingSummaryRecipient={meetingSummaryRecipient}
+          meetingAudioRetention={meetingAudioRetention}
+          meetingSummaryPrompt={meetingSummaryPrompt}
+          meetingActivityItems={meetingActivityItems}
+          meetingRecordingsError={meetingRecordingsError}
+          openAIStats={openAIStats}
+          openAIStatsError={openAIStatsError}
+          openAIStatsLoading={openAIStatsLoading}
+          settingsReadOnly={settingsReadOnly}
+          saving={saving}
+          saveStatus={saveStatus}
+          meetingSummarySettingsDirty={meetingSummarySettingsDirty}
+          meetingSummaryPromptDirty={meetingSummaryPromptDirty}
+          onMeetingSummariesEnabledChange={setMeetingSummariesEnabled}
+          onMeetingSummaryMinParticipantsChange={setMeetingSummaryMinParticipants}
+          onMeetingSummaryMinDurationChange={setMeetingSummaryMinDuration}
+          onMeetingSummaryLanguageChange={setMeetingSummaryLanguage}
+          onMeetingSummaryRecipientChange={setMeetingSummaryRecipient}
+          onMeetingAudioRetentionChange={setMeetingAudioRetention}
+          onMeetingSummaryPromptChange={setMeetingSummaryPrompt}
+          onSaveMeetingSummarySettings={() => void saveMeetingSummarySettings()}
+          onSaveMeetingSummaryPrompt={() => void saveMeetingSummaryPrompt()}
+          onRefreshOpenAIStats={() => void loadOpenAIStats()}
+        />
       ) : (
         <SiteUsersPanel currentUser={currentUser} authorProfiles={profiles} authorProfileDrafts={drafts} />
       )}
@@ -1822,55 +1074,3 @@ function intervalSettingsTelegramOnlinePromptMinutes(summary: Summary | null) {
   const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { telegramOnlinePromptDelayMinutes?: number }) | undefined;
   return intervalSettings?.telegramOnlinePromptDelayMinutes ?? 15;
 }
-
-function renderMeetingActivityDetail(item: MeetingActivityItem) {
-  if (item.itemType !== "recording") {
-    return <span>{meetingActivityDetail(item)}</span>;
-  }
-
-  const recording = item.recording;
-  const participants = recording.participantNames?.length ? recording.participantNames.join(", ") : "No participants";
-  const duration = recording.durationSeconds ? formatReportMinutes(recording.durationSeconds) : "-";
-  const recipient = recording.recipient?.kind === "private" ? recording.recipient.label || "private chat" : "work chat";
-  const audioFrames = `${recording.nonSilentFrameCount ?? 0}/${recording.audioFrameCount ?? 0}`;
-  const quality = recording.audioQualityStatus || "unknown";
-
-  return (
-    <div className="meeting-activity-detail-grid">
-      <div>
-        <span>Participants</span>
-        <strong>{participants}</strong>
-      </div>
-      <div>
-        <span>Timing</span>
-        <strong>
-          Started {formatTimestamp(recording.startedAt)}
-          {recording.telegramSentAt ? `, sent ${formatTimestamp(recording.telegramSentAt)}` : ""}
-          {recording.updatedAt ? `, updated ${formatTimestamp(recording.updatedAt)}` : ""}
-        </strong>
-      </div>
-      <div>
-        <span>Delivery</span>
-        <strong>
-          {recipient}, duration {duration}
-        </strong>
-      </div>
-      <div>
-        <span>Audio</span>
-        <strong>
-          Frames {audioFrames}, corrupted {recording.corruptedPacketCount ?? 0}, quality {quality}
-        </strong>
-      </div>
-      <div>
-        <span>Mix</span>
-        <strong>
-          Mixed users {recording.mixedUserCount ?? 0}
-          {recording.silencePaddingFrameCount ? `, padded ${recording.silencePaddingFrameCount}` : ""}
-          {recording.unknownSourceFrameCount ? `, unknown ${recording.unknownSourceFrameCount}` : ""}
-          {recording.listenErrorCount ? `, listen errors ${recording.listenErrorCount}` : ""}
-        </strong>
-      </div>
-    </div>
-  );
-}
-

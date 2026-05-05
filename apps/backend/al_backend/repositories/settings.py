@@ -3,6 +3,10 @@ from __future__ import annotations
 import shutil
 import socket
 import subprocess
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from ..activity_math import *
@@ -19,6 +23,8 @@ SERVER_STATS_PATHS = {
     "aptCache": Path("/var/cache/apt"),
     "logs": Path("/var/log"),
 }
+OPENAI_STATS_CACHE_TTL_SECONDS = 300
+OPENAI_STATS_USAGE_ENDPOINTS = ("completions", "audio_transcriptions")
 
 
 def _server_stats_category(key: str, path: Path) -> dict[str, Any]:
@@ -79,7 +85,121 @@ def _du_size_bytes(path: Path) -> int | None:
         return None
 
 
+def _fetch_openai_stats(api_key: str, project_id: str, now: dt.datetime) -> dict[str, Any]:
+    start = dt.datetime(now.year, now.month, 1, tzinfo=dt.UTC)
+    start_time = int(start.timestamp())
+    end_time = int(now.timestamp())
+    spend, currency = _fetch_openai_month_spend(api_key, project_id, start_time, end_time)
+    total_tokens = 0
+    total_requests = 0
+
+    for endpoint in OPENAI_STATS_USAGE_ENDPOINTS:
+        usage = _fetch_openai_usage(api_key, endpoint, project_id, start_time, end_time)
+        total_tokens += usage["tokens"]
+        total_requests += usage["requests"]
+
+    return {
+        "configured": True,
+        "cached": False,
+        "generatedAt": now.isoformat(),
+        "periodStart": start.isoformat(),
+        "periodEnd": now.isoformat(),
+        "projectId": project_id or None,
+        "monthSpend": round(spend, 6),
+        "currency": currency.upper(),
+        "totalTokens": total_tokens,
+        "totalRequests": total_requests,
+    }
+
+
+def _fetch_openai_month_spend(api_key: str, project_id: str, start_time: int, end_time: int) -> tuple[float, str]:
+    params: dict[str, int | str] = {"start_time": start_time, "end_time": end_time, "bucket_width": "1d", "limit": 31}
+    if project_id:
+        params["project_ids"] = project_id
+
+    payload = _openai_get(
+        api_key,
+        "/v1/organization/costs",
+        params,
+    )
+    spend = 0.0
+    currency = "usd"
+
+    for bucket in payload.get("data", []):
+        for result in bucket.get("results", bucket.get("result", [])):
+            amount = result.get("amount") or {}
+            spend += float(amount.get("value") or 0)
+            currency = amount.get("currency") or currency
+
+    return spend, currency
+
+
+def _fetch_openai_usage(api_key: str, endpoint: str, project_id: str, start_time: int, end_time: int) -> dict[str, int]:
+    params: dict[str, int | str] = {"start_time": start_time, "end_time": end_time, "bucket_width": "1d", "limit": 31}
+    if project_id:
+        params["project_ids"] = project_id
+
+    payload = _openai_get(
+        api_key,
+        f"/v1/organization/usage/{endpoint}",
+        params,
+    )
+    tokens = 0
+    requests = 0
+
+    for bucket in payload.get("data", []):
+        for result in bucket.get("results", bucket.get("result", [])):
+            tokens += int(result.get("input_tokens") or 0)
+            tokens += int(result.get("output_tokens") or 0)
+            requests += int(result.get("num_model_requests") or 0)
+
+    return {"tokens": tokens, "requests": requests}
+
+
+def _openai_get(api_key: str, path: str, params: dict[str, int | str]) -> dict[str, Any]:
+    url = f"https://api.openai.com{path}?{urllib.parse.urlencode(params)}"
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
+
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"OpenAI stats request failed with HTTP {exc.code}: {detail[:240]}") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"OpenAI stats request failed: {exc}") from exc
+
+
 class SettingsRepository(MongoComposableMixin):
+    def get_openai_stats(self) -> dict[str, Any]:
+        if not getattr(composed(self), "openai_usage_api_key", ""):
+            return {"configured": False, "error": "AL_OPENAI_USAGE_API_KEY is not configured"}
+
+        cached = self.db.system_settings.find_one({"kind": "openai_stats_cache"}, {"_id": 0}) or {}
+        cached_at = _coerce_datetime(cached.get("cachedAt"))
+        now = dt.datetime.now(dt.UTC)
+
+        if cached_at and (now - cached_at).total_seconds() < OPENAI_STATS_CACHE_TTL_SECONDS and cached.get("stats"):
+            stats = dict(cached["stats"])
+            stats["cached"] = True
+            return stats
+
+        try:
+            stats = _fetch_openai_stats(
+                composed(self).openai_usage_api_key,
+                getattr(composed(self), "openai_usage_project_id", ""),
+                now,
+            )
+        except RuntimeError as exc:
+            return {"configured": True, "error": str(exc)}
+
+        self.db.system_settings.update_one(
+            {"kind": "openai_stats_cache"},
+            {"$set": {"kind": "openai_stats_cache", "cachedAt": now, "stats": stats}},
+            upsert=True,
+        )
+        return stats
+
     def get_interval_for_author(self, author: str) -> int:
         author = _normalize_author(author)
         author_setting = self.db.interval_settings.find_one({"kind": "author", "author": author})

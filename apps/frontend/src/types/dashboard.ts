@@ -202,6 +202,20 @@ export type Summary = {
   activitySummary: ActivitySummary;
 };
 
+export type OpenAIStats = {
+  configured: boolean;
+  cached?: boolean;
+  generatedAt?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  projectId?: string | null;
+  monthSpend?: number;
+  currency?: string;
+  totalTokens?: number;
+  totalRequests?: number;
+  error?: string;
+};
+
 export type ReportsPage = {
   reports: Report[];
   total: number;

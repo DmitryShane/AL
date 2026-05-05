@@ -56,6 +56,8 @@ class BackendServices(
         self.default_send_interval_seconds = settings.default_send_interval_seconds
         self.avatar_cache_dir = settings.avatar_cache_dir
         self.aggregate_version_rebuild_scope = settings.aggregate_version_rebuild_scope
+        self.openai_usage_api_key = settings.openai_usage_api_key
+        self.openai_usage_project_id = settings.openai_usage_project_id
 
     def ping(self) -> bool:
         self.client.admin.command("ping")

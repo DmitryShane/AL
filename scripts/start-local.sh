@@ -4,9 +4,12 @@ set -euo pipefail
 ROOT_DIR="/Volumes/MacMiniExternal2TB/Development/AL"
 BACKEND_DIR="$ROOT_DIR/apps/backend"
 FRONTEND_DIR="$ROOT_DIR/apps/frontend"
+LOCAL_ENV_FILE="$ROOT_DIR/.env"
 RUNTIME_DIR="/tmp/al-runtime"
 BACKEND_LOG="$RUNTIME_DIR/backend.log"
 BACKEND_ERR="$RUNTIME_DIR/backend.err.log"
+BACKEND_RUNNER="$RUNTIME_DIR/backend-runner.sh"
+BACKEND_LOCAL_ENV="$RUNTIME_DIR/backend.env"
 FRONTEND_LOG="$RUNTIME_DIR/frontend.log"
 FRONTEND_ERR="$RUNTIME_DIR/frontend.err.log"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
@@ -36,6 +39,29 @@ is_loaded() {
 }
 
 write_backend_plist() {
+  if [ -f "$LOCAL_ENV_FILE" ]; then
+    cp "$LOCAL_ENV_FILE" "$BACKEND_LOCAL_ENV"
+  else
+    : >"$BACKEND_LOCAL_ENV"
+  fi
+
+  cat >"$BACKEND_RUNNER" <<SH
+#!/usr/bin/env zsh
+set -e
+
+cd "$BACKEND_DIR"
+
+if [ -f "$BACKEND_LOCAL_ENV" ]; then
+  while IFS='=' read -r key value; do
+    [[ -z "\$key" || "\$key" == \#* ]] && continue
+    export "\$key=\$value"
+  done < "$BACKEND_LOCAL_ENV"
+fi
+
+exec "$UV_BIN" run uvicorn al_backend.main:app --host 127.0.0.1 --port 8000
+SH
+  chmod +x "$BACKEND_RUNNER"
+
   cat >"$BACKEND_PLIST" <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -45,9 +71,7 @@ write_backend_plist() {
   <string>$BACKEND_LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>cd "$BACKEND_DIR" &amp;&amp; exec "$UV_BIN" run uvicorn al_backend.main:app --host 127.0.0.1 --port 8000</string>
+    <string>$BACKEND_RUNNER</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

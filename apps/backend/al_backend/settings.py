@@ -14,6 +14,8 @@ class Settings:
     telegram_bot_secret: str
     discord_bot_secret: str
     openai_api_key: str
+    openai_usage_api_key: str
+    openai_usage_project_id: str
     openai_transcription_model: str
     openai_summary_model: str
     cors_origins: list[str]
@@ -41,6 +43,8 @@ def load_settings() -> Settings:
         telegram_bot_secret=os.getenv("AL_TELEGRAM_BOT_SECRET", "").strip(),
         discord_bot_secret=os.getenv("AL_DISCORD_BOT_SECRET", "").strip(),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
+        openai_usage_api_key=os.getenv("AL_OPENAI_USAGE_API_KEY", "").strip(),
+        openai_usage_project_id=os.getenv("AL_OPENAI_USAGE_PROJECT_ID", "").strip(),
         openai_transcription_model=os.getenv("AL_OPENAI_TRANSCRIPTION_MODEL", "whisper-1").strip(),
         openai_summary_model=os.getenv("AL_OPENAI_SUMMARY_MODEL", "gpt-4o-mini").strip(),
         cors_origins=[origin.strip() for origin in raw_origins.split(",") if origin.strip()],

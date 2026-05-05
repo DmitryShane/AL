@@ -19,6 +19,14 @@ def server_stats(
     return service.get_server_stats()
 
 
+@router.get("/api/v1/settings/openai-stats")
+def openai_stats(
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.get_openai_stats()
+
+
 @router.put("/api/v1/settings/avatars")
 def update_avatar_settings(
     settings_in: AvatarSettingsIn,

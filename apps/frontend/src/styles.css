@@ -2741,7 +2741,6 @@ p {
 
 .meeting-summary-workspace {
   display: grid;
-  grid-template-columns: minmax(360px, 0.9fr) minmax(460px, 1.1fr);
   gap: 18px;
   align-items: start;
 }
@@ -2750,7 +2749,15 @@ p {
   min-width: 0;
 }
 
-.meeting-summary-workspace > .meeting-summary-activity-panel {
+.meeting-summary-main-row {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(460px, 1.1fr);
+  min-width: 0;
+  gap: 18px;
+  align-items: start;
+}
+
+.meeting-summary-workspace .meeting-summary-activity-panel {
   display: grid;
   gap: 12px;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -2759,7 +2766,7 @@ p {
   overflow: hidden;
 }
 
-.meeting-summary-workspace > .panel > .settings-caption {
+.meeting-summary-workspace .panel > .settings-caption {
   margin: 0;
 }
 
@@ -2798,6 +2805,49 @@ p {
 }
 
 .meeting-summary-workspace h3 {
+  margin: 0;
+}
+
+.meeting-summary-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.meeting-summary-openai-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.openai-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.openai-stats-grid > div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.openai-stats-grid span,
+.openai-stats-grid p {
+  color: #718093;
+  font-size: 12px;
+}
+
+.openai-stats-grid strong {
+  color: #202a36;
+  font-size: 20px;
+}
+
+.openai-stats-grid p {
+  grid-column: 1 / -1;
   margin: 0;
 }
 
@@ -4339,14 +4389,18 @@ p {
     grid-template-columns: 1fr;
   }
 
-  .meeting-summary-workspace {
+  .meeting-summary-main-row {
     grid-template-columns: 1fr;
   }
 
-  .meeting-summary-workspace > .meeting-summary-activity-panel {
+  .meeting-summary-workspace .meeting-summary-activity-panel {
     max-height: none;
     overflow: visible;
     grid-template-rows: auto auto auto;
+  }
+
+  .openai-stats-grid {
+    grid-template-columns: 1fr;
   }
 
   .meeting-summary-recordings-field .settings-list {
