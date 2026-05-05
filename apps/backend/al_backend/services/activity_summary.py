@@ -367,7 +367,7 @@ class ActivitySummaryService(MongoComposableMixin):
     def _status_intervals_for_reports(self, status_rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]]:
         intervals_by_key: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]] = {}
         ordered_rows = sorted(status_rows, key=lambda row: _report_sort_datetime(row) or dt.datetime.min.replace(tzinfo=dt.UTC))
-        open_offline_by_key: dict[tuple[str, str], dt.datetime] = {}
+        open_offline_by_key: dict[tuple[str, str], tuple[dt.datetime, str]] = {}
 
         for row in ordered_rows:
             if row.get("source") != "status" and row.get("reportType") != "status":
@@ -376,6 +376,7 @@ class ActivitySummaryService(MongoComposableMixin):
             raw_author = str(row.get("author") or "Unknown User")
             report_date = str(row.get("date") or "")
             event_type = str(row.get("statusEventType") or row.get("activityType") or "")
+            reason = str(row.get("statusReason") or (row.get("metadata") or {}).get("reason") or "")
             sort_at = _report_sort_datetime(row)
 
             if not report_date or not sort_at:
@@ -384,16 +385,24 @@ class ActivitySummaryService(MongoComposableMixin):
             key = (raw_author, report_date)
 
             if event_type == "offline":
-                open_offline_by_key[key] = sort_at
+                open_offline_by_key[key] = (sort_at, reason)
                 continue
 
             if event_type == "online":
-                opened_at = open_offline_by_key.pop(key, None)
+                opened = open_offline_by_key.pop(key, None)
+
+                if not opened:
+                    continue
+
+                opened_at, opened_reason = opened
+
+                if opened_reason == "reports_stopped" and reason == "reports_resumed":
+                    continue
 
                 if opened_at:
                     intervals_by_key.setdefault(key, []).append((opened_at, sort_at))
 
-        for key, opened_at in open_offline_by_key.items():
+        for key, (opened_at, _) in open_offline_by_key.items():
             intervals_by_key.setdefault(key, []).append((opened_at, None))
 
         return intervals_by_key

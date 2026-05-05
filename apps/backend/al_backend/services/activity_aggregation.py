@@ -1006,7 +1006,7 @@ class ActivityAggregationService(MongoComposableMixin):
         status_events = sorted(
             self.db.status_events.find(
                 {"rawAuthor": raw_author, "date": day_date},
-                {"_id": 0, "statusEventType": 1, "transitionAt": 1, "timeZoneId": 1},
+                {"_id": 0, "statusEventType": 1, "transitionAt": 1, "timeZoneId": 1, "reason": 1},
             ),
             key=lambda item: _coerce_datetime(item.get("transitionAt")) or dt.datetime.min.replace(tzinfo=dt.UTC),
         )
@@ -1021,8 +1021,12 @@ class ActivityAggregationService(MongoComposableMixin):
                 continue
 
             event_type = str(status_event.get("statusEventType") or "")
+            reason = str(status_event.get("reason") or "")
 
             if event_type == "offline":
+                if reason == "reports_stopped":
+                    continue
+
                 if occurred_at > transition_at:
                     open_offline_event = status_event
                     open_offline_at = transition_at

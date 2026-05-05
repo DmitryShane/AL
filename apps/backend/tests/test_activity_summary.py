@@ -6060,7 +6060,7 @@ def test_status_offline_interval_suppresses_activity_payload_after_idle_accounte
     assert deltas["savedPrefabDeltas"] == []
 
 
-def test_scoped_rebuild_counts_raw_activity_after_reports_resumed_closes_offline_interval():
+def test_scoped_rebuild_counts_raw_activity_during_reports_stopped_interval():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
     repo.record_status_event(
@@ -6122,7 +6122,8 @@ def test_scoped_rebuild_counts_raw_activity_after_reports_resumed_closes_offline
     repo.rebuild_aggregates_for_dates("2026-04-29", dates=["2026-04-29"], authors=["Future Artist"])
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-29", "source": "cur"}, {"_id": 0})
 
-    assert daily["activeSeconds"] == 0
+    assert daily["activeSeconds"] == 120
+    assert daily["activityCounts"] == [{"type": "focus", "count": 1}, {"type": "select", "count": 1}]
 
     repo.record_status_event(
         "Future Artist",
@@ -6231,11 +6232,7 @@ def test_rebuild_status_idle_batch_keeps_last_event_recorded_at():
     assert row["recordedAt"] == "2026-04-29T09:59:00+00:00"
 
 
-def test_reports_stopped_gap_heartbeats_do_not_double_status_idle():
-    """Heartbeats inside author status offline (reports_stopped window) must not add idle that later duplicates status reconciliation.
-
-    After deploying a fix for historical days, run rebuild_aggregates_for_dates for affected authors/dates so report_rows and daily_author_activity match.
-    """
+def test_reports_stopped_gap_heartbeats_count_idle_through_normal_delta_path():
     repo = fake_repository()
     set_idle_threshold(repo, 60)
     day = "2026-05-04"
@@ -6243,7 +6240,6 @@ def test_reports_stopped_gap_heartbeats_do_not_double_status_idle():
     tz = "UTC"
     offline_at = dt.datetime(2026, 5, 4, 0, 21, 45, 261000, tzinfo=dt.UTC)
     online_at = dt.datetime(2026, 5, 4, 0, 41, 9, 809000, tzinfo=dt.UTC)
-    gap_seconds = int(round((online_at - offline_at).total_seconds()))
 
     repo.db.status_events.insert_one(
         {
@@ -6367,7 +6363,7 @@ def test_reports_stopped_gap_heartbeats_do_not_double_status_idle():
     rows = list(repo.db.report_rows.find({"source": "cur", "author": author, "date": day}, {"_id": 0, "idleDeltaSeconds": 1}))
     total_idle = sum(int(r.get("idleDeltaSeconds") or 0) for r in rows)
 
-    assert total_idle == gap_seconds
+    assert total_idle == 1255
 
 
 def test_status_events_rematerialize_report_rows_after_rebuild():
@@ -6926,6 +6922,74 @@ def test_telegram_online_prompt_confirm_aligns_to_first_plugin_report_and_exempt
     status_rows = [r for r in repo.db.report_rows.items if r.get("source") == "status"]
     intervals = repo._status_intervals_for_reports(status_rows)
     assert repo._is_report_inside_status_interval(telegram_row, intervals) is False
+
+
+def test_reports_stopped_closed_interval_does_not_hide_plugin_report_rows():
+    repo = fake_repository()
+    day = "2026-04-30"
+    plugin_row = {
+        "source": "ual",
+        "author": "A",
+        "date": day,
+        "recordedAt": "2026-04-30T10:30:00+00:00",
+        "receivedAt": dt.datetime(2026, 4, 30, 10, 30, tzinfo=dt.UTC),
+        "reportType": "auto",
+    }
+    status_rows = [
+        {
+            "source": "status",
+            "author": "A",
+            "date": day,
+            "recordedAt": "2026-04-30T10:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 10, 0, tzinfo=dt.UTC),
+            "reportType": "status",
+            "statusEventType": "offline",
+            "statusReason": "reports_stopped",
+        },
+        {
+            "source": "status",
+            "author": "A",
+            "date": day,
+            "recordedAt": "2026-04-30T11:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 11, 0, tzinfo=dt.UTC),
+            "reportType": "status",
+            "statusEventType": "online",
+            "statusReason": "reports_resumed",
+        },
+    ]
+
+    intervals = repo._status_intervals_for_reports(status_rows)
+
+    assert repo._is_report_inside_status_interval(plugin_row, intervals) is False
+
+
+def test_reports_stopped_open_interval_hides_current_plugin_report_rows():
+    repo = fake_repository()
+    day = "2026-04-30"
+    plugin_row = {
+        "source": "ual",
+        "author": "A",
+        "date": day,
+        "recordedAt": "2026-04-30T10:30:00+00:00",
+        "receivedAt": dt.datetime(2026, 4, 30, 10, 30, tzinfo=dt.UTC),
+        "reportType": "auto",
+    }
+    status_rows = [
+        {
+            "source": "status",
+            "author": "A",
+            "date": day,
+            "recordedAt": "2026-04-30T10:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 10, 0, tzinfo=dt.UTC),
+            "reportType": "status",
+            "statusEventType": "offline",
+            "statusReason": "reports_stopped",
+        }
+    ]
+
+    intervals = repo._status_intervals_for_reports(status_rows)
+
+    assert repo._is_report_inside_status_interval(plugin_row, intervals) is True
 
 
 def test_record_break_event_online_invalidates_online_prompt():
