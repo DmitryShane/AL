@@ -27,7 +27,6 @@ Create `/etc/al/backend.env`:
 ```bash
 AL_MONGO_URI=mongodb://127.0.0.1:27017
 AL_MONGO_DATABASE=al
-AL_PRIVATE_KEY_PATH=/opt/al/current/apps/backend/al_backend/UnityActivityLoggerKey.json
 AL_DEFAULT_SEND_INTERVAL_SECONDS=300
 AL_CORS_ORIGINS=https://activity.mempic.com,http://activity.mempic.com
 AL_ADMIN_EMAIL=dmitry.shane@gmail.com

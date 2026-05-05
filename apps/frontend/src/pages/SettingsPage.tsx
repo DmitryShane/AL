@@ -14,7 +14,7 @@ import { SiteUsersPanel } from "../components/settings/SettingsComponents";
 import { AuthorProfilesTab } from "../components/settings/tabs/authors/AuthorProfilesTab";
 import { AutoBreakTab } from "../components/settings/tabs/autoBreak/AutoBreakTab";
 import { DiscordSettingsTab } from "../components/settings/tabs/discord/DiscordSettingsTab";
-import { GeneralSettingsTab } from "../components/settings/tabs/general/GeneralSettingsTab";
+import { GeneralSettingsTab, authorIntervalSaveKey } from "../components/settings/tabs/general/GeneralSettingsTab";
 import { MeetingSummariesTab } from "../components/settings/tabs/meetingSummaries/MeetingSummariesTab";
 import { AuthorRedirectsTab } from "../components/settings/tabs/redirects/AuthorRedirectsTab";
 import { TelegramSettingsTab } from "../components/settings/tabs/telegram/TelegramSettingsTab";
@@ -67,6 +67,7 @@ export function SettingsPage({
   const avatarSettingsLockedTitle = "Only editors and admins can change GitHub avatar cache settings.";
   const [settingsTab, setSettingsTabState] = useState<SettingsTab>(() => loadSavedSettingsTab());
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
+  const [authorIntervalDrafts, setAuthorIntervalDrafts] = useState<Record<string, string>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
   const [idleThreshold, setIdleThreshold] = useState(String(intervalSettingsIdleThreshold(summary)));
   const [deviceIdleThreshold, setDeviceIdleThreshold] = useState(String(intervalSettingsDeviceIdleThreshold(summary)));
@@ -153,6 +154,7 @@ export function SettingsPage({
     }
 
     setDrafts(nextDrafts);
+    setAuthorIntervalDrafts(authorIntervalDraftsFromSummary(summary));
     setGlobalInterval(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
     setIdleThreshold(String(intervalSettingsIdleThreshold(summary)));
     setDeviceIdleThreshold(String(intervalSettingsDeviceIdleThreshold(summary)));
@@ -486,6 +488,43 @@ export function SettingsPage({
       setSaving(null);
       window.setTimeout(() => {
         setSaveStatus((items) => ({ ...items, interval: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function saveAuthorInterval(rawAuthor: string) {
+    if (settingsReadOnly) {
+      return;
+    }
+
+    const saveKey = authorIntervalSaveKey(rawAuthor);
+    const draftInterval = authorIntervalDrafts[rawAuthor] ?? "";
+
+    setSaving(saveKey);
+    setSaveStatus((items) => ({ ...items, [saveKey]: undefined }));
+
+    try {
+      const response = await apiFetch(`/api/v1/settings/intervals`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          author: rawAuthor,
+          authorSendIntervalSeconds: draftInterval ? Number(draftInterval) : null
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Author interval save failed");
+      }
+
+      setSaveStatus((items) => ({ ...items, [saveKey]: "saved" }));
+      onSaved();
+    } catch {
+      setSaveStatus((items) => ({ ...items, [saveKey]: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, [saveKey]: undefined }));
       }, 2500);
     }
   }
@@ -937,6 +976,9 @@ export function SettingsPage({
       </div>
       {settingsTab === "general" ? (
         <GeneralSettingsTab
+          profiles={profiles}
+          authorIntervalDrafts={authorIntervalDrafts}
+          intervalSettings={summary?.intervalSettings}
           globalInterval={globalInterval}
           idleThreshold={idleThreshold}
           deviceIdleThreshold={deviceIdleThreshold}
@@ -949,7 +991,9 @@ export function SettingsPage({
           onIdleThresholdChange={setIdleThreshold}
           onDeviceIdleThresholdChange={setDeviceIdleThreshold}
           onPluginIngestEnabledChange={setPluginIngestEnabled}
+          onAuthorIntervalChange={(rawAuthor, value) => setAuthorIntervalDrafts((items) => ({ ...items, [rawAuthor]: value }))}
           onSaveInterval={() => void saveInterval()}
+          onSaveAuthorInterval={(rawAuthor) => void saveAuthorInterval(rawAuthor)}
         />
       ) : settingsTab === "autoBreak" ? (
         <AutoBreakTab
@@ -1088,6 +1132,16 @@ function intervalSettingsDeviceIdleThreshold(summary: Summary | null) {
 function intervalSettingsTelegramOnlinePromptMinutes(summary: Summary | null) {
   const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { telegramOnlinePromptDelayMinutes?: number }) | undefined;
   return intervalSettings?.telegramOnlinePromptDelayMinutes ?? 15;
+}
+
+function authorIntervalDraftsFromSummary(summary: Summary) {
+  const drafts: Record<string, string> = {};
+
+  for (const item of summary.intervalSettings.authors) {
+    drafts[item.author] = String(item.sendIntervalSeconds);
+  }
+
+  return drafts;
 }
 
 function readCachedOpenAIStats(): OpenAIStats | null {

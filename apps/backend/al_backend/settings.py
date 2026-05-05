@@ -9,7 +9,6 @@ from pathlib import Path
 class Settings:
     mongo_uri: str
     mongo_database: str
-    private_key_path: Path
     default_send_interval_seconds: int
     telegram_bot_secret: str
     discord_bot_secret: str
@@ -38,7 +37,6 @@ def load_settings() -> Settings:
     return Settings(
         mongo_uri=os.getenv("AL_MONGO_URI", "mongodb://127.0.0.1:27017"),
         mongo_database=os.getenv("AL_MONGO_DATABASE", "al"),
-        private_key_path=Path(os.getenv("AL_PRIVATE_KEY_PATH", base_dir / "UnityActivityLoggerKey.json")),
         default_send_interval_seconds=int(os.getenv("AL_DEFAULT_SEND_INTERVAL_SECONDS", "300")),
         telegram_bot_secret=os.getenv("AL_TELEGRAM_BOT_SECRET", "").strip(),
         discord_bot_secret=os.getenv("AL_DISCORD_BOT_SECRET", "").strip(),

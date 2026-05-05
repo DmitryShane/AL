@@ -3,18 +3,15 @@ import hashlib
 import hmac
 import json
 import struct
-from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from al_backend.protocol import MAGIC, decode_alr1
+from al_backend.protocol import MAGIC, decode_alr1, generate_report_challenge_keys
 
 
-PRIVATE_KEY = json.loads(
-    (Path(__file__).resolve().parents[1] / "al_backend" / "UnityActivityLoggerKey.json").read_text()
-)["privateKeyPem"]
+PRIVATE_KEY = generate_report_challenge_keys().private_key_pem
 
 
 def test_decode_alr1_round_trip():
@@ -41,12 +38,12 @@ def _encode(payload: dict) -> str:
     private_key_candidate = serialization.load_pem_private_key(PRIVATE_KEY.encode("utf-8"), password=None)
 
     if not isinstance(private_key_candidate, rsa.RSAPrivateKey):
-        raise AssertionError("UnityActivityLoggerKey must be RSA for ALR1 test encoding")
+        raise AssertionError("Generated ALR1 test key must be RSA")
 
     public_key_candidate = private_key_candidate.public_key()
 
     if not isinstance(public_key_candidate, rsa.RSAPublicKey):
-        raise AssertionError("UnityActivityLoggerKey must yield RSA public key for ALR1 test encoding")
+        raise AssertionError("Generated ALR1 test key must yield RSA public key")
 
     aes_key = bytes(range(32))
     hmac_key = bytes(range(32, 64))

@@ -480,6 +480,10 @@ class SettingsRepository(MongoComposableMixin):
                 upsert=True,
             )
 
+        if author and author_send_interval_seconds is None:
+            author = _normalize_author(author)
+            self.db.interval_settings.delete_one({"kind": "author", "author": author})
+
         if author and author_send_interval_seconds is not None:
             author = _normalize_author(author)
             self.db.interval_settings.update_one(

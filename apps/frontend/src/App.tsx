@@ -429,9 +429,10 @@ function App() {
   const isVisualLoading = canShowCachedDashboard && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
   const authorsSource = isVisualLoading && !activitySummary.authors.length ? cachedAuthors : activitySummary.authors;
   const authors = useMemo(() => authorsSource.filter((author) => matchesAuthorSearch(author, search)), [authorsSource, search]);
-  const activeAuthor = activitySummary.authors.some((author) => author.rawAuthor === selectedAuthor)
+  const activeAuthorSource = page === "activity" ? activityDisplaySummary.authors : activitySummary.authors;
+  const activeAuthor = activeAuthorSource.some((author) => author.rawAuthor === selectedAuthor)
     ? selectedAuthor
-    : activitySummary.authors[0]?.rawAuthor ?? null;
+    : activeAuthorSource[0]?.rawAuthor ?? null;
 
   useEffect(() => {
     setCachedAuthors(readCachedAuthors(dateRange));
@@ -439,10 +440,10 @@ function App() {
   }, [dateRange.startDate, dateRange.endDate, dateRange.preset]);
 
   useEffect(() => {
-    if (!activeAuthor && activitySummary.authors.length) {
-      setSelectedAuthor(activitySummary.authors[0].rawAuthor);
+    if (!activeAuthor && activeAuthorSource.length) {
+      setSelectedAuthor(activeAuthorSource[0].rawAuthor);
     }
-  }, [activeAuthor, activitySummary.authors]);
+  }, [activeAuthor, activeAuthorSource]);
 
   useEffect(() => {
     const savePageScroll = (force = false) => {

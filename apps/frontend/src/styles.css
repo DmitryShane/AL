@@ -2319,6 +2319,35 @@ p {
   gap: 12px;
 }
 
+.author-interval-list {
+  display: grid;
+  gap: 12px;
+}
+
+.author-interval-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 220px) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.author-interval-row > div,
+.author-interval-row label {
+  display: grid;
+  gap: 6px;
+}
+
+.author-interval-row strong {
+  color: #202a36;
+}
+
+.author-interval-row span,
+.author-interval-row label {
+  color: #718093;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .server-stats-panel {
   --server-stats-accent: #35a86b;
   display: grid;
@@ -2768,6 +2797,7 @@ p {
 .settings-row input,
 .settings-row textarea,
 .settings-row select,
+.author-interval-row input,
 .profile-create-card input,
 .profile-create-card select,
 .site-user-create-card input,
@@ -2790,6 +2820,7 @@ p {
 
 .settings-row input:not([type="checkbox"]):not([type="color"]),
 .settings-row select,
+.author-interval-row input,
 .settings-row textarea {
   font-size: 13px;
   font-weight: 500;

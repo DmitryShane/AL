@@ -7,7 +7,6 @@ AL is an Activity Logger workspace. It contains the FastAPI backend, React front
 - `apps/backend` - FastAPI API server with MongoDB persistence and ALR1 decoding.
 - `apps/frontend` - React/Vite dashboard.
 - `/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual` - linked Unity package and Blender Activity Logger add-on source.
-- `docs/REMINDERS.md` - follow-up product and deployment reminders.
 
 ## Local Requirements
 
@@ -31,8 +30,6 @@ The backend defaults to:
 - API: `https://activity.mempic.com`
 - Mongo URI: `mongodb://127.0.0.1:27017`
 - Mongo database: `al`
-
-The MVP temporarily commits the private key in `apps/backend/al_backend/UnityActivityLoggerKey.json` as requested. Replace this with environment-managed secrets before any public deployment.
 
 ## Frontend
 
