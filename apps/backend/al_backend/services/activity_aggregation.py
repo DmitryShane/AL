@@ -811,6 +811,16 @@ class ActivityAggregationService(MongoComposableMixin):
 
             deltas[saved_prefab_delta_key].append(saved_prefab)
 
+        worked_file = None if is_inside_status_offline else _worked_file_delta(event)
+
+        if worked_file:
+            worked_file_delta_key = "savedPrefabDeltas"
+
+            if _is_overtime_event_delta(consumed_normal_microseconds, deltas, overtime_window):
+                worked_file_delta_key = "overtimeSavedPrefabDeltas"
+
+            deltas[worked_file_delta_key].append(worked_file)
+
         snapshot = {
             "source": event.get("source"),
             "author": event.get("author") or "Unknown User",

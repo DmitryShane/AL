@@ -25,6 +25,7 @@ from al_backend.activity_math import (
     _with_activity_mix,
     _with_author_presence,
     _with_productivity,
+    _worked_file_delta,
 )
 from al_backend.telegram_bot import (
     BotConfig,
@@ -8098,6 +8099,26 @@ def test_figma_file_saved_is_counted_as_saved_file():
     )
 
     assert saved == {
+        "path": "https://www.figma.com/design/abc123/Game-HUD",
+        "name": "Game HUD",
+        "saveCount": 1,
+    }
+
+
+def test_figma_activity_file_metadata_is_counted_as_saved_file_breakdown_item():
+    worked = _worked_file_delta(
+        {
+            "source": "fch",
+            "eventType": "selection",
+            "metadata": {
+                "path": "https://www.figma.com/design/abc123/Game-HUD",
+                "name": "Game HUD",
+                "fileKey": "abc123",
+            },
+        }
+    )
+
+    assert worked == {
         "path": "https://www.figma.com/design/abc123/Game-HUD",
         "name": "Game HUD",
         "saveCount": 1,
