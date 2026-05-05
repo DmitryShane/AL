@@ -296,12 +296,13 @@ class DiscordMeetingService(MongoComposableMixin):
                 **deltas,
             }
         )
-        composed(self)._schedule_telegram_online_prompt_if_needed(
-            raw_author,
-            event_date,
-            "discord",
-            event_time,
-        )
+        if not composed(self).should_suppress_vacation_prompt(raw_author, event_date):
+            composed(self)._schedule_telegram_online_prompt_if_needed(
+                raw_author,
+                event_date,
+                "discord",
+                event_time,
+            )
 
     def _insert_discord_meeting_live_report_row(
         self,
@@ -340,6 +341,10 @@ class DiscordMeetingService(MongoComposableMixin):
         deltas["meetingSeconds"] = meeting_seconds
         deltas["meetingMicroseconds"] = meeting_seconds * MICROSECONDS_PER_SECOND
         deltas["hourlyActivityDelta"] = hourly_activity_delta
+
+        if composed(self).is_vacation_day(raw_author, event_date):
+            deltas = composed(self).convert_deltas_to_vacation_overtime(deltas)
+
         row = {
             "reportId": report_id,
             "source": "discord",

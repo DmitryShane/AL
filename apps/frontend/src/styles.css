@@ -1318,6 +1318,18 @@ p {
   gap: 10px;
 }
 
+.author-card-day-badge {
+  border: 1px solid rgb(124 58 237 / 20%);
+  border-radius: 999px;
+  background: rgb(124 58 237 / 10%);
+  padding: 5px 9px;
+  color: #6d28d9;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .overdrive-author-text {
   min-width: 0;
   border-radius: 999px;

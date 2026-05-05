@@ -735,6 +735,7 @@ class ActivitySummaryService(MongoComposableMixin):
                 meeting_buckets.get(author_date_key, []),
                 meeting_consumed_by_author_date_hour.setdefault(author_date_key, _empty_hourly_activity()),
             )
+            vacation_mark = composed(self).vacation_mark_for_author_date(raw_author, item_date)
             telegram_gap = telegram_gaps.get(author_date_key, {})
             telegram_gap_hours = telegram_gap.get("hourlyActivity", [])
             can_apply_telegram_gap = item.get("source") not in {"telegram", "discord"}
@@ -748,11 +749,23 @@ class ActivitySummaryService(MongoComposableMixin):
                 _merge_hourly_activity(hourly_activity, telegram_gap_hours)
                 telegram_gap_counted.add(author_date_key)
 
+            if vacation_mark:
+                hourly_activity = composed(self).convert_hourly_to_vacation_overtime(hourly_activity)
+
             report_active_seconds = int(item.get("activeSeconds", 0))
             report_idle_seconds = sum(int(hour.get("idleSeconds", 0)) for hour in hourly_activity)
             raw_plugin_day_seconds = max(0, int(item.get("activeSeconds", 0)) + int(item.get("idleSeconds", 0)) + telegram_gap_seconds)
             effective_break_seconds = sum(int(hour.get("breakSeconds", 0)) for hour in hourly_activity)
             effective_meeting_seconds = sum(int(hour.get("meetingSeconds", 0)) for hour in hourly_activity)
+            vacation_overtime_seconds = 0
+
+            if vacation_mark:
+                vacation_overtime_seconds = sum(int(hour.get("overtimeActiveSeconds", 0)) for hour in hourly_activity)
+                report_active_seconds = 0
+                report_idle_seconds = 0
+                effective_break_seconds = 0
+                effective_meeting_seconds = 0
+
             telegram_day_seconds = int(item.get("daySeconds", 0))
             telegram_to_first_activity_seconds = telegram_gap_seconds
             work_window_seconds = int(item.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS)
@@ -776,14 +789,15 @@ class ActivitySummaryService(MongoComposableMixin):
             totals["activeSeconds"] += effective_active_seconds
             totals["idleSeconds"] += effective_idle_seconds
             totals["meetingSeconds"] += effective_meeting_seconds
-            totals["overtimeActiveSeconds"] += int(item.get("overtimeActiveSeconds", 0))
+            totals["overtimeActiveSeconds"] += vacation_overtime_seconds if vacation_mark else int(item.get("overtimeActiveSeconds", 0))
             totals["breakSeconds"] += effective_break_seconds
 
             for count in item.get("activityCounts", []):
                 activity_type = count.get("type")
 
                 if activity_type:
-                    activity_counts[activity_type] = activity_counts.get(activity_type, 0) + int(count.get("count", 0))
+                    target_counts = overtime_activity_counts if vacation_mark else activity_counts
+                    target_counts[activity_type] = target_counts.get(activity_type, 0) + int(count.get("count", 0))
 
             for count in item.get("overtimeActivityCounts", []):
                 activity_type = count.get("type")
@@ -800,12 +814,13 @@ class ActivitySummaryService(MongoComposableMixin):
                 if not path:
                     continue
 
-                existing = saved_prefabs.get(path)
+                target_prefabs = overtime_saved_prefabs if vacation_mark else saved_prefabs
+                existing = target_prefabs.get(path)
 
                 if existing:
                     existing["saveCount"] += int(prefab.get("saveCount", 0))
                 else:
-                    saved_prefabs[path] = dict(prefab)
+                    target_prefabs[path] = dict(prefab)
 
             for prefab in overtime_saved_prefab_items:
                 path = prefab.get("path")
@@ -871,7 +886,10 @@ class ActivitySummaryService(MongoComposableMixin):
             author_row["idleSeconds"] += effective_idle_seconds
             author_row["meetingSeconds"] += effective_meeting_seconds
             author_row["breakSeconds"] += effective_break_seconds
-            author_row["overtimeActiveSeconds"] += int(item.get("overtimeActiveSeconds", 0))
+            author_row["overtimeActiveSeconds"] += vacation_overtime_seconds if vacation_mark else int(item.get("overtimeActiveSeconds", 0))
+            if vacation_mark:
+                author_row["dayOverride"] = vacation_mark
+                author_row["calendarDayMark"] = vacation_mark
             author_row["authorEmail"] = profile.get("authorEmail") or item.get("authorEmail") or author_row.get("authorEmail", "")
             author_row["pluginVersion"] = item.get("pluginVersion") or author_row.get("pluginVersion")
             author_row["source"] = item.get("source") or author_row.get("source")
@@ -879,12 +897,20 @@ class ActivitySummaryService(MongoComposableMixin):
             author_row["timeZoneDisplayName"] = (
                 profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName") or author_row.get("timeZoneDisplayName")
             )
-            author_row["activityCounts"] = _merge_count_list(
-                author_row.get("activityCounts", []), item.get("activityCounts", []), "type", "count"
-            )
-            author_row["savedPrefabs"] = _merge_count_list(
-                author_row.get("savedPrefabs", []), saved_prefab_items, "path", "saveCount"
-            )
+            if vacation_mark:
+                author_row["overtimeActivityCounts"] = _merge_count_list(
+                    author_row.get("overtimeActivityCounts", []), item.get("activityCounts", []), "type", "count"
+                )
+                author_row["overtimeSavedPrefabs"] = _merge_count_list(
+                    author_row.get("overtimeSavedPrefabs", []), saved_prefab_items, "path", "saveCount"
+                )
+            else:
+                author_row["activityCounts"] = _merge_count_list(
+                    author_row.get("activityCounts", []), item.get("activityCounts", []), "type", "count"
+                )
+                author_row["savedPrefabs"] = _merge_count_list(
+                    author_row.get("savedPrefabs", []), saved_prefab_items, "path", "saveCount"
+                )
             author_row["overtimeActivityCounts"] = _merge_count_list(
                 author_row.get("overtimeActivityCounts", []), item.get("overtimeActivityCounts", []), "type", "count"
             )
@@ -892,12 +918,26 @@ class ActivitySummaryService(MongoComposableMixin):
                 author_row.get("overtimeSavedPrefabs", []), overtime_saved_prefab_items, "path", "saveCount"
             )
             source_key = str(item.get("source") or "unknown")
-            author_row["_activityCountsBySource"][source_key] = _merge_count_list(
-                author_row["_activityCountsBySource"].get(source_key, []), item.get("activityCounts", []), "type", "count"
-            )
-            author_row["_savedPrefabsBySource"][source_key] = _merge_count_list(
-                author_row["_savedPrefabsBySource"].get(source_key, []), saved_prefab_items, "path", "saveCount"
-            )
+            if vacation_mark:
+                author_row["_overtimeActivityCountsBySource"][source_key] = _merge_count_list(
+                    author_row["_overtimeActivityCountsBySource"].get(source_key, []),
+                    item.get("activityCounts", []),
+                    "type",
+                    "count",
+                )
+                author_row["_overtimeSavedPrefabsBySource"][source_key] = _merge_count_list(
+                    author_row["_overtimeSavedPrefabsBySource"].get(source_key, []),
+                    saved_prefab_items,
+                    "path",
+                    "saveCount",
+                )
+            else:
+                author_row["_activityCountsBySource"][source_key] = _merge_count_list(
+                    author_row["_activityCountsBySource"].get(source_key, []), item.get("activityCounts", []), "type", "count"
+                )
+                author_row["_savedPrefabsBySource"][source_key] = _merge_count_list(
+                    author_row["_savedPrefabsBySource"].get(source_key, []), saved_prefab_items, "path", "saveCount"
+                )
             author_row["_overtimeActivityCountsBySource"][source_key] = _merge_count_list(
                 author_row["_overtimeActivityCountsBySource"].get(source_key, []),
                 item.get("overtimeActivityCounts", []),
@@ -991,6 +1031,16 @@ class ActivitySummaryService(MongoComposableMixin):
                 "hourlyActivity": _empty_hourly_activity(),
             }
 
+        self._apply_vacation_summary_overrides(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+        )
         self._apply_plugin_hour_idle_gaps(
             authors_by_raw,
             hourly_by_author,
@@ -1214,6 +1264,73 @@ class ActivitySummaryService(MongoComposableMixin):
 
         return transferred_seconds
 
+    def _apply_vacation_summary_overrides(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        for raw_author, author_row in authors_by_raw.items():
+            vacation_dates = self._summary_vacation_dates_for_author(
+                raw_author,
+                profiles,
+                start_date,
+                end_date,
+                date_mode,
+                now,
+            )
+
+            if not vacation_dates:
+                continue
+
+            composed(self).apply_vacation_mark_to_author(author_row, vacation_dates[-1])
+            active_seconds = int(author_row.get("activeSeconds", 0))
+            meeting_seconds = int(author_row.get("meetingSeconds", 0))
+            vacation_overtime_addition = active_seconds + meeting_seconds
+
+            if vacation_overtime_addition > 0:
+                author_row["overtimeActiveSeconds"] = int(author_row.get("overtimeActiveSeconds", 0)) + vacation_overtime_addition
+                totals["overtimeActiveSeconds"] = int(totals.get("overtimeActiveSeconds", 0)) + vacation_overtime_addition
+
+            for key in ("activeSeconds", "idleSeconds", "meetingSeconds", "breakSeconds"):
+                removed_seconds = int(author_row.get(key, 0))
+                author_row[key] = 0
+                totals[key] = max(0, int(totals.get(key, 0)) - removed_seconds)
+
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if hourly_author:
+                hourly_author["dayOverride"] = author_row.get("dayOverride")
+                hourly_author["calendarDayMark"] = author_row.get("calendarDayMark")
+                hourly_author["hourlyActivity"] = composed(self).convert_hourly_to_vacation_overtime(
+                    hourly_author.get("hourlyActivity", [])
+                )
+
+    def _summary_vacation_dates_for_author(
+        self,
+        raw_author: str,
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> list[str]:
+        dates: list[str] = []
+
+        for mark in self.db.calendar_marks.find({"rawAuthor": raw_author, "reasonId": "vacation"}, {"_id": 0, "date": 1}):
+            day_date = str(mark.get("date") or "")
+            time_zone_id = _author_time_zone_id(raw_author, profiles, None)
+
+            if day_date and _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                dates.append(day_date)
+
+        return sorted(dates)
+
     def _apply_plugin_hour_idle_gaps(
         self,
         authors_by_raw: dict[str, dict[str, Any]],
@@ -1231,6 +1348,9 @@ class ActivitySummaryService(MongoComposableMixin):
             time_zone_id = _author_time_zone_id(raw_author, profiles, None)
 
             if not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            if composed(self).is_vacation_day(raw_author, day_date):
                 continue
 
             author_row = authors_by_raw.get(raw_author)
@@ -1286,6 +1406,9 @@ class ActivitySummaryService(MongoComposableMixin):
             if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
                 continue
 
+            if composed(self).is_vacation_day(raw_author, day_date):
+                continue
+
             latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
             ended_at = _coerce_datetime(session.get("lastOfflineAt"))
 
@@ -1330,6 +1453,9 @@ class ActivitySummaryService(MongoComposableMixin):
             time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
 
             if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            if composed(self).is_vacation_day(raw_author, day_date):
                 continue
 
             started_at = _coerce_datetime(session.get("startedAt"))
@@ -1403,6 +1529,9 @@ class ActivitySummaryService(MongoComposableMixin):
             time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
 
             if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            if composed(self).is_vacation_day(raw_author, day_date):
                 continue
 
             started_at = _coerce_datetime(session.get("startedAt"))
@@ -1584,6 +1713,9 @@ class ActivitySummaryService(MongoComposableMixin):
             time_zone_id = _author_time_zone_id(raw_author, profiles, report.get("timeZoneId"))
 
             if not report_date or not _date_in_summary_scope(report_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            if composed(self).is_vacation_day(raw_author, report_date):
                 continue
 
             occurred_at = (

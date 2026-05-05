@@ -70,6 +70,17 @@ export type AuthorRow = {
   overtimeSavedPrefabsBySource?: SavedPrefabsSourceGroup[];
   status?: "online" | "stale";
   stalePresence?: "telegram" | "reports" | "both";
+  dayOverride?: CalendarDayOverride;
+  calendarDayMark?: CalendarDayOverride;
+};
+
+export type CalendarDayOverride = {
+  type: "vacation";
+  reasonId: string;
+  reasonLabel: string;
+  label: string;
+  date: string;
+  note?: string;
 };
 
 export type ActivitySummary = {

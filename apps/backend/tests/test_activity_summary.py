@@ -3246,6 +3246,92 @@ def test_overtime_activity_after_telegram_offline_is_allowed():
     assert daily["overtimeActiveSeconds"] == 15
 
 
+def test_vacation_day_plugin_activity_is_overtime_only():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.db.calendar_marks.insert_one(
+        {"rawAuthor": "Future Artist", "date": "2026-05-06", "reasonId": "vacation", "note": "Vacation"}
+    )
+
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[10]["activeSeconds"] = 1800
+    repo._apply_snapshot_to_aggregates(
+        {
+            "source": "cur",
+            "pluginVersion": "1.0.0",
+            "author": "Future Artist",
+            "projectId": "AL",
+            "sessionId": "session-1",
+            "deviceId": "mac-mini",
+            "date": "2026-05-06",
+            "recordedAt": "2026-05-06T10:30:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 6, 10, 30, tzinfo=dt.UTC),
+            "lastRecordedAt": "2026-05-06T10:30:00+00:00",
+            "lastReceivedAt": dt.datetime(2026, 5, 6, 10, 30, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "timeZoneDisplayName": "UTC",
+            "activeSeconds": 1800,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "activityCounts": [{"type": "select", "count": 1}],
+            "savedPrefabs": [],
+            "hourlyActivity": hourly_activity,
+        }
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-06", "source": "cur"})
+    summary = repo.activity_summary(start_date="2026-05-06", end_date="2026-05-06")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+    hour_10 = next(item for item in hourly if item["hour"] == 10)
+
+    assert daily["activeSeconds"] == 0
+    assert daily["overtimeActiveSeconds"] == 1800
+    assert author["dayOverride"]["type"] == "vacation"
+    assert author["activeSeconds"] == 0
+    assert author["idleSeconds"] == 0
+    assert author["breakSeconds"] == 0
+    assert author["meetingSeconds"] == 0
+    assert author["overtimeActiveSeconds"] == 1800
+    assert hour_10["activeSeconds"] == 0
+    assert hour_10["idleSeconds"] == 0
+    assert hour_10["breakSeconds"] == 0
+    assert hour_10["meetingSeconds"] == 0
+    assert hour_10["missedSeconds"] == 0
+    assert hour_10["overtimeActiveSeconds"] == 1800
+    assert repo.db.telegram_online_prompts.count_documents({"rawAuthor": "Future Artist"}) == 0
+
+
+def test_vacation_day_meeting_is_overtime_in_summary():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.db.calendar_marks.insert_one(
+        {"rawAuthor": "Future Artist", "date": "2026-05-06", "reasonId": "vacation", "note": "Vacation"}
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-06",
+            "startedAt": dt.datetime(2026, 5, 6, 11, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 6, 11, 45, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "meetingSeconds": 2700,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-06", end_date="2026-05-06", now=dt.datetime(2026, 5, 6, 12, tzinfo=dt.UTC))
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+    hour_11 = next(item for item in hourly if item["hour"] == 11)
+
+    assert author["calendarDayMark"]["reasonId"] == "vacation"
+    assert author["meetingSeconds"] == 0
+    assert author["overtimeActiveSeconds"] == 2700
+    assert hour_11["meetingSeconds"] == 0
+    assert hour_11["missedSeconds"] == 0
+    assert hour_11["overtimeActiveSeconds"] == 2700
+
+
 def test_activity_after_work_window_without_offline_stays_normal():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})

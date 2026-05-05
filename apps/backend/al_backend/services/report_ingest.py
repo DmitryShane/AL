@@ -295,11 +295,14 @@ class ReportIngestService(MongoComposableMixin):
 
         for row in rows:
             report_time = _report_row_time(row) or received_at
+            row_date = str(row.get("date") or "")
+            suppress_vacation_prompt = composed(self).should_suppress_vacation_prompt(author, row_date)
 
-            if _has_active_or_overtime_delta(row):
-                composed(self)._schedule_telegram_break_activity_prompt_if_needed(author, str(row.get("date") or ""), source, report_time)
+            if _has_active_or_overtime_delta(row) and not suppress_vacation_prompt:
+                composed(self)._schedule_telegram_break_activity_prompt_if_needed(author, row_date, source, report_time)
 
-            composed(self)._schedule_telegram_online_prompt_if_needed(author, str(row.get("date") or ""), source, received_at)
+            if not suppress_vacation_prompt:
+                composed(self)._schedule_telegram_online_prompt_if_needed(author, row_date, source, received_at)
 
         return True
 

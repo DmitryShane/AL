@@ -13,6 +13,7 @@ from .services.activity_summary import ActivitySummaryService
 from .services.author_status_events import AuthorStatusEventsService
 from .services.activity_live_summary import ActivityLiveSummaryService
 from .services.editor_activity_purge import EditorActivityPurgeService
+from .services.calendar_day_overrides import CalendarDayOverrideService
 from .services.calendar import CalendarService
 from .services.discord_meetings import DiscordMeetingService
 from .services.telegram_meeting_delivery import TelegramMeetingDeliveryService
@@ -36,6 +37,7 @@ class BackendServices(
     ReportListingService,
     EditorActivityPurgeService,
     ActivityLiveSummaryService,
+    CalendarDayOverrideService,
     ActivitySummaryService,
     CalendarService,
     DiscordMeetingService,
@@ -45,7 +47,7 @@ class BackendServices(
     AuthorStatusEventsService,
     ActivityAggregationService,
 ):
-    aggregates_version = 29
+    aggregates_version = 30
 
     def __init__(self, storage: MongoStorage, settings: Settings):
         self.storage = storage

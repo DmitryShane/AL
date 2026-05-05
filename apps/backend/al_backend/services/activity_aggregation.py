@@ -493,6 +493,8 @@ class ActivityAggregationService(MongoComposableMixin):
         session_key = _session_key(snapshot)
         previous = self.db.aggregate_session_state.find_one({"_id": session_key}) or {}
         deltas = _build_deltas(snapshot, previous.get("snapshot", {}))
+        if composed(self).is_vacation_day(str(snapshot.get("author") or "Unknown User"), str(snapshot.get("date") or "")):
+            deltas = composed(self).convert_deltas_to_vacation_overtime(deltas)
         materialize = self._should_materialize_aggregate_date(str(snapshot.get("date") or ""), str(snapshot.get("author") or "Unknown User"))
         if self._should_suppress_post_offline_plugin_deltas(snapshot, deltas):
             self.db.aggregate_session_state.update_one(
@@ -518,7 +520,11 @@ class ActivityAggregationService(MongoComposableMixin):
 
         received_at = _coerce_datetime(snapshot.get("receivedAt")) or dt.datetime.now(dt.UTC)
         report_time = _coerce_datetime(snapshot.get("recordedAt") or snapshot.get("lastRecordedAt") or snapshot.get("receivedAt")) or received_at
-        if materialize and _has_active_or_overtime_delta(deltas):
+        suppress_vacation_prompt = composed(self).should_suppress_vacation_prompt(
+            str(snapshot.get("author") or "Unknown User"),
+            str(snapshot.get("date") or ""),
+        )
+        if materialize and _has_active_or_overtime_delta(deltas) and not suppress_vacation_prompt:
             composed(self)._schedule_telegram_break_activity_prompt_if_needed(
                 str(snapshot.get("author") or "Unknown User"),
                 str(snapshot.get("date") or ""),
@@ -526,7 +532,7 @@ class ActivityAggregationService(MongoComposableMixin):
                 report_time,
             )
 
-        if materialize and _has_time_delta(deltas):
+        if materialize and _has_time_delta(deltas) and not suppress_vacation_prompt:
             composed(self)._schedule_telegram_online_prompt_if_needed(
                 str(snapshot.get("author") or "Unknown User"),
                 str(snapshot.get("date") or ""),
@@ -952,6 +958,11 @@ class ActivityAggregationService(MongoComposableMixin):
 
         if not raw_author or not day_date or not event_time:
             return None
+
+        vacation_window = composed(self).vacation_overtime_window_for_event(event)
+
+        if vacation_window:
+            return vacation_window
 
         if not self._is_author_offline_after_latest_telegram_state(raw_author, day_date, event_time):
             return None
