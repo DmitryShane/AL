@@ -575,27 +575,7 @@ function loadCachedDashboardSummary(page: Page, dateRange: DateRange) {
 }
 
 function sanitizeCachedDashboardSummary(summary: Summary): Summary {
-  if (!summary.activitySummary?.authors) {
-    return summary;
-  }
-
-  return {
-    ...summary,
-    activitySummary: {
-      ...summary.activitySummary,
-      authors: summary.activitySummary.authors.map((author) => {
-        if (author.status === "online") {
-          const cachedAuthor = { ...author };
-          delete cachedAuthor.status;
-          delete cachedAuthor.stalePresence;
-
-          return cachedAuthor;
-        }
-
-        return author;
-      })
-    }
-  };
+  return summary;
 }
 
 function saveCachedDashboardSummary(page: Page, dateRange: DateRange, summary: Summary) {
