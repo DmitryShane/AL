@@ -2,12 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { AuthorsTable } from "../components/AuthorsTable";
 import { HourlyActivityChart } from "../components/HourlyActivityChart";
-import { ActivityAuthorMiniCard } from "../components/activity/ActivityAuthorMiniCard";
 import { ActivityCard } from "../components/activity/ActivityCard";
+import { ActivityAuthorFloatingStrip } from "../components/activity/ActivityAuthorFloatingStrip";
 import { ActivityMetricsGrid } from "../components/activity/ActivityMetricsGrid";
 import { BreakdownPanel, OvertimeBreakdownPanel, type BreakdownPanelItem } from "../components/activity/BreakdownPanels";
 import { ReportsTable } from "../components/activity/ReportsTable";
-import { DateRangePicker } from "../components/layout/DateRangePicker";
 import { apiFetch } from "../api/client";
 import { REPORTS_PAGE_STORAGE_KEY } from "../constants/dashboard";
 import type { ActivitySummary, AuthorHourlyActivity, DateRange, Report, ReportsPage, ReportsPageCache, SavedPrefab } from "../types/dashboard";
@@ -16,7 +15,6 @@ import { activityColor, compareAuthorCardStatus, formatActivityType, loadSavedRe
 
 const ACTIVITY_HOURLY_CACHE_PREFIX = "AL.Dashboard.ActivityHourly.";
 const ACTIVITY_REPORTS_CACHE_PREFIX = "AL.Dashboard.ActivityReports.";
-const ACTIVITY_FLOATING_STRIP_EXIT_MS = 220;
 
 export function ActivityPage({
   summary,
@@ -25,6 +23,8 @@ export function ActivityPage({
   onDatePickerChange,
   selectedAuthor,
   setSelectedAuthor,
+  loading,
+  restoringScroll,
   refreshing,
   onRefreshAuthor
 }: {
@@ -34,6 +34,8 @@ export function ActivityPage({
   onDatePickerChange: (range: DateRange) => void;
   selectedAuthor: string | null;
   setSelectedAuthor: (value: string) => void;
+  loading: boolean;
+  restoringScroll: boolean;
   refreshing: boolean;
   onRefreshAuthor: (author: string) => void;
 }) {
@@ -94,13 +96,6 @@ export function ActivityPage({
     [summary.authors, dateRange]
   );
   const authorCardStripRef = useRef<HTMLDivElement>(null);
-  const [authorStripInView, setAuthorStripInView] = useState(true);
-  const shouldShowFloatingStrip = !authorStripInView && cardAuthors.length > 0;
-  const [floatingStripMounted, setFloatingStripMounted] = useState(false);
-  const [floatingStripExiting, setFloatingStripExiting] = useState(false);
-  const [floatingStripAnimKey, setFloatingStripAnimKey] = useState(0);
-  const floatingStripExitTimerRef = useRef<number | null>(null);
-  const prevShouldShowFloatingStripRef = useRef(false);
   const [reports, setReports] = useState<Report[]>([]);
   const [reportsTotal, setReportsTotal] = useState(0);
   const [reportSources, setReportSources] = useState<string[]>([]);
@@ -322,96 +317,19 @@ export function ActivityPage({
     };
   }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportsPage, reportsPageSize, reportSourceFilter, reportHourFilter, reportsCacheKey]);
 
-  useEffect(() => {
-    const element = authorCardStripRef.current;
-
-    if (!element) {
-      return;
-    }
-
-    const intersectionObserver = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-
-        if (entry) {
-          setAuthorStripInView(entry.isIntersecting);
-        }
-      },
-      { threshold: 0 }
-    );
-
-    intersectionObserver.observe(element);
-
-    return () => {
-      intersectionObserver.disconnect();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (shouldShowFloatingStrip && !prevShouldShowFloatingStripRef.current) {
-      setFloatingStripAnimKey((key) => key + 1);
-    }
-
-    prevShouldShowFloatingStripRef.current = shouldShowFloatingStrip;
-  }, [shouldShowFloatingStrip]);
-
-  useEffect(() => {
-    if (shouldShowFloatingStrip) {
-      if (floatingStripExitTimerRef.current !== null) {
-        window.clearTimeout(floatingStripExitTimerRef.current);
-        floatingStripExitTimerRef.current = null;
-      }
-
-      setFloatingStripExiting(false);
-      setFloatingStripMounted(true);
-      return;
-    }
-
-    if (!floatingStripMounted) {
-      return;
-    }
-
-    setFloatingStripExiting(true);
-    floatingStripExitTimerRef.current = window.setTimeout(() => {
-      floatingStripExitTimerRef.current = null;
-      setFloatingStripMounted(false);
-      setFloatingStripExiting(false);
-    }, ACTIVITY_FLOATING_STRIP_EXIT_MS);
-
-    return () => {
-      if (floatingStripExitTimerRef.current !== null) {
-        window.clearTimeout(floatingStripExitTimerRef.current);
-        floatingStripExitTimerRef.current = null;
-      }
-    };
-  }, [shouldShowFloatingStrip, floatingStripMounted]);
-
   return (
     <>
-      {floatingStripMounted ? (
-        <div
-          key={floatingStripAnimKey}
-          className={`activity-author-floating-strip ${floatingStripExiting ? "is-exiting" : ""}`.trim()}
-          role="region"
-          aria-label="Authors and date range"
-        >
-          <div className="activity-author-floating-strip-inner">
-            <div className="activity-author-floating-strip-scroll">
-              {cardAuthors.map((item) => (
-                <ActivityAuthorMiniCard
-                  key={`float-${item.rawAuthor}`}
-                  author={item}
-                  active={item.rawAuthor === author?.rawAuthor}
-                  onSelect={(selected) => setSelectedAuthor(selected.rawAuthor)}
-                />
-              ))}
-            </div>
-            <div className="activity-author-floating-strip-dates">
-              <DateRangePicker value={datePickerValue} onChange={onDatePickerChange} />
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <ActivityAuthorFloatingStrip
+        anchorRef={authorCardStripRef}
+        authors={summary.authors}
+        dateRange={dateRange}
+        datePickerValue={datePickerValue}
+        onDatePickerChange={onDatePickerChange}
+        selectedAuthor={author?.rawAuthor ?? null}
+        setSelectedAuthor={setSelectedAuthor}
+        loading={loading}
+        restoringScroll={restoringScroll}
+      />
       <section className="page-section">
         <div ref={authorCardStripRef} className="author-card-strip">
           {cardAuthors.map((item) => (
@@ -534,6 +452,28 @@ function saveCachedActivityHourly(key: string, rows: AuthorHourlyActivity[]) {
     sessionStorage.setItem(activityCacheKey(ACTIVITY_HOURLY_CACHE_PREFIX, key), JSON.stringify(rows));
   } catch {
     // Ignore storage failures; live API data is still shown.
+  }
+}
+
+function loadCachedFloatingAuthors(key: string) {
+  try {
+    const cached = sessionStorage.getItem(activityCacheKey(ACTIVITY_FLOATING_AUTHORS_CACHE_PREFIX, key));
+
+    if (!cached) {
+      return [];
+    }
+
+    return JSON.parse(cached) as AuthorRow[];
+  } catch {
+    return [];
+  }
+}
+
+function saveCachedFloatingAuthors(key: string, authors: AuthorRow[]) {
+  try {
+    sessionStorage.setItem(activityCacheKey(ACTIVITY_FLOATING_AUTHORS_CACHE_PREFIX, key), JSON.stringify(authors));
+  } catch {
+    // Ignore storage failures; the main dashboard summary remains the source of truth.
   }
 }
 

@@ -513,6 +513,8 @@ function App() {
             onDatePickerChange={setDateRange}
             selectedAuthor={activeAuthor}
             setSelectedAuthor={setSelectedAuthor}
+            loading={loading}
+            restoringScroll={isRestoringScroll}
             refreshing={refreshingReports}
             onRefreshAuthor={(author) => void requestReportRefresh(author)}
           />
@@ -594,6 +596,7 @@ function clearDashboardSessionCaches() {
   const prefixes = [
     DASHBOARD_SUMMARY_CACHE_PREFIX,
     "AL.Dashboard.ActivityHourly.",
+    "AL.Dashboard.ActivityFloatingAuthors.",
     "AL.Dashboard.ActivityReports.",
     "AL.Dashboard.AnalyticsSummary",
     "AL.Dashboard.CalendarSummary"

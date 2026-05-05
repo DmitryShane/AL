@@ -940,6 +940,10 @@ p {
   animation: activity-author-floating-strip-out 0.22s cubic-bezier(0.48, 0.02, 0.52, 0.98) both;
 }
 
+.activity-author-floating-strip.is-restored:not(.is-exiting) {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .activity-author-floating-strip,
   .activity-author-floating-strip.is-exiting {
