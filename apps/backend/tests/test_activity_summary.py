@@ -1004,6 +1004,50 @@ def test_activity_summary_exposes_telegram_to_first_activity_time():
     assert author["telegramToFirstActivitySeconds"] == 17 * 60 + 30
 
 
+def test_activity_summary_fills_hourly_idle_from_telegram_online_to_first_raw_activity():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "displayName": "Dmitry Shane",
+            "telegramUsername": "dmitryshane",
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    repo.record_break_event("dmitryshane", "online", "2026-05-05T09:02:59Z")
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry Shane",
+            "projectId": "unity",
+            "date": "2026-05-05",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "author": "Dmitry Shane",
+            "date": "2026-05-05",
+            "source": "ual",
+            "eventType": "focus",
+            "occurredAtUtc": dt.datetime(2026, 5, 5, 10, 31, 7, tzinfo=dt.UTC),
+            "receivedAt": dt.datetime(2026, 5, 5, 10, 54, 32, tzinfo=dt.UTC),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-05", end_date="2026-05-05")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry Shane")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Dmitry Shane")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert author["telegramToFirstActivitySeconds"] == 88 * 60 + 8
+    assert hourly_by_hour[11]["idleSeconds"] == 57 * 60 + 1
+    assert hourly_by_hour[12]["idleSeconds"] == 31 * 60 + 7
+
+
 def test_activity_summary_marks_visual_missed_time_before_online_hour_without_affecting_totals():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
