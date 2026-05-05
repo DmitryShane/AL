@@ -24,7 +24,6 @@ export function ActivityCard({ author, active, onSelect }: ActivityCardProps) {
       <span className="author-card-status" aria-hidden="true" />
       <span className="author-card-identity">
         <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
-        {isVacationDay ? <span className="author-card-day-badge">Vacation</span> : null}
         {productivityTone(author.productivity) === "overdrive" ? <span className="overdrive-author-text">Are you human?</span> : null}
       </span>
       <strong>{author.displayName}</strong>
@@ -32,7 +31,11 @@ export function ActivityCard({ author, active, onSelect }: ActivityCardProps) {
       <div className="author-card-footer">
         <div className="mini-metrics">
           {isVacationDay ? (
-            <span>{formatDuration(author.overtimeActiveSeconds)} overtime</span>
+            <>
+              <span className="mini-metric-placeholder" aria-hidden="true">0h 00m active</span>
+              <span className="author-card-day-badge">Vacation</span>
+              <span>{formatDuration(author.overtimeActiveSeconds)} overtime</span>
+            </>
           ) : (
             <>
               <span>{formatDuration(author.activeSeconds)} active</span>

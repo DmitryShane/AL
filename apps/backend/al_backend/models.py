@@ -124,7 +124,7 @@ class CalendarMarkIn(ApiModel):
     authors: list[str] = Field(min_length=1)
     dates: list[str] = Field(min_length=1)
     reason_id: str = Field(alias="reasonId", min_length=1)
-    note: str = Field(min_length=1)
+    note: str = ""
 
 
 class CalendarMarksDeleteIn(ApiModel):

@@ -1252,8 +1252,11 @@ p {
 .author-card.is-telegram-offline .avatar,
 .author-card.is-telegram-offline strong,
 .author-card.is-telegram-offline small,
-.author-card.is-telegram-offline .mini-metrics,
 .author-card.is-telegram-offline .overdrive-author-text {
+  opacity: 0.78;
+}
+
+.author-card.is-telegram-offline .mini-metrics span:not(.author-card-day-badge) {
   opacity: 0.78;
 }
 
@@ -1323,15 +1326,30 @@ p {
 }
 
 .author-card-day-badge {
-  border: 1px solid rgb(124 58 237 / 20%);
+  position: relative;
+  overflow: hidden;
+  width: fit-content;
+  border: 1px solid rgb(167 139 250 / 72%);
   border-radius: 999px;
-  background: rgb(124 58 237 / 10%);
-  padding: 5px 9px;
-  color: #6d28d9;
+  background: linear-gradient(135deg, #7c3aed 0%, #5b4dff 100%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 28%), 0 6px 14px rgb(91 77 255 / 22%);
+  padding: 4px 9px;
+  color: #f8fafc;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 900;
+  letter-spacing: 0.01em;
   line-height: 1;
   white-space: nowrap;
+}
+
+.author-card-day-badge::after {
+  position: absolute;
+  inset: -60% auto -60% -45%;
+  width: 42%;
+  background: linear-gradient(100deg, transparent 0%, rgb(255 255 255 / 74%) 48%, transparent 100%);
+  content: "";
+  transform: skewX(-18deg);
+  animation: vacation-badge-shine 2.8s ease-in-out infinite;
 }
 
 .overdrive-author-text {
@@ -1419,6 +1437,24 @@ p {
   }
 }
 
+@keyframes vacation-badge-shine {
+  0%,
+  46% {
+    left: -45%;
+    opacity: 0;
+  }
+
+  58% {
+    opacity: 1;
+  }
+
+  76%,
+  100% {
+    left: 116%;
+    opacity: 0;
+  }
+}
+
 .author-card .avatar {
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 40%), 0 8px 18px rgb(15 23 42 / 14%);
 }
@@ -1449,6 +1485,18 @@ p {
   background: #eef3f8;
   padding: 3px 7px;
   white-space: nowrap;
+}
+
+.mini-metrics .author-card-day-badge {
+  border: 1px solid rgb(167 139 250 / 72%);
+  background: linear-gradient(135deg, #7c3aed 0%, #5b4dff 100%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 28%), 0 6px 14px rgb(91 77 255 / 22%);
+  color: #f8fafc;
+  padding: 4px 9px;
+}
+
+.mini-metrics .mini-metric-placeholder {
+  visibility: hidden;
 }
 
 .author-card-footer {

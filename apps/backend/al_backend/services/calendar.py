@@ -94,8 +94,8 @@ class CalendarService(MongoComposableMixin):
     def upsert_calendar_marks(self, authors: list[str], dates: list[str], reason_id: str, note: str) -> dict[str, Any]:
         normalized_note = (note or "").strip()
 
-        if not authors or not dates or not reason_id or not normalized_note:
-            return {"ok": False, "error": "Authors, dates, reason, and note are required"}
+        if not authors or not dates or not reason_id:
+            return {"ok": False, "error": "Authors, dates, and reason are required"}
 
         self._ensure_calendar_reasons()
         reason = self.db.calendar_reasons.find_one({"id": reason_id}, {"_id": 1})
