@@ -61,6 +61,17 @@ class AuthorStatusEventsService(MongoComposableMixin):
         self._insert_status_report_row(event)
         return {"ok": True, "event": event}
 
+    def _latest_status_event_for_author(self, raw_author: str) -> dict[str, Any]:
+        latest = list(
+            self.db.status_events.find(
+                {"rawAuthor": raw_author},
+                {"_id": 0, "statusEventType": 1, "transitionAt": 1, "reason": 1},
+            )
+            .sort([("transitionAt", -1)])
+            .limit(1)
+        )
+        return latest[0] if latest else {}
+
     def _record_status_transition_for_author(
         self,
         author: dict[str, Any],
@@ -75,6 +86,8 @@ class AuthorStatusEventsService(MongoComposableMixin):
 
         previous_state = self.db.status_states.find_one({"rawAuthor": raw_author}, {"_id": 0}) or {}
         previous_status = str(previous_state.get("status") or "online")
+        latest_status_event = self._latest_status_event_for_author(raw_author)
+        latest_status_event_type = str(latest_status_event.get("statusEventType") or "")
         stale_presence = str(author.get("stalePresence") or "")
         is_red_offline = (
             track_plugin_staleness
@@ -113,7 +126,9 @@ class AuthorStatusEventsService(MongoComposableMixin):
                 upsert=True,
             )
 
-        if author.get("status") == "online" and previous_status == "offline" and composed(self).get_plugin_ingest_enabled():
+        should_record_reports_resumed = previous_status == "offline" or latest_status_event_type == "offline"
+
+        if author.get("status") == "online" and should_record_reports_resumed and composed(self).get_plugin_ingest_enabled():
             transition_at = (_coerce_datetime(author.get("lastReceivedAt")) or now) + dt.timedelta(microseconds=1)
             self.record_status_event(raw_author, "online", transition_at, time_zone_id, "reports_resumed")
             self.db.status_states.update_one(

@@ -5749,6 +5749,45 @@ def test_fresh_daily_activity_without_report_row_resumes_reports_stopped_status(
     assert repo.db.status_states.items[0]["status"] == "online"
 
 
+def test_fresh_daily_activity_resumes_when_status_state_online_but_latest_event_offline():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.db.status_states.insert_one({"rawAuthor": "Future Artist", "status": "online"})
+    repo.record_status_event(
+        "Future Artist",
+        "offline",
+        dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+        "UTC",
+        "reports_stopped",
+        dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "pluginVersion": "cursor-plugin",
+            "author": "Future Artist",
+            "projectId": "AL",
+            "date": "2026-04-29",
+            "lastRecordedAt": "2026-04-29T09:05:00+00:00",
+            "lastReceivedAt": dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC),
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "activityCounts": [{"type": "focus", "count": 1}],
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", now=dt.datetime(2026, 4, 29, 9, 5, 30, tzinfo=dt.UTC))
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    status_events = [event for event in repo.db.status_events.items if event.get("rawAuthor") == "Future Artist"]
+
+    assert author["status"] == "online"
+    assert status_events[-1]["statusEventType"] == "online"
+    assert status_events[-1]["reason"] == "reports_resumed"
+    assert repo.db.status_states.items[0]["status"] == "online"
+
+
 def test_stale_daily_activity_without_report_row_does_not_resume_reports_stopped_status():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
@@ -6019,6 +6058,77 @@ def test_status_offline_interval_suppresses_activity_payload_after_idle_accounte
     assert deltas["idleDeltaSeconds"] == 0
     assert deltas["activityCountDeltas"] == []
     assert deltas["savedPrefabDeltas"] == []
+
+
+def test_scoped_rebuild_counts_raw_activity_after_reports_resumed_closes_offline_interval():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.record_status_event(
+        "Future Artist",
+        "offline",
+        dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC),
+        "UTC",
+        "reports_stopped",
+        dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC),
+    )
+    raw_events = [
+        {
+            "eventId": "focus-after-offline",
+            "source": "cur",
+            "pluginVersion": "cursor-plugin",
+            "author": "Future Artist",
+            "authorEmail": "future@example.com",
+            "projectId": "AL",
+            "sessionId": "cursor-session",
+            "deviceId": "device",
+            "date": "2026-04-29",
+            "eventType": "focus",
+            "occurredAtUtc": dt.datetime(2026, 4, 29, 9, 20, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-29T09:20:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 9, 20, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "timeZoneDisplayName": "UTC",
+        },
+        {
+            "eventId": "selection-after-offline",
+            "source": "cur",
+            "pluginVersion": "cursor-plugin",
+            "author": "Future Artist",
+            "authorEmail": "future@example.com",
+            "projectId": "AL",
+            "sessionId": "cursor-session",
+            "deviceId": "device",
+            "date": "2026-04-29",
+            "eventType": "selection",
+            "occurredAtUtc": dt.datetime(2026, 4, 29, 9, 22, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-29T09:22:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 9, 22, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "timeZoneDisplayName": "UTC",
+        },
+    ]
+
+    for event in raw_events:
+        repo.db.raw_activity_events.insert_one(event)
+
+    repo.rebuild_aggregates_for_dates("2026-04-29", dates=["2026-04-29"], authors=["Future Artist"])
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-29", "source": "cur"}, {"_id": 0})
+
+    assert daily["activeSeconds"] == 0
+
+    repo.record_status_event(
+        "Future Artist",
+        "online",
+        dt.datetime(2026, 4, 29, 9, 15, tzinfo=dt.UTC),
+        "UTC",
+        "reports_resumed",
+        dt.datetime(2026, 4, 29, 9, 15, tzinfo=dt.UTC),
+    )
+    repo.rebuild_aggregates_for_dates("2026-04-29", dates=["2026-04-29"], authors=["Future Artist"])
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-29", "source": "cur"}, {"_id": 0})
+
+    assert daily["activeSeconds"] == 120
+    assert daily["activityCounts"] == [{"type": "focus", "count": 1}, {"type": "select", "count": 1}]
 
 
 def test_rebuild_status_idle_batch_keeps_last_event_recorded_at():
