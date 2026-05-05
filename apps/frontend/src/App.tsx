@@ -53,7 +53,7 @@ const emptyActivitySummary: ActivitySummary = {
   hourlyActivityByAuthor: []
 };
 
-const LAST_AUTHORS_CACHE_KEY = "AL.Dashboard.LastAuthors";
+const LAST_AUTHORS_CACHE_PREFIX = "AL.Dashboard.LastAuthors.";
 
 function readStoredSessionUserPreview(): SiteUser | null {
   if (typeof window === "undefined" || localStorage.getItem(AUTH_HINT_STORAGE_KEY) !== "true") {
@@ -116,9 +116,14 @@ function writeStoredSessionUserPreview(user: SiteUser | null) {
   }
 }
 
-function readCachedAuthors(): AuthorRow[] {
+function lastAuthorsCacheKey(dateRange: DateRange) {
+  const dateMode = dateRange.preset === "live" ? "authorLocalToday" : "";
+  return `${LAST_AUTHORS_CACHE_PREFIX}${dateRange.startDate}.${dateRange.endDate}.${dateMode}`;
+}
+
+function readCachedAuthors(dateRange: DateRange): AuthorRow[] {
   try {
-    const raw = sessionStorage.getItem(LAST_AUTHORS_CACHE_KEY);
+    const raw = localStorage.getItem(lastAuthorsCacheKey(dateRange));
 
     if (!raw) {
       return [];
@@ -136,13 +141,9 @@ function readCachedAuthors(): AuthorRow[] {
   }
 }
 
-function saveCachedAuthors(authors: AuthorRow[]) {
-  if (!authors.length) {
-    return;
-  }
-
+function saveCachedAuthors(dateRange: DateRange, authors: AuthorRow[]) {
   try {
-    sessionStorage.setItem(LAST_AUTHORS_CACHE_KEY, JSON.stringify(authors));
+    localStorage.setItem(lastAuthorsCacheKey(dateRange), JSON.stringify(authors));
   } catch {
     // Browsers can reject storage writes in private mode or when the quota is full.
   }
@@ -163,7 +164,7 @@ function App() {
   const [summary, setSummary] = useState<Summary | null>(() => loadCachedDashboardSummary(loadSavedPage(), loadSavedDateRange()));
   const [search, setSearch] = useState("");
   const [selectedAuthor, setSelectedAuthorState] = useState<string | null>(() => loadSavedActivityAuthor());
-  const [cachedAuthors, setCachedAuthors] = useState<AuthorRow[]>(() => readCachedAuthors());
+  const [cachedAuthors, setCachedAuthors] = useState<AuthorRow[]>(() => readCachedAuthors(loadSavedDateRange()));
   const [loading, setLoading] = useState(true);
   const [refreshingReports, setRefreshingReports] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -297,8 +298,11 @@ function App() {
 
       setHealth(await healthResponse.json());
       const nextSummary = await summaryResponse.json() as Summary;
+      const nextAuthors = nextSummary.activitySummary.authors;
       setSummary(nextSummary);
       saveCachedDashboardSummary(requestedPage, requestedDateRange, nextSummary);
+      setCachedAuthors(nextAuthors);
+      saveCachedAuthors(requestedDateRange, nextAuthors);
       setAppliedDateRange(requestedDateRange);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unknown error");
@@ -364,13 +368,8 @@ function App() {
     : activitySummary.authors[0]?.rawAuthor ?? null;
 
   useEffect(() => {
-    if (!activitySummary.authors.length) {
-      return;
-    }
-
-    setCachedAuthors(activitySummary.authors);
-    saveCachedAuthors(activitySummary.authors);
-  }, [activitySummary.authors]);
+    setCachedAuthors(readCachedAuthors(dateRange));
+  }, [dateRange.startDate, dateRange.endDate, dateRange.preset]);
 
   useEffect(() => {
     if (!activeAuthor && activitySummary.authors.length) {
@@ -642,19 +641,28 @@ function saveCachedDashboardSummary(page: Page, dateRange: DateRange, summary: S
 }
 
 function clearDashboardSessionCaches() {
-  const prefixes = [
+  const sessionPrefixes = [
     DASHBOARD_SUMMARY_CACHE_PREFIX,
     "AL.Dashboard.ActivityHourly.",
     "AL.Dashboard.ActivityReports.",
     "AL.Dashboard.AnalyticsSummary",
     "AL.Dashboard.CalendarSummary"
   ];
+  const localPrefixes = [LAST_AUTHORS_CACHE_PREFIX];
 
   for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
     const key = sessionStorage.key(index);
 
-    if (key && prefixes.some((prefix) => key.startsWith(prefix))) {
+    if (key && sessionPrefixes.some((prefix) => key.startsWith(prefix))) {
       sessionStorage.removeItem(key);
+    }
+  }
+
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index);
+
+    if (key && localPrefixes.some((prefix) => key.startsWith(prefix))) {
+      localStorage.removeItem(key);
     }
   }
 }
