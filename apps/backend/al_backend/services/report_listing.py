@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..activity_math import *
+from ..activity_math import (
+    DESCENDING,
+    dt,
+    _date_in_range,
+    _display_name,
+    _is_author_local_today,
+    _iso,
+    _normalize_report_hour_filter,
+    _report_date_query,
+    _report_matches_hour_filter,
+    _report_table_sort_key,
+)
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
@@ -241,3 +252,21 @@ class ReportListingService(MongoComposableMixin):
             or self._is_idle_report_during_break(row, break_lookup)
             for row in candidate_rows
         )
+
+
+def _is_live_date_match(
+    value: Any,
+    raw_author: str,
+    profiles: dict[str, dict[str, Any]],
+    fallback_time_zone_id: Any,
+    now: dt.datetime,
+    start_date: str | None,
+    end_date: str | None,
+) -> bool:
+    if _is_author_local_today(value, raw_author, profiles, fallback_time_zone_id, now):
+        return True
+
+    if start_date or end_date:
+        return _date_in_range(str(value or ""), start_date, end_date)
+
+    return False
