@@ -17,6 +17,7 @@ class BackendComposableHost(Protocol):
     default_send_interval_seconds: int
     db: Database
 
+    # Activity summary and report listing
     def _apply_live_activity_summary(
         self,
         authors_by_raw: dict[str, dict[str, Any]],
@@ -53,6 +54,7 @@ class BackendComposableHost(Protocol):
 
     def _apply_snapshot_to_aggregates(self, snapshot: dict[str, Any]) -> None: ...
 
+    # Hourly enrichment helpers
     def _break_buckets_for_daily_items(
         self, daily_items: list[dict[str, Any]]
     ) -> dict[tuple[str, str], list[dict[str, int]]]: ...
@@ -68,6 +70,7 @@ class BackendComposableHost(Protocol):
         self, authors_by_raw: dict[str, dict[str, Any]], raw_author: str, profiles: dict[str, dict[str, Any]]
     ) -> dict[str, Any]: ...
 
+    # Workday, break, meeting, and status helpers
     def _close_break_session(self, normalized_telegram: str, raw_author: str, event_time: dt.datetime) -> dict[str, Any]: ...
 
     def _insert_discord_meeting_report_row(
@@ -144,6 +147,7 @@ class BackendComposableHost(Protocol):
         extra_fields: dict[str, Any] | None = None,
     ) -> None: ...
 
+    # Authors and settings
     def author_aliases(self) -> list[dict[str, Any]]: ...
 
     def author_alias_keys(self, raw_author: str | None) -> list[str]: ...
@@ -164,6 +168,7 @@ class BackendComposableHost(Protocol):
 
     def get_telegram_online_prompt_delay_seconds(self) -> int: ...
 
+    # Cache and aggregate maintenance
     def invalidate_activity_summary_cache(
         self, dates: list[str] | tuple[str, ...] | set[str] | None = None
     ) -> None: ...

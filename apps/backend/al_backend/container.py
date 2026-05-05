@@ -3,15 +3,21 @@ from __future__ import annotations
 from .repositories.auth import AuthRepository
 from .repositories.settings import SettingsRepository
 from .repositories.authors import AuthorRepository
+from .services.author_avatar_service import AuthorAvatarService
+from .services.author_timezone_rebucket import AuthorTimezoneRebucketService
+from .services.report_challenges import ReportChallengeService
+from .services.report_security import ReportSecurityService
 from .services.report_ingest import ReportIngestService
+from .services.report_listing import ReportListingService
 from .services.activity_summary import ActivitySummaryService
 from .services.author_status_events import AuthorStatusEventsService
 from .services.activity_live_summary import ActivityLiveSummaryService
+from .services.editor_activity_purge import EditorActivityPurgeService
 from .services.calendar import CalendarService
 from .services.discord_meetings import DiscordMeetingService
-from .services.discord_meeting_notifications import DiscordMeetingNotificationsService
+from .services.telegram_meeting_delivery import TelegramMeetingDeliveryService
 from .services.telegram_activity import TelegramActivityService
-from .services.workday_sessions import WorkdaySessionsService
+from .services.break_sessions import BreakSessionService
 from .services.activity_aggregation import ActivityAggregationService
 from .storage import MongoStorage
 from .settings import Settings
@@ -21,14 +27,20 @@ from .indexes import IndexManager
 class BackendServices(
     AuthRepository,
     SettingsRepository,
+    AuthorAvatarService,
+    AuthorTimezoneRebucketService,
+    ReportChallengeService,
+    ReportSecurityService,
     AuthorRepository,
     ReportIngestService,
+    ReportListingService,
+    EditorActivityPurgeService,
     ActivityLiveSummaryService,
     ActivitySummaryService,
     CalendarService,
     DiscordMeetingService,
-    DiscordMeetingNotificationsService,
-    WorkdaySessionsService,
+    TelegramMeetingDeliveryService,
+    BreakSessionService,
     TelegramActivityService,
     AuthorStatusEventsService,
     ActivityAggregationService,

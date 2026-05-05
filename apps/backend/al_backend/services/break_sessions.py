@@ -6,7 +6,7 @@ from ..activity_math import dt, _coerce_datetime, _telegram_event_date, _valid_t
 from ..mongo_composable import MongoComposableMixin
 
 
-class WorkdaySessionsService(MongoComposableMixin):
+class BreakSessionService(MongoComposableMixin):
     def _close_break_session(self, normalized_telegram: str, raw_author: str, event_time: dt.datetime) -> dict[str, Any]:
         session = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
 

@@ -7,7 +7,7 @@ from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
 
-class DiscordMeetingNotificationsService(MongoComposableMixin):
+class TelegramMeetingDeliveryService(MongoComposableMixin):
     def claim_due_telegram_meeting_auto_afk_notifications(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
         now = now or dt.datetime.now(dt.UTC)
         notifications: list[dict[str, Any]] = []

@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 
 from ..activity_math import *
-from ..author_avatar_cache import ensure_author_avatar_cached, remove_author_avatar_cache_file
+from ..author_avatar_cache import remove_author_avatar_cache_file
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
@@ -107,59 +107,6 @@ class AuthorRepository(MongoComposableMixin):
             )
 
         return result
-
-    def refresh_author_github_avatar(self, raw_author: str) -> dict[str, Any]:
-        resolved = composed(self).resolve_author_alias(_normalize_author(raw_author))
-        profile = self.db.author_profiles.find_one(
-            {"rawAuthor": resolved}, {"_id": 0, "githubUsername": 1, "github_username": 1}
-        ) or {}
-
-        if not _github_username_for_avatar_fetch(resolved, profile):
-            return {"ok": False, "error": "GitHub username is not set for this profile"}
-
-        cadence = composed(self).get_avatar_refresh_cadence()
-        path, _ = ensure_author_avatar_cached(
-            self.db,
-            getattr(self, "avatar_cache_dir", None),
-            resolved,
-            cadence=cadence,
-            force=True,
-        )
-
-        if path is not None and path.is_file():
-            return {"ok": True, "rawAuthor": resolved}
-
-        return {"ok": False, "error": "Avatar could not be downloaded"}
-
-    def refresh_all_author_github_avatars(self) -> dict[str, Any]:
-        cache_dir = getattr(self, "avatar_cache_dir", None)
-        cadence = composed(self).get_avatar_refresh_cadence()
-        attempted = 0
-        refreshed = 0
-        failed: list[str] = []
-
-        for doc in self.db.author_profiles.find({}, {"rawAuthor": 1, "githubUsername": 1, "github_username": 1}):
-            raw_author = doc.get("rawAuthor")
-
-            if not raw_author or not _github_username_for_avatar_fetch(raw_author, doc):
-                continue
-
-            resolved = composed(self).resolve_author_alias(_normalize_author(raw_author))
-            attempted += 1
-            path, _ = ensure_author_avatar_cached(
-                self.db,
-                cache_dir,
-                resolved,
-                cadence=cadence,
-                force=True,
-            )
-
-            if path is not None and path.is_file():
-                refreshed += 1
-            else:
-                failed.append(resolved)
-
-        return {"ok": True, "attempted": attempted, "refreshed": refreshed, "failedRawAuthors": failed}
 
     def update_author_email(self, raw_author: str, author_email: str | None) -> None:
         raw_author = composed(self).resolve_author_alias(_normalize_author(raw_author))
@@ -292,59 +239,6 @@ class AuthorRepository(MongoComposableMixin):
 
         if previous_time_zone != normalized_time_zone or previous_display_name != display_name:
             self._rebucket_author_telegram_time_zone(raw_author, normalized_time_zone, display_name)
-
-    def _rebucket_author_telegram_time_zone(self, raw_author: str, time_zone_id: str, time_zone_display_name: str) -> None:
-        for event in self.db.break_events.find({"rawAuthor": raw_author}, {"_id": 1, "timestamp": 1}):
-            event_time = _coerce_datetime(event.get("timestamp"))
-
-            if event_time:
-                self.db.break_events.update_one(
-                    _document_identity_query(event),
-                    {
-                        "$set": {
-                            "date": _telegram_event_date(event_time, time_zone_id),
-                            "timeZoneId": time_zone_id,
-                            "timeZoneDisplayName": time_zone_display_name,
-                        }
-                    },
-                )
-
-        for collection_name, time_field in (
-            ("day_sessions", "startedAt"),
-            ("break_sessions", "startedAt"),
-            ("break_intervals", "startedAt"),
-        ):
-            collection = getattr(self.db, collection_name)
-
-            for item in collection.find({"rawAuthor": raw_author}, {"_id": 1, time_field: 1}):
-                event_time = _coerce_datetime(item.get(time_field))
-
-                if event_time:
-                    collection.update_one(
-                        _document_identity_query(item),
-                        {
-                            "$set": {
-                                "date": _telegram_event_date(event_time, time_zone_id),
-                                "timeZoneId": time_zone_id,
-                                "timeZoneDisplayName": time_zone_display_name,
-                            }
-                        },
-                    )
-
-        for row in self.db.report_rows.find({"source": "telegram", "author": raw_author}, {"_id": 1, "recordedAt": 1}):
-            event_time = _coerce_datetime(row.get("recordedAt"))
-
-            if event_time:
-                self.db.report_rows.update_one(
-                    _document_identity_query(row),
-                    {
-                        "$set": {
-                            "date": _telegram_event_date(event_time, time_zone_id),
-                            "timeZoneId": time_zone_id,
-                            "timeZoneDisplayName": time_zone_display_name,
-                        }
-                    },
-                )
 
     def upsert_author_profile(
         self,
