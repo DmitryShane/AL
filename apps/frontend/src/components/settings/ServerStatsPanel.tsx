@@ -62,8 +62,9 @@ export function ServerStatsPanel() {
 
       setRebootMessage("Server reboot requested. The dashboard may disconnect for a few minutes.");
       setRebootModalOpen(false);
-    } catch {
-      setRebootMessage("Could not request server reboot.");
+    } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : "Server reboot request failed";
+      setRebootMessage(`Could not request server reboot: ${message}`);
     } finally {
       setRebooting(false);
     }

@@ -101,6 +101,12 @@ EOF
 chmod 0440 /etc/sudoers.d/al-server-stats-du
 visudo -cf /etc/sudoers.d/al-server-stats-du
 
+cat > /etc/sudoers.d/al-server-reboot <<EOF
+${APP_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit al-dashboard-reboot-* --on-active=2s /usr/bin/systemctl reboot
+EOF
+chmod 0440 /etc/sudoers.d/al-server-reboot
+visudo -cf /etc/sudoers.d/al-server-reboot
+
 sed \
   -e "s#__APP_DIR__#${APP_DIR}#g" \
   -e "s#__APP_USER__#${APP_USER}#g" \
