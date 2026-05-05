@@ -6071,6 +6071,14 @@ def test_scoped_rebuild_counts_raw_activity_after_reports_resumed_closes_offline
         "reports_stopped",
         dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC),
     )
+    repo.record_status_event(
+        "Future Artist",
+        "offline",
+        dt.datetime(2026, 4, 29, 9, 10, tzinfo=dt.UTC),
+        "UTC",
+        "reports_stopped",
+        dt.datetime(2026, 4, 29, 9, 10, tzinfo=dt.UTC),
+    )
     raw_events = [
         {
             "eventId": "focus-after-offline",

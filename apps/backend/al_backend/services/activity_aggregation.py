@@ -1011,53 +1011,54 @@ class ActivityAggregationService(MongoComposableMixin):
             key=lambda item: _coerce_datetime(item.get("transitionAt")) or dt.datetime.min.replace(tzinfo=dt.UTC),
         )
         previous_closed_interval: dict[str, Any] | None = None
-        index = 0
+        open_offline_event: dict[str, Any] | None = None
+        open_offline_at: dt.datetime | None = None
 
-        while index < len(status_events):
-            status_event = status_events[index]
+        for status_event in status_events:
             transition_at = _coerce_datetime(status_event.get("transitionAt"))
 
-            if not transition_at or str(status_event.get("statusEventType") or "") != "offline":
-                index += 1
+            if not transition_at:
                 continue
 
-            online_event: dict[str, Any] | None = None
-            next_index = index + 1
+            event_type = str(status_event.get("statusEventType") or "")
 
-            while next_index < len(status_events):
-                next_event = status_events[next_index]
-                next_transition_at = _coerce_datetime(next_event.get("transitionAt"))
-                next_type = str(next_event.get("statusEventType") or "")
+            if event_type == "offline":
+                if occurred_at > transition_at:
+                    open_offline_event = status_event
+                    open_offline_at = transition_at
 
-                if next_transition_at and next_transition_at > transition_at and next_type == "online":
-                    online_event = next_event
-                    break
+                continue
 
-                if next_transition_at and next_transition_at > transition_at and next_type == "offline":
-                    break
+            if event_type != "online" or not open_offline_event or not open_offline_at:
+                continue
 
-                next_index += 1
+            if transition_at <= open_offline_at:
+                continue
 
-            online_at = _coerce_datetime((online_event or {}).get("transitionAt"))
-            inside_offline = occurred_at > transition_at and (not online_at or occurred_at < online_at)
-
-            if inside_offline:
+            if occurred_at < transition_at:
                 return {
-                    "offlineAt": transition_at,
-                    "onlineAt": online_at,
+                    "offlineAt": open_offline_at,
+                    "onlineAt": transition_at,
                     "insideOffline": True,
-                    "timeZoneId": online_event.get("timeZoneId") if online_event else status_event.get("timeZoneId"),
+                    "timeZoneId": status_event.get("timeZoneId") or open_offline_event.get("timeZoneId"),
                 }
 
-            if online_at and occurred_at >= online_at:
-                previous_closed_interval = {
-                    "offlineAt": transition_at,
-                    "onlineAt": online_at,
-                    "insideOffline": False,
-                    "timeZoneId": online_event.get("timeZoneId") if online_event else status_event.get("timeZoneId"),
-                }
+            previous_closed_interval = {
+                "offlineAt": open_offline_at,
+                "onlineAt": transition_at,
+                "insideOffline": False,
+                "timeZoneId": status_event.get("timeZoneId") or open_offline_event.get("timeZoneId"),
+            }
+            open_offline_event = None
+            open_offline_at = None
 
-            index += 1
+        if open_offline_event and open_offline_at and occurred_at > open_offline_at:
+            return {
+                "offlineAt": open_offline_at,
+                "onlineAt": None,
+                "insideOffline": True,
+                "timeZoneId": open_offline_event.get("timeZoneId"),
+            }
 
         if previous_closed_interval and received_at and received_at >= previous_closed_interval["onlineAt"]:
             return previous_closed_interval
