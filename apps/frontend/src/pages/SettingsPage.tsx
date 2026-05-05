@@ -142,6 +142,10 @@ export function SettingsPage({
   }, [settingsTab]);
 
   useEffect(() => {
+    if (!summary) {
+      return;
+    }
+
     const nextDrafts: Record<string, AuthorProfile> = {};
 
     for (const profile of profiles) {

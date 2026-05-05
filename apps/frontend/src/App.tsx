@@ -54,6 +54,7 @@ const emptyActivitySummary: ActivitySummary = {
 };
 
 const LAST_AUTHORS_CACHE_PREFIX = "AL.Dashboard.LastAuthors.";
+const SETTINGS_SUMMARY_CACHE_KEY = "AL.Dashboard.SettingsSummary";
 
 function readStoredSessionUserPreview(): SiteUser | null {
   if (typeof window === "undefined" || localStorage.getItem(AUTH_HINT_STORAGE_KEY) !== "true") {
@@ -149,6 +150,28 @@ function saveCachedAuthors(dateRange: DateRange, authors: AuthorRow[]) {
   }
 }
 
+function readCachedSettingsSummary(): Summary | null {
+  try {
+    const raw = localStorage.getItem(SETTINGS_SUMMARY_CACHE_KEY);
+
+    if (!raw) {
+      return null;
+    }
+
+    return sanitizeCachedDashboardSummary(JSON.parse(raw) as Summary);
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedSettingsSummary(summary: Summary) {
+  try {
+    localStorage.setItem(SETTINGS_SUMMARY_CACHE_KEY, JSON.stringify(summary));
+  } catch {
+    // Browsers can reject storage writes in private mode or when the quota is full.
+  }
+}
+
 function App() {
   const [page, setPage] = useState<Page>(() => loadSavedPage());
   const [isRestoringScroll, setIsRestoringScroll] = useState(() => getSavedPageScroll(loadSavedPage()) > 0);
@@ -165,6 +188,7 @@ function App() {
   const [search, setSearch] = useState("");
   const [selectedAuthor, setSelectedAuthorState] = useState<string | null>(() => loadSavedActivityAuthor());
   const [cachedAuthors, setCachedAuthors] = useState<AuthorRow[]>(() => readCachedAuthors(loadSavedDateRange()));
+  const [cachedSettingsSummary, setCachedSettingsSummary] = useState<Summary | null>(() => readCachedSettingsSummary());
   const [loading, setLoading] = useState(true);
   const [refreshingReports, setRefreshingReports] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -303,6 +327,12 @@ function App() {
       saveCachedDashboardSummary(requestedPage, requestedDateRange, nextSummary);
       setCachedAuthors(nextAuthors);
       saveCachedAuthors(requestedDateRange, nextAuthors);
+
+      if (requestedPage === "settings") {
+        setCachedSettingsSummary(nextSummary);
+        saveCachedSettingsSummary(nextSummary);
+      }
+
       setAppliedDateRange(requestedDateRange);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unknown error");
@@ -360,6 +390,7 @@ function App() {
 
   const canShowCachedDashboard = Boolean(authUser) || (authLoading && hasAuthHint);
   const activitySummary = canShowCachedDashboard ? (summary?.activitySummary ?? emptyActivitySummary) : emptyActivitySummary;
+  const settingsDisplaySummary = canShowCachedDashboard ? (summary ?? cachedSettingsSummary) : null;
   const isVisualLoading = canShowCachedDashboard && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
   const authorsSource = isVisualLoading && !activitySummary.authors.length ? cachedAuthors : activitySummary.authors;
   const authors = useMemo(() => authorsSource.filter((author) => matchesAuthorSearch(author, search)), [authorsSource, search]);
@@ -571,7 +602,7 @@ function App() {
         {page === "calendar" ? <CalendarPage /> : null}
         {page === "alerts" ? <AlertsPage /> : null}
         {page === "settings" && displaySessionUser ? (
-          <SettingsPage summary={canShowCachedDashboard ? summary : null} currentUser={displaySessionUser} onSaved={() => void load(false)} />
+          <SettingsPage summary={settingsDisplaySummary} currentUser={displaySessionUser} onSaved={() => void load(false)} />
         ) : null}
       </main>
     </div>
@@ -648,7 +679,7 @@ function clearDashboardSessionCaches() {
     "AL.Dashboard.AnalyticsSummary",
     "AL.Dashboard.CalendarSummary"
   ];
-  const localPrefixes = [LAST_AUTHORS_CACHE_PREFIX];
+  const localPrefixes = [LAST_AUTHORS_CACHE_PREFIX, SETTINGS_SUMMARY_CACHE_KEY];
 
   for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
     const key = sessionStorage.key(index);
