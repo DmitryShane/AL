@@ -6,6 +6,7 @@ type HourlyActivity = {
   breakSegments?: Array<{ startSecond: number; endSecond: number }>;
   meetingSeconds?: number;
   overtimeActiveSeconds?: number;
+  overtimeFillSeconds?: number;
   missedSeconds?: number;
   missedStartSeconds?: number;
   missedEndSeconds?: number;
@@ -29,6 +30,7 @@ type AuthorHourlyChart = {
     meetingMinutes: number;
     idleMinutes: number;
     overtimeMinutes: number;
+    overtimeFillMinutes: number;
     missedMinutes: number;
     missedStartMinutes: number;
     missedEndMinutes: number;
@@ -86,6 +88,10 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                             <div
                               className="hourly-chart-segment overtime"
                               style={{ height: `${segments.overtimePercent}%` }}
+                            />
+                            <div
+                              className="hourly-chart-segment overtime-fill"
+                              style={{ height: `${segments.overtimeFillPercent}%` }}
                             />
                             {hour.breakSegments.length ? (
                               hour.breakSegments.map((segment, index) => (
@@ -154,6 +160,7 @@ function createEmptyHourlyActivity(): Required<HourlyActivity>[] {
     breakSeconds: 0,
     meetingSeconds: 0,
     overtimeActiveSeconds: 0,
+    overtimeFillSeconds: 0,
     missedSeconds: 0,
     missedStartSeconds: 0,
     missedEndSeconds: 0,
@@ -174,6 +181,7 @@ function normalizeHourlyActivity(source: HourlyActivity[]) {
     hourlyActivity[sourceHour.hour].breakSeconds = sourceHour.breakSeconds ?? 0;
     hourlyActivity[sourceHour.hour].meetingSeconds = sourceHour.meetingSeconds ?? 0;
     hourlyActivity[sourceHour.hour].overtimeActiveSeconds = sourceHour.overtimeActiveSeconds ?? 0;
+    hourlyActivity[sourceHour.hour].overtimeFillSeconds = sourceHour.overtimeFillSeconds ?? 0;
     hourlyActivity[sourceHour.hour].missedSeconds = sourceHour.missedSeconds ?? 0;
     hourlyActivity[sourceHour.hour].missedStartSeconds = sourceHour.missedStartSeconds ?? 0;
     hourlyActivity[sourceHour.hour].missedEndSeconds = sourceHour.missedEndSeconds ?? 0;
@@ -197,6 +205,7 @@ function toAuthorHourlyActivity(author: AuthorHourlyActivity): AuthorHourlyChart
       meetingMinutes: Math.min(60, (hour.meetingSeconds ?? 0) / 60),
       idleMinutes: Math.min(60, hour.idleSeconds / 60),
       overtimeMinutes: Math.min(60, (hour.overtimeActiveSeconds ?? 0) / 60),
+      overtimeFillMinutes: Math.min(60, (hour.overtimeFillSeconds ?? 0) / 60),
       missedMinutes: Math.min(60, (hour.missedSeconds ?? 0) / 60),
       missedStartMinutes: Math.min(60, (hour.missedStartSeconds ?? 0) / 60),
       missedEndMinutes: Math.min(60, (hour.missedEndSeconds ?? 0) / 60),
@@ -234,23 +243,25 @@ function toPositionedBreakSegments(segments: Array<{ startSecond: number; endSec
   }));
 }
 
-function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; meetingMinutes: number; idleMinutes: number; overtimeMinutes: number; missedStartMinutes: number; missedEndMinutes: number }) {
+function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; meetingMinutes: number; idleMinutes: number; overtimeMinutes: number; overtimeFillMinutes: number; missedStartMinutes: number; missedEndMinutes: number }) {
   const activeMinutes = Math.max(0, hour.activeMinutes);
   const overtimeMinutes = Math.max(0, hour.overtimeMinutes);
+  const overtimeFillMinutes = Math.max(0, hour.overtimeFillMinutes);
   const breakMinutes = Math.max(0, hour.breakMinutes);
   const meetingMinutes = Math.max(0, hour.meetingMinutes);
   const idleMinutes = Math.max(0, hour.idleMinutes);
   const missedStartMinutes = Math.max(0, hour.missedStartMinutes);
   const missedEndMinutes = Math.max(0, hour.missedEndMinutes);
-  const totalMinutes = activeMinutes + overtimeMinutes + breakMinutes + meetingMinutes + idleMinutes + missedStartMinutes + missedEndMinutes;
+  const totalMinutes = activeMinutes + overtimeMinutes + overtimeFillMinutes + breakMinutes + meetingMinutes + idleMinutes + missedStartMinutes + missedEndMinutes;
 
   if (totalMinutes <= 0) {
-    return { activePercent: 0, overtimePercent: 0, breakPercent: 0, meetingPercent: 0, idlePercent: 0, missedStartPercent: 0, missedEndPercent: 0 };
+    return { activePercent: 0, overtimePercent: 0, overtimeFillPercent: 0, breakPercent: 0, meetingPercent: 0, idlePercent: 0, missedStartPercent: 0, missedEndPercent: 0 };
   }
 
   return {
     activePercent: toPercentOfHour(activeMinutes),
     overtimePercent: toPercentOfHour(overtimeMinutes),
+    overtimeFillPercent: toPercentOfHour(overtimeFillMinutes),
     breakPercent: toPercentOfHour(breakMinutes),
     meetingPercent: toPercentOfHour(meetingMinutes),
     idlePercent: toPercentOfHour(idleMinutes),
@@ -259,14 +270,14 @@ function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; 
   };
 }
 
-function hasHourlyActivity(hour: { activeMinutes: number; breakMinutes: number; meetingMinutes: number; idleMinutes: number; overtimeMinutes: number; missedMinutes: number }) {
-  return hour.activeMinutes > 0 || hour.overtimeMinutes > 0 || hour.breakMinutes > 0 || hour.meetingMinutes > 0 || hour.idleMinutes > 0 || hour.missedMinutes > 0;
+function hasHourlyActivity(hour: { activeMinutes: number; breakMinutes: number; meetingMinutes: number; idleMinutes: number; overtimeMinutes: number; overtimeFillMinutes: number; missedMinutes: number }) {
+  return hour.activeMinutes > 0 || hour.overtimeMinutes > 0 || hour.overtimeFillMinutes > 0 || hour.breakMinutes > 0 || hour.meetingMinutes > 0 || hour.idleMinutes > 0 || hour.missedMinutes > 0;
 }
 
 function findInProgressHour(hours: Required<HourlyActivity>[]) {
   for (let index = hours.length - 1; index >= 0; index -= 1) {
     const hour = hours[index];
-    const totalSeconds = hour.activeSeconds + hour.overtimeActiveSeconds + hour.breakSeconds + hour.meetingSeconds + hour.idleSeconds;
+    const totalSeconds = hour.activeSeconds + hour.overtimeActiveSeconds + hour.overtimeFillSeconds + hour.breakSeconds + hour.meetingSeconds + hour.idleSeconds;
 
     if (totalSeconds > 0 && totalSeconds < 3600) {
       return hour.hour;

@@ -1565,6 +1565,7 @@ def _public_hourly_activity(source: list[dict[str, Any]]) -> list[dict[str, int]
             "breakSeconds": int(item.get("breakSeconds", 0)),
             "meetingSeconds": int(item.get("meetingSeconds", 0)),
             "overtimeActiveSeconds": int(item.get("overtimeActiveSeconds", 0)),
+            "overtimeFillSeconds": int(item.get("overtimeFillSeconds", 0)),
             "missedSeconds": int(item.get("missedSeconds", 0)),
             "missedStartSeconds": int(item.get("missedStartSeconds", 0)),
             "missedEndSeconds": int(item.get("missedEndSeconds", 0)),
@@ -1693,6 +1694,7 @@ def _visual_hour_occupied_seconds(hour: dict[str, Any]) -> int:
         + int(hour.get("breakSeconds", 0))
         + int(hour.get("meetingSeconds", 0))
         + int(hour.get("overtimeActiveSeconds", 0))
+        + int(hour.get("overtimeFillSeconds", 0))
     )
 
 
@@ -1724,11 +1726,7 @@ def _fill_visual_overtime_hour(hour: dict[str, Any]) -> None:
     if overtime_seconds <= 0:
         return
 
-    overtime_microseconds = _time_microseconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds") + (
-        overtime_seconds * MICROSECONDS_PER_SECOND
-    )
-    hour["overtimeActiveMicroseconds"] = overtime_microseconds
-    hour["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_microseconds)
+    hour["overtimeFillSeconds"] = int(hour.get("overtimeFillSeconds", 0)) + overtime_seconds
     _remove_visual_missed_seconds(hour, overtime_seconds)
 
 

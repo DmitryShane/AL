@@ -1383,7 +1383,57 @@ def test_activity_summary_visual_missed_end_fills_last_report_hour_to_sixty_minu
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
     assert hourly_by_hour[14]["overtimeActiveSeconds"] == 21 * 60 + 31
+    assert hourly_by_hour[14]["overtimeFillSeconds"] == 0
     assert hourly_by_hour[14]["missedEndSeconds"] == 3600 - (21 * 60 + 31)
+
+
+def test_activity_summary_overtime_bracket_fill_is_visual_only():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "timeZoneId": "America/Vancouver"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T14:27:35-07:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 21, 27, 35, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 60,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T16:05:00-07:00",
+            "receivedAt": dt.datetime(2026, 5, 1, 23, 5, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 60,
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "projectId": "AL",
+            "date": "2026-05-01",
+            "activeSeconds": 32400,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-01", end_date="2026-05-01")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Igor Mats")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert hourly_by_hour[15]["overtimeActiveSeconds"] == 0
+    assert hourly_by_hour[15]["overtimeFillSeconds"] == 3600
 
 
 def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_report_hour_is_full():
