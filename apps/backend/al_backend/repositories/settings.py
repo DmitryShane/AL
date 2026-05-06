@@ -666,6 +666,7 @@ class SettingsRepository(MongoComposableMixin):
                     "meetingSummaryRecipient": current["meetingSummaryRecipient"],
                     "meetingAudioRetentionSeconds": current["meetingAudioRetentionSeconds"],
                     "meetingSummaryPrompt": current["meetingSummaryPrompt"],
+                    "meetingSummaryTelegramTemplate": current["meetingSummaryTelegramTemplate"],
                     "updatedAt": now,
                 }
             },
@@ -685,6 +686,7 @@ class SettingsRepository(MongoComposableMixin):
         meeting_summary_recipient: str,
         meeting_audio_retention_seconds: int,
         meeting_summary_prompt: str,
+        meeting_summary_telegram_template: str = "",
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         self.db.system_settings.update_one(
@@ -700,6 +702,7 @@ class SettingsRepository(MongoComposableMixin):
                     "meetingSummaryRecipient": meeting_summary_recipient.strip() or "work_chat",
                     "meetingAudioRetentionSeconds": meeting_audio_retention_seconds,
                     "meetingSummaryPrompt": meeting_summary_prompt.strip() or DEFAULT_MEETING_SUMMARY_PROMPT,
+                    "meetingSummaryTelegramTemplate": meeting_summary_telegram_template.strip() or DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE,
                     "updatedAt": now,
                 }
             },
@@ -722,6 +725,9 @@ class SettingsRepository(MongoComposableMixin):
             "meetingAudioRetentionSeconds": int(settings.get("meetingAudioRetentionSeconds", 0)),
             "meetingSummaryPrompt": str(
                 settings.get("meetingSummaryPrompt") or settings.get("meetingAudioEditPrompt") or DEFAULT_MEETING_SUMMARY_PROMPT
+            ),
+            "meetingSummaryTelegramTemplate": str(
+                settings.get("meetingSummaryTelegramTemplate") or DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE
             ),
         }
 

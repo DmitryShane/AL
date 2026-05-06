@@ -198,6 +198,7 @@ export type Summary = {
     meetingSummaryRecipient: string;
     meetingAudioRetentionSeconds: number;
     meetingSummaryPrompt: string;
+    meetingSummaryTelegramTemplate: string;
   };
   activitySummary: ActivitySummary;
 };

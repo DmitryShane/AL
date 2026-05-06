@@ -18,6 +18,13 @@ For action items, include an owner or deadline only if explicitly mentioned.
 Do not list meeting participants in your summary. Expected participant names are provided only so you can attribute discussion in the transcript; the published Telegram message already includes the participant list in its header.
 Keep every bullet short and practical for a work Telegram chat."""
 
+DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE = """Meeting summary
+Date: {date}
+Duration: {duration}
+Participants: {participants}
+
+{summary}"""
+
 
 _CONTENT_SECTION_PREFIXES: tuple[str, ...] = (
     "discussed:",

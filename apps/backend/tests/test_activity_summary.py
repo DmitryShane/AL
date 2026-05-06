@@ -9,7 +9,7 @@ import al_backend.discord_bot as discord_bot_module
 from al_backend.app import PUBLIC_API_PATHS
 from al_backend.discord_author_mappings import apply_discord_author_mappings
 from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSession, UserPcmTrack, cleanup_old_retained_recordings, retain_recording_recovery_files
-from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, meeting_summary_sections, render_meeting_summary_prompt
+from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE, meeting_summary_sections, render_meeting_summary_prompt
 from al_backend.routers.reports import plugin_config
 from al_backend.activity_math import (
     _add_break_interval_to_buckets,
@@ -4644,6 +4644,7 @@ def test_discord_settings_default_and_save():
     assert result["meetingAutoAfkTimeoutSeconds"] == 900
     assert result["meetingSummariesEnabled"] is True
     assert result["meetingSummaryPrompt"] == "Custom summary prompt."
+    assert result["meetingSummaryTelegramTemplate"] == DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE
     assert repo.get_discord_settings()["meetingAutoAfkTimeoutSeconds"] == 900
 
 
@@ -4697,6 +4698,24 @@ def test_discord_settings_include_default_meeting_summary_prompt():
 
     assert prompt == DEFAULT_MEETING_SUMMARY_PROMPT
     assert "{transcript}" not in prompt
+
+
+def test_discord_settings_save_meeting_summary_telegram_template():
+    repo = fake_repository()
+
+    result = repo.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=900,
+        meeting_summaries_enabled=True,
+        meeting_summary_min_participants=2,
+        meeting_summary_min_duration_seconds=120,
+        meeting_summary_language="English",
+        meeting_summary_recipient="work_chat",
+        meeting_audio_retention_seconds=0,
+        meeting_summary_prompt="Custom summary prompt.",
+        meeting_summary_telegram_template="Summary for {date}\n{summary}",
+    )
+
+    assert result["meetingSummaryTelegramTemplate"] == "Summary for {date}\n{summary}"
 
 
 def test_default_meeting_summary_prompt_renders_sections():
@@ -4765,6 +4784,7 @@ def test_meeting_recording_finished_creates_summary_notification():
     assert notifications[0]["summaryId"] == result["summaryId"]
     assert notifications[0]["participantTelegramUsernames"] == ["dmitryshane", "igormats"]
     assert "Discord summaries" in notifications[0]["summary"]
+    assert notifications[0]["telegramTemplate"] == DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE
 
 
 def test_meeting_recording_start_and_finish_create_telegram_notifications():
@@ -5232,6 +5252,35 @@ def test_meeting_summary_message_falls_back_to_participant_names():
         "Discussed:\n- Backend status UI.",
     )
 
+    assert "Participants: @Dmitry, @Igor" in message
+
+
+def test_meeting_summary_message_uses_custom_telegram_template():
+    message = format_meeting_summary_message(
+        {
+            "startedAt": "2026-05-01T10:00:00+00:00",
+            "durationSeconds": 180,
+            "participantNames": ["Dmitry", "Igor"],
+            "telegramTemplate": "Daily meeting {date}\nPeople: {participants}\n{summary}",
+        },
+        "Discussed:\n- Backend status UI.",
+    )
+
+    assert message == "Daily meeting 2026-05-01\nPeople: @Dmitry, @Igor\nDiscussed:\n- Backend status UI."
+
+
+def test_meeting_summary_message_falls_back_on_invalid_telegram_template():
+    message = format_meeting_summary_message(
+        {
+            "startedAt": "2026-05-01T10:00:00+00:00",
+            "durationSeconds": 180,
+            "participantNames": ["Dmitry", "Igor"],
+            "telegramTemplate": "Broken {missing}",
+        },
+        "Discussed:\n- Backend status UI.",
+    )
+
+    assert "Meeting summary" in message
     assert "Participants: @Dmitry, @Igor" in message
 
 

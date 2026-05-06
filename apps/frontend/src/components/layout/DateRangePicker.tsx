@@ -10,9 +10,10 @@ export type DateRange = {
 type DateRangePickerProps = {
   value: DateRange;
   onChange: (range: DateRange) => void;
+  showPresets?: boolean;
 };
 
-export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
+export function DateRangePicker({ value, onChange, showPresets = true }: DateRangePickerProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [focused, setFocused] = useState(false);
 
@@ -39,13 +40,15 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
 
   return (
     <div className="date-range-group">
-      <div className="date-presets" aria-label="Date presets">
-        <button className={`live-preset-button ${value.preset === "live" ? "active" : ""}`.trim()} onClick={() => onChange(todayRange())}>
-          <span className="live-preset-dot" aria-hidden="true" />
-          Live
-        </button>
-        <button className={value.preset === "yesterday" ? "active" : undefined} onClick={() => onChange(yesterdayRange())}>Yesterday</button>
-      </div>
+      {showPresets ? (
+        <div className="date-presets" aria-label="Date presets">
+          <button className={`live-preset-button ${value.preset === "live" ? "active" : ""}`.trim()} onClick={() => onChange(todayRange())}>
+            <span className="live-preset-dot" aria-hidden="true" />
+            Live
+          </button>
+          <button className={value.preset === "yesterday" ? "active" : undefined} onClick={() => onChange(yesterdayRange())}>Yesterday</button>
+        </div>
+      ) : null}
       <div className={focused ? "date-range-control focused" : "date-range-control"} onMouseDown={handleDateControlMouseDown}>
         <span className="date-range-value">{formatSelectedDate(value.startDate)}</span>
         <CalendarDays className="date-range-icon" size={16} aria-hidden="true" />

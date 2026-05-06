@@ -97,6 +97,7 @@ export function SettingsPage({
   const [meetingSummaryRecipient, setMeetingSummaryRecipient] = useState(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
   const [meetingAudioRetention, setMeetingAudioRetention] = useState(String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0));
   const [meetingSummaryPrompt, setMeetingSummaryPrompt] = useState(summary?.discordSettings.meetingSummaryPrompt ?? "");
+  const [meetingSummaryTelegramTemplate, setMeetingSummaryTelegramTemplate] = useState(summary?.discordSettings.meetingSummaryTelegramTemplate ?? "");
   const [avatarRefreshCadence, setAvatarRefreshCadence] = useState<"week" | "month">(
     summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month"
   );
@@ -184,6 +185,7 @@ export function SettingsPage({
     setMeetingSummaryRecipient(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
     setMeetingAudioRetention(String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0));
     setMeetingSummaryPrompt(summary?.discordSettings.meetingSummaryPrompt ?? "");
+    setMeetingSummaryTelegramTemplate(summary?.discordSettings.meetingSummaryTelegramTemplate ?? "");
     setAvatarRefreshCadence(summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month");
   }, [summary]);
 
@@ -343,6 +345,7 @@ export function SettingsPage({
     meetingSummaryRecipient !== (summary?.discordSettings.meetingSummaryRecipient ?? "work_chat") ||
     meetingAudioRetention !== String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0);
   const meetingSummaryPromptDirty = meetingSummaryPrompt !== (summary?.discordSettings.meetingSummaryPrompt ?? "");
+  const meetingSummaryTelegramTemplateDirty = meetingSummaryTelegramTemplate !== (summary?.discordSettings.meetingSummaryTelegramTemplate ?? "");
   const discordSettingsDirty = discordAutoAfkTimeout !== String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600);
   const telegramPromptSettingsDirty =
     telegramOnlinePromptDelayMinutes !== String(intervalSettingsTelegramOnlinePromptMinutes(summary));
@@ -618,7 +621,8 @@ export function SettingsPage({
           meetingSummaryLanguage,
           meetingSummaryRecipient,
           meetingAudioRetentionSeconds: Number(meetingAudioRetention),
-          meetingSummaryPrompt
+          meetingSummaryPrompt,
+          meetingSummaryTelegramTemplate
         })
       });
 
@@ -658,7 +662,8 @@ export function SettingsPage({
           meetingSummaryLanguage,
           meetingSummaryRecipient,
           meetingAudioRetentionSeconds: Number(meetingAudioRetention),
-          meetingSummaryPrompt: summary?.discordSettings.meetingSummaryPrompt ?? meetingSummaryPrompt
+          meetingSummaryPrompt: summary?.discordSettings.meetingSummaryPrompt ?? meetingSummaryPrompt,
+          meetingSummaryTelegramTemplate: summary?.discordSettings.meetingSummaryTelegramTemplate ?? meetingSummaryTelegramTemplate
         })
       });
 
@@ -698,7 +703,8 @@ export function SettingsPage({
           meetingSummaryLanguage: summary?.discordSettings.meetingSummaryLanguage ?? meetingSummaryLanguage,
           meetingSummaryRecipient: summary?.discordSettings.meetingSummaryRecipient ?? meetingSummaryRecipient,
           meetingAudioRetentionSeconds: summary?.discordSettings.meetingAudioRetentionSeconds ?? Number(meetingAudioRetention),
-          meetingSummaryPrompt
+          meetingSummaryPrompt,
+          meetingSummaryTelegramTemplate: summary?.discordSettings.meetingSummaryTelegramTemplate ?? meetingSummaryTelegramTemplate
         })
       });
 
@@ -714,6 +720,47 @@ export function SettingsPage({
       setSaving(null);
       window.setTimeout(() => {
         setSaveStatus((items) => ({ ...items, meetingSummaryPrompt: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function saveMeetingSummaryTelegramTemplate() {
+    if (settingsReadOnly) {
+      return;
+    }
+
+    setSaving("meetingSummaryTelegramTemplate");
+    setSaveStatus((items) => ({ ...items, meetingSummaryTelegramTemplate: undefined }));
+
+    try {
+      const response = await apiFetch(`/api/v1/settings/discord`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          meetingAutoAfkTimeoutSeconds: summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? Number(discordAutoAfkTimeout),
+          meetingSummariesEnabled: Boolean(summary?.discordSettings.meetingSummariesEnabled),
+          meetingSummaryMinParticipants: summary?.discordSettings.meetingSummaryMinParticipants ?? Number(meetingSummaryMinParticipants),
+          meetingSummaryMinDurationSeconds: summary?.discordSettings.meetingSummaryMinDurationSeconds ?? Number(meetingSummaryMinDuration),
+          meetingSummaryLanguage: summary?.discordSettings.meetingSummaryLanguage ?? meetingSummaryLanguage,
+          meetingSummaryRecipient: summary?.discordSettings.meetingSummaryRecipient ?? meetingSummaryRecipient,
+          meetingAudioRetentionSeconds: summary?.discordSettings.meetingAudioRetentionSeconds ?? Number(meetingAudioRetention),
+          meetingSummaryPrompt: summary?.discordSettings.meetingSummaryPrompt ?? meetingSummaryPrompt,
+          meetingSummaryTelegramTemplate
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Meeting summary Telegram template save failed");
+      }
+
+      setSaveStatus((items) => ({ ...items, meetingSummaryTelegramTemplate: "saved" }));
+      onSaved();
+    } catch {
+      setSaveStatus((items) => ({ ...items, meetingSummaryTelegramTemplate: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, meetingSummaryTelegramTemplate: undefined }));
       }, 2500);
     }
   }
@@ -1273,6 +1320,7 @@ export function SettingsPage({
           meetingSummaryRecipient={meetingSummaryRecipient}
           meetingAudioRetention={meetingAudioRetention}
           meetingSummaryPrompt={meetingSummaryPrompt}
+          meetingSummaryTelegramTemplate={meetingSummaryTelegramTemplate}
           meetingActivityItems={meetingActivityItems}
           meetingRecordingsError={meetingRecordingsError}
           openAIStats={openAIStats}
@@ -1283,6 +1331,7 @@ export function SettingsPage({
           saveStatus={saveStatus}
           meetingSummarySettingsDirty={meetingSummarySettingsDirty}
           meetingSummaryPromptDirty={meetingSummaryPromptDirty}
+          meetingSummaryTelegramTemplateDirty={meetingSummaryTelegramTemplateDirty}
           onMeetingSummariesEnabledChange={setMeetingSummariesEnabled}
           onMeetingSummaryMinParticipantsChange={setMeetingSummaryMinParticipants}
           onMeetingSummaryMinDurationChange={setMeetingSummaryMinDuration}
@@ -1290,8 +1339,10 @@ export function SettingsPage({
           onMeetingSummaryRecipientChange={setMeetingSummaryRecipient}
           onMeetingAudioRetentionChange={setMeetingAudioRetention}
           onMeetingSummaryPromptChange={setMeetingSummaryPrompt}
+          onMeetingSummaryTelegramTemplateChange={setMeetingSummaryTelegramTemplate}
           onSaveMeetingSummarySettings={() => void saveMeetingSummarySettings()}
           onSaveMeetingSummaryPrompt={() => void saveMeetingSummaryPrompt()}
+          onSaveMeetingSummaryTelegramTemplate={() => void saveMeetingSummaryTelegramTemplate()}
           onRefreshOpenAIStats={() => void loadOpenAIStats()}
         />
       ) : (

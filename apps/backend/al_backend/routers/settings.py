@@ -74,6 +74,7 @@ def update_discord_settings(
         meeting_summary_recipient=settings_in.meeting_summary_recipient,
         meeting_audio_retention_seconds=settings_in.meeting_audio_retention_seconds,
         meeting_summary_prompt=settings_in.meeting_summary_prompt,
+        meeting_summary_telegram_template=settings_in.meeting_summary_telegram_template,
     )
 
 

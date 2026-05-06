@@ -12,7 +12,7 @@ from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from pymongo.database import Database
 
-from .meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT
+from .meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE
 from .settings import Settings
 from .auth import hash_password, new_session_token, session_token_hash, verify_password
 
@@ -2109,6 +2109,7 @@ __all__: tuple[str, ...] = (
     "DEFAULT_DISCORD_MEETING_AUTO_AFK_TIMEOUT_SECONDS",
     "DEFAULT_IDLE_THRESHOLD_SECONDS",
     "DEFAULT_MEETING_SUMMARY_PROMPT",
+    "DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE",
     "DEFAULT_PLUGIN_WORK_WINDOW_SECONDS",
     "DEFAULT_TELEGRAM_ONLINE_PROMPT_DELAY_MINUTES",
     "DESCENDING",

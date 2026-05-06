@@ -119,6 +119,7 @@ class TelegramMeetingDeliveryService(MongoComposableMixin):
             if recording_id:
                 composed(self)._update_meeting_recording_pipeline_status(recording_id, "telegram_claimed", updated_at=now)
 
+            discord_settings = composed(self).get_discord_settings()
             notifications.append(
                 {
                     "summaryId": summary_id,
@@ -130,6 +131,7 @@ class TelegramMeetingDeliveryService(MongoComposableMixin):
                     "durationSeconds": int(doc.get("durationSeconds", 0)),
                     "summary": doc.get("summary", ""),
                     "recipient": self._meeting_summary_recipient(),
+                    "telegramTemplate": discord_settings["meetingSummaryTelegramTemplate"],
                 }
             )
 

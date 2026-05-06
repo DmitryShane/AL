@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE
+
 
 LOGGER = logging.getLogger("al.telegram_bot")
 POLL_TIMEOUT_SECONDS = 30
@@ -543,14 +545,22 @@ def format_meeting_summary_message(notification: dict[str, Any], summary_text: s
     )
     participants = raw_participants if isinstance(raw_participants, list) else []
     participants_text = _format_meeting_summary_participant_mentions([str(item) for item in participants])
+    template = str(notification.get("telegramTemplate") or DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE)
 
-    return (
-        "Meeting summary\n"
-        f"Date: {started_at}\n"
-        f"Duration: {duration_label}\n"
-        f"Participants: {participants_text}\n\n"
-        f"{summary_text}"
-    )
+    try:
+        return template.format(
+            date=started_at,
+            duration=duration_label,
+            participants=participants_text,
+            summary=summary_text,
+        ).strip()
+    except (KeyError, ValueError):
+        return DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE.format(
+            date=started_at,
+            duration=duration_label,
+            participants=participants_text,
+            summary=summary_text,
+        ).strip()
 
 
 def format_meeting_recording_notification_message(notification: dict[str, Any]) -> str:

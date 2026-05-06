@@ -5,6 +5,7 @@ import { settingsSaveButtonClassName, settingsSaveButtonLabel } from "../../../.
 import { OpenAIStatsCard } from "./OpenAIStatsCard";
 import { RecentMeetingSummaryActivityCard } from "./RecentMeetingSummaryActivityCard";
 import { SummaryInstructionsCard } from "./SummaryInstructionsCard";
+import { TelegramSummaryFormatCard } from "./TelegramSummaryFormatCard";
 
 type MeetingSummariesTabProps = {
   workspaceRef: Ref<HTMLDivElement>;
@@ -17,6 +18,7 @@ type MeetingSummariesTabProps = {
   meetingSummaryRecipient: string;
   meetingAudioRetention: string;
   meetingSummaryPrompt: string;
+  meetingSummaryTelegramTemplate: string;
   meetingActivityItems: MeetingActivityItem[];
   meetingRecordingsError: string;
   openAIStats: OpenAIStats | null;
@@ -27,6 +29,7 @@ type MeetingSummariesTabProps = {
   saveStatus: Record<string, "saved" | "error" | undefined>;
   meetingSummarySettingsDirty: boolean;
   meetingSummaryPromptDirty: boolean;
+  meetingSummaryTelegramTemplateDirty: boolean;
   onMeetingSummariesEnabledChange: (value: boolean) => void;
   onMeetingSummaryMinParticipantsChange: (value: string) => void;
   onMeetingSummaryMinDurationChange: (value: string) => void;
@@ -34,8 +37,10 @@ type MeetingSummariesTabProps = {
   onMeetingSummaryRecipientChange: (value: string) => void;
   onMeetingAudioRetentionChange: (value: string) => void;
   onMeetingSummaryPromptChange: (value: string) => void;
+  onMeetingSummaryTelegramTemplateChange: (value: string) => void;
   onSaveMeetingSummarySettings: () => void;
   onSaveMeetingSummaryPrompt: () => void;
+  onSaveMeetingSummaryTelegramTemplate: () => void;
   onRefreshOpenAIStats: () => void;
 };
 
@@ -50,6 +55,7 @@ export function MeetingSummariesTab({
   meetingSummaryRecipient,
   meetingAudioRetention,
   meetingSummaryPrompt,
+  meetingSummaryTelegramTemplate,
   meetingActivityItems,
   meetingRecordingsError,
   openAIStats,
@@ -60,6 +66,7 @@ export function MeetingSummariesTab({
   saveStatus,
   meetingSummarySettingsDirty,
   meetingSummaryPromptDirty,
+  meetingSummaryTelegramTemplateDirty,
   onMeetingSummariesEnabledChange,
   onMeetingSummaryMinParticipantsChange,
   onMeetingSummaryMinDurationChange,
@@ -67,8 +74,10 @@ export function MeetingSummariesTab({
   onMeetingSummaryRecipientChange,
   onMeetingAudioRetentionChange,
   onMeetingSummaryPromptChange,
+  onMeetingSummaryTelegramTemplateChange,
   onSaveMeetingSummarySettings,
   onSaveMeetingSummaryPrompt,
+  onSaveMeetingSummaryTelegramTemplate,
   onRefreshOpenAIStats
 }: MeetingSummariesTabProps) {
   return (
@@ -158,8 +167,8 @@ export function MeetingSummariesTab({
           openAIStatsLoading={openAIStatsLoading}
           onRefresh={onRefreshOpenAIStats}
         />
-        <div className="meeting-summary-main-row">
-          <RecentMeetingSummaryActivityCard meetingActivityItems={meetingActivityItems} meetingRecordingsError={meetingRecordingsError} />
+        <div className="meeting-summary-row">
+          <RecentMeetingSummaryActivityCard meetingActivityItems={meetingActivityItems} meetingRecordingsError={meetingRecordingsError} period="today" />
           <SummaryInstructionsCard
             refCallback={promptPanelRef}
             meetingSummaryPrompt={meetingSummaryPrompt}
@@ -169,6 +178,18 @@ export function MeetingSummariesTab({
             meetingSummaryPromptDirty={meetingSummaryPromptDirty}
             onMeetingSummaryPromptChange={onMeetingSummaryPromptChange}
             onSaveMeetingSummaryPrompt={onSaveMeetingSummaryPrompt}
+          />
+        </div>
+        <div className="meeting-summary-row">
+          <RecentMeetingSummaryActivityCard meetingActivityItems={meetingActivityItems} meetingRecordingsError={meetingRecordingsError} period="archive" />
+          <TelegramSummaryFormatCard
+            meetingSummaryTelegramTemplate={meetingSummaryTelegramTemplate}
+            settingsReadOnly={settingsReadOnly}
+            saving={saving}
+            saveStatus={saveStatus}
+            meetingSummaryTelegramTemplateDirty={meetingSummaryTelegramTemplateDirty}
+            onMeetingSummaryTelegramTemplateChange={onMeetingSummaryTelegramTemplateChange}
+            onSaveMeetingSummaryTelegramTemplate={onSaveMeetingSummaryTelegramTemplate}
           />
         </div>
       </div>
