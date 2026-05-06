@@ -1873,14 +1873,22 @@ def _apply_meetings_to_hourly_activity(
         available_meeting_seconds = max(0, requested_meeting_seconds - consumed_meeting_seconds)
         available_hour_seconds = max(0, 3600 - break_seconds)
         meeting_seconds = min(available_meeting_seconds, available_hour_seconds)
+        meeting_overlap_seconds = meeting_seconds
         raw_idle_seconds = max(0, int(source_hour.get("idleSeconds", 0)))
-        idle_seconds = max(0, raw_idle_seconds - meeting_seconds)
-        remaining_seconds = max(0, available_hour_seconds - meeting_seconds - idle_seconds)
-        active_seconds = min(max(0, int(source_hour.get("activeSeconds", 0))), remaining_seconds)
-        overtime_active_seconds = min(
-            max(0, int(source_hour.get("overtimeActiveSeconds", 0))),
-            max(0, remaining_seconds - active_seconds),
-        )
+        idle_seconds = max(0, raw_idle_seconds - meeting_overlap_seconds)
+        meeting_overlap_seconds = max(0, meeting_overlap_seconds - raw_idle_seconds)
+        raw_active_seconds = max(0, int(source_hour.get("activeSeconds", 0)))
+        active_seconds = max(0, raw_active_seconds - meeting_overlap_seconds)
+        meeting_overlap_seconds = max(0, meeting_overlap_seconds - raw_active_seconds)
+        raw_overtime_active_seconds = max(0, int(source_hour.get("overtimeActiveSeconds", 0)))
+        overtime_active_seconds = max(0, raw_overtime_active_seconds - meeting_overlap_seconds)
+        visual_seconds = idle_seconds + active_seconds + overtime_active_seconds
+
+        if visual_seconds > available_hour_seconds - meeting_seconds:
+            overflow_seconds = visual_seconds - max(0, available_hour_seconds - meeting_seconds)
+            overtime_active_seconds = max(0, overtime_active_seconds - overflow_seconds)
+            overflow_seconds = max(0, overflow_seconds - raw_overtime_active_seconds)
+            active_seconds = max(0, active_seconds - overflow_seconds)
         consumed_hour["meetingSeconds"] = consumed_meeting_seconds + meeting_seconds
 
         hourly_activity.append(
@@ -1931,29 +1939,40 @@ def _merge_meeting_buckets_into_hourly_author_rows(
             meeting_seconds = int(meeting_hour.get("meetingSeconds", 0))
             current_meeting_seconds = int(target_hour.get("meetingSeconds", 0))
 
+            target_meeting_seconds = current_meeting_seconds
+            added_meeting_seconds = 0
+
             if meeting_seconds > current_meeting_seconds:
                 added_meeting_seconds = min(meeting_seconds - current_meeting_seconds, max(0, 3600 - current_meeting_seconds))
+                target_meeting_seconds = current_meeting_seconds + added_meeting_seconds
+                target_hour["meetingSeconds"] = target_meeting_seconds
 
-                if added_meeting_seconds <= 0:
-                    continue
+            if target_meeting_seconds <= 0:
+                continue
 
-                target_hour["meetingSeconds"] = current_meeting_seconds + added_meeting_seconds
-                remaining_seconds = max(
-                    0,
-                    3600 - int(target_hour.get("breakSeconds", 0)) - int(target_hour.get("meetingSeconds", 0)),
-                )
-                current_idle_seconds = max(0, int(target_hour.get("idleSeconds", 0)))
-                target_hour["idleSeconds"] = max(0, current_idle_seconds - added_meeting_seconds)
-                remaining_seconds = max(0, remaining_seconds - int(target_hour.get("idleSeconds", 0)))
-                target_hour["activeSeconds"] = min(max(0, int(target_hour.get("activeSeconds", 0))), remaining_seconds)
-                target_hour["overtimeActiveSeconds"] = min(
-                    max(0, int(target_hour.get("overtimeActiveSeconds", 0))),
-                    max(0, remaining_seconds - int(target_hour.get("activeSeconds", 0))),
-                )
-                idle_reduction = current_idle_seconds - int(target_hour.get("idleSeconds", 0))
-                if idle_reduction:
-                    adjustment = adjustments_by_author.setdefault(raw_author, {"idleSeconds": 0, "meetingSeconds": 0})
-                    adjustment["idleSeconds"] += idle_reduction
+            current_idle_seconds = max(0, int(target_hour.get("idleSeconds", 0)))
+            current_active_seconds = max(0, int(target_hour.get("activeSeconds", 0)))
+            current_overtime_active_seconds = max(0, int(target_hour.get("overtimeActiveSeconds", 0)))
+            meeting_overlap_seconds = max(
+                0,
+                int(target_hour.get("breakSeconds", 0))
+                + target_meeting_seconds
+                + current_idle_seconds
+                + current_active_seconds
+                + current_overtime_active_seconds
+                - 3600,
+            )
+            target_hour["idleSeconds"] = max(0, current_idle_seconds - meeting_overlap_seconds)
+            meeting_overlap_seconds = max(0, meeting_overlap_seconds - current_idle_seconds)
+            target_hour["activeSeconds"] = max(0, current_active_seconds - meeting_overlap_seconds)
+            meeting_overlap_seconds = max(0, meeting_overlap_seconds - current_active_seconds)
+            target_hour["overtimeActiveSeconds"] = max(0, current_overtime_active_seconds - meeting_overlap_seconds)
+            idle_reduction = current_idle_seconds - int(target_hour.get("idleSeconds", 0))
+            if idle_reduction and added_meeting_seconds > 0:
+                adjustment = adjustments_by_author.setdefault(raw_author, {"idleSeconds": 0, "meetingSeconds": 0})
+                adjustment["idleSeconds"] += idle_reduction
+
+            if added_meeting_seconds > 0:
                 adjustment = adjustments_by_author.setdefault(raw_author, {"idleSeconds": 0, "meetingSeconds": 0})
                 adjustment["meetingSeconds"] += added_meeting_seconds
 

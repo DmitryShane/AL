@@ -3957,7 +3957,7 @@ def test_discord_meeting_reduces_idle_for_any_activity_source():
     assert hour["meetingSeconds"] == 1800
 
 
-def test_discord_meeting_does_not_replace_active_time():
+def test_discord_meeting_hides_active_from_hourly_chart_without_replacing_summary_active_time():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
     repo.db.daily_author_activity.insert_one(
@@ -3993,7 +3993,8 @@ def test_discord_meeting_does_not_replace_active_time():
     assert author["activeSeconds"] == 600
     assert author["idleSeconds"] == 0
     assert author["meetingSeconds"] == 1200
-    assert hour["activeSeconds"] == 600
+    assert summary["totals"]["activeSeconds"] == 600
+    assert hour["activeSeconds"] == 0
     assert hour["idleSeconds"] == 0
     assert hour["meetingSeconds"] == 1200
 
@@ -4032,9 +4033,12 @@ def test_discord_meeting_overlay_is_not_applied_twice_across_sources():
 
     summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", now=dt.datetime(2026, 4, 29, 11, tzinfo=dt.UTC))
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
 
     assert author["meetingSeconds"] == 1800
     assert author["idleSeconds"] == 5400
+    assert hour["meetingSeconds"] == 1800
+    assert hour["idleSeconds"] == 1800
 
 
 def test_live_discord_meeting_session_is_included_in_summary():
