@@ -5,6 +5,65 @@ from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
 
+def _shift_break_segments(hour: dict[str, Any], offset_seconds: int) -> None:
+    if offset_seconds <= 0:
+        return
+
+    shifted_segments = []
+
+    for segment in hour.get("breakSegments", []):
+        start_second = max(0, min(3600, int(segment.get("startSecond", 0)) + offset_seconds))
+        end_second = max(0, min(3600, int(segment.get("endSecond", 0)) + offset_seconds))
+
+        if end_second > start_second:
+            shifted_segments.append({"startSecond": start_second, "endSecond": end_second})
+
+    hour["breakSegments"] = shifted_segments
+    _normalize_break_segments(hour)
+
+
+def _normalize_break_segments(hour: dict[str, Any]) -> None:
+    segments = []
+
+    for segment in hour.get("breakSegments", []):
+        start_second = max(0, min(3600, int(segment.get("startSecond", 0))))
+        end_second = max(0, min(3600, int(segment.get("endSecond", 0))))
+
+        if end_second > start_second:
+            segments.append({"startSecond": start_second, "endSecond": end_second})
+
+    segments.sort(key=lambda item: (item["startSecond"], item["endSecond"]))
+    merged_segments = []
+
+    for segment in segments:
+        if merged_segments and segment["startSecond"] <= merged_segments[-1]["endSecond"]:
+            merged_segments[-1]["endSecond"] = max(merged_segments[-1]["endSecond"], segment["endSecond"])
+        else:
+            merged_segments.append(segment)
+
+    hour["breakSegments"] = merged_segments
+
+
+def _shift_break_segments_after_remaining_idle(
+    hourly_by_author: dict[str, dict[str, Any]],
+    auto_break_applied_by_author: dict[str, int],
+) -> None:
+    for raw_author, applied_seconds in auto_break_applied_by_author.items():
+        if applied_seconds <= 0:
+            continue
+
+        hourly_author = hourly_by_author.get(raw_author)
+
+        if not hourly_author:
+            continue
+
+        for hour in hourly_author.get("hourlyActivity", []):
+            idle_seconds = max(0, int(hour.get("idleSeconds", 0)))
+
+            if idle_seconds > 0 and hour.get("breakSegments"):
+                _shift_break_segments(hour, idle_seconds)
+
+
 class ActivitySummaryService(MongoComposableMixin):
     SUMMARY_CACHE_TTL_SECONDS = 5
     REPORTS_PAGE_SCAN_MULTIPLIER = 5
@@ -1098,6 +1157,7 @@ class ActivitySummaryService(MongoComposableMixin):
             summary_dates_by_author,
             auto_break_applied_by_author,
         )
+        _shift_break_segments_after_remaining_idle(hourly_by_author, auto_break_applied_by_author)
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_start=False)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_latest_report_metadata(
@@ -1304,6 +1364,7 @@ class ActivitySummaryService(MongoComposableMixin):
             remaining_idle_seconds = max(0, idle_seconds - move_seconds)
             break_start_seconds = occupied_seconds + remaining_idle_seconds if occupied_seconds > 0 else 3600 - move_seconds
             _add_break_segment_to_hour(hour, break_start_seconds, break_start_seconds + move_seconds)
+            _normalize_break_segments(hour)
             transferred_seconds += move_seconds
 
         return transferred_seconds
