@@ -3331,7 +3331,7 @@ def test_auto_break_uses_one_daily_limit_across_sources():
     assert sum(hour["breakSeconds"] for hour in hourly) == 3600
 
 
-def test_auto_break_ignores_visual_idle_gaps():
+def test_auto_break_uses_plugin_hour_idle_gaps():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
         {
@@ -3380,9 +3380,9 @@ def test_auto_break_ignores_visual_idle_gaps():
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
 
-    assert author["breakSeconds"] == 0
-    assert hourly[8]["idleSeconds"] == 3540
-    assert hourly[8]["breakSeconds"] == 0
+    assert author["breakSeconds"] == 3540
+    assert hourly[8]["idleSeconds"] == 0
+    assert hourly[8]["breakSeconds"] == 3540
 
 
 def test_auto_break_does_not_overflow_hour_with_visual_missed_start():
