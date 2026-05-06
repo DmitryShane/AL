@@ -307,6 +307,7 @@ export type MeetingRecordingStatus = {
   audioSizeBytes?: number;
   recipient?: { kind?: string; label?: string };
   telegramSentAt?: string;
+  telegramMessage?: string;
   error?: string;
   updatedAt?: string;
 };

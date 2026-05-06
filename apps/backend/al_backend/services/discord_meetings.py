@@ -25,6 +25,7 @@ from ..activity_math import (
 )
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+from ..telegram_bot import format_meeting_summary_message
 
 
 MEETING_RECORDING_SUCCESS_STATUSES = {
@@ -930,6 +931,7 @@ class DiscordMeetingService(MongoComposableMixin):
         for recording in self.db.meeting_recordings.find({}, {"_id": 0}).sort("startedAt", DESCENDING).limit(limit):
             summary = summaries_by_recording_id.get(str(recording.get("recordingId") or ""))
             status = str(recording.get("status") or "")
+            telegram_message = ""
 
             if summary:
                 summary_status = str(summary.get("status") or "")
@@ -938,6 +940,20 @@ class DiscordMeetingService(MongoComposableMixin):
                     status = "telegram_sent"
                 elif status not in {"telegram_claimed"} and summary_status:
                     status = f"summary_{summary_status}"
+
+                summary_text = str(summary.get("summary") or "").strip()
+
+                if summary_text:
+                    telegram_message = format_meeting_summary_message(
+                        {
+                            "startedAt": _iso(summary.get("startedAt") or recording.get("startedAt")),
+                            "durationSeconds": int(summary.get("durationSeconds") or recording.get("durationSeconds") or 0),
+                            "participantNames": summary.get("participantNames") or recording.get("participantNames") or [],
+                            "participantTelegramUsernames": summary.get("participantTelegramUsernames") or [],
+                            "telegramTemplate": composed(self).get_discord_settings()["meetingSummaryTelegramTemplate"],
+                        },
+                        summary_text,
+                    )
 
             items.append(
                 {
@@ -968,6 +984,7 @@ class DiscordMeetingService(MongoComposableMixin):
                     "audioSizeBytes": int(recording.get("audioSizeBytes") or 0),
                     "recipient": (summary or {}).get("recipient"),
                     "telegramSentAt": _iso((summary or {}).get("telegramSentAt") or (summary or {}).get("sentAt")),
+                    "telegramMessage": telegram_message,
                     "error": recording.get("error") or (summary or {}).get("error"),
                     "updatedAt": _iso(recording.get("updatedAt")),
                 }

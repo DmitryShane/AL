@@ -151,40 +151,48 @@ function renderMeetingActivityDetail(item: MeetingActivityItem) {
   const quality = recording.audioQualityStatus || "unknown";
 
   return (
-    <div className="meeting-activity-detail-grid">
-      <div>
-        <span>Participants</span>
-        <strong>{participants}</strong>
+    <>
+      <div className="meeting-activity-detail-grid">
+        <div>
+          <span>Participants</span>
+          <strong>{participants}</strong>
+        </div>
+        <div>
+          <span>Timing</span>
+          <strong>
+            Started {formatTimestamp(recording.startedAt)}
+            {recording.telegramSentAt ? `, sent ${formatTimestamp(recording.telegramSentAt)}` : ""}
+            {recording.updatedAt ? `, updated ${formatTimestamp(recording.updatedAt)}` : ""}
+          </strong>
+        </div>
+        <div>
+          <span>Delivery</span>
+          <strong>
+            {recipient}, duration {duration}
+          </strong>
+        </div>
+        <div>
+          <span>Audio</span>
+          <strong>
+            Frames {audioFrames}, corrupted {recording.corruptedPacketCount ?? 0}, quality {quality}
+          </strong>
+        </div>
+        <div>
+          <span>Mix</span>
+          <strong>
+            Mixed users {recording.mixedUserCount ?? 0}
+            {recording.silencePaddingFrameCount ? `, padded ${recording.silencePaddingFrameCount}` : ""}
+            {recording.unknownSourceFrameCount ? `, unknown ${recording.unknownSourceFrameCount}` : ""}
+            {recording.listenErrorCount ? `, listen errors ${recording.listenErrorCount}` : ""}
+          </strong>
+        </div>
       </div>
-      <div>
-        <span>Timing</span>
-        <strong>
-          Started {formatTimestamp(recording.startedAt)}
-          {recording.telegramSentAt ? `, sent ${formatTimestamp(recording.telegramSentAt)}` : ""}
-          {recording.updatedAt ? `, updated ${formatTimestamp(recording.updatedAt)}` : ""}
-        </strong>
-      </div>
-      <div>
-        <span>Delivery</span>
-        <strong>
-          {recipient}, duration {duration}
-        </strong>
-      </div>
-      <div>
-        <span>Audio</span>
-        <strong>
-          Frames {audioFrames}, corrupted {recording.corruptedPacketCount ?? 0}, quality {quality}
-        </strong>
-      </div>
-      <div>
-        <span>Mix</span>
-        <strong>
-          Mixed users {recording.mixedUserCount ?? 0}
-          {recording.silencePaddingFrameCount ? `, padded ${recording.silencePaddingFrameCount}` : ""}
-          {recording.unknownSourceFrameCount ? `, unknown ${recording.unknownSourceFrameCount}` : ""}
-          {recording.listenErrorCount ? `, listen errors ${recording.listenErrorCount}` : ""}
-        </strong>
-      </div>
-    </div>
+      {recording.telegramMessage ? (
+        <div className="meeting-activity-telegram-message">
+          <span>Telegram message</span>
+          <pre>{recording.telegramMessage}</pre>
+        </div>
+      ) : null}
+    </>
   );
 }

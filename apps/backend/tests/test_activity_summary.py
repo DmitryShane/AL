@@ -4785,6 +4785,8 @@ def test_meeting_recording_finished_creates_summary_notification():
     assert notifications[0]["participantTelegramUsernames"] == ["dmitryshane", "igormats"]
     assert "Discord summaries" in notifications[0]["summary"]
     assert notifications[0]["telegramTemplate"] == DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE
+    assert "Meeting summary" in repo.recent_meeting_activity()[1]["recording"]["telegramMessage"]
+    assert "Discord summaries" in repo.recent_meeting_activity()[1]["recording"]["telegramMessage"]
 
 
 def test_meeting_recording_start_and_finish_create_telegram_notifications():
