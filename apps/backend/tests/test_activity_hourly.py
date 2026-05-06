@@ -1073,6 +1073,7 @@ def test_auto_break_uses_workday_gap_idle_after_plugin_gap_fill():
 
     assert hourly[13]["idleSeconds"] == 0
     assert hourly[13]["breakSeconds"] == 1410
+    assert hourly[13]["breakSegments"] == [{"startSecond": 2190, "endSecond": 3600}]
 
 def test_auto_break_skips_incomplete_plugin_hour_idle_gaps():
     repo = fake_repository()
