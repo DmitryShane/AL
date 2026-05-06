@@ -3277,6 +3277,22 @@ def test_break_interval_segments_can_cross_hour_boundary():
     assert hourly[14]["breakSegments"] == [{"startSecond": 0, "endSecond": 180}]
 
 
+def test_real_break_does_not_convert_remaining_idle_to_break_segment():
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[16]["activeSeconds"] = 1900
+    hourly_activity[16]["idleSeconds"] = 93
+    break_buckets = _empty_hourly_activity()
+    break_buckets[16]["breakSeconds"] = 53
+    break_buckets[16]["breakSegments"] = [{"startSecond": 0, "endSecond": 53}]
+
+    hourly = _apply_breaks_to_hourly_activity(hourly_activity, break_buckets)
+
+    assert hourly[16]["activeSeconds"] == 1900
+    assert hourly[16]["breakSeconds"] == 53
+    assert hourly[16]["idleSeconds"] == 40
+    assert hourly[16]["breakSegments"] == [{"startSecond": 0, "endSecond": 53}]
+
+
 def test_auto_break_adds_full_daily_limit_even_with_real_break():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(

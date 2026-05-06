@@ -1836,19 +1836,6 @@ def _apply_breaks_to_hourly_activity(
             break_seconds,
         )
 
-        if break_seconds and idle_seconds < AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS:
-            artifact_seconds = min(
-                idle_seconds,
-                max(0, 3600 - active_seconds - overtime_active_seconds - break_seconds),
-            )
-            break_seconds = min(
-                break_seconds + idle_seconds,
-                max(0, 3600 - active_seconds - overtime_active_seconds),
-            )
-            if artifact_seconds > 0:
-                break_segments.append({"startSecond": max(0, 3600 - artifact_seconds), "endSecond": 3600})
-            idle_seconds = 0
-
         if consumed_buckets is not None:
             consumed_hour["breakSeconds"] = consumed_break_seconds + break_seconds
 
