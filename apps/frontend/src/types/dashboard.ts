@@ -209,6 +209,7 @@ export type OpenAIStats = {
   periodStart?: string;
   periodEnd?: string;
   projectId?: string | null;
+  totalSpend?: number;
   monthSpend?: number;
   currency?: string;
   totalTokens?: number;

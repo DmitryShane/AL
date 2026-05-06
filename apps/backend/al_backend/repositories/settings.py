@@ -171,6 +171,7 @@ def _fetch_openai_stats(api_key: str, project_id: str, now: dt.datetime) -> dict
     start_time = int(start.timestamp())
     end_time = int(now.timestamp())
     spend, currency = _fetch_openai_month_spend(api_key, project_id, start_time, end_time)
+    total_spend, total_currency = _fetch_openai_total_spend(api_key, project_id, end_time)
     total_tokens = 0
     total_requests = 0
 
@@ -186,39 +187,80 @@ def _fetch_openai_stats(api_key: str, project_id: str, now: dt.datetime) -> dict
         "periodStart": start.isoformat(),
         "periodEnd": now.isoformat(),
         "projectId": project_id or None,
+        "totalSpend": round(total_spend, 6),
         "monthSpend": round(spend, 6),
-        "currency": currency.upper(),
+        "currency": (currency or total_currency).upper(),
         "totalTokens": total_tokens,
         "totalRequests": total_requests,
     }
 
 
 def _fetch_openai_month_spend(api_key: str, project_id: str, start_time: int, end_time: int) -> tuple[float, str]:
-    params: dict[str, int | str] = {"start_time": start_time, "end_time": end_time, "bucket_width": "1d", "limit": 31}
-    if project_id:
-        params["project_ids"] = project_id
+    return _fetch_openai_spend(api_key, project_id, start_time, end_time, 31)
 
-    payload = _openai_get(
-        api_key,
-        "/v1/organization/costs",
-        params,
-    )
+
+def _fetch_openai_total_spend(api_key: str, project_id: str, end_time: int) -> tuple[float, str]:
+    openai_api_start_time = int(dt.datetime(2020, 1, 1, tzinfo=dt.UTC).timestamp())
+    return _fetch_openai_spend(api_key, project_id, openai_api_start_time, end_time, 180)
+
+
+def _fetch_openai_spend(
+    api_key: str,
+    project_id: str,
+    start_time: int,
+    end_time: int,
+    limit: int,
+) -> tuple[float, str]:
+    params: dict[str, int | str | list[str]] = {
+        "start_time": start_time,
+        "end_time": end_time,
+        "bucket_width": "1d",
+        "limit": limit,
+        "group_by": ["project_id"],
+    }
+
     spend = 0.0
     currency = "usd"
+    page: str | None = None
 
-    for bucket in payload.get("data", []):
-        for result in bucket.get("results", bucket.get("result", [])):
-            amount = result.get("amount") or {}
-            spend += float(amount.get("value") or 0)
-            currency = amount.get("currency") or currency
+    while True:
+        params["limit"] = limit
+
+        if page:
+            params["page"] = page
+        elif "page" in params:
+            del params["page"]
+
+        payload = _openai_get(
+            api_key,
+            "/v1/organization/costs",
+            params,
+        )
+
+        for bucket in payload.get("data", []):
+            for result in bucket.get("results", bucket.get("result", [])):
+                if project_id and result.get("project_id") != project_id:
+                    continue
+
+                amount = result.get("amount") or {}
+                spend += float(amount.get("value") or 0)
+                currency = amount.get("currency") or currency
+
+        page = payload.get("next_page")
+        if not page:
+            break
 
     return spend, currency
 
 
 def _fetch_openai_usage(api_key: str, endpoint: str, project_id: str, start_time: int, end_time: int) -> dict[str, int]:
-    params: dict[str, int | str] = {"start_time": start_time, "end_time": end_time, "bucket_width": "1d", "limit": 31}
-    if project_id:
-        params["project_ids"] = project_id
+    params: dict[str, int | str | list[str]] = {
+        "start_time": start_time,
+        "end_time": end_time,
+        "bucket_width": "1d",
+        "limit": 31,
+        "group_by": ["project_id"],
+    }
 
     payload = _openai_get(
         api_key,
@@ -230,6 +272,9 @@ def _fetch_openai_usage(api_key: str, endpoint: str, project_id: str, start_time
 
     for bucket in payload.get("data", []):
         for result in bucket.get("results", bucket.get("result", [])):
+            if project_id and result.get("project_id") != project_id:
+                continue
+
             tokens += int(result.get("input_tokens") or 0)
             tokens += int(result.get("output_tokens") or 0)
             requests += int(result.get("num_model_requests") or 0)
@@ -237,8 +282,8 @@ def _fetch_openai_usage(api_key: str, endpoint: str, project_id: str, start_time
     return {"tokens": tokens, "requests": requests}
 
 
-def _openai_get(api_key: str, path: str, params: dict[str, int | str]) -> dict[str, Any]:
-    url = f"https://api.openai.com{path}?{urllib.parse.urlencode(params)}"
+def _openai_get(api_key: str, path: str, params: dict[str, int | str | list[str]]) -> dict[str, Any]:
+    url = f"https://api.openai.com{path}?{urllib.parse.urlencode(params, doseq=True)}"
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
 
     try:

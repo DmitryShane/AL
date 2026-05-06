@@ -22,6 +22,10 @@ export function OpenAIStatsCard({ openAIStats, openAIStatsError, openAIStatsLoad
       ) : openAIStats ? (
         <div className="openai-stats-grid">
           <div>
+            <span>Total spend</span>
+            <strong>{formatOpenAICurrency(openAIStats.totalSpend ?? 0, openAIStats.currency)}</strong>
+          </div>
+          <div>
             <span>Month spend</span>
             <strong>{formatOpenAICurrency(openAIStats.monthSpend ?? 0, openAIStats.currency)}</strong>
           </div>
