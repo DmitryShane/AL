@@ -26,7 +26,7 @@ export function OpenAIStatsCard({ openAIStats, openAIStatsError, openAIStatsLoad
             <strong>{formatOpenAICurrency(openAIStats.totalSpend ?? 0, openAIStats.currency)}</strong>
           </div>
           <div>
-            <span>Month spend</span>
+            <span>Month spend{openAIStats.periodStart ? ` (${formatOpenAIMonth(openAIStats.periodStart)})` : ""}</span>
             <strong>{formatOpenAICurrency(openAIStats.monthSpend ?? 0, openAIStats.currency)}</strong>
           </div>
           <div>
@@ -62,4 +62,11 @@ function formatOpenAICurrency(value: number, currency = "USD") {
     minimumFractionDigits: 2,
     maximumFractionDigits: value > 0 && value < 1 ? 4 : 2
   }).format(value);
+}
+
+function formatOpenAIMonth(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric"
+  }).format(new Date(value));
 }
