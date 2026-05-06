@@ -10,7 +10,10 @@ export type AuthorDeleteConfirmProps = {
   onCancel: () => void;
   onDelete: () => void;
   description?: string;
+  title?: string;
+  lead?: string;
   confirmLabel?: string;
+  savingLabel?: string;
   /** ISO calendar dates (YYYY-MM-DD), inclusive range shown in this modal. */
   periodStartDate?: string;
   periodEndDate?: string;
@@ -47,7 +50,10 @@ export function AuthorDeleteConfirm({
   onCancel,
   onDelete,
   description,
+  title,
+  lead,
   confirmLabel,
+  savingLabel,
   periodStartDate,
   periodEndDate,
 }: AuthorDeleteConfirmProps) {
@@ -85,8 +91,8 @@ export function AuthorDeleteConfirm({
           >
             {todayOnlyAccent && hasPeriod ? "Today only" : "Selected period"}
           </span>
-          <h2 id="scoped-activity-delete-title">Delete activity data</h2>
-          <p className="scoped-delete-modal__lead">Review the scope below, then confirm. Your choice applies only to the dates described.</p>
+          <h2 id="scoped-activity-delete-title">{title ?? "Delete activity data"}</h2>
+          <p className="scoped-delete-modal__lead">{lead ?? "Review the scope below, then confirm. Your choice applies only to the dates described."}</p>
         </header>
 
         <div className="scoped-delete-modal__profile-card">
@@ -154,7 +160,7 @@ export function AuthorDeleteConfirm({
         <div className="modal-actions scoped-delete-modal__actions">
           <button className="primary-outline-button" type="button" onClick={onCancel} disabled={saving}>Cancel</button>
           <button className="primary-button danger-solid-button" type="button" onClick={onDelete} disabled={saving}>
-            {saving ? "Deleting..." : confirmLabel ?? "Delete all author data"}
+            {saving ? savingLabel ?? "Deleting..." : confirmLabel ?? "Delete all author data"}
           </button>
         </div>
       </div>

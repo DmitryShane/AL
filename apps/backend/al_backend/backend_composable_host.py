@@ -191,6 +191,8 @@ class BackendComposableHost(Protocol):
 
     def purge_editor_plugin_activity_for_author_day(self, raw_author: str, day_date: str) -> dict[str, Any]: ...
 
+    def rebuild_aggregates_if_needed(self, force: bool = False, scope: str = "full") -> None: ...
+
     def rebuild_aggregates_for_author_dates(
         self,
         authors: list[str] | tuple[str, ...] | set[str],

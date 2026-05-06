@@ -1,10 +1,8 @@
 import { ServerStatsPanel } from "../../ServerStatsPanel";
 import { settingsSaveButtonClassName, settingsSaveButtonLabel } from "../../../../pages/pageHelpers";
-import type { AuthorProfile, Summary } from "../../../../types/dashboard";
+import type { Summary } from "../../../../types/dashboard";
 
 type GeneralSettingsTabProps = {
-  profiles: AuthorProfile[];
-  authorIntervalDrafts: Record<string, string>;
   intervalSettings: Summary["intervalSettings"] | undefined;
   globalInterval: string;
   idleThreshold: string;
@@ -18,14 +16,10 @@ type GeneralSettingsTabProps = {
   onIdleThresholdChange: (value: string) => void;
   onDeviceIdleThresholdChange: (value: string) => void;
   onPluginIngestEnabledChange: (value: boolean) => void;
-  onAuthorIntervalChange: (author: string, value: string) => void;
   onSaveInterval: () => void;
-  onSaveAuthorInterval: (author: string) => void;
 };
 
 export function GeneralSettingsTab({
-  profiles,
-  authorIntervalDrafts,
   intervalSettings,
   globalInterval,
   idleThreshold,
@@ -39,9 +33,7 @@ export function GeneralSettingsTab({
   onIdleThresholdChange,
   onDeviceIdleThresholdChange,
   onPluginIngestEnabledChange,
-  onAuthorIntervalChange,
-  onSaveInterval,
-  onSaveAuthorInterval
+  onSaveInterval
 }: GeneralSettingsTabProps) {
   return (
     <>
@@ -92,60 +84,7 @@ export function GeneralSettingsTab({
           </button>
         </div>
       </div>
-      <div className="panel">
-        <h2>Author Interval Overrides</h2>
-        <p className="settings-caption">
-          Optional send interval overrides for individual authors. Clear a value to return that author to the global interval.
-        </p>
-        <div className="author-interval-list">
-          {profiles.length ? profiles.map((profile) => {
-            const rawAuthor = profile.rawAuthor;
-            const savedInterval = authorIntervalSeconds(intervalSettings, rawAuthor);
-            const draftInterval = authorIntervalDrafts[rawAuthor] ?? "";
-            const saveKey = authorIntervalSaveKey(rawAuthor);
-            const isDirty = draftInterval !== (savedInterval === null ? "" : String(savedInterval));
-
-            return (
-              <div className="author-interval-row" key={rawAuthor}>
-                <div>
-                  <strong>{profile.displayName || rawAuthor}</strong>
-                  <span>{rawAuthor}</span>
-                </div>
-                <label>
-                  Override interval, sec
-                  <input
-                    value={draftInterval}
-                    onChange={(event) => onAuthorIntervalChange(rawAuthor, event.target.value)}
-                    type="number"
-                    min="30"
-                    placeholder={String(intervalSettings?.defaultSendIntervalSeconds ?? 300)}
-                    disabled={settingsReadOnly}
-                  />
-                </label>
-                <button
-                  className={settingsSaveButtonClassName(saveStatus[saveKey])}
-                  onClick={() => onSaveAuthorInterval(rawAuthor)}
-                  disabled={settingsReadOnly || saving === saveKey || !isDirty || (!draftInterval && savedInterval === null)}
-                >
-                  {settingsSaveButtonLabel(saveKey, saving, saveStatus)}
-                </button>
-              </div>
-            );
-          }) : (
-            <p className="empty-state">Create author profiles to configure per-author intervals.</p>
-          )}
-        </div>
-      </div>
       <ServerStatsPanel />
     </>
   );
-}
-
-export function authorIntervalSaveKey(author: string) {
-  return `authorInterval:${author}`;
-}
-
-function authorIntervalSeconds(intervalSettings: Summary["intervalSettings"] | undefined, author: string) {
-  const match = intervalSettings?.authors.find((item) => item.author === author);
-  return match?.sendIntervalSeconds ?? null;
 }

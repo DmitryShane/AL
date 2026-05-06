@@ -187,7 +187,6 @@ export type Summary = {
     pluginIngestEnabled: boolean;
     telegramOnlinePromptDelayMinutes: number;
     avatarRefreshCadence?: "week" | "month";
-    authors: Array<{ author: string; sendIntervalSeconds: number }>;
   };
   discordSettings: {
     meetingAutoAfkTimeoutSeconds: number;

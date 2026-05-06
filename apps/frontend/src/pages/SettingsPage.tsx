@@ -14,7 +14,7 @@ import { SiteUsersPanel } from "../components/settings/SettingsComponents";
 import { AuthorProfilesTab } from "../components/settings/tabs/authors/AuthorProfilesTab";
 import { AutoBreakTab } from "../components/settings/tabs/autoBreak/AutoBreakTab";
 import { DiscordSettingsTab } from "../components/settings/tabs/discord/DiscordSettingsTab";
-import { GeneralSettingsTab, authorIntervalSaveKey } from "../components/settings/tabs/general/GeneralSettingsTab";
+import { GeneralSettingsTab } from "../components/settings/tabs/general/GeneralSettingsTab";
 import { MeetingSummariesTab } from "../components/settings/tabs/meetingSummaries/MeetingSummariesTab";
 import { AuthorRedirectsTab } from "../components/settings/tabs/redirects/AuthorRedirectsTab";
 import { TelegramSettingsTab } from "../components/settings/tabs/telegram/TelegramSettingsTab";
@@ -28,6 +28,12 @@ type DeleteActivityDraft = {
 type PendingAuthorActivityDelete =
   | { mode: "range"; profile: AuthorProfile; startDate: string; endDate: string }
   | { mode: "all"; profile: AuthorProfile };
+
+type PendingAuthorActivityRebuild = {
+  profile: AuthorProfile;
+  startDate: string;
+  endDate: string;
+};
 
 const OPENAI_STATS_CACHE_KEY = "al.openAIStats.cache";
 let cachedOpenAIStats: OpenAIStats | null = readCachedOpenAIStats();
@@ -67,7 +73,6 @@ export function SettingsPage({
   const avatarSettingsLockedTitle = "Only editors and admins can change GitHub avatar cache settings.";
   const [settingsTab, setSettingsTabState] = useState<SettingsTab>(() => loadSavedSettingsTab());
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
-  const [authorIntervalDrafts, setAuthorIntervalDrafts] = useState<Record<string, string>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
   const [idleThreshold, setIdleThreshold] = useState(String(intervalSettingsIdleThreshold(summary)));
   const [deviceIdleThreshold, setDeviceIdleThreshold] = useState(String(intervalSettingsDeviceIdleThreshold(summary)));
@@ -91,10 +96,12 @@ export function SettingsPage({
   const [aliasError, setAliasError] = useState("");
   const [deleteActivityDrafts, setDeleteActivityDrafts] = useState<Record<string, DeleteActivityDraft>>({});
   const [pendingAuthorActivityDelete, setPendingAuthorActivityDelete] = useState<PendingAuthorActivityDelete | null>(null);
+  const [pendingAuthorActivityRebuild, setPendingAuthorActivityRebuild] = useState<PendingAuthorActivityRebuild | null>(null);
   const [deleteActivityFieldError, setDeleteActivityFieldError] = useState<Record<string, string>>({});
   const [deleteProfileTarget, setDeleteProfileTarget] = useState<AuthorProfile | null>(null);
   const [bulkActivityDeletePreset, setBulkActivityDeletePreset] = useState<BulkActivityDeletePreset>("1d");
   const [bulkActivityDeleteModalOpen, setBulkActivityDeleteModalOpen] = useState(false);
+  const [fullActivityRebuildModalOpen, setFullActivityRebuildModalOpen] = useState(false);
   const [newProfile, setNewProfile] = useState<AuthorProfile>(() => emptyAuthorProfile());
   const [aliasSource, setAliasSource] = useState("");
   const [aliasTarget, setAliasTarget] = useState("");
@@ -154,7 +161,6 @@ export function SettingsPage({
     }
 
     setDrafts(nextDrafts);
-    setAuthorIntervalDrafts(authorIntervalDraftsFromSummary(summary));
     setGlobalInterval(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
     setIdleThreshold(String(intervalSettingsIdleThreshold(summary)));
     setDeviceIdleThreshold(String(intervalSettingsDeviceIdleThreshold(summary)));
@@ -492,43 +498,6 @@ export function SettingsPage({
     }
   }
 
-  async function saveAuthorInterval(rawAuthor: string) {
-    if (settingsReadOnly) {
-      return;
-    }
-
-    const saveKey = authorIntervalSaveKey(rawAuthor);
-    const draftInterval = authorIntervalDrafts[rawAuthor] ?? "";
-
-    setSaving(saveKey);
-    setSaveStatus((items) => ({ ...items, [saveKey]: undefined }));
-
-    try {
-      const response = await apiFetch(`/api/v1/settings/intervals`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          author: rawAuthor,
-          authorSendIntervalSeconds: draftInterval ? Number(draftInterval) : null
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error("Author interval save failed");
-      }
-
-      setSaveStatus((items) => ({ ...items, [saveKey]: "saved" }));
-      onSaved();
-    } catch {
-      setSaveStatus((items) => ({ ...items, [saveKey]: "error" }));
-    } finally {
-      setSaving(null);
-      window.setTimeout(() => {
-        setSaveStatus((items) => ({ ...items, [saveKey]: undefined }));
-      }, 2500);
-    }
-  }
-
   async function saveTelegramPromptSettings() {
     if (settingsReadOnly) {
       return;
@@ -774,6 +743,78 @@ export function SettingsPage({
     }
   }
 
+  async function executeFullActivityRebuild(confirmPhrase: string) {
+    if (settingsReadOnly) {
+      return;
+    }
+
+    setSaving("full-activity-rebuild");
+    setSaveStatus((items) => ({ ...items, fullActivityRebuild: undefined }));
+
+    try {
+      const response = await apiFetch("/api/v1/authors/activity/rebuild", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmPhrase })
+      });
+
+      if (!response.ok) {
+        throw new Error(await apiErrorDetail(response, "Full activity rebuild failed"));
+      }
+
+      setFullActivityRebuildModalOpen(false);
+      setSaveStatus((items) => ({ ...items, fullActivityRebuild: "saved" }));
+      onSaved();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Full activity rebuild failed";
+      window.alert(message);
+      setSaveStatus((items) => ({ ...items, fullActivityRebuild: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, fullActivityRebuild: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function executeAuthorActivityRebuild(pending: PendingAuthorActivityRebuild) {
+    if (settingsReadOnly) {
+      return;
+    }
+
+    const rawAuthor = pending.profile.rawAuthor;
+    const rebuildKey = `rebuild:${rawAuthor}`;
+    setSaving(rebuildKey);
+    setSaveStatus((items) => ({ ...items, [rebuildKey]: undefined }));
+
+    try {
+      const params = new URLSearchParams({
+        startDate: pending.startDate,
+        endDate: pending.endDate
+      });
+      const response = await apiFetch(`/api/v1/authors/${encodeURIComponent(rawAuthor)}/activity/rebuild?${params.toString()}`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(await apiErrorDetail(response, "Author activity rebuild failed"));
+      }
+
+      setPendingAuthorActivityRebuild(null);
+      setSaveStatus((items) => ({ ...items, [rebuildKey]: "saved" }));
+      onSaved();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Author activity rebuild failed";
+      window.alert(message);
+      setSaveStatus((items) => ({ ...items, [rebuildKey]: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, [rebuildKey]: undefined }));
+      }, 2500);
+    }
+  }
+
   function requestAuthorActivityDelete(profile: AuthorProfile) {
     if (settingsReadOnly) {
       return;
@@ -815,6 +856,58 @@ export function SettingsPage({
       profile,
       startDate: draft.rangeStart,
       endDate: draft.rangeEnd
+    });
+  }
+
+  function resolveAuthorActivityPeriod(profile: AuthorProfile): { startDate: string; endDate: string } | null {
+    const draft: DeleteActivityDraft =
+      deleteActivityDrafts[profile.rawAuthor] ?? { mode: "today", rangeStart: "", rangeEnd: "" };
+
+    setDeleteActivityFieldError((items) => {
+      const next = { ...items };
+      delete next[profile.rawAuthor];
+      return next;
+    });
+
+    if (draft.mode === "today") {
+      const day = profileLocalTodayIso(profile);
+      return { startDate: day, endDate: day };
+    }
+
+    if (!draft.rangeStart.trim() || !draft.rangeEnd.trim()) {
+      setDeleteActivityFieldError((items) => ({
+        ...items,
+        [profile.rawAuthor]: "Choose both start and end dates."
+      }));
+      return null;
+    }
+
+    if (draft.rangeStart > draft.rangeEnd) {
+      setDeleteActivityFieldError((items) => ({
+        ...items,
+        [profile.rawAuthor]: "Start date must be on or before end date."
+      }));
+      return null;
+    }
+
+    return { startDate: draft.rangeStart, endDate: draft.rangeEnd };
+  }
+
+  function requestAuthorActivityRebuild(profile: AuthorProfile) {
+    if (settingsReadOnly) {
+      return;
+    }
+
+    const period = resolveAuthorActivityPeriod(profile);
+
+    if (!period) {
+      return;
+    }
+
+    setPendingAuthorActivityRebuild({
+      profile,
+      startDate: period.startDate,
+      endDate: period.endDate
     });
   }
 
@@ -976,8 +1069,6 @@ export function SettingsPage({
       </div>
       {settingsTab === "general" ? (
         <GeneralSettingsTab
-          profiles={profiles}
-          authorIntervalDrafts={authorIntervalDrafts}
           intervalSettings={summary?.intervalSettings}
           globalInterval={globalInterval}
           idleThreshold={idleThreshold}
@@ -991,9 +1082,7 @@ export function SettingsPage({
           onIdleThresholdChange={setIdleThreshold}
           onDeviceIdleThresholdChange={setDeviceIdleThreshold}
           onPluginIngestEnabledChange={setPluginIngestEnabled}
-          onAuthorIntervalChange={(rawAuthor, value) => setAuthorIntervalDrafts((items) => ({ ...items, [rawAuthor]: value }))}
           onSaveInterval={() => void saveInterval()}
-          onSaveAuthorInterval={(rawAuthor) => void saveAuthorInterval(rawAuthor)}
         />
       ) : settingsTab === "autoBreak" ? (
         <AutoBreakTab
@@ -1029,10 +1118,12 @@ export function SettingsPage({
           avatarRefreshCadence={avatarRefreshCadence}
           deleteActivityDrafts={deleteActivityDrafts}
           pendingAuthorActivityDelete={pendingAuthorActivityDelete}
+          pendingAuthorActivityRebuild={pendingAuthorActivityRebuild}
           deleteActivityFieldError={deleteActivityFieldError}
           deleteProfileTarget={deleteProfileTarget}
           bulkActivityDeletePreset={bulkActivityDeletePreset}
           bulkActivityDeleteModalOpen={bulkActivityDeleteModalOpen}
+          fullActivityRebuildModalOpen={fullActivityRebuildModalOpen}
           canManageSettings={canManageSettings}
           settingsReadOnly={settingsReadOnly}
           avatarSettingsLockedTitle={avatarSettingsLockedTitle}
@@ -1046,7 +1137,9 @@ export function SettingsPage({
           onDeleteActivityDraftChange={(rawAuthor, draft) => setDeleteActivityDrafts((items) => ({ ...items, [rawAuthor]: draft }))}
           onBulkActivityDeletePresetChange={setBulkActivityDeletePreset}
           onBulkActivityDeleteModalOpenChange={setBulkActivityDeleteModalOpen}
+          onFullActivityRebuildModalOpenChange={setFullActivityRebuildModalOpen}
           onPendingAuthorActivityDeleteChange={setPendingAuthorActivityDelete}
+          onPendingAuthorActivityRebuildChange={setPendingAuthorActivityRebuild}
           onDeleteProfileTargetChange={setDeleteProfileTarget}
           onCreateProfile={() => void createProfile()}
           onSaveProfile={(rawAuthor) => void saveProfile(rawAuthor)}
@@ -1054,9 +1147,12 @@ export function SettingsPage({
           onRefreshAllGitHubAvatars={() => void refreshAllGitHubAvatars()}
           onRefreshAuthorGitHubAvatar={(rawAuthor) => void refreshAuthorGitHubAvatar(rawAuthor)}
           onRequestAuthorActivityDelete={requestAuthorActivityDelete}
+          onRequestAuthorActivityRebuild={requestAuthorActivityRebuild}
           onRequestAuthorDeleteAllActivity={requestAuthorDeleteAllActivity}
           onExecuteBulkActivityDeleteAllAuthors={(confirmPhrase) => void executeBulkActivityDeleteAllAuthors(confirmPhrase)}
+          onExecuteFullActivityRebuild={(confirmPhrase) => void executeFullActivityRebuild(confirmPhrase)}
           onExecuteAuthorActivityDelete={(pending) => void executeAuthorActivityDelete(pending)}
+          onExecuteAuthorActivityRebuild={(pending) => void executeAuthorActivityRebuild(pending)}
           onDeleteAuthorProfile={(rawAuthor) => void deleteAuthorProfile(rawAuthor)}
         />
       ) : settingsTab === "discord" ? (
@@ -1132,16 +1228,6 @@ function intervalSettingsDeviceIdleThreshold(summary: Summary | null) {
 function intervalSettingsTelegramOnlinePromptMinutes(summary: Summary | null) {
   const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { telegramOnlinePromptDelayMinutes?: number }) | undefined;
   return intervalSettings?.telegramOnlinePromptDelayMinutes ?? 15;
-}
-
-function authorIntervalDraftsFromSummary(summary: Summary) {
-  const drafts: Record<string, string> = {};
-
-  for (const item of summary.intervalSettings.authors) {
-    drafts[item.author] = String(item.sendIntervalSeconds);
-  }
-
-  return drafts;
 }
 
 function readCachedOpenAIStats(): OpenAIStats | null {

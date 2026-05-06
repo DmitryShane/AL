@@ -11,6 +11,7 @@ import {
 } from "../../../../pages/pageHelpers";
 import { AuthorDeleteAllActivityModal } from "../../AuthorDeleteAllActivityModal";
 import { BulkAllAuthorsActivityDeleteModal } from "../../BulkAllAuthorsActivityDeleteModal";
+import { FullActivityRebuildModal } from "../../FullActivityRebuildModal";
 import { AuthorDeleteConfirm, AuthorProfileDeleteModal } from "../../SettingsComponents";
 
 type DeleteActivityDraft = {
@@ -23,6 +24,12 @@ type PendingAuthorActivityDelete =
   | { mode: "range"; profile: AuthorProfile; startDate: string; endDate: string }
   | { mode: "all"; profile: AuthorProfile };
 
+type PendingAuthorActivityRebuild = {
+  profile: AuthorProfile;
+  startDate: string;
+  endDate: string;
+};
+
 type AuthorProfilesTabProps = {
   profiles: AuthorProfile[];
   drafts: Record<string, AuthorProfile>;
@@ -30,10 +37,12 @@ type AuthorProfilesTabProps = {
   avatarRefreshCadence: "week" | "month";
   deleteActivityDrafts: Record<string, DeleteActivityDraft>;
   pendingAuthorActivityDelete: PendingAuthorActivityDelete | null;
+  pendingAuthorActivityRebuild: PendingAuthorActivityRebuild | null;
   deleteActivityFieldError: Record<string, string>;
   deleteProfileTarget: AuthorProfile | null;
   bulkActivityDeletePreset: BulkActivityDeletePreset;
   bulkActivityDeleteModalOpen: boolean;
+  fullActivityRebuildModalOpen: boolean;
   canManageSettings: boolean;
   settingsReadOnly: boolean;
   avatarSettingsLockedTitle: string;
@@ -47,7 +56,9 @@ type AuthorProfilesTabProps = {
   onDeleteActivityDraftChange: (rawAuthor: string, draft: DeleteActivityDraft) => void;
   onBulkActivityDeletePresetChange: (value: BulkActivityDeletePreset) => void;
   onBulkActivityDeleteModalOpenChange: (value: boolean) => void;
+  onFullActivityRebuildModalOpenChange: (value: boolean) => void;
   onPendingAuthorActivityDeleteChange: (value: PendingAuthorActivityDelete | null) => void;
+  onPendingAuthorActivityRebuildChange: (value: PendingAuthorActivityRebuild | null) => void;
   onDeleteProfileTargetChange: (value: AuthorProfile | null) => void;
   onCreateProfile: () => void;
   onSaveProfile: (rawAuthor: string) => void;
@@ -55,9 +66,12 @@ type AuthorProfilesTabProps = {
   onRefreshAllGitHubAvatars: () => void;
   onRefreshAuthorGitHubAvatar: (rawAuthor: string) => void;
   onRequestAuthorActivityDelete: (profile: AuthorProfile) => void;
+  onRequestAuthorActivityRebuild: (profile: AuthorProfile) => void;
   onRequestAuthorDeleteAllActivity: (profile: AuthorProfile) => void;
   onExecuteBulkActivityDeleteAllAuthors: (confirmPhrase: string) => void;
+  onExecuteFullActivityRebuild: (confirmPhrase: string) => void;
   onExecuteAuthorActivityDelete: (pending: PendingAuthorActivityDelete) => void;
+  onExecuteAuthorActivityRebuild: (pending: PendingAuthorActivityRebuild) => void;
   onDeleteAuthorProfile: (rawAuthor: string) => void;
 };
 
@@ -68,10 +82,12 @@ export function AuthorProfilesTab({
   avatarRefreshCadence,
   deleteActivityDrafts,
   pendingAuthorActivityDelete,
+  pendingAuthorActivityRebuild,
   deleteActivityFieldError,
   deleteProfileTarget,
   bulkActivityDeletePreset,
   bulkActivityDeleteModalOpen,
+  fullActivityRebuildModalOpen,
   canManageSettings,
   settingsReadOnly,
   avatarSettingsLockedTitle,
@@ -85,7 +101,9 @@ export function AuthorProfilesTab({
   onDeleteActivityDraftChange,
   onBulkActivityDeletePresetChange,
   onBulkActivityDeleteModalOpenChange,
+  onFullActivityRebuildModalOpenChange,
   onPendingAuthorActivityDeleteChange,
+  onPendingAuthorActivityRebuildChange,
   onDeleteProfileTargetChange,
   onCreateProfile,
   onSaveProfile,
@@ -93,9 +111,12 @@ export function AuthorProfilesTab({
   onRefreshAllGitHubAvatars,
   onRefreshAuthorGitHubAvatar,
   onRequestAuthorActivityDelete,
+  onRequestAuthorActivityRebuild,
   onRequestAuthorDeleteAllActivity,
   onExecuteBulkActivityDeleteAllAuthors,
+  onExecuteFullActivityRebuild,
   onExecuteAuthorActivityDelete,
+  onExecuteAuthorActivityRebuild,
   onDeleteAuthorProfile
 }: AuthorProfilesTabProps) {
   return (
@@ -478,18 +499,32 @@ export function AuthorProfilesTab({
       <option value="full">All activity history (every author)</option>
     </select>
   </label>
-  <button
-    type="button"
-    className="primary-button danger-solid-button delete-all-data-solid-button"
-    onClick={() => {
-      if (!settingsReadOnly) {
-        onBulkActivityDeleteModalOpenChange(true);
-      }
-    }}
-    disabled={settingsReadOnly || saving === "bulk-delete-all-authors" || profiles.length === 0}
-  >
-    Delete for all authors…
-  </button>
+  <div className="delete-activity-bulk-actions">
+    <button
+      type="button"
+      className="primary-button danger-solid-button delete-all-data-solid-button"
+      onClick={() => {
+        if (!settingsReadOnly) {
+          onBulkActivityDeleteModalOpenChange(true);
+        }
+      }}
+      disabled={settingsReadOnly || saving === "bulk-delete-all-authors" || profiles.length === 0}
+    >
+      Delete for all authors…
+    </button>
+    <button
+      type="button"
+      className="primary-button danger-solid-button delete-all-data-solid-button"
+      onClick={() => {
+        if (!settingsReadOnly) {
+          onFullActivityRebuildModalOpenChange(true);
+        }
+      }}
+      disabled={settingsReadOnly || saving === "full-activity-rebuild"}
+    >
+      Rebuild full DB…
+    </button>
+  </div>
 </div>
 <div className="profile-table-shell profile-table-shell--compact">
   <div className="profile-table profile-table--delete-activity">
@@ -519,28 +554,30 @@ export function AuthorProfilesTab({
           </span>
           <div className="profile-delete-activity-period-cell">
             <div className="delete-activity-controls">
-              <label className="radio-inline">
-                <input
-                  type="radio"
-                  name={`delete-mode-${profile.rawAuthor}`}
-                  checked={actDraft.mode === "today"}
-                  disabled={settingsReadOnly}
-                  onChange={() => onDeleteActivityDraftChange(profile.rawAuthor, { ...actDraft, mode: "today" })}
-                />
-                Today
-              </label>
-              <label className="radio-inline">
-                <input
-                  type="radio"
-                  name={`delete-mode-${profile.rawAuthor}`}
-                  checked={actDraft.mode === "range"}
-                  disabled={settingsReadOnly}
-                  onChange={() => onDeleteActivityDraftChange(profile.rawAuthor, { ...actDraft, mode: "range" })}
-                />
-                Custom range
-              </label>
+              <div className="delete-activity-mode-row">
+                <label className="radio-inline">
+                  <input
+                    type="radio"
+                    name={`delete-mode-${profile.rawAuthor}`}
+                    checked={actDraft.mode === "today"}
+                    disabled={settingsReadOnly}
+                    onChange={() => onDeleteActivityDraftChange(profile.rawAuthor, { ...actDraft, mode: "today" })}
+                  />
+                  Today
+                </label>
+                <label className="radio-inline">
+                  <input
+                    type="radio"
+                    name={`delete-mode-${profile.rawAuthor}`}
+                    checked={actDraft.mode === "range"}
+                    disabled={settingsReadOnly}
+                    onChange={() => onDeleteActivityDraftChange(profile.rawAuthor, { ...actDraft, mode: "range" })}
+                  />
+                  Custom range
+                </label>
+              </div>
               {actDraft.mode === "range" ? (
-                <>
+                <div className="delete-activity-date-row">
                   <label>
                     Start
                     <input
@@ -559,7 +596,7 @@ export function AuthorProfilesTab({
                       onChange={(event) => onDeleteActivityDraftChange(profile.rawAuthor, { ...actDraft, rangeEnd: event.target.value })}
                     />
                   </label>
-                </>
+                </div>
               ) : null}
             </div>
             {deleteActivityFieldError[profile.rawAuthor] ? (
@@ -567,6 +604,14 @@ export function AuthorProfilesTab({
             ) : null}
           </div>
           <div className="profile-actions">
+            <button
+              type="button"
+              className={settingsSaveButtonClassName(saveStatus[`rebuild:${profile.rawAuthor}`], true)}
+              onClick={() => onRequestAuthorActivityRebuild(profile)}
+              disabled={settingsReadOnly || saving === `rebuild:${profile.rawAuthor}`}
+            >
+              {saving === `rebuild:${profile.rawAuthor}` ? "Rebuilding..." : saveStatus[`rebuild:${profile.rawAuthor}`] === "error" ? "Failed" : "Rebuild"}
+            </button>
             <button
               type="button"
               className={`${settingsSaveButtonClassName(saveStatus[deleteActivityKey], true)} danger-button`}
@@ -598,6 +643,28 @@ export function AuthorProfilesTab({
   saving={saving === "bulk-delete-all-authors"}
   onCancel={() => onBulkActivityDeleteModalOpenChange(false)}
   onDelete={(confirmPhrase) => onExecuteBulkActivityDeleteAllAuthors(confirmPhrase)}
+/>
+      ) : null}
+      {!settingsReadOnly && fullActivityRebuildModalOpen ? (
+<FullActivityRebuildModal
+  saving={saving === "full-activity-rebuild"}
+  onCancel={() => onFullActivityRebuildModalOpenChange(false)}
+  onRebuild={(confirmPhrase) => onExecuteFullActivityRebuild(confirmPhrase)}
+/>
+      ) : null}
+      {!settingsReadOnly && pendingAuthorActivityRebuild ? (
+<AuthorDeleteConfirm
+  profile={pendingAuthorActivityRebuild.profile}
+  saving={saving === `rebuild:${pendingAuthorActivityRebuild.profile.rawAuthor}`}
+  onCancel={() => onPendingAuthorActivityRebuildChange(null)}
+  onDelete={() => onExecuteAuthorActivityRebuild(pendingAuthorActivityRebuild)}
+  periodStartDate={pendingAuthorActivityRebuild.startDate}
+  periodEndDate={pendingAuthorActivityRebuild.endDate}
+  title="Rebuild activity data"
+  lead="Review the rebuild scope below, then confirm. Your choice applies only to the dates described."
+  description={`This will rebuild derived activity rows and daily aggregates for ${pendingAuthorActivityRebuild.profile.rawAuthor} from ${pendingAuthorActivityRebuild.startDate} through ${pendingAuthorActivityRebuild.endDate} (inclusive). Raw activity data and author profile settings are kept unchanged.`}
+  confirmLabel="Rebuild activity for period"
+  savingLabel="Rebuilding..."
 />
       ) : null}
       {!settingsReadOnly && pendingAuthorActivityDelete?.mode === "range" ? (

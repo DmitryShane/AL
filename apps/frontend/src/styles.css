@@ -2727,14 +2727,26 @@ p {
 }
 
 .github-avatars-toolbar .github-avatars-refresh-all,
-.github-avatars-toolbar.delete-activity-bulk-toolbar .delete-all-data-solid-button {
+.github-avatars-toolbar.delete-activity-bulk-toolbar .delete-activity-bulk-actions {
   margin-left: auto;
+}
+
+.delete-activity-bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 @media (max-width: 640px) {
   .github-avatars-toolbar .github-avatars-refresh-all,
-  .github-avatars-toolbar.delete-activity-bulk-toolbar .delete-all-data-solid-button {
+  .github-avatars-toolbar.delete-activity-bulk-toolbar .delete-activity-bulk-actions {
     margin-left: 0;
+  }
+
+  .delete-activity-bulk-actions {
+    justify-content: flex-start;
   }
 }
 
@@ -3745,7 +3757,7 @@ p {
 }
 
 .profile-table--delete-activity {
-  --profile-columns: minmax(220px, 0.88fr) minmax(240px, 1.82fr) minmax(200px, 1fr);
+  --profile-columns: minmax(220px, 0.78fr) minmax(240px, 1.52fr) minmax(300px, 1.2fr);
 }
 
 .profile-delete-activity-period-cell {
@@ -3787,6 +3799,14 @@ p {
 
 .profile-table-shell--compact .profile-table--delete-activity > .profile-row > .profile-actions {
   flex-wrap: nowrap;
+}
+
+.profile-table-shell--compact .profile-table--delete-activity > .profile-row > .profile-actions button {
+  min-width: 82px;
+}
+
+.profile-table-shell--compact .profile-table--delete-activity > .profile-row > .profile-actions .delete-all-data-solid-button {
+  min-width: 132px;
 }
 
 .profile-create-card {
@@ -4123,15 +4143,23 @@ p {
 
 .delete-activity-controls {
   display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 8px 12px;
   flex: 1 1 auto;
-  min-width: max-content;
+  min-width: 0;
   min-height: 38px;
 }
 
-.delete-activity-controls label:not(.radio-inline) {
+.delete-activity-mode-row,
+.delete-activity-date-row {
+  display: flex;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: max-content;
+}
+
+.delete-activity-date-row label {
   display: flex;
   flex-direction: row;
   align-items: center;

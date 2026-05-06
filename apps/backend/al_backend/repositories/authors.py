@@ -610,7 +610,6 @@ class AuthorRepository(MongoComposableMixin):
         data_result = self.delete_author_data(normalized_author)
         counts = dict(data_result.get("deleted", {}))
         counts["authorProfiles"] = self.db.author_profiles.delete_many({"rawAuthor": normalized_author}).deleted_count
-        counts["intervalSettings"] = self.db.interval_settings.delete_many({"kind": "author", "author": normalized_author}).deleted_count
         counts["calendarMarks"] = self.db.calendar_marks.delete_many({"rawAuthor": normalized_author}).deleted_count
 
         composed(self).invalidate_activity_summary_cache()

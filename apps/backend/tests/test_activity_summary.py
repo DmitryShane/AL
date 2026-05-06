@@ -69,8 +69,6 @@ def test_interval_settings_include_independent_idle_threshold():
         idle_threshold_seconds=450,
         device_idle_threshold_seconds=60,
         plugin_ingest_enabled=None,
-        author=None,
-        author_send_interval_seconds=None,
     )
 
     assert result["defaultSendIntervalSeconds"] == 120
@@ -87,8 +85,6 @@ def test_interval_settings_include_global_plugin_ingest_toggle():
         idle_threshold_seconds=None,
         device_idle_threshold_seconds=None,
         plugin_ingest_enabled=False,
-        author=None,
-        author_send_interval_seconds=None,
     )
 
     assert result["pluginIngestEnabled"] is False
@@ -104,16 +100,12 @@ def test_interval_settings_store_plugin_ingest_resume_timestamp_when_re_enabled(
         idle_threshold_seconds=None,
         device_idle_threshold_seconds=None,
         plugin_ingest_enabled=False,
-        author=None,
-        author_send_interval_seconds=None,
     )
     repo.upsert_interval_settings(
         default_send_interval_seconds=None,
         idle_threshold_seconds=None,
         device_idle_threshold_seconds=None,
         plugin_ingest_enabled=True,
-        author=None,
-        author_send_interval_seconds=None,
     )
 
     doc = repo.db.system_settings.find_one({"kind": "plugins"}) or {}
@@ -279,8 +271,6 @@ def test_interval_settings_persist_telegram_online_prompt_delay_minutes():
         idle_threshold_seconds=None,
         device_idle_threshold_seconds=None,
         plugin_ingest_enabled=None,
-        author=None,
-        author_send_interval_seconds=None,
         telegram_online_prompt_delay_minutes=42,
     )
 

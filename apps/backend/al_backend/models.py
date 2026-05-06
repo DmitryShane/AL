@@ -52,8 +52,6 @@ class IntervalSettingsIn(ApiModel):
     idle_threshold_seconds: int | None = Field(default=None, alias="idleThresholdSeconds", ge=30)
     device_idle_threshold_seconds: int | None = Field(default=None, alias="deviceIdleThresholdSeconds", ge=30)
     plugin_ingest_enabled: bool | None = Field(default=None, alias="pluginIngestEnabled")
-    author: str | None = None
-    author_send_interval_seconds: int | None = Field(default=None, alias="authorSendIntervalSeconds", ge=30)
     telegram_online_prompt_delay_minutes: int | None = Field(
         default=None,
         alias="telegramOnlinePromptDelayMinutes",
@@ -112,6 +110,10 @@ class AvatarSettingsIn(ApiModel):
 
 class BulkAuthorsActivityDeleteIn(ApiModel):
     preset: Literal["1d", "2d", "3d", "week", "month", "full"]
+    confirm_phrase: str = Field(alias="confirmPhrase", min_length=1)
+
+
+class FullActivityRebuildIn(ApiModel):
     confirm_phrase: str = Field(alias="confirmPhrase", min_length=1)
 
 

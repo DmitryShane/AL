@@ -282,12 +282,6 @@ class SettingsRepository(MongoComposableMixin):
         return stats
 
     def get_interval_for_author(self, author: str) -> int:
-        author = _normalize_author(author)
-        author_setting = self.db.interval_settings.find_one({"kind": "author", "author": author})
-
-        if author_setting and author_setting.get("sendIntervalSeconds"):
-            return int(author_setting["sendIntervalSeconds"])
-
         global_setting = self.db.interval_settings.find_one({"kind": "global"})
 
         if global_setting and global_setting.get("sendIntervalSeconds"):
@@ -432,8 +426,6 @@ class SettingsRepository(MongoComposableMixin):
         idle_threshold_seconds: int | None,
         device_idle_threshold_seconds: int | None,
         plugin_ingest_enabled: bool | None,
-        author: str | None,
-        author_send_interval_seconds: int | None,
         telegram_online_prompt_delay_minutes: int | None = None,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
@@ -480,24 +472,6 @@ class SettingsRepository(MongoComposableMixin):
                 upsert=True,
             )
 
-        if author and author_send_interval_seconds is None:
-            author = _normalize_author(author)
-            self.db.interval_settings.delete_one({"kind": "author", "author": author})
-
-        if author and author_send_interval_seconds is not None:
-            author = _normalize_author(author)
-            self.db.interval_settings.update_one(
-                {"kind": "author", "author": author},
-                {
-                    "$set": {
-                        "author": author,
-                        "sendIntervalSeconds": author_send_interval_seconds,
-                        "updatedAt": now,
-                    }
-                },
-                upsert=True,
-            )
-
         composed(self).invalidate_activity_summary_cache()
         return self.get_interval_settings()
 
@@ -529,9 +503,6 @@ class SettingsRepository(MongoComposableMixin):
 
     def get_interval_settings(self) -> dict[str, Any]:
         global_setting = self.db.interval_settings.find_one({"kind": "global"}) or {}
-        author_settings = list(
-            self.db.interval_settings.find({"kind": "author"}, {"_id": 0}).sort("author", ASCENDING)
-        )
         raw_minutes = global_setting.get("telegramOnlinePromptDelayMinutes")
 
         if raw_minutes is None:
@@ -550,7 +521,6 @@ class SettingsRepository(MongoComposableMixin):
             "deviceIdleThresholdSeconds": int(global_setting.get("deviceIdleThresholdSeconds", DEFAULT_IDLE_THRESHOLD_SECONDS)),
             "pluginIngestEnabled": self.get_plugin_ingest_enabled(),
             "telegramOnlinePromptDelayMinutes": telegram_online_prompt_delay_minutes,
-            "authors": author_settings,
             "avatarRefreshCadence": self.get_avatar_refresh_cadence(),
         }
 

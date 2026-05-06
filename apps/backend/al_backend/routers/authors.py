@@ -8,7 +8,7 @@ from ..author_avatar_cache import ensure_author_avatar_cached
 from ..repositories.authors import utc_inclusive_range_for_bulk_activity_preset
 from ..container import BackendServices
 from ..dependencies import get_author_service
-from ..models import AuthorAliasIn, AuthorProfileIn, BulkAuthorsActivityDeleteIn
+from ..models import AuthorAliasIn, AuthorProfileIn, BulkAuthorsActivityDeleteIn, FullActivityRebuildIn
 
 
 router = APIRouter()
@@ -63,6 +63,35 @@ def bulk_delete_activity_all_authors(
 
     start_date, end_date = utc_inclusive_range_for_bulk_activity_preset(body.preset)
     return service.bulk_delete_activity_all_authors_for_range(start_date, end_date)
+
+
+@router.post("/api/v1/authors/activity/rebuild")
+def rebuild_activity_all_authors(
+    body: FullActivityRebuildIn,
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    if body.confirm_phrase.strip() != "REBUILD ALL ACTIVITY":
+        raise HTTPException(status_code=400, detail="Confirmation phrase does not match")
+
+    service.rebuild_aggregates_if_needed(force=True)
+    return {"ok": True, "scope": "full"}
+
+
+@router.post("/api/v1/authors/{raw_author}/activity/rebuild")
+def rebuild_author_activity(
+    raw_author: str,
+    start_date: str = Query(..., alias="startDate"),
+    end_date: str = Query(..., alias="endDate"),
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    result = service.rebuild_aggregates_for_dates(start_date=start_date, end_date=end_date, authors=[raw_author])
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=str(result.get("error") or "Activity rebuild failed"))
+
+    return result
 
 
 @router.post("/api/v1/authors/{raw_author}/avatar/refresh")
