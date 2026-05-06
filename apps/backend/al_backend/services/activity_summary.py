@@ -5,15 +5,6 @@ from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
 
-def _shift_break_segments(hour: dict[str, Any], offset_seconds: int) -> None:
-    if offset_seconds <= 0:
-        return
-
-    break_seconds = max(0, min(3600, int(hour.get("breakSeconds", 0))))
-    hour["breakSegments"] = [{"startSecond": 3600 - break_seconds, "endSecond": 3600}] if break_seconds > 0 else []
-    _normalize_break_segments(hour)
-
-
 def _normalize_break_segments(hour: dict[str, Any]) -> None:
     segments = []
 
@@ -34,26 +25,6 @@ def _normalize_break_segments(hour: dict[str, Any]) -> None:
             merged_segments.append(segment)
 
     hour["breakSegments"] = merged_segments
-
-
-def _shift_break_segments_after_remaining_idle(
-    hourly_by_author: dict[str, dict[str, Any]],
-    auto_break_applied_by_author: dict[str, int],
-) -> None:
-    for raw_author, applied_seconds in auto_break_applied_by_author.items():
-        if applied_seconds <= 0:
-            continue
-
-        hourly_author = hourly_by_author.get(raw_author)
-
-        if not hourly_author:
-            continue
-
-        for hour in hourly_author.get("hourlyActivity", []):
-            idle_seconds = max(0, int(hour.get("idleSeconds", 0)))
-
-            if idle_seconds > 0 and hour.get("breakSegments"):
-                _shift_break_segments(hour, idle_seconds)
 
 
 class ActivitySummaryService(MongoComposableMixin):
@@ -1102,7 +1073,6 @@ class ActivitySummaryService(MongoComposableMixin):
             now,
         )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_end=False)
-        auto_break_applied_by_author: dict[str, int] = {}
         self._apply_plugin_hour_idle_gaps(
             authors_by_raw,
             hourly_by_author,
@@ -1112,14 +1082,6 @@ class ActivitySummaryService(MongoComposableMixin):
             end_date,
             date_mode,
             now,
-        )
-        self._apply_summary_auto_breaks(
-            authors_by_raw,
-            hourly_by_author,
-            totals,
-            profiles,
-            summary_dates_by_author,
-            auto_break_applied_by_author,
         )
         self._apply_offline_idle_gaps(
             authors_by_raw,
@@ -1147,9 +1109,7 @@ class ActivitySummaryService(MongoComposableMixin):
             totals,
             profiles,
             summary_dates_by_author,
-            auto_break_applied_by_author,
         )
-        _shift_break_segments_after_remaining_idle(hourly_by_author, auto_break_applied_by_author)
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_start=False)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_latest_report_metadata(
@@ -1601,7 +1561,9 @@ class ActivitySummaryService(MongoComposableMixin):
 
                     occupied_seconds = min(expected_seconds, occupied_seconds)
                     gap_seconds = max(0, expected_seconds - occupied_seconds)
-                    remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - int(author_row.get("pluginDaySeconds", 0)))
+                    auto_break_allowance_seconds = self._summary_auto_break_remaining_seconds(raw_author, profiles, {day_date})
+                    effective_plugin_day_seconds = max(0, int(author_row.get("pluginDaySeconds", 0)) - auto_break_allowance_seconds)
+                    remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - effective_plugin_day_seconds)
                     idle_seconds = min(gap_seconds, remaining_plugin_seconds)
 
                     if idle_seconds > 0:
