@@ -32,6 +32,7 @@ SERVER_STATS_SERVICES = (
 )
 OPENAI_STATS_CACHE_TTL_SECONDS = 300
 OPENAI_STATS_USAGE_ENDPOINTS = ("completions", "audio_transcriptions")
+OPENAI_STATS_TOTAL_SPEND_START = dt.datetime(2025, 1, 1, tzinfo=dt.UTC)
 
 
 def _server_stats_category(key: str, path: Path) -> dict[str, Any]:
@@ -200,7 +201,7 @@ def _fetch_openai_month_spend(api_key: str, project_id: str, start_time: int, en
 
 
 def _fetch_openai_total_spend(api_key: str, project_id: str, end_time: int) -> tuple[float, str]:
-    openai_api_start_time = int(dt.datetime(2020, 1, 1, tzinfo=dt.UTC).timestamp())
+    openai_api_start_time = int(OPENAI_STATS_TOTAL_SPEND_START.timestamp())
     return _fetch_openai_spend(api_key, project_id, openai_api_start_time, end_time, 180)
 
 
