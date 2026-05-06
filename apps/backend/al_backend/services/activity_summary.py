@@ -1258,7 +1258,10 @@ class ActivitySummaryService(MongoComposableMixin):
 
             idle_seconds = max(0, int(hour.get("idleSeconds", 0)))
             telegram_gap_idle_seconds = max(0, int(hour.get("telegramToFirstActivityIdleSeconds", 0)))
-            convertible_idle_seconds = max(0, idle_seconds - telegram_gap_idle_seconds)
+            plugin_hour_gap_idle_seconds = max(0, int(hour.get("pluginHourGapIdleSeconds", 0)))
+            visual_occupied_seconds = _visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
+            blocked_plugin_gap_idle_seconds = plugin_hour_gap_idle_seconds if visual_occupied_seconds < 3600 else 0
+            convertible_idle_seconds = max(0, idle_seconds - telegram_gap_idle_seconds - blocked_plugin_gap_idle_seconds)
 
             if convertible_idle_seconds <= 0:
                 continue
@@ -1281,6 +1284,7 @@ class ActivitySummaryService(MongoComposableMixin):
             )
             hour["idleMicroseconds"] = idle_microseconds
             hour["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
+            hour["pluginHourGapIdleSeconds"] = min(plugin_hour_gap_idle_seconds, hour["idleSeconds"])
             hour["breakSeconds"] = int(hour.get("breakSeconds", 0)) + move_seconds
             _add_break_segment_to_hour(hour, 3600 - move_seconds, 3600)
             transferred_seconds += move_seconds
@@ -1405,6 +1409,7 @@ class ActivitySummaryService(MongoComposableMixin):
                     continue
 
                 _add_idle_seconds_to_hour(hour, idle_seconds)
+                hour["pluginHourGapIdleSeconds"] = int(hour.get("pluginHourGapIdleSeconds", 0)) + idle_seconds
                 visual_plugin_seconds += idle_seconds
 
     def _apply_offline_idle_gaps(
