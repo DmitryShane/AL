@@ -9,16 +9,8 @@ def _shift_break_segments(hour: dict[str, Any], offset_seconds: int) -> None:
     if offset_seconds <= 0:
         return
 
-    shifted_segments = []
-
-    for segment in hour.get("breakSegments", []):
-        start_second = max(0, min(3600, int(segment.get("startSecond", 0)) + offset_seconds))
-        end_second = max(0, min(3600, int(segment.get("endSecond", 0)) + offset_seconds))
-
-        if end_second > start_second:
-            shifted_segments.append({"startSecond": start_second, "endSecond": end_second})
-
-    hour["breakSegments"] = shifted_segments
+    break_seconds = max(0, min(3600, int(hour.get("breakSeconds", 0))))
+    hour["breakSegments"] = [{"startSecond": 3600 - break_seconds, "endSecond": 3600}] if break_seconds > 0 else []
     _normalize_break_segments(hour)
 
 
