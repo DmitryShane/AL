@@ -1050,6 +1050,7 @@ class ActivitySummaryService(MongoComposableMixin):
             date_mode,
             now,
         )
+        self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_end=False)
         self._apply_plugin_hour_idle_gaps(
             authors_by_raw,
             hourly_by_author,
@@ -1087,7 +1088,7 @@ class ActivitySummaryService(MongoComposableMixin):
             profiles,
             summary_dates_by_author,
         )
-        self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now)
+        self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_start=False)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_latest_report_metadata(
             authors_by_raw,
@@ -1534,6 +1535,8 @@ class ActivitySummaryService(MongoComposableMixin):
         end_date: str | None,
         date_mode: str | None,
         now: dt.datetime,
+        include_start: bool = True,
+        include_end: bool = True,
     ) -> None:
         latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
         session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
@@ -1571,14 +1574,16 @@ class ActivitySummaryService(MongoComposableMixin):
                 hourly_by_author[raw_author] = hourly_author
 
             hourly_activity = hourly_author.get("hourlyActivity", [])
-            self._add_visual_missed_start(hourly_activity, started_at, time_zone_id)
-            self._add_visual_missed_end(
-                hourly_activity,
-                latest_signal_at,
-                time_zone_id,
-                fill_to_hour=latest_report_at is not None,
-                offline_at=ended_at,
-            )
+            if include_start:
+                self._add_visual_missed_start(hourly_activity, started_at, time_zone_id)
+            if include_end:
+                self._add_visual_missed_end(
+                    hourly_activity,
+                    latest_signal_at,
+                    time_zone_id,
+                    fill_to_hour=latest_report_at is not None,
+                    offline_at=ended_at,
+                )
 
     def _latest_report_times_by_author_date(
         self,

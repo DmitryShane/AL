@@ -3296,8 +3296,9 @@ def test_auto_break_does_not_overflow_hour_with_visual_missed_start():
     summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
 
-    assert hourly[11]["breakSeconds"] == 3600
-    assert hourly[11]["missedSeconds"] == 0
+    assert hourly[11]["breakSeconds"] == 2640
+    assert hourly[11]["missedSeconds"] == 960
+    assert hourly[11]["missedStartSeconds"] == 960
     assert (
         hourly[11]["activeSeconds"]
         + hourly[11]["idleSeconds"]
