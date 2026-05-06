@@ -765,16 +765,15 @@ def _report_date_query(
     profiles: dict[str, dict[str, Any]],
     now: dt.datetime,
 ) -> dict[str, Any]:
-    if date_mode != "authorLocalToday":
-        return _date_query(start_date, end_date)
+    if date_mode == "authorLocalToday" and not start_date and not end_date:
+        dates = {now.astimezone(dt.UTC).date().isoformat()}
 
-    dates = {now.astimezone(dt.UTC).date().isoformat()}
-    dates.update(_date_values_between(start_date, end_date))
+        for profile in profiles.values():
+            dates.add(_local_date_for_time_zone(now, _author_time_zone_id(profile.get("rawAuthor"), profiles)))
 
-    for profile in profiles.values():
-        dates.add(_local_date_for_time_zone(now, _author_time_zone_id(profile.get("rawAuthor"), profiles)))
+        return {"date": {"$in": sorted(dates)}}
 
-    return {"date": {"$in": sorted(dates)}}
+    return _date_query(start_date, end_date)
 
 
 def _meeting_interval_date_query(
@@ -872,7 +871,7 @@ def _date_in_summary_scope(
     end_date: str | None,
     date_mode: str | None,
 ) -> bool:
-    if date_mode == "authorLocalToday":
+    if date_mode == "authorLocalToday" and not start_date and not end_date:
         return _is_author_local_today(value, raw_author, profiles, fallback_time_zone_id, now)
 
     return _date_in_range(value, start_date, end_date)

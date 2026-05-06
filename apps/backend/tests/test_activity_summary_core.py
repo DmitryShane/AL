@@ -508,7 +508,7 @@ def test_configured_author_time_zone_normalizes_saved_report_row():
     assert repo.db.author_profiles.items[0]["timeZoneId"] == "Europe/Kyiv"
     assert repo.db.report_rows.items[0]["timeZoneId"] == "Europe/Kyiv"
 
-def test_author_local_today_summary_includes_authors_on_different_local_dates():
+def test_author_local_today_summary_uses_observer_selected_date_for_activity():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Madrid Author", "displayName": "Madrid Author", "timeZoneId": "Europe/Madrid"})
     repo.db.author_profiles.insert_one({"rawAuthor": "Utc Author", "displayName": "Utc Author", "timeZoneId": "UTC"})
@@ -547,12 +547,10 @@ def test_author_local_today_summary_includes_authors_on_different_local_dates():
 
     authors = {author["rawAuthor"]: author for author in summary["authors"]}
     assert authors["Madrid Author"]["activeSeconds"] == 60
-    assert authors["Utc Author"]["activeSeconds"] == 120
+    assert authors["Utc Author"]["activeSeconds"] == 0
     assert authors["No Activity Author"]["activeSeconds"] == 0
     assert authors["No Activity Author"]["status"] == "stale"
     assert authors["No Activity Author"]["stalePresence"] == "telegram"
-    assert authors["Utc Author"]["status"] == "stale"
-    assert authors["Utc Author"]["stalePresence"] == "reports"
 
 def test_activity_summary_regular_date_keeps_calendar_filter_and_all_authors():
     repo = fake_repository()

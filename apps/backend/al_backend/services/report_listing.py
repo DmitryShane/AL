@@ -263,10 +263,7 @@ def _is_live_date_match(
     start_date: str | None,
     end_date: str | None,
 ) -> bool:
-    if _is_author_local_today(value, raw_author, profiles, fallback_time_zone_id, now):
-        return True
+    if not start_date and not end_date:
+        return _is_author_local_today(value, raw_author, profiles, fallback_time_zone_id, now)
 
-    if start_date or end_date:
-        return _date_in_range(str(value or ""), start_date, end_date)
-
-    return False
+    return _date_in_range(str(value or ""), start_date, end_date)
