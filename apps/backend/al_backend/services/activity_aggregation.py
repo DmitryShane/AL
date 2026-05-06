@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from typing import Callable
+
 from ..activity_math import *
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
 
 class ActivityAggregationService(MongoComposableMixin):
-    def rebuild_aggregates_if_needed(self, force: bool = False, scope: str = "full") -> None:
+    def rebuild_aggregates_if_needed(
+        self,
+        force: bool = False,
+        scope: str = "full",
+        progress_callback: Callable[[str, int, int], None] | None = None,
+    ) -> None:
         metadata = self.db.aggregate_metadata.find_one({"kind": "activity"})
 
         if not force and metadata and metadata.get("version") == composed(self).aggregates_version:
@@ -14,7 +21,7 @@ class ActivityAggregationService(MongoComposableMixin):
 
         if not force and scope == "today":
             target_dates = self._current_author_calendar_dates()
-            self.rebuild_aggregates_for_dates(target_dates[0], dates=target_dates)
+            self.rebuild_aggregates_for_dates(target_dates[0], dates=target_dates, progress_callback=progress_callback)
             self.db.aggregate_metadata.update_one(
                 {"kind": "activity"},
                 {
@@ -32,12 +39,16 @@ class ActivityAggregationService(MongoComposableMixin):
             return
 
         self._daily_consumed_microseconds_cache = {}
+        self._report_rebuild_progress(progress_callback, "Clearing derived data", 0, 1)
         self.db.report_rows.delete_many({})
         self.db.daily_author_activity.delete_many({})
         self.db.aggregate_session_state.delete_many({})
         self.db.aggregate_day_state.delete_many({})
-        self._rebuild_aggregates_from_sources()
+        self._report_rebuild_progress(progress_callback, "Clearing derived data", 1, 1)
+        self._rebuild_aggregates_from_sources(progress_callback=progress_callback)
+        self._report_rebuild_progress(progress_callback, "Capturing day state", 0, 1)
         self._persist_aggregate_day_state(sorted(self.db.daily_author_activity.distinct("date")), set())
+        self._report_rebuild_progress(progress_callback, "Capturing day state", 1, 1)
 
         self.db.aggregate_metadata.update_one(
             {"kind": "activity"},
@@ -69,11 +80,13 @@ class ActivityAggregationService(MongoComposableMixin):
         end_date: str | None = None,
         authors: list[str] | tuple[str, ...] | set[str] | None = None,
         dates: list[str] | tuple[str, ...] | set[str] | None = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> dict[str, Any]:
         target_dates = self._aggregate_rebuild_dates(start_date, end_date, dates)
         target_authors = {composed(self).resolve_author_alias(str(author or "Unknown User")) for author in (authors or []) if str(author or "").strip()}
         scoped_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
         raw_author_query = self._aggregate_rebuild_query(target_dates, target_authors, "rawAuthor")
+        self._report_rebuild_progress(progress_callback, "Clearing scoped derived data", 0, 1)
         deleted_report_rows = self.db.report_rows.delete_many(scoped_query).deleted_count
         deleted_daily = self.db.daily_author_activity.delete_many(scoped_query).deleted_count
         deleted_state = self.db.aggregate_session_state.delete_many(scoped_query).deleted_count
@@ -88,6 +101,7 @@ class ActivityAggregationService(MongoComposableMixin):
             else:
                 deleted_state += self.db.aggregate_session_state.delete_many({"_id": {"$regex": f"(^|\\|){re.escape(day)}(\\||$)"}}).deleted_count
 
+        self._report_rebuild_progress(progress_callback, "Clearing scoped derived data", 1, 1)
         previous_dates = getattr(self, "_aggregate_rebuild_target_dates", None)
         previous_authors = getattr(self, "_aggregate_rebuild_target_authors", None)
         self._aggregate_rebuild_target_dates = set(target_dates)
@@ -95,13 +109,15 @@ class ActivityAggregationService(MongoComposableMixin):
         self._daily_consumed_microseconds_cache = {}
 
         try:
-            self._rebuild_aggregates_from_sources(set(target_dates), target_authors)
+            self._rebuild_aggregates_from_sources(set(target_dates), target_authors, progress_callback=progress_callback)
         finally:
             self._aggregate_rebuild_target_dates = previous_dates
             self._aggregate_rebuild_target_authors = previous_authors
             self._daily_consumed_microseconds_cache = None
 
+        self._report_rebuild_progress(progress_callback, "Capturing day state", 0, 1)
         state_count = self._persist_aggregate_day_state(target_dates, target_authors)
+        self._report_rebuild_progress(progress_callback, "Capturing day state", 1, 1)
         composed(self).invalidate_activity_summary_cache(target_dates)
         return {
             "ok": True,
@@ -271,15 +287,23 @@ class ActivityAggregationService(MongoComposableMixin):
         self,
         target_dates: set[str] | None = None,
         target_authors: set[str] | None = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> None:
         snapshot_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
         raw_author_query = self._aggregate_rebuild_query(target_dates, target_authors, "rawAuthor")
         raw_event_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
 
         snapshots = self.db.activity_snapshots.find(snapshot_query).sort("receivedAt", ASCENDING)
+        snapshot_total = self.db.activity_snapshots.count_documents(snapshot_query)
+        snapshot_count = 0
 
         for snapshot in snapshots:
             self._apply_snapshot_to_aggregates(snapshot)
+            snapshot_count += 1
+            self._report_rebuild_progress(progress_callback, "Rebuilding snapshots", snapshot_count, snapshot_total)
+
+        if snapshot_total == 0:
+            self._report_rebuild_progress(progress_callback, "Rebuilding snapshots", 0, 0)
 
         batch_ids = {
             str(batch.get("batchId") or "")
@@ -289,9 +313,13 @@ class ActivityAggregationService(MongoComposableMixin):
         batch_delta_items_by_batch_id: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
         orphan_report_rows: list[dict[str, Any]] = []
         raw_events = self.db.raw_activity_events.find(raw_event_query).sort("occurredAtUtc", ASCENDING)
+        raw_event_total = self.db.raw_activity_events.count_documents(raw_event_query)
+        raw_event_count = 0
 
         for event in raw_events:
             deltas = self._apply_raw_event_to_aggregates(event)
+            raw_event_count += 1
+            self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", raw_event_count, raw_event_total)
             batch_id = str(event.get("batchId") or "")
 
             if batch_id and batch_id in batch_ids:
@@ -326,9 +354,16 @@ class ActivityAggregationService(MongoComposableMixin):
                 }
             )
 
+        if raw_event_total == 0:
+            self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", 0, 0)
+
         last_report_time_by_author: dict[str, dt.datetime] = {}
+        batch_total = self.db.raw_event_batches.count_documents({})
+        batch_count = 0
 
         for batch in self.db.raw_event_batches.find({}).sort("receivedAt", ASCENDING):
+            batch_count += 1
+            self._report_rebuild_progress(progress_callback, "Rebuilding event batches", batch_count, batch_total)
             batch_id = str(batch.get("batchId") or "")
 
             if target_dates is not None and batch_id not in batch_delta_items_by_batch_id:
@@ -352,7 +387,12 @@ class ActivityAggregationService(MongoComposableMixin):
 
         _insert_many_if_supported(self.db.report_rows, orphan_report_rows)
 
+        break_total = self.db.break_events.count_documents(raw_author_query)
+        break_count = 0
+
         for event in self.db.break_events.find(raw_author_query).sort("timestamp", ASCENDING):
+            break_count += 1
+            self._report_rebuild_progress(progress_callback, "Rebuilding Telegram activity", break_count, break_total)
             event_time = _coerce_datetime(event.get("timestamp"))
 
             if not event_time:
@@ -371,7 +411,15 @@ class ActivityAggregationService(MongoComposableMixin):
                 str(event.get("eventType") or "telegram"),
             )
 
+        if break_total == 0:
+            self._report_rebuild_progress(progress_callback, "Rebuilding Telegram activity", 0, 0)
+
+        meeting_total = self.db.meeting_events.count_documents(raw_author_query)
+        meeting_count = 0
+
         for event in self.db.meeting_events.find(raw_author_query).sort("timestamp", ASCENDING):
+            meeting_count += 1
+            self._report_rebuild_progress(progress_callback, "Rebuilding Discord meetings", meeting_count, meeting_total)
             event_time = _coerce_datetime(event.get("timestamp"))
 
             if not event_time:
@@ -393,7 +441,27 @@ class ActivityAggregationService(MongoComposableMixin):
                 str(event.get("channelId") or ""),
             )
 
+        if meeting_total == 0:
+            self._report_rebuild_progress(progress_callback, "Rebuilding Discord meetings", 0, 0)
+
+        self._report_rebuild_progress(progress_callback, "Rebuilding status events", 0, 1)
         composed(self)._materialize_status_report_rows()
+        self._report_rebuild_progress(progress_callback, "Rebuilding status events", 1, 1)
+
+    def _report_rebuild_progress(
+        self,
+        progress_callback: Callable[[str, int, int], None] | None,
+        phase: str,
+        current: int,
+        total: int,
+    ) -> None:
+        if progress_callback is None:
+            return
+
+        if total > 0 and current not in {0, total} and current % 100 != 0:
+            return
+
+        progress_callback(phase, current, total)
 
     def _aggregate_rebuild_dates(
         self,

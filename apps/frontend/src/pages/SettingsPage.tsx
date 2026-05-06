@@ -35,6 +35,15 @@ type PendingAuthorActivityRebuild = {
   endDate: string;
 };
 
+type ActivityRebuildProgress = {
+  jobId: string;
+  label: string;
+  status: "running" | "completed" | "failed";
+  phase: string;
+  progress: number;
+  error?: string;
+};
+
 const OPENAI_STATS_CACHE_KEY = "al.openAIStats.cache";
 let cachedOpenAIStats: OpenAIStats | null = readCachedOpenAIStats();
 
@@ -102,6 +111,7 @@ export function SettingsPage({
   const [bulkActivityDeletePreset, setBulkActivityDeletePreset] = useState<BulkActivityDeletePreset>("1d");
   const [bulkActivityDeleteModalOpen, setBulkActivityDeleteModalOpen] = useState(false);
   const [fullActivityRebuildModalOpen, setFullActivityRebuildModalOpen] = useState(false);
+  const [activityRebuildProgress, setActivityRebuildProgress] = useState<ActivityRebuildProgress | null>(null);
   const [newProfile, setNewProfile] = useState<AuthorProfile>(() => emptyAuthorProfile());
   const [aliasSource, setAliasSource] = useState("");
   const [aliasTarget, setAliasTarget] = useState("");
@@ -233,6 +243,57 @@ export function SettingsPage({
       window.clearInterval(intervalId);
     };
   }, [settingsTab]);
+
+  useEffect(() => {
+    if (!activityRebuildProgress?.jobId || activityRebuildProgress.status !== "running") {
+      return;
+    }
+
+    let cancelled = false;
+    const jobId = activityRebuildProgress.jobId;
+
+    async function pollRebuildProgress() {
+      try {
+        const response = await apiFetch(`/api/v1/authors/activity/rebuild/status?${new URLSearchParams({ jobId }).toString()}`);
+
+        if (!response.ok) {
+          throw new Error(await apiErrorDetail(response, "Activity rebuild status load failed"));
+        }
+
+        const data = await response.json() as { job?: Partial<ActivityRebuildProgress> | null };
+        const job = data.job;
+
+        if (!cancelled && job?.jobId) {
+          const status = job.status === "completed" || job.status === "failed" ? job.status : "running";
+          setActivityRebuildProgress({
+            jobId: String(job.jobId),
+            label: String(job.label || "Activity rebuild"),
+            status,
+            phase: String(job.phase || (status === "completed" ? "Completed" : "Running")),
+            progress: Number(job.progress ?? (status === "completed" ? 100 : 1)),
+            error: typeof job.error === "string" ? job.error : undefined,
+          });
+
+          if (status === "completed") {
+            onSaved();
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : "Activity rebuild status load failed";
+          setActivityRebuildProgress((current) => current ? { ...current, status: "failed", phase: "Status polling failed", error: message } : current);
+        }
+      }
+    }
+
+    void pollRebuildProgress();
+    const intervalId = window.setInterval(() => void pollRebuildProgress(), 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activityRebuildProgress?.jobId, activityRebuildProgress?.status, onSaved]);
 
   useEffect(() => {
     if (settingsTab !== "meetingSummaries") {
@@ -762,9 +823,21 @@ export function SettingsPage({
         throw new Error(await apiErrorDetail(response, "Full activity rebuild failed"));
       }
 
+      const data = await response.json() as { jobId?: string };
+
+      if (!data.jobId) {
+        throw new Error("Full activity rebuild did not return a job id");
+      }
+
+      setActivityRebuildProgress({
+        jobId: data.jobId,
+        label: "Rebuild full DB",
+        status: "running",
+        phase: "Queued",
+        progress: 1,
+      });
       setFullActivityRebuildModalOpen(false);
       setSaveStatus((items) => ({ ...items, fullActivityRebuild: "saved" }));
-      onSaved();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Full activity rebuild failed";
       window.alert(message);
@@ -800,9 +873,21 @@ export function SettingsPage({
         throw new Error(await apiErrorDetail(response, "Author activity rebuild failed"));
       }
 
+      const data = await response.json() as { jobId?: string };
+
+      if (!data.jobId) {
+        throw new Error("Author activity rebuild did not return a job id");
+      }
+
+      setActivityRebuildProgress({
+        jobId: data.jobId,
+        label: `Rebuild ${rawAuthor}`,
+        status: "running",
+        phase: "Queued",
+        progress: 1,
+      });
       setPendingAuthorActivityRebuild(null);
       setSaveStatus((items) => ({ ...items, [rebuildKey]: "saved" }));
-      onSaved();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Author activity rebuild failed";
       window.alert(message);
@@ -1124,6 +1209,7 @@ export function SettingsPage({
           bulkActivityDeletePreset={bulkActivityDeletePreset}
           bulkActivityDeleteModalOpen={bulkActivityDeleteModalOpen}
           fullActivityRebuildModalOpen={fullActivityRebuildModalOpen}
+          activityRebuildProgress={activityRebuildProgress}
           canManageSettings={canManageSettings}
           settingsReadOnly={settingsReadOnly}
           avatarSettingsLockedTitle={avatarSettingsLockedTitle}

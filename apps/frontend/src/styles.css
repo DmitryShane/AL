@@ -1655,6 +1655,15 @@ p {
   --duration-accent: #dc2626;
 }
 
+.duration-overtime.has-value {
+  --duration-accent: #8b5cf6;
+}
+
+.duration-overtime.has-value span,
+.duration-overtime.has-value strong {
+  color: #7c3aed;
+}
+
 .duration span {
   display: block;
   color: #718093;
@@ -2724,6 +2733,80 @@ p {
 
 .github-avatars-toolbar {
   flex-wrap: wrap;
+}
+
+.database-rebuild-progress {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.database-rebuild-progress__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.database-rebuild-progress__track {
+  position: relative;
+  overflow: hidden;
+  height: 8px;
+  border-radius: 999px;
+  background: #bfdbfe;
+}
+
+.database-rebuild-progress__track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb 0%, #06b6d4 100%);
+  transition: width 220ms ease;
+}
+
+.database-rebuild-progress p {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #2563eb;
+}
+
+.database-rebuild-progress--completed {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.database-rebuild-progress--completed .database-rebuild-progress__track {
+  background: #bbf7d0;
+}
+
+.database-rebuild-progress--completed .database-rebuild-progress__track span {
+  background: #22c55e;
+}
+
+.database-rebuild-progress--failed {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.database-rebuild-progress--failed .database-rebuild-progress__track {
+  background: #fecaca;
+}
+
+.database-rebuild-progress--failed .database-rebuild-progress__track span {
+  background: #dc2626;
+}
+
+.database-rebuild-progress__error {
+  color: #991b1b !important;
 }
 
 .github-avatars-toolbar .github-avatars-refresh-all,

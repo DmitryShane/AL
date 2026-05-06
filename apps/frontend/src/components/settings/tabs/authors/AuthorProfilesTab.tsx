@@ -30,6 +30,15 @@ type PendingAuthorActivityRebuild = {
   endDate: string;
 };
 
+type ActivityRebuildProgress = {
+  jobId: string;
+  label: string;
+  status: "running" | "completed" | "failed";
+  phase: string;
+  progress: number;
+  error?: string;
+};
+
 type AuthorProfilesTabProps = {
   profiles: AuthorProfile[];
   drafts: Record<string, AuthorProfile>;
@@ -43,6 +52,7 @@ type AuthorProfilesTabProps = {
   bulkActivityDeletePreset: BulkActivityDeletePreset;
   bulkActivityDeleteModalOpen: boolean;
   fullActivityRebuildModalOpen: boolean;
+  activityRebuildProgress: ActivityRebuildProgress | null;
   canManageSettings: boolean;
   settingsReadOnly: boolean;
   avatarSettingsLockedTitle: string;
@@ -88,6 +98,7 @@ export function AuthorProfilesTab({
   bulkActivityDeletePreset,
   bulkActivityDeleteModalOpen,
   fullActivityRebuildModalOpen,
+  activityRebuildProgress,
   canManageSettings,
   settingsReadOnly,
   avatarSettingsLockedTitle,
@@ -119,6 +130,8 @@ export function AuthorProfilesTab({
   onExecuteAuthorActivityRebuild,
   onDeleteAuthorProfile
 }: AuthorProfilesTabProps) {
+  const rebuildRunning = activityRebuildProgress?.status === "running";
+
   return (
 <>
       <div className="panel">
@@ -478,11 +491,26 @@ export function AuthorProfilesTab({
 </div>
       </div>
       <div className="panel delete-activity-data-panel">
-<h2>Delete activity data</h2>
+<h2>Data Base</h2>
 <p className="settings-caption">
-  Delete data for today or a custom date range using the controls below. To wipe everything for an author, use <strong>Delete all data</strong> — that opens a separate confirmation step (you must type <strong>delete</strong>). The profile row stays unchanged unless you delete the profile above.
+  Manage the activity database for all authors: rebuild derived aggregates for a selected period, delete scoped activity data, or wipe an author&apos;s full activity history. To wipe everything for an author, use <strong>Delete all data</strong> — that opens a separate confirmation step (you must type <strong>delete</strong>). The profile row stays unchanged unless you delete the profile above.
   &quot;Today&quot; uses each author&apos;s timezone when set on the profile; otherwise your browser&apos;s local calendar date.
 </p>
+{activityRebuildProgress ? (
+  <div className={`database-rebuild-progress database-rebuild-progress--${activityRebuildProgress.status}`}>
+    <div className="database-rebuild-progress__header">
+      <strong>{activityRebuildProgress.label}</strong>
+      <span>{Math.round(activityRebuildProgress.progress)}%</span>
+    </div>
+    <div className="database-rebuild-progress__track" aria-label="Activity rebuild progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(activityRebuildProgress.progress)}>
+      <span style={{ width: `${Math.max(0, Math.min(100, activityRebuildProgress.progress))}%` }} />
+    </div>
+    <p>{activityRebuildProgress.status === "completed" ? "Completed" : activityRebuildProgress.status === "failed" ? "Failed" : activityRebuildProgress.phase}</p>
+    {activityRebuildProgress.status === "failed" && activityRebuildProgress.error ? (
+      <p className="alert-text database-rebuild-progress__error">{activityRebuildProgress.error.split("\n")[0]}</p>
+    ) : null}
+  </div>
+) : null}
 <div className="settings-row github-avatars-toolbar delete-activity-bulk-toolbar">
   <label>
     Bulk delete for every author (UTC window)
@@ -520,7 +548,7 @@ export function AuthorProfilesTab({
           onFullActivityRebuildModalOpenChange(true);
         }
       }}
-      disabled={settingsReadOnly || saving === "full-activity-rebuild"}
+    disabled={settingsReadOnly || saving === "full-activity-rebuild" || rebuildRunning}
     >
       Rebuild full DB…
     </button>
@@ -608,7 +636,7 @@ export function AuthorProfilesTab({
               type="button"
               className={settingsSaveButtonClassName(saveStatus[`rebuild:${profile.rawAuthor}`], true)}
               onClick={() => onRequestAuthorActivityRebuild(profile)}
-              disabled={settingsReadOnly || saving === `rebuild:${profile.rawAuthor}`}
+              disabled={settingsReadOnly || saving === `rebuild:${profile.rawAuthor}` || rebuildRunning}
             >
               {saving === `rebuild:${profile.rawAuthor}` ? "Rebuilding..." : saveStatus[`rebuild:${profile.rawAuthor}`] === "error" ? "Failed" : "Rebuild"}
             </button>

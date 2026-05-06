@@ -15,6 +15,10 @@ export function DurationCard({ label, seconds, variant, className, valueClassNam
     classNames.push(`duration-${variant}`);
   }
 
+  if (variant === "overtime" && seconds > 0) {
+    classNames.push("has-value");
+  }
+
   if (className) {
     classNames.push(className);
   }

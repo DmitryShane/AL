@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, ClassVar, Protocol, cast
+from typing import Any, Callable, ClassVar, Protocol, cast
 
 from pymongo.database import Database
 
@@ -191,7 +191,12 @@ class BackendComposableHost(Protocol):
 
     def purge_editor_plugin_activity_for_author_day(self, raw_author: str, day_date: str) -> dict[str, Any]: ...
 
-    def rebuild_aggregates_if_needed(self, force: bool = False, scope: str = "full") -> None: ...
+    def rebuild_aggregates_if_needed(
+        self,
+        force: bool = False,
+        scope: str = "full",
+        progress_callback: Callable[[str, int, int], None] | None = None,
+    ) -> None: ...
 
     def rebuild_aggregates_for_author_dates(
         self,
@@ -204,6 +209,7 @@ class BackendComposableHost(Protocol):
         end_date: str | None = None,
         authors: list[str] | tuple[str, ...] | set[str] | None = None,
         dates: list[str] | tuple[str, ...] | set[str] | None = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> dict[str, Any]: ...
 
     def resolve_author_alias(self, raw_author: str | None) -> str: ...

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import datetime as dt
+import traceback
+import uuid
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from ..api_security import require_permission
@@ -12,6 +16,98 @@ from ..models import AuthorAliasIn, AuthorProfileIn, BulkAuthorsActivityDeleteIn
 
 
 router = APIRouter()
+
+REBUILD_PHASES = [
+    "Clearing derived data",
+    "Clearing scoped derived data",
+    "Rebuilding snapshots",
+    "Rebuilding raw activity events",
+    "Rebuilding event batches",
+    "Rebuilding Telegram activity",
+    "Rebuilding Discord meetings",
+    "Rebuilding status events",
+    "Capturing day state",
+]
+
+
+def _active_rebuild_job(service: BackendServices) -> dict | None:
+    return service.db.aggregate_rebuild_jobs.find_one({"status": "running"}, {"_id": 0})
+
+
+def _rebuild_job_doc(job_id: str, label: str, scope: str) -> dict:
+    now = dt.datetime.now(dt.UTC)
+    return {
+        "jobId": job_id,
+        "label": label,
+        "scope": scope,
+        "status": "running",
+        "phase": "Queued",
+        "progress": 1,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+
+def _rebuild_progress_percent(phase: str, current: int, total: int) -> int:
+    phase_index = REBUILD_PHASES.index(phase) if phase in REBUILD_PHASES else 0
+    phase_fraction = 1.0 if total <= 0 else max(0.0, min(1.0, current / total))
+    return max(1, min(95, int(((phase_index + phase_fraction) / len(REBUILD_PHASES)) * 95)))
+
+
+def _update_rebuild_job_progress(service: BackendServices, job_id: str, phase: str, current: int, total: int) -> None:
+    service.db.aggregate_rebuild_jobs.update_one(
+        {"jobId": job_id},
+        {
+            "$set": {
+                "phase": phase,
+                "progress": _rebuild_progress_percent(phase, current, total),
+                "current": current,
+                "total": total,
+                "updatedAt": dt.datetime.now(dt.UTC),
+            }
+        },
+    )
+
+
+def _finish_rebuild_job(service: BackendServices, job_id: str, status: str, result: dict | None = None, error: str | None = None) -> None:
+    payload: dict = {
+        "status": status,
+        "progress": 100 if status == "completed" else 0,
+        "updatedAt": dt.datetime.now(dt.UTC),
+        "finishedAt": dt.datetime.now(dt.UTC),
+    }
+
+    if result is not None:
+        payload["result"] = result
+
+    if error is not None:
+        payload["error"] = error
+
+    service.db.aggregate_rebuild_jobs.update_one({"jobId": job_id}, {"$set": payload})
+
+
+def _run_full_rebuild_job(service: BackendServices, job_id: str) -> None:
+    try:
+        service.rebuild_aggregates_if_needed(
+            force=True,
+            progress_callback=lambda phase, current, total: _update_rebuild_job_progress(service, job_id, phase, current, total),
+        )
+        _finish_rebuild_job(service, job_id, "completed", {"ok": True, "scope": "full"})
+    except Exception as exc:
+        _finish_rebuild_job(service, job_id, "failed", error=f"{exc}\n{traceback.format_exc()}")
+
+
+def _run_scoped_rebuild_job(service: BackendServices, job_id: str, raw_author: str, start_date: str, end_date: str) -> None:
+    try:
+        result = service.rebuild_aggregates_for_dates(
+            start_date=start_date,
+            end_date=end_date,
+            authors=[raw_author],
+            progress_callback=lambda phase, current, total: _update_rebuild_job_progress(service, job_id, phase, current, total),
+        )
+        _finish_rebuild_job(service, job_id, "completed", result)
+    except Exception as exc:
+        _finish_rebuild_job(service, job_id, "failed", error=f"{exc}\n{traceback.format_exc()}")
 
 
 @router.get("/api/v1/avatars/author")
@@ -68,30 +164,59 @@ def bulk_delete_activity_all_authors(
 @router.post("/api/v1/authors/activity/rebuild")
 def rebuild_activity_all_authors(
     body: FullActivityRebuildIn,
+    background_tasks: BackgroundTasks,
     _: dict = Depends(require_permission("manageSettings")),
     service: BackendServices = Depends(get_author_service),
 ) -> dict:
     if body.confirm_phrase.strip() != "REBUILD ALL ACTIVITY":
         raise HTTPException(status_code=400, detail="Confirmation phrase does not match")
 
-    service.rebuild_aggregates_if_needed(force=True)
-    return {"ok": True, "scope": "full"}
+    active_job = _active_rebuild_job(service)
+
+    if active_job:
+        raise HTTPException(status_code=409, detail="Another rebuild is already running")
+
+    job_id = uuid.uuid4().hex
+    service.db.aggregate_rebuild_jobs.insert_one(_rebuild_job_doc(job_id, "Rebuild full DB", "full"))
+    background_tasks.add_task(_run_full_rebuild_job, service, job_id)
+    return {"ok": True, "jobId": job_id}
+
+
+@router.get("/api/v1/authors/activity/rebuild/status")
+def rebuild_activity_status(
+    job_id: str | None = Query(None, alias="jobId"),
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    query = {"jobId": job_id} if job_id else {}
+    job = service.db.aggregate_rebuild_jobs.find_one(query, {"_id": 0}, sort=[("createdAt", -1)])
+
+    if not job:
+        return {"ok": True, "job": None}
+
+    return {"ok": True, "job": job}
 
 
 @router.post("/api/v1/authors/{raw_author}/activity/rebuild")
 def rebuild_author_activity(
     raw_author: str,
+    background_tasks: BackgroundTasks,
     start_date: str = Query(..., alias="startDate"),
     end_date: str = Query(..., alias="endDate"),
     _: dict = Depends(require_permission("manageSettings")),
     service: BackendServices = Depends(get_author_service),
 ) -> dict:
-    result = service.rebuild_aggregates_for_dates(start_date=start_date, end_date=end_date, authors=[raw_author])
+    active_job = _active_rebuild_job(service)
 
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=str(result.get("error") or "Activity rebuild failed"))
+    if active_job:
+        raise HTTPException(status_code=409, detail="Another rebuild is already running")
 
-    return result
+    dt.date.fromisoformat(start_date)
+    dt.date.fromisoformat(end_date)
+    job_id = uuid.uuid4().hex
+    service.db.aggregate_rebuild_jobs.insert_one(_rebuild_job_doc(job_id, f"Rebuild {raw_author}", "author"))
+    background_tasks.add_task(_run_scoped_rebuild_job, service, job_id, raw_author, start_date, end_date)
+    return {"ok": True, "jobId": job_id}
 
 
 @router.post("/api/v1/authors/{raw_author}/avatar/refresh")
