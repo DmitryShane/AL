@@ -1546,6 +1546,7 @@ def _empty_hourly_activity() -> list[dict[str, int]]:
             "breakSeconds": 0,
             "meetingSeconds": 0,
             "overtimeActiveSeconds": 0,
+            "overtimeFillSeconds": 0,
             "missedSeconds": 0,
             "missedStartSeconds": 0,
             "missedEndSeconds": 0,
