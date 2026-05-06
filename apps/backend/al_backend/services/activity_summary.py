@@ -1061,13 +1061,6 @@ class ActivitySummaryService(MongoComposableMixin):
             date_mode,
             now,
         )
-        self._apply_summary_auto_breaks(
-            authors_by_raw,
-            hourly_by_author,
-            totals,
-            profiles,
-            summary_dates_by_author,
-        )
         self._apply_offline_idle_gaps(
             authors_by_raw,
             hourly_by_author,
@@ -1087,6 +1080,13 @@ class ActivitySummaryService(MongoComposableMixin):
             end_date,
             date_mode,
             now,
+        )
+        self._apply_summary_auto_breaks(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            summary_dates_by_author,
         )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_start=False)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)

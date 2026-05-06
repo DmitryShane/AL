@@ -1022,6 +1022,58 @@ def test_auto_break_uses_completed_plugin_hour_idle_gaps():
     assert hourly[8]["idleSeconds"] == 0
     assert hourly[8]["breakSeconds"] == 3540
 
+def test_auto_break_uses_workday_gap_idle_after_plugin_gap_fill():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-05-02",
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[13]["activeSeconds"] = 2190
+    hourly_activity[13]["idleSeconds"] = 1149
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "source": "cur",
+            "activeSeconds": 27510,
+            "idleSeconds": 1149,
+            "daySeconds": 0,
+            "hourlyActivity": hourly_activity,
+            "lastRecordedAt": "2026-05-02T14:00:00Z",
+            "lastReceivedAt": dt.datetime(2026, 5, 2, 14, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "source": "cur",
+            "reportType": "auto",
+            "recordedAt": "2026-05-02T14:00:00Z",
+            "receivedAt": dt.datetime(2026, 5, 2, 14, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-02",
+            "startedAt": dt.datetime(2026, 5, 2, 13, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    assert hourly[13]["idleSeconds"] == 0
+    assert hourly[13]["breakSeconds"] == 1410
+
 def test_auto_break_skips_incomplete_plugin_hour_idle_gaps():
     repo = fake_repository()
     hourly_activity = _empty_hourly_activity()
