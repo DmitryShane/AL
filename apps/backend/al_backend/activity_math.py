@@ -1549,6 +1549,7 @@ def _empty_hourly_activity() -> list[dict[str, int]]:
             "missedSeconds": 0,
             "missedStartSeconds": 0,
             "missedEndSeconds": 0,
+            "breakSegments": [],
         }
         for hour in range(24)
     ]
@@ -1566,9 +1567,79 @@ def _public_hourly_activity(source: list[dict[str, Any]]) -> list[dict[str, int]
             "missedSeconds": int(item.get("missedSeconds", 0)),
             "missedStartSeconds": int(item.get("missedStartSeconds", 0)),
             "missedEndSeconds": int(item.get("missedEndSeconds", 0)),
+            "breakSegments": _public_break_segments(item.get("breakSegments", [])),
         }
         for item in source
     ]
+
+
+def _public_break_segments(source: Any) -> list[dict[str, int]]:
+    segments = []
+
+    if not isinstance(source, list):
+        return segments
+
+    for segment in source:
+        if not isinstance(segment, dict):
+            continue
+
+        start_second = max(0, min(3600, int(segment.get("startSecond", 0))))
+        end_second = max(0, min(3600, int(segment.get("endSecond", 0))))
+
+        if end_second <= start_second:
+            continue
+
+        segments.append({"startSecond": start_second, "endSecond": end_second})
+
+    return segments
+
+
+def _add_break_segment_to_hour(hour: dict[str, Any], start_second: int, end_second: int) -> None:
+    start_second = max(0, min(3600, start_second))
+    end_second = max(0, min(3600, end_second))
+
+    if end_second <= start_second:
+        return
+
+    segments = hour.setdefault("breakSegments", [])
+    segments.append({"startSecond": start_second, "endSecond": end_second})
+
+
+def _break_segments_after_consumed_seconds(
+    source: Any,
+    consumed_seconds: int,
+    target_seconds: int,
+) -> list[dict[str, int]]:
+    if target_seconds <= 0:
+        return []
+
+    remaining_consumed_seconds = max(0, consumed_seconds)
+    remaining_target_seconds = max(0, target_seconds)
+    segments = []
+
+    for segment in _public_break_segments(source):
+        segment_start = int(segment["startSecond"])
+        segment_end = int(segment["endSecond"])
+        segment_seconds = segment_end - segment_start
+
+        if remaining_consumed_seconds >= segment_seconds:
+            remaining_consumed_seconds -= segment_seconds
+            continue
+
+        start_second = segment_start + remaining_consumed_seconds
+        available_seconds = segment_end - start_second
+        selected_seconds = min(available_seconds, remaining_target_seconds)
+
+        if selected_seconds > 0:
+            segments.append({"startSecond": start_second, "endSecond": start_second + selected_seconds})
+            remaining_target_seconds -= selected_seconds
+
+        remaining_consumed_seconds = 0
+
+        if remaining_target_seconds <= 0:
+            break
+
+    return segments
 
 
 def _add_visual_missed_seconds(hourly_activity: list[dict[str, Any]], hour: int, seconds: int, segment_key: str) -> None:
@@ -1730,6 +1801,7 @@ def _merge_hourly_activity(target: list[dict[str, Any]], deltas: list[dict[str, 
         target_item["breakSeconds"] = int(target_item.get("breakSeconds", 0)) + int(delta_item.get("breakSeconds", 0))
         target_item["meetingSeconds"] = int(target_item.get("meetingSeconds", 0)) + int(delta_item.get("meetingSeconds", 0))
         target_item["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_active_microseconds)
+        target_item.setdefault("breakSegments", []).extend(_public_break_segments(delta_item.get("breakSegments", [])))
 
 
 def _apply_breaks_to_hourly_activity(
@@ -1755,12 +1827,23 @@ def _apply_breaks_to_hourly_activity(
         break_seconds = min(available_break_seconds, max(0, 3600 - active_seconds - overtime_active_seconds))
         idle_seconds = max(0, raw_idle_seconds - break_seconds)
         idle_seconds = min(idle_seconds, max(0, 3600 - active_seconds - overtime_active_seconds - break_seconds))
+        break_segments = _break_segments_after_consumed_seconds(
+            break_hour.get("breakSegments", []),
+            consumed_break_seconds,
+            break_seconds,
+        )
 
         if break_seconds and idle_seconds < AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS:
+            artifact_seconds = min(
+                idle_seconds,
+                max(0, 3600 - active_seconds - overtime_active_seconds - break_seconds),
+            )
             break_seconds = min(
                 break_seconds + idle_seconds,
                 max(0, 3600 - active_seconds - overtime_active_seconds),
             )
+            if artifact_seconds > 0:
+                break_segments.append({"startSecond": max(0, 3600 - artifact_seconds), "endSecond": 3600})
             idle_seconds = 0
 
         if consumed_buckets is not None:
@@ -1772,6 +1855,7 @@ def _apply_breaks_to_hourly_activity(
                 "activeSeconds": active_seconds,
                 "idleSeconds": idle_seconds,
                 "breakSeconds": break_seconds,
+                "breakSegments": break_segments,
                 "meetingSeconds": int(source_hour.get("meetingSeconds", 0)),
                 "overtimeActiveSeconds": overtime_active_seconds,
             }
@@ -1815,6 +1899,7 @@ def _apply_meetings_to_hourly_activity(
                 "activeSeconds": active_seconds,
                 "idleSeconds": idle_seconds,
                 "breakSeconds": break_seconds,
+                "breakSegments": _public_break_segments(source_hour.get("breakSegments", [])),
                 "meetingSeconds": meeting_seconds,
                 "overtimeActiveSeconds": overtime_active_seconds,
             }
@@ -1913,6 +1998,13 @@ def _add_break_interval_to_buckets(
         if target:
             seconds = max(0, int((segment_end - current).total_seconds()))
             target[current.hour]["breakSeconds"] = int(target[current.hour].get("breakSeconds", 0)) + seconds
+            start_second = current.minute * 60 + current.second
+            end_second = segment_end.minute * 60 + segment_end.second
+
+            if segment_end == hour_end:
+                end_second = 3600
+
+            _add_break_segment_to_hour(target[current.hour], start_second, end_second)
 
         current = segment_end
 
@@ -2057,6 +2149,7 @@ __all__: tuple[str, ...] = (
     "_activity_count_type",
     "_activity_mix_from_counts",
     "_activity_mix_from_list",
+    "_add_break_segment_to_hour",
     "_add_break_interval_to_buckets",
     "_add_idle_interval_to_buckets",
     "_add_idle_seconds_to_hour",

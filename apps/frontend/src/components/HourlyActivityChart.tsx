@@ -3,6 +3,7 @@ type HourlyActivity = {
   activeSeconds: number;
   idleSeconds: number;
   breakSeconds?: number;
+  breakSegments?: Array<{ startSecond: number; endSecond: number }>;
   meetingSeconds?: number;
   overtimeActiveSeconds?: number;
   missedSeconds?: number;
@@ -31,6 +32,7 @@ type AuthorHourlyChart = {
     missedMinutes: number;
     missedStartMinutes: number;
     missedEndMinutes: number;
+    breakSegments: Array<{ startPercent: number; heightPercent: number }>;
     isInProgress: boolean;
   }>;
 };
@@ -85,10 +87,20 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                               className="hourly-chart-segment overtime"
                               style={{ height: `${segments.overtimePercent}%` }}
                             />
-                            <div
-                              className="hourly-chart-segment break"
-                              style={{ height: `${segments.breakPercent}%` }}
-                            />
+                            {hour.breakSegments.length ? (
+                              hour.breakSegments.map((segment, index) => (
+                                <div
+                                  className="hourly-chart-segment break is-positioned"
+                                  key={`${segment.startPercent}-${segment.heightPercent}-${index}`}
+                                  style={{ bottom: `${segment.startPercent}%`, height: `${segment.heightPercent}%` }}
+                                />
+                              ))
+                            ) : (
+                              <div
+                                className="hourly-chart-segment break"
+                                style={{ height: `${segments.breakPercent}%` }}
+                              />
+                            )}
                             <div
                               className="hourly-chart-segment meeting"
                               style={{ height: `${segments.meetingPercent}%` }}
@@ -144,7 +156,8 @@ function createEmptyHourlyActivity(): Required<HourlyActivity>[] {
     overtimeActiveSeconds: 0,
     missedSeconds: 0,
     missedStartSeconds: 0,
-    missedEndSeconds: 0
+    missedEndSeconds: 0,
+    breakSegments: []
   }));
 }
 
@@ -164,6 +177,7 @@ function normalizeHourlyActivity(source: HourlyActivity[]) {
     hourlyActivity[sourceHour.hour].missedSeconds = sourceHour.missedSeconds ?? 0;
     hourlyActivity[sourceHour.hour].missedStartSeconds = sourceHour.missedStartSeconds ?? 0;
     hourlyActivity[sourceHour.hour].missedEndSeconds = sourceHour.missedEndSeconds ?? 0;
+    hourlyActivity[sourceHour.hour].breakSegments = normalizeBreakSegments(sourceHour.breakSegments);
   }
 
   return hourlyActivity;
@@ -186,6 +200,7 @@ function toAuthorHourlyActivity(author: AuthorHourlyActivity): AuthorHourlyChart
       missedMinutes: Math.min(60, (hour.missedSeconds ?? 0) / 60),
       missedStartMinutes: Math.min(60, (hour.missedStartSeconds ?? 0) / 60),
       missedEndMinutes: Math.min(60, (hour.missedEndSeconds ?? 0) / 60),
+      breakSegments: toPositionedBreakSegments(hour.breakSegments),
       isInProgress: hour.hour === inProgressHour
     }))
   };
@@ -193,6 +208,30 @@ function toAuthorHourlyActivity(author: AuthorHourlyActivity): AuthorHourlyChart
 
 function toPercentOfHour(minutes: number) {
   return Math.min(100, Math.max(0, (minutes / 60) * 100));
+}
+
+function normalizeBreakSegments(segments: HourlyActivity["breakSegments"]) {
+  if (!Array.isArray(segments)) {
+    return [];
+  }
+
+  return segments.flatMap((segment) => {
+    const startSecond = Math.min(3600, Math.max(0, segment.startSecond ?? 0));
+    const endSecond = Math.min(3600, Math.max(0, segment.endSecond ?? 0));
+
+    if (endSecond <= startSecond) {
+      return [];
+    }
+
+    return [{ startSecond, endSecond }];
+  });
+}
+
+function toPositionedBreakSegments(segments: Array<{ startSecond: number; endSecond: number }>) {
+  return segments.map((segment) => ({
+    startPercent: (segment.startSecond / 3600) * 100,
+    heightPercent: ((segment.endSecond - segment.startSecond) / 3600) * 100
+  }));
 }
 
 function toDisplaySegments(hour: { activeMinutes: number; breakMinutes: number; meetingMinutes: number; idleMinutes: number; overtimeMinutes: number; missedStartMinutes: number; missedEndMinutes: number }) {

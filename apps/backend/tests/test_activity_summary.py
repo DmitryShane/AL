@@ -3093,6 +3093,82 @@ def test_auto_break_moves_first_idle_hour_to_break_in_summary_only():
     assert rebuilt.get("autoBreakSeconds", 0) == 0
 
 
+def test_auto_break_adds_break_segment_at_end_of_hour():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-05-02",
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[13]["idleSeconds"] = 240
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "source": "cur",
+            "projectId": "AL",
+            "timeZoneId": "UTC",
+            "activeSeconds": 0,
+            "idleSeconds": 240,
+            "breakSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    assert author["breakSeconds"] == 240
+    assert hourly[13]["breakSeconds"] == 240
+    assert hourly[13]["breakSegments"] == [{"startSecond": 3360, "endSecond": 3600}]
+
+
+def test_break_interval_segments_can_cross_hour_boundary():
+    repo = fake_repository()
+    repo.db.break_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 5, 2, 13, 56, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 2, 14, 3, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo._save_event_batch(
+        "cur",
+        "1.0.0",
+        {
+            "author": "Future Artist",
+            "projectId": "AL",
+            "sessionId": "session-1",
+            "deviceId": "mac-mini",
+            "timeZoneId": "UTC",
+            "events": [
+                {"eventId": "selection-1", "eventType": "selection", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T13:00:00Z"},
+                {"eventId": "heartbeat-1", "eventType": "heartbeat", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T14:10:00Z"},
+            ],
+        },
+        "raw-1",
+        "auto",
+        dt.datetime(2026, 5, 2, 14, 10, tzinfo=dt.UTC),
+        "challenge-1",
+        None,
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    assert hourly[13]["breakSeconds"] == 240
+    assert hourly[13]["breakSegments"] == [{"startSecond": 3360, "endSecond": 3600}]
+    assert hourly[14]["breakSeconds"] == 180
+    assert hourly[14]["breakSegments"] == [{"startSecond": 0, "endSecond": 180}]
+
+
 def test_auto_break_adds_full_daily_limit_even_with_real_break():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(

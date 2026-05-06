@@ -165,6 +165,7 @@ export type HourlyActivity = {
   activeSeconds: number;
   idleSeconds: number;
   breakSeconds?: number;
+  breakSegments?: Array<{ startSecond: number; endSecond: number }>;
   meetingSeconds?: number;
   overtimeActiveSeconds?: number;
 };

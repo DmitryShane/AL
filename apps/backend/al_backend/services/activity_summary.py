@@ -1280,6 +1280,7 @@ class ActivitySummaryService(MongoComposableMixin):
             hour["idleMicroseconds"] = idle_microseconds
             hour["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
             hour["breakSeconds"] = int(hour.get("breakSeconds", 0)) + move_seconds
+            _add_break_segment_to_hour(hour, 3600 - move_seconds, 3600)
             transferred_seconds += move_seconds
 
         return transferred_seconds
