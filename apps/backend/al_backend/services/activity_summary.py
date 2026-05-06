@@ -1051,6 +1051,7 @@ class ActivitySummaryService(MongoComposableMixin):
             now,
         )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_end=False)
+        auto_break_applied_by_author: dict[str, int] = {}
         self._apply_plugin_hour_idle_gaps(
             authors_by_raw,
             hourly_by_author,
@@ -1060,6 +1061,14 @@ class ActivitySummaryService(MongoComposableMixin):
             end_date,
             date_mode,
             now,
+        )
+        self._apply_summary_auto_breaks(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            summary_dates_by_author,
+            auto_break_applied_by_author,
         )
         self._apply_offline_idle_gaps(
             authors_by_raw,
@@ -1087,6 +1096,7 @@ class ActivitySummaryService(MongoComposableMixin):
             totals,
             profiles,
             summary_dates_by_author,
+            auto_break_applied_by_author,
         )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_start=False)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
@@ -1183,7 +1193,10 @@ class ActivitySummaryService(MongoComposableMixin):
         totals: dict[str, int],
         profiles: dict[str, dict[str, Any]],
         summary_dates_by_author: dict[str, set[str]],
+        auto_break_applied_by_author: dict[str, int] | None = None,
     ) -> None:
+        applied_by_author = auto_break_applied_by_author if auto_break_applied_by_author is not None else {}
+
         for raw_author, hourly_author in hourly_by_author.items():
             author_row = authors_by_raw.get(raw_author)
 
@@ -1195,6 +1208,7 @@ class ActivitySummaryService(MongoComposableMixin):
                 profiles,
                 summary_dates_by_author.get(raw_author, set()),
             )
+            remaining_seconds = max(0, remaining_seconds - int(applied_by_author.get(raw_author, 0)))
 
             if remaining_seconds <= 0:
                 continue
@@ -1216,6 +1230,7 @@ class ActivitySummaryService(MongoComposableMixin):
             totals["breakSeconds"] = int(totals.get("breakSeconds", 0)) + transferred_seconds
             totals["pluginDaySeconds"] = max(0, int(totals.get("pluginDaySeconds", 0)) - applied_idle_reduction)
             totals["rawPluginDaySeconds"] = max(0, int(totals.get("rawPluginDaySeconds", 0)) - applied_idle_reduction)
+            applied_by_author[raw_author] = int(applied_by_author.get(raw_author, 0)) + transferred_seconds
 
     def _summary_auto_break_remaining_seconds(
         self,
