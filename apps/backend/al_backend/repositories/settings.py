@@ -172,7 +172,11 @@ def _fetch_openai_stats(api_key: str, project_id: str, now: dt.datetime) -> dict
     start_time = int(start.timestamp())
     end_time = int(now.timestamp())
     spend, currency = _fetch_openai_month_spend(api_key, project_id, start_time, end_time)
-    total_spend, total_currency = _fetch_openai_total_spend(api_key, project_id, end_time)
+    total_spend, total_currency = spend, currency
+    try:
+        total_spend, total_currency = _fetch_openai_total_spend(api_key, project_id, end_time)
+    except RuntimeError:
+        pass
     total_tokens = 0
     total_requests = 0
 
