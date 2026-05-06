@@ -3115,11 +3115,22 @@ p {
   margin: 0;
 }
 
+.meeting-summary-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .meeting-summary-recordings-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.meeting-summary-recordings-header > span {
+  align-self: flex-end;
 }
 
 .meeting-summary-archive-date-picker .date-range-control,
