@@ -27,7 +27,7 @@ export function AutoBreakTab({
     <div className="panel">
       <h2>Auto Break</h2>
       <p className="settings-caption">
-        Assign authors whose first idle time during a work day should count as break time until the legal 60 minute break is filled.
+        Assign authors whose first idle time during a work day should count as break time, up to 60 minutes per day.
       </p>
       <div className="profile-table-shell">
         <div className="auto-break-list">

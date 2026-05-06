@@ -1637,6 +1637,57 @@ def test_telegram_to_first_activity_gap_counts_as_idle_hourly_activity():
     assert hourly_by_hour[10]["idleSeconds"] == 17 * 60 + 30
 
 
+def test_auto_break_can_use_telegram_to_first_activity_gap():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "UTC",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-04-28",
+        }
+    )
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-04-28",
+            "recordedAt": "2026-04-28T10:17:30Z",
+            "receivedAt": dt.datetime(2026, 4, 28, 10, 17, 31, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": _empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert author["telegramToFirstActivitySeconds"] == 77 * 60 + 30
+    assert author["idleSeconds"] == 17 * 60 + 30
+    assert author["breakSeconds"] == 3600
+    assert hourly_by_hour[9]["idleSeconds"] == 0
+    assert hourly_by_hour[9]["breakSeconds"] == 3600
+    assert hourly_by_hour[10]["idleSeconds"] == 17 * 60 + 30
+
+
 def test_telegram_to_first_activity_uses_first_raw_activity_event_before_report_row():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
@@ -3048,7 +3099,7 @@ def test_auto_break_moves_first_idle_hour_to_break_in_summary_only():
     assert rebuilt.get("autoBreakSeconds", 0) == 0
 
 
-def test_auto_break_only_fills_remaining_legal_break():
+def test_auto_break_adds_full_daily_limit_even_with_real_break():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
         {
@@ -3095,8 +3146,8 @@ def test_auto_break_only_fills_remaining_legal_break():
 
     summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
-    assert author["idleSeconds"] == 5400
-    assert author["breakSeconds"] == 3600
+    assert author["idleSeconds"] == 3600
+    assert author["breakSeconds"] == 5400
 
 
 def test_auto_break_uses_one_daily_limit_across_sources():
@@ -3240,6 +3291,105 @@ def test_auto_break_waits_until_effective_date():
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
     assert daily["idleSeconds"] == 7200
     assert daily.get("breakSeconds", 0) == 0
+
+
+def test_auto_break_preserves_meeting_priority():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "discordUserId": "123",
+            "timeZoneId": "UTC",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-05-02",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "activeSeconds": 0,
+            "idleSeconds": 3600,
+            "hourlyActivity": [
+                {"hour": 10, "activeSeconds": 0, "idleSeconds": 3600, "breakSeconds": 0, "meetingSeconds": 0, "overtimeActiveSeconds": 0}
+            ],
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 5, 2, 10, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 2, 10, 30, tzinfo=dt.UTC),
+            "date": "2026-05-02",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 1800,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02", now=dt.datetime(2026, 5, 2, 11, tzinfo=dt.UTC))
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
+
+    assert author["idleSeconds"] == 0
+    assert author["meetingSeconds"] == 1800
+    assert author["breakSeconds"] == 1800
+    assert hour["idleSeconds"] == 0
+    assert hour["meetingSeconds"] == 1800
+    assert hour["breakSeconds"] == 1800
+
+
+def test_auto_break_skips_hour_fully_used_by_meeting():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "discordUserId": "123",
+            "timeZoneId": "UTC",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-05-02",
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[10]["idleSeconds"] = 3600
+    hourly_activity[11]["idleSeconds"] = 1800
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "activeSeconds": 0,
+            "idleSeconds": 5400,
+            "hourlyActivity": hourly_activity,
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "discordUserId": "123",
+            "startedAt": dt.datetime(2026, 5, 2, 10, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 2, 11, 0, tzinfo=dt.UTC),
+            "date": "2026-05-02",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 3600,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02", now=dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC))
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    assert author["idleSeconds"] == 0
+    assert author["meetingSeconds"] == 3600
+    assert author["breakSeconds"] == 1800
+    assert hourly[10]["meetingSeconds"] == 3600
+    assert hourly[10]["breakSeconds"] == 0
+    assert hourly[11]["breakSeconds"] == 1800
 
 
 def test_overtime_activity_after_telegram_offline_is_allowed():

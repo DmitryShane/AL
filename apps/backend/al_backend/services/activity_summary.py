@@ -1086,7 +1086,6 @@ class ActivitySummaryService(MongoComposableMixin):
             totals,
             profiles,
             summary_dates_by_author,
-            break_seconds_by_author_date,
         )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
@@ -1183,7 +1182,6 @@ class ActivitySummaryService(MongoComposableMixin):
         totals: dict[str, int],
         profiles: dict[str, dict[str, Any]],
         summary_dates_by_author: dict[str, set[str]],
-        break_seconds_by_author_date: dict[tuple[str, str], int],
     ) -> None:
         for raw_author, hourly_author in hourly_by_author.items():
             author_row = authors_by_raw.get(raw_author)
@@ -1195,7 +1193,6 @@ class ActivitySummaryService(MongoComposableMixin):
                 raw_author,
                 profiles,
                 summary_dates_by_author.get(raw_author, set()),
-                break_seconds_by_author_date,
             )
 
             if remaining_seconds <= 0:
@@ -1220,7 +1217,6 @@ class ActivitySummaryService(MongoComposableMixin):
         raw_author: str,
         profiles: dict[str, dict[str, Any]],
         summary_dates: set[str],
-        break_seconds_by_author_date: dict[tuple[str, str], int],
     ) -> int:
         if not raw_author or not summary_dates:
             return 0
@@ -1241,8 +1237,7 @@ class ActivitySummaryService(MongoComposableMixin):
             if day_date < effective_date:
                 continue
 
-            real_break_seconds = break_seconds_by_author_date.get((raw_author, day_date), 0)
-            remaining_seconds += max(0, AUTO_BREAK_SECONDS - real_break_seconds)
+            remaining_seconds += AUTO_BREAK_SECONDS
 
         return remaining_seconds
 
@@ -1261,7 +1256,18 @@ class ActivitySummaryService(MongoComposableMixin):
             if idle_seconds <= 0:
                 continue
 
-            move_seconds = min(idle_seconds, remaining_seconds - transferred_seconds)
+            occupied_seconds = (
+                max(0, int(hour.get("activeSeconds", 0)))
+                + max(0, int(hour.get("meetingSeconds", 0)))
+                + max(0, int(hour.get("breakSeconds", 0)))
+                + max(0, int(hour.get("overtimeActiveSeconds", 0)))
+            )
+            available_break_seconds = max(0, 3600 - occupied_seconds)
+
+            if available_break_seconds <= 0:
+                continue
+
+            move_seconds = min(idle_seconds, available_break_seconds, remaining_seconds - transferred_seconds)
             idle_microseconds = max(
                 0,
                 _time_microseconds(hour, "idleSeconds", "idleMicroseconds") - (move_seconds * MICROSECONDS_PER_SECOND),

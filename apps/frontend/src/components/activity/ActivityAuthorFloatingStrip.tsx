@@ -32,27 +32,32 @@ export function ActivityAuthorFloatingStrip({
     [authors, dateRange]
   );
   const shouldRestoreFloatingStrip = restoringScroll && cardAuthors.length > 0;
-  const [anchorInView, setAnchorInView] = useState(!shouldRestoreFloatingStrip);
-  const shouldShowFloatingStrip = !anchorInView && cardAuthors.length > 0;
-  const [mounted, setMounted] = useState(shouldRestoreFloatingStrip);
+  const [anchorMeasured, setAnchorMeasured] = useState(false);
+  const [anchorInView, setAnchorInView] = useState(true);
+  const shouldShowFloatingStrip = anchorMeasured && !anchorInView && cardAuthors.length > 0;
+  const [mounted, setMounted] = useState(false);
   const [exiting, setExiting] = useState(false);
   const [animKey, setAnimKey] = useState(0);
   const exitTimerRef = useRef<number | null>(null);
-  const prevShouldShowRef = useRef(shouldRestoreFloatingStrip);
+  const prevShouldShowRef = useRef(false);
   const [restored] = useState(shouldRestoreFloatingStrip);
 
   useEffect(() => {
     const element = anchorRef.current;
 
     if (!element) {
+      setAnchorMeasured(false);
       return;
     }
+
+    setAnchorMeasured(false);
 
     const intersectionObserver = new IntersectionObserver(
       (entries) => {
         const entry = entries[0];
 
         if (entry) {
+          setAnchorMeasured(true);
           setAnchorInView(entry.isIntersecting);
         }
       },
