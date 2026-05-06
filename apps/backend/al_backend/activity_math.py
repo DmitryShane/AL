@@ -434,6 +434,9 @@ def _is_activity_event(event: dict[str, Any] | str) -> bool:
     if isinstance(event, dict):
         event_type = str(event.get("eventType") or "")
 
+        if event.get("source") == "cur" and event_type == "focus":
+            return True
+
         if event.get("source") == "bal" and event_type == "scene_changed":
             metadata = event.get("metadata") or {}
             return bool(metadata.get("inputType") or metadata.get("changeType") == "object_update")

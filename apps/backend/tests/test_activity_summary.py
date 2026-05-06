@@ -8321,8 +8321,8 @@ def test_cross_source_activity_clamps_unity_after_vscode_activity():
 
     assert background_deltas["activeDeltaSeconds"] == 0
     assert background_deltas["idleDeltaSeconds"] == 0
-    assert focus_deltas["activeDeltaSeconds"] == 20
-    assert asset_deltas["activeDeltaSeconds"] == 74
+    assert focus_deltas["activeDeltaSeconds"] == 0
+    assert asset_deltas["activeDeltaSeconds"] == 94
     assert focus_deltas["idleDeltaSeconds"] == 0
     assert asset_deltas["idleDeltaSeconds"] == 0
 
