@@ -629,7 +629,6 @@ function App() {
             selectedAuthor={activeAuthor}
             setSelectedAuthor={setSelectedAuthor}
             loading={isVisualLoading}
-            restoringScroll={isRestoringScroll}
             refreshing={refreshingReports}
             onRefreshAuthor={(author) => void requestReportRefresh(author)}
           />

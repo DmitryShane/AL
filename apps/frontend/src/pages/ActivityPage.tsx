@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { AuthorsTable } from "../components/AuthorsTable";
 import { HourlyActivityChart } from "../components/HourlyActivityChart";
 import { ActivityCard } from "../components/activity/ActivityCard";
-import { ActivityAuthorFloatingStrip } from "../components/activity/ActivityAuthorFloatingStrip";
+import { ActivityAuthorMiniCard } from "../components/activity/ActivityAuthorMiniCard";
 import { ActivityMetricsGrid } from "../components/activity/ActivityMetricsGrid";
 import { BreakdownPanel, OvertimeBreakdownPanel, type BreakdownPanelItem } from "../components/activity/BreakdownPanels";
 import { ReportsTable } from "../components/activity/ReportsTable";
+import { DateRangePicker } from "../components/layout/DateRangePicker";
 import { apiFetch } from "../api/client";
-import { REPORTS_PAGE_STORAGE_KEY } from "../constants/dashboard";
-import type { ActivitySummary, AuthorHourlyActivity, DateRange, Report, ReportsPage, ReportsPageCache, SavedPrefab } from "../types/dashboard";
+import { PAGE_SCROLL_STORAGE_PREFIX, REPORTS_PAGE_STORAGE_KEY } from "../constants/dashboard";
+import type { ActivitySummary, AuthorHourlyActivity, AuthorRow, DateRange, Report, ReportsPage, ReportsPageCache, SavedPrefab } from "../types/dashboard";
 import { formatSource } from "../utils/format";
 import { activityColor, compareAuthorCardStatus, formatActivityType, loadSavedReportsPage, paletteColor, savedFileLabel } from "./pageHelpers";
 
@@ -24,7 +25,6 @@ export function ActivityPage({
   selectedAuthor,
   setSelectedAuthor,
   loading,
-  restoringScroll,
   refreshing,
   onRefreshAuthor
 }: {
@@ -35,7 +35,6 @@ export function ActivityPage({
   selectedAuthor: string | null;
   setSelectedAuthor: (value: string) => void;
   loading: boolean;
-  restoringScroll: boolean;
   refreshing: boolean;
   onRefreshAuthor: (author: string) => void;
 }) {
@@ -95,7 +94,19 @@ export function ActivityPage({
     () => [...summary.authors].sort((left, right) => compareAuthorCardStatus(left, right, dateRange)),
     [summary.authors, dateRange]
   );
+  const lastFloatingAuthorsRef = useRef<AuthorRow[]>(cardAuthors);
+
+  if (!loading && summary.authors.length === 0) {
+    lastFloatingAuthorsRef.current = [];
+  }
+
+  if (cardAuthors.length > 0) {
+    lastFloatingAuthorsRef.current = cardAuthors;
+  }
+
+  const floatingAuthors = cardAuthors.length > 0 ? cardAuthors : lastFloatingAuthorsRef.current;
   const authorCardStripRef = useRef<HTMLDivElement>(null);
+  const [showFloatingAuthorStrip, setShowFloatingAuthorStrip] = useState(false);
   const [reports, setReports] = useState<Report[]>([]);
   const [reportsTotal, setReportsTotal] = useState(0);
   const [reportSources, setReportSources] = useState<string[]>([]);
@@ -126,6 +137,74 @@ export function ActivityPage({
     limit: reportsPageSize,
     page: reportsPage
   }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportHourFilter, reportsPageSize, reportsPage]);
+  useLayoutEffect(() => {
+    let settleAttempts = 0;
+    let pendingFrame: number | null = null;
+
+    function readSavedActivityScrollY() {
+      try {
+        const raw = sessionStorage.getItem(`${PAGE_SCROLL_STORAGE_PREFIX}activity`);
+
+        if (!raw) {
+          return 0;
+        }
+
+        const value = Number(raw);
+
+        if (!Number.isFinite(value)) {
+          return 0;
+        }
+
+        return Math.max(0, value);
+      } catch {
+        return 0;
+      }
+    }
+
+    function updateFloatingAuthorStrip() {
+      const element = authorCardStripRef.current;
+
+      if (!element || floatingAuthors.length === 0) {
+        setShowFloatingAuthorStrip(false);
+        settleAttempts = 0;
+        return;
+      }
+
+      const savedScrollY = readSavedActivityScrollY();
+
+      if (savedScrollY > 0 && window.scrollY + 1 < savedScrollY && settleAttempts < 12) {
+        settleAttempts += 1;
+
+        if (pendingFrame !== null) {
+          window.cancelAnimationFrame(pendingFrame);
+        }
+
+        pendingFrame = window.requestAnimationFrame(() => {
+          pendingFrame = null;
+          updateFloatingAuthorStrip();
+        });
+
+        return;
+      }
+
+      settleAttempts = 0;
+      setShowFloatingAuthorStrip(element.getBoundingClientRect().bottom <= 0);
+    }
+
+    updateFloatingAuthorStrip();
+    window.addEventListener("scroll", updateFloatingAuthorStrip, { passive: true });
+    window.addEventListener("resize", updateFloatingAuthorStrip);
+
+    return () => {
+      if (pendingFrame !== null) {
+        window.cancelAnimationFrame(pendingFrame);
+      }
+
+      window.removeEventListener("scroll", updateFloatingAuthorStrip);
+      window.removeEventListener("resize", updateFloatingAuthorStrip);
+    };
+  }, [cardAuthors.length, floatingAuthors.length, loading, summary.authors.length]);
+
   useEffect(() => {
     let ignore = false;
 
@@ -327,16 +406,28 @@ export function ActivityPage({
 
   return (
     <>
-      <ActivityAuthorFloatingStrip
-        anchorRef={authorCardStripRef}
-        authors={summary.authors}
-        dateRange={dateRange}
-        datePickerValue={datePickerValue}
-        onDatePickerChange={onDatePickerChange}
-        selectedAuthor={author?.rawAuthor ?? null}
-        setSelectedAuthor={setSelectedAuthor}
-        restoringScroll={restoringScroll}
-      />
+      <div
+        className={`activity-author-floating-strip${showFloatingAuthorStrip ? " is-visible" : ""}`}
+        role="region"
+        aria-label="Authors and date range"
+        aria-hidden={!showFloatingAuthorStrip}
+      >
+        <div className="activity-author-floating-strip-inner">
+          <div className="activity-author-floating-strip-scroll">
+            {floatingAuthors.map((item) => (
+              <ActivityAuthorMiniCard
+                key={`float-${item.rawAuthor}`}
+                author={item}
+                active={item.rawAuthor === author?.rawAuthor}
+                onSelect={(selected) => setSelectedAuthor(selected.rawAuthor)}
+              />
+            ))}
+          </div>
+          <div className="activity-author-floating-strip-dates">
+            <DateRangePicker value={datePickerValue} onChange={onDatePickerChange} />
+          </div>
+        </div>
+      </div>
       <section className="page-section">
         <div ref={authorCardStripRef} className="author-card-strip">
           {cardAuthors.map((item) => (

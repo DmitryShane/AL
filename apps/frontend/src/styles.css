@@ -888,40 +888,6 @@ p {
   background: #8d99ad;
 }
 
-@keyframes activity-author-floating-strip-in {
-  from {
-    opacity: 0;
-    transform: translate3d(0, -100%, 0);
-  }
-
-  82% {
-    opacity: 1;
-    transform: translate3d(0, 3px, 0);
-  }
-
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes activity-author-floating-strip-out {
-  from {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-
-  18% {
-    opacity: 1;
-    transform: translate3d(0, 4px, 0);
-  }
-
-  to {
-    opacity: 0;
-    transform: translate3d(0, -100%, 0);
-  }
-}
-
 .activity-author-floating-strip {
   position: fixed;
   top: 0;
@@ -933,22 +899,17 @@ p {
   backdrop-filter: blur(10px);
   box-shadow: 0 10px 24px -10px rgb(15 23 42 / 12%);
   padding: 10px 32px;
-  animation: activity-author-floating-strip-in 0.23s cubic-bezier(0.33, 1.08, 0.52, 1) both;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(0, -100%, 0);
+  visibility: hidden;
 }
 
-.activity-author-floating-strip.is-exiting {
-  animation: activity-author-floating-strip-out 0.22s cubic-bezier(0.48, 0.02, 0.52, 0.98) both;
-}
-
-.activity-author-floating-strip.is-restored:not(.is-exiting) {
-  animation: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .activity-author-floating-strip,
-  .activity-author-floating-strip.is-exiting {
-    animation: none;
-  }
+.activity-author-floating-strip.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate3d(0, 0, 0);
+  visibility: visible;
 }
 
 .activity-author-floating-strip-inner {
