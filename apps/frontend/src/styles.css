@@ -745,6 +745,10 @@ p {
   white-space: nowrap;
 }
 
+.authors-row .metric-value.overtime {
+  color: #7c3aed;
+}
+
 .author-cell {
   display: flex;
   min-width: 0;

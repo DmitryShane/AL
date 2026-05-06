@@ -65,7 +65,7 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
           <span>{formatDuration(author.activeSeconds)}</span>
           <span>{formatDuration(author.idleSeconds)}</span>
           <span>{formatDuration(author.meetingSeconds ?? 0)}</span>
-          <span>{formatDuration(author.overtimeActiveSeconds)}</span>
+          <span className={overtimeClassName(author.overtimeActiveSeconds)}>{formatDuration(author.overtimeActiveSeconds)}</span>
           <span className={breakClassName(author.breakSeconds)}>{formatMinutes(author.breakSeconds)}</span>
           <strong className={productivityClassName(author)}>{author.productivity.toFixed(2)}%</strong>
           <span className="author-status-stack">
@@ -217,4 +217,8 @@ function breakClassName(seconds: number) {
   }
 
   return seconds > 61 * 60 ? "metric-value bad" : "metric-value good";
+}
+
+function overtimeClassName(seconds: number) {
+  return seconds > 0 ? "metric-value overtime" : undefined;
 }
