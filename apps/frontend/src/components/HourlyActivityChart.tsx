@@ -108,12 +108,12 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                               style={{ height: `${segments.idlePercent}%` }}
                             />
                             <div
-                              className="hourly-chart-segment overtime-fill"
-                              style={{ height: `${segments.overtimeFillPercent}%` }}
-                            />
-                            <div
                               className="hourly-chart-segment overtime"
                               style={{ height: `${segments.overtimePercent}%` }}
+                            />
+                            <div
+                              className="hourly-chart-segment overtime-fill"
+                              style={{ height: `${segments.overtimeFillPercent}%` }}
                             />
                             <div
                               className="hourly-chart-segment missed"
