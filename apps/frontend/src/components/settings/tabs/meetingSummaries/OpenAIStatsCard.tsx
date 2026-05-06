@@ -12,7 +12,12 @@ export function OpenAIStatsCard({ openAIStats, openAIStatsError, openAIStatsLoad
   return (
     <div className="panel meeting-summary-openai-panel">
       <div className="meeting-summary-panel-header">
-        <h3>OpenAI Stats</h3>
+        <div className="openai-stats-title">
+          <h3>OpenAI Stats</h3>
+          <a href="https://platform.openai.com/" target="_blank" rel="noreferrer">
+            OpenAI Platform
+          </a>
+        </div>
         <button className="primary-outline-button" onClick={onRefresh} disabled={openAIStatsLoading}>
           {openAIStatsLoading ? "Loading..." : "Refresh"}
         </button>

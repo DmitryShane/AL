@@ -3127,6 +3127,22 @@ p {
   gap: 12px;
 }
 
+.openai-stats-title {
+  display: grid;
+  gap: 2px;
+}
+
+.openai-stats-title a {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.openai-stats-title a:hover {
+  text-decoration: underline;
+}
+
 .openai-stats-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
