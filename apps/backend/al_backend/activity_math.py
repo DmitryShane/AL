@@ -1550,6 +1550,7 @@ def _empty_hourly_activity() -> list[dict[str, int]]:
             "missedStartSeconds": 0,
             "missedEndSeconds": 0,
             "breakSegments": [],
+            "telegramToFirstActivityIdleSeconds": 0,
         }
         for hour in range(24)
     ]
@@ -1568,6 +1569,7 @@ def _public_hourly_activity(source: list[dict[str, Any]]) -> list[dict[str, int]
             "missedStartSeconds": int(item.get("missedStartSeconds", 0)),
             "missedEndSeconds": int(item.get("missedEndSeconds", 0)),
             "breakSegments": _public_break_segments(item.get("breakSegments", [])),
+            "telegramToFirstActivityIdleSeconds": int(item.get("telegramToFirstActivityIdleSeconds", 0)),
         }
         for item in source
     ]
@@ -1802,6 +1804,9 @@ def _merge_hourly_activity(target: list[dict[str, Any]], deltas: list[dict[str, 
         target_item["meetingSeconds"] = int(target_item.get("meetingSeconds", 0)) + int(delta_item.get("meetingSeconds", 0))
         target_item["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_active_microseconds)
         target_item.setdefault("breakSegments", []).extend(_public_break_segments(delta_item.get("breakSegments", [])))
+        target_item["telegramToFirstActivityIdleSeconds"] = int(target_item.get("telegramToFirstActivityIdleSeconds", 0)) + int(
+            delta_item.get("telegramToFirstActivityIdleSeconds", 0)
+        )
 
 
 def _apply_breaks_to_hourly_activity(

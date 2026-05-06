@@ -257,6 +257,8 @@ class ActivityLiveSummaryService(MongoComposableMixin):
                 first_activity_at,
                 str(first_online.get("timeZoneId") or "UTC"),
             )
+            for hour in hourly_activity:
+                hour["telegramToFirstActivityIdleSeconds"] = int(hour.get("idleSeconds", 0))
             gaps[key] = {
                 "seconds": gap_seconds,
                 "hourlyActivity": hourly_activity,

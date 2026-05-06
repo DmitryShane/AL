@@ -1257,8 +1257,10 @@ class ActivitySummaryService(MongoComposableMixin):
                 break
 
             idle_seconds = max(0, int(hour.get("idleSeconds", 0)))
+            telegram_gap_idle_seconds = max(0, int(hour.get("telegramToFirstActivityIdleSeconds", 0)))
+            convertible_idle_seconds = max(0, idle_seconds - telegram_gap_idle_seconds)
 
-            if idle_seconds <= 0:
+            if convertible_idle_seconds <= 0:
                 continue
 
             occupied_seconds = (
@@ -1272,7 +1274,7 @@ class ActivitySummaryService(MongoComposableMixin):
             if available_break_seconds <= 0:
                 continue
 
-            move_seconds = min(idle_seconds, available_break_seconds, remaining_seconds - transferred_seconds)
+            move_seconds = min(convertible_idle_seconds, available_break_seconds, remaining_seconds - transferred_seconds)
             idle_microseconds = max(
                 0,
                 _time_microseconds(hour, "idleSeconds", "idleMicroseconds") - (move_seconds * MICROSECONDS_PER_SECOND),
