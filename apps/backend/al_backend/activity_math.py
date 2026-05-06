@@ -51,7 +51,6 @@ RAW_ACTIVITY_EVENT_TYPES = {
     "prefab_saved",
     "undo_redo",
     "play_mode",
-    "focus",
     "scene_changed",
     "file_saved",
     "file_loaded",
@@ -1576,8 +1575,18 @@ def _add_visual_missed_seconds(hourly_activity: list[dict[str, Any]], hour: int,
     if hour < 0 or hour >= len(hourly_activity):
         return
 
-    hourly_activity[hour]["missedSeconds"] = int(hourly_activity[hour].get("missedSeconds", 0)) + seconds
-    hourly_activity[hour][segment_key] = int(hourly_activity[hour].get(segment_key, 0)) + seconds
+    target = hourly_activity[hour]
+    available_seconds = max(
+        0,
+        3600 - _visual_hour_occupied_seconds(target) - int(target.get("missedSeconds", 0)),
+    )
+    applied_seconds = min(seconds, available_seconds)
+
+    if applied_seconds <= 0:
+        return
+
+    target["missedSeconds"] = int(target.get("missedSeconds", 0)) + applied_seconds
+    target[segment_key] = int(target.get(segment_key, 0)) + applied_seconds
 
 
 def _add_idle_seconds_to_hour(hour: dict[str, Any], seconds: int) -> None:

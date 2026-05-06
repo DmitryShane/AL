@@ -3016,7 +3016,7 @@ def test_auto_break_disabled_keeps_idle_as_idle():
             "deviceId": "mac-mini",
             "timeZoneId": "UTC",
             "events": [
-                {"eventId": "focus-1", "eventType": "focus", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
+                {"eventId": "selection-1", "eventType": "selection", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
                 {"eventId": "heartbeat-1", "eventType": "heartbeat", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T10:00:00Z"},
             ],
         },
@@ -3052,7 +3052,7 @@ def test_auto_break_moves_first_idle_hour_to_break_in_summary_only():
             "deviceId": "mac-mini",
             "timeZoneId": "UTC",
             "events": [
-                {"eventId": "focus-1", "eventType": "focus", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
+                {"eventId": "selection-1", "eventType": "selection", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
                 {"eventId": "heartbeat-1", "eventType": "heartbeat", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T10:00:00Z"},
             ],
         },
@@ -3118,7 +3118,7 @@ def test_auto_break_adds_full_daily_limit_even_with_real_break():
             "deviceId": "mac-mini",
             "timeZoneId": "UTC",
             "events": [
-                {"eventId": "focus-1", "eventType": "focus", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
+                {"eventId": "selection-1", "eventType": "selection", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
                 {"eventId": "heartbeat-1", "eventType": "heartbeat", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T10:00:00Z"},
             ],
         },
@@ -3247,6 +3247,67 @@ def test_auto_break_applies_after_visual_idle_gaps():
     assert hourly[8]["breakSeconds"] == 3540
 
 
+def test_auto_break_does_not_overflow_hour_with_visual_missed_start():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-05-02",
+        }
+    )
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[12]["activeSeconds"] = 1800
+    hourly_activity[11]["idleSeconds"] = 3600
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "source": "cur",
+            "activeSeconds": 1800,
+            "idleSeconds": 3600,
+            "daySeconds": 0,
+            "hourlyActivity": hourly_activity,
+            "lastRecordedAt": "2026-05-02T12:30:00Z",
+            "lastReceivedAt": dt.datetime(2026, 5, 2, 12, 30, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "source": "cur",
+            "reportType": "auto",
+            "recordedAt": "2026-05-02T12:30:00Z",
+            "receivedAt": dt.datetime(2026, 5, 2, 12, 30, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-02",
+            "startedAt": dt.datetime(2026, 5, 2, 11, 16, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    assert hourly[11]["breakSeconds"] == 3600
+    assert hourly[11]["missedSeconds"] == 0
+    assert (
+        hourly[11]["activeSeconds"]
+        + hourly[11]["idleSeconds"]
+        + hourly[11]["breakSeconds"]
+        + hourly[11]["meetingSeconds"]
+        + hourly[11]["overtimeActiveSeconds"]
+        + hourly[11]["missedSeconds"]
+    ) == 3600
+
+
 def test_auto_break_waits_until_effective_date():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
@@ -3267,7 +3328,7 @@ def test_auto_break_waits_until_effective_date():
             "deviceId": "mac-mini",
             "timeZoneId": "UTC",
             "events": [
-                {"eventId": "focus-1", "eventType": "focus", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
+                {"eventId": "selection-1", "eventType": "selection", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T08:00:00Z"},
                 {"eventId": "heartbeat-1", "eventType": "heartbeat", "date": "2026-05-02", "occurredAtUtc": "2026-05-02T10:00:00Z"},
             ],
         },
