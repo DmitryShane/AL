@@ -258,10 +258,6 @@ function App() {
         }
       } catch {
         setAuthUser(null);
-        setHasAuthHint(false);
-        localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
-        setSessionUserPreview(null);
-        writeStoredSessionUserPreview(null);
       } finally {
         setAuthLoading(false);
       }
@@ -485,7 +481,10 @@ function App() {
     }
 
     window.scrollTo({ top: savedScroll, left: 0, behavior: "auto" });
-    setIsRestoringScroll(false);
+
+    window.requestAnimationFrame(() => {
+      setIsRestoringScroll(false);
+    });
   }, [canShowCachedDashboard, page]);
 
   function setSelectedAuthor(value: string) {
@@ -530,7 +529,7 @@ function App() {
     return <LoginPage checkingSession onLogin={setAuthUser} />;
   }
 
-  if (!authLoading && !authUser) {
+  if (!authLoading && !authUser && !hasAuthHint) {
     return <LoginPage onLogin={setAuthUser} />;
   }
 

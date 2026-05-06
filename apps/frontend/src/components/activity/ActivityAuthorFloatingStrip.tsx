@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { DateRangePicker } from "../layout/DateRangePicker";
 import type { AuthorRow, DateRange } from "../../types/dashboard";
 import { compareAuthorCardStatus } from "../../pages/pageHelpers";
@@ -32,15 +32,50 @@ export function ActivityAuthorFloatingStrip({
     [authors, dateRange]
   );
   const shouldRestoreFloatingStrip = restoringScroll && cardAuthors.length > 0;
-  const [anchorMeasured, setAnchorMeasured] = useState(false);
-  const [anchorInView, setAnchorInView] = useState(true);
+  const shouldMountRestored = shouldRestoreFloatingStrip;
+  const [anchorMeasured, setAnchorMeasured] = useState(shouldMountRestored);
+  const [anchorInView, setAnchorInView] = useState(!shouldMountRestored);
   const shouldShowFloatingStrip = anchorMeasured && !anchorInView && cardAuthors.length > 0;
-  const [mounted, setMounted] = useState(false);
+  const [mounted, setMounted] = useState(shouldMountRestored);
   const [exiting, setExiting] = useState(false);
   const [animKey, setAnimKey] = useState(0);
   const exitTimerRef = useRef<number | null>(null);
   const prevShouldShowRef = useRef(false);
   const [restored] = useState(shouldRestoreFloatingStrip);
+
+  useLayoutEffect(() => {
+    const element = anchorRef.current;
+
+    if (!element) {
+      return;
+    }
+
+    const rect = element.getBoundingClientRect();
+    setAnchorMeasured(true);
+    setAnchorInView(rect.bottom > 0 && rect.top < window.innerHeight);
+  }, [anchorRef]);
+
+  useEffect(() => {
+    if (!restoringScroll) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const element = anchorRef.current;
+
+      if (!element) {
+        return;
+      }
+
+      const rect = element.getBoundingClientRect();
+      setAnchorMeasured(true);
+      setAnchorInView(rect.bottom > 0 && rect.top < window.innerHeight);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [anchorRef, restoringScroll]);
 
   useEffect(() => {
     const element = anchorRef.current;
