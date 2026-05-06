@@ -85,14 +85,6 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                               className="hourly-chart-segment active"
                               style={{ height: `${segments.activePercent}%` }}
                             />
-                            <div
-                              className="hourly-chart-segment overtime"
-                              style={{ height: `${segments.overtimePercent}%` }}
-                            />
-                            <div
-                              className="hourly-chart-segment overtime-fill"
-                              style={{ height: `${segments.overtimeFillPercent}%` }}
-                            />
                             {hour.breakSegments.length ? (
                               hour.breakSegments.map((segment, index) => (
                                 <div
@@ -114,6 +106,14 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                             <div
                               className="hourly-chart-segment idle"
                               style={{ height: `${segments.idlePercent}%` }}
+                            />
+                            <div
+                              className="hourly-chart-segment overtime-fill"
+                              style={{ height: `${segments.overtimeFillPercent}%` }}
+                            />
+                            <div
+                              className="hourly-chart-segment overtime"
+                              style={{ height: `${segments.overtimePercent}%` }}
                             />
                             <div
                               className="hourly-chart-segment missed"
