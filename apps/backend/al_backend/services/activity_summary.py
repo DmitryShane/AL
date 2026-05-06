@@ -1210,8 +1210,12 @@ class ActivitySummaryService(MongoComposableMixin):
             applied_idle_reduction = min(int(author_row.get("idleSeconds", 0)), transferred_seconds)
             author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) - applied_idle_reduction
             author_row["breakSeconds"] = int(author_row.get("breakSeconds", 0)) + transferred_seconds
+            author_row["pluginDaySeconds"] = max(0, int(author_row.get("pluginDaySeconds", 0)) - applied_idle_reduction)
+            author_row["rawPluginDaySeconds"] = max(0, int(author_row.get("rawPluginDaySeconds", 0)) - applied_idle_reduction)
             totals["idleSeconds"] = max(0, int(totals.get("idleSeconds", 0)) - applied_idle_reduction)
             totals["breakSeconds"] = int(totals.get("breakSeconds", 0)) + transferred_seconds
+            totals["pluginDaySeconds"] = max(0, int(totals.get("pluginDaySeconds", 0)) - applied_idle_reduction)
+            totals["rawPluginDaySeconds"] = max(0, int(totals.get("rawPluginDaySeconds", 0)) - applied_idle_reduction)
 
     def _summary_auto_break_remaining_seconds(
         self,

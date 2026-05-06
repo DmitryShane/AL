@@ -3079,8 +3079,12 @@ def test_auto_break_moves_first_idle_hour_to_break_in_summary_only():
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
     assert author["idleSeconds"] == 3600
     assert author["breakSeconds"] == 3600
+    assert author["pluginDaySeconds"] == 3600
+    assert author["rawPluginDaySeconds"] == 3600
     assert sum(hour["idleSeconds"] for hour in hourly) == 3600
     assert sum(hour["breakSeconds"] for hour in hourly) == 3600
+    assert summary["totals"]["pluginDaySeconds"] == 3600
+    assert summary["totals"]["rawPluginDaySeconds"] == 3600
 
     repo.rebuild_aggregates_if_needed(force=True)
     rebuilt = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
