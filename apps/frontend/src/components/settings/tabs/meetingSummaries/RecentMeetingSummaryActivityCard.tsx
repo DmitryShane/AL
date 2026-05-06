@@ -7,19 +7,53 @@ type RecentMeetingSummaryActivityCardProps = {
 };
 
 export function RecentMeetingSummaryActivityCard({ meetingActivityItems, meetingRecordingsError }: RecentMeetingSummaryActivityCardProps) {
+  const today = formatLocalDate(new Date());
+  const todayActivityItems = meetingActivityItems.filter((item) => getMeetingActivityDate(item) === today);
+  const archiveActivityItems = meetingActivityItems.filter((item) => {
+    const date = getMeetingActivityDate(item);
+    return Boolean(date && date < today);
+  });
+
+  return (
+    <div className="meeting-summary-activity-column">
+      <MeetingSummaryActivityPanel
+        title="Today's meeting summary activity"
+        caption="Live status for today's Discord recording, OpenAI summary, and Telegram delivery pipeline."
+        activityItems={todayActivityItems}
+        meetingRecordingsError={meetingRecordingsError}
+        emptyMessage="No meeting summary activity for today yet."
+      />
+      <MeetingSummaryActivityPanel
+        title="Meeting summary archive"
+        caption="History for previous meeting days."
+        activityItems={archiveActivityItems}
+        meetingRecordingsError={meetingRecordingsError}
+        emptyMessage="No previous meeting summary activity yet."
+      />
+    </div>
+  );
+}
+
+type MeetingSummaryActivityPanelProps = {
+  title: string;
+  caption: string;
+  activityItems: MeetingActivityItem[];
+  meetingRecordingsError: string;
+  emptyMessage: string;
+};
+
+function MeetingSummaryActivityPanel({ title, caption, activityItems, meetingRecordingsError, emptyMessage }: MeetingSummaryActivityPanelProps) {
   return (
     <div className="panel meeting-summary-activity-panel">
-      <h3>Recent meeting summary activity</h3>
-      <p className="settings-caption">
-        Live status for the Discord recording, OpenAI summary, and Telegram delivery pipeline.
-      </p>
+      <h3>{title}</h3>
+      <p className="settings-caption">{caption}</p>
       <div className="meeting-summary-recordings-field">
         Process
         {meetingRecordingsError ? (
           <p className="empty">{meetingRecordingsError}</p>
-        ) : meetingActivityItems.length ? (
+        ) : activityItems.length ? (
           <div className="settings-list">
-            {meetingActivityItems.map((item) => (
+            {activityItems.map((item) => (
               <div className={item.itemType === "day_separator" ? "settings-list-day-separator" : "settings-list-item"} key={item.id}>
                 <strong>{meetingActivityTitle(item)}</strong>
                 {item.itemType !== "day_separator" ? renderMeetingActivityDetail(item) : null}
@@ -28,11 +62,30 @@ export function RecentMeetingSummaryActivityCard({ meetingActivityItems, meeting
             ))}
           </div>
         ) : (
-          <p className="empty">No meeting summary activity yet.</p>
+          <p className="empty">{emptyMessage}</p>
         )}
       </div>
     </div>
   );
+}
+
+function getMeetingActivityDate(item: MeetingActivityItem) {
+  if (item.date) {
+    return item.date;
+  }
+
+  if (!item.timestamp) {
+    return "";
+  }
+
+  return formatLocalDate(new Date(item.timestamp));
+}
+
+function formatLocalDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function renderMeetingActivityDetail(item: MeetingActivityItem) {

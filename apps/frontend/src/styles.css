@@ -3064,6 +3064,12 @@ p {
   align-items: start;
 }
 
+.meeting-summary-activity-column {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
 .meeting-summary-workspace .meeting-summary-activity-panel {
   display: grid;
   gap: 12px;
