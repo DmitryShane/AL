@@ -1088,6 +1088,19 @@ def test_auto_break_skips_incomplete_plugin_hour_idle_gaps():
     assert hourly_activity[8]["idleSeconds"] == 1800
     assert hourly_activity[8]["breakSeconds"] == 0
 
+def test_auto_break_places_partial_break_after_remaining_idle():
+    repo = fake_repository()
+    hourly_activity = _empty_hourly_activity()
+    hourly_activity[13]["activeSeconds"] = 2190
+    hourly_activity[13]["idleSeconds"] = 1410
+
+    transferred_seconds = repo._transfer_summary_idle_to_break(hourly_activity, 1149)
+
+    assert transferred_seconds == 1149
+    assert hourly_activity[13]["idleSeconds"] == 261
+    assert hourly_activity[13]["breakSeconds"] == 1149
+    assert hourly_activity[13]["breakSegments"] == [{"startSecond": 2451, "endSecond": 3600}]
+
 def test_auto_break_does_not_overflow_hour_with_visual_missed_start():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(

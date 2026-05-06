@@ -1301,7 +1301,8 @@ class ActivitySummaryService(MongoComposableMixin):
             hour["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
             hour["pluginHourGapIdleSeconds"] = min(plugin_hour_gap_idle_seconds, hour["idleSeconds"])
             hour["breakSeconds"] = int(hour.get("breakSeconds", 0)) + move_seconds
-            break_start_seconds = occupied_seconds if occupied_seconds > 0 else 3600 - move_seconds
+            remaining_idle_seconds = max(0, idle_seconds - move_seconds)
+            break_start_seconds = occupied_seconds + remaining_idle_seconds if occupied_seconds > 0 else 3600 - move_seconds
             _add_break_segment_to_hour(hour, break_start_seconds, break_start_seconds + move_seconds)
             transferred_seconds += move_seconds
 
