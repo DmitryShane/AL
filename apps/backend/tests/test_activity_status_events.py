@@ -12,11 +12,8 @@ from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSes
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE, meeting_summary_sections, render_meeting_summary_prompt
 from al_backend.routers.reports import plugin_config
 from al_backend.activity_math import (
-    _add_break_interval_to_buckets,
-    _apply_breaks_to_hourly_activity,
     _date_query,
     _empty_event_deltas,
-    _empty_hourly_activity,
     _interval_deltas,
     _merge_batch_deltas,
     _normalize_telegram_username,
@@ -26,6 +23,11 @@ from al_backend.activity_math import (
     _with_author_presence,
     _with_productivity,
     _worked_file_delta,
+)
+from al_backend.hourly_fill_rules import (
+    empty_hourly_activity,
+    apply_breaks_to_hourly_activity,
+    add_break_interval_to_buckets,
 )
 from al_backend.telegram_bot import (
     BotConfig,
@@ -225,7 +227,7 @@ def test_regular_date_still_applies_reports_stopped_when_it_is_author_local_toda
             "savedPrefabs": [],
             "overtimeActivityCounts": [],
             "overtimeSavedPrefabs": [],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -267,7 +269,7 @@ def test_closed_telegram_workday_does_not_apply_reports_stopped_even_with_plugin
             "savedPrefabs": [],
             "overtimeActivityCounts": [],
             "overtimeSavedPrefabs": [],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -310,7 +312,7 @@ def test_open_telegram_workday_still_applies_reports_stopped_when_plugin_stale()
             "savedPrefabs": [],
             "overtimeActivityCounts": [],
             "overtimeSavedPrefabs": [],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -528,7 +530,7 @@ def test_red_offline_creates_status_report_row():
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -561,7 +563,7 @@ def test_historical_stale_does_not_create_status_report_row():
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -592,7 +594,7 @@ def test_status_online_row_sorts_before_returning_plugin_report():
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
     repo.activity_summary(
@@ -659,7 +661,7 @@ def test_fresh_daily_activity_without_report_row_resumes_reports_stopped_status(
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
             "activityCounts": [{"type": "focus", "count": 1}],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -697,7 +699,7 @@ def test_fresh_daily_activity_resumes_when_status_state_online_but_latest_event_
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
             "activityCounts": [{"type": "focus", "count": 1}],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -727,7 +729,7 @@ def test_stale_daily_activity_without_report_row_does_not_resume_reports_stopped
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
             "activityCounts": [{"type": "focus", "count": 1}],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 

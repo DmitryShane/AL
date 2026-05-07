@@ -3,6 +3,7 @@ from __future__ import annotations
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..activity_math import *
+from ..hourly_fill_rules import empty_hourly_activity
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
@@ -989,7 +990,7 @@ class TelegramActivityService(MongoComposableMixin):
                     "savedPrefabs": [],
                     "overtimeActivityCounts": [],
                     "overtimeSavedPrefabs": [],
-                    "hourlyActivity": _empty_hourly_activity(),
+                    "hourlyActivity": empty_hourly_activity(),
                     "activeSeconds": 0,
                     "activeMicroseconds": 0,
                     "idleSeconds": 0,
@@ -1054,4 +1055,3 @@ class TelegramActivityService(MongoComposableMixin):
                 **deltas,
             }
         )
-

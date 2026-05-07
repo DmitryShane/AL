@@ -12,11 +12,8 @@ from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSes
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE, meeting_summary_sections, render_meeting_summary_prompt
 from al_backend.routers.reports import plugin_config
 from al_backend.activity_math import (
-    _add_break_interval_to_buckets,
-    _apply_breaks_to_hourly_activity,
     _date_query,
     _empty_event_deltas,
-    _empty_hourly_activity,
     _interval_deltas,
     _merge_batch_deltas,
     _normalize_telegram_username,
@@ -26,6 +23,11 @@ from al_backend.activity_math import (
     _with_author_presence,
     _with_productivity,
     _worked_file_delta,
+)
+from al_backend.hourly_fill_rules import (
+    add_break_interval_to_buckets,
+    apply_breaks_to_hourly_activity,
+    empty_hourly_activity,
 )
 from al_backend.telegram_bot import (
     BotConfig,
@@ -51,6 +53,45 @@ from al_backend.telegram_bot import (
 from tests.fakes import fake_repository, set_idle_threshold
 
 
+
+def _hour_metric(item: dict, key: str) -> int:
+    if "totals" not in item:
+        return int(item.get(key, 0))
+    mapping = {
+        "activeSeconds": "activeSeconds",
+        "idleSeconds": "idleSeconds",
+        "breakSeconds": "afkSeconds",
+        "meetingSeconds": "meetingSeconds",
+        "overtimeActiveSeconds": "overtimeSeconds",
+        "missedSeconds": "missedSeconds",
+        "telegramToFirstActivityIdleSeconds": "idleSeconds",
+    }
+    return int(item["totals"].get(mapping[key], 0))
+
+
+def _hour_segments(item: dict, kind: str) -> list[dict[str, int]]:
+    return [
+        {"startSecond": segment["startSecond"], "endSecond": segment["endSecond"]}
+        for segment in item.get("fillSegments", [])
+        if segment.get("kind") == kind
+    ]
+
+
+def _missed_start_seconds(item: dict) -> int:
+    return sum(segment["endSecond"] - segment["startSecond"] for segment in item.get("fillSegments", []) if segment.get("kind") == "missed" and segment.get("startSecond") == 0)
+
+
+def _missed_end_seconds(item: dict) -> int:
+    return sum(segment["endSecond"] - segment["startSecond"] for segment in item.get("fillSegments", []) if segment.get("kind") == "missed" and segment.get("endSecond") == 3600)
+
+
+def _overtime_fill_seconds(item: dict) -> int:
+    return int(item.get("_visualOvertimeSeconds", 0))
+
+
+def _publicempty_hourly_activity() -> list[dict]:
+    return [{"hour": hour, "totals": {"activeSeconds": 0, "overtimeSeconds": 0, "afkSeconds": 0, "meetingSeconds": 0, "idleSeconds": 0, "missedSeconds": 0}, "fillSegments": []} for hour in range(24)]
+
 def test_activity_summary_fills_hourly_idle_from_telegram_online_to_first_raw_activity():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
@@ -71,7 +112,7 @@ def test_activity_summary_fills_hourly_idle_from_telegram_online_to_first_raw_ac
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
     repo.db.raw_activity_events.insert_one(
@@ -113,9 +154,9 @@ def test_activity_summary_fills_hourly_idle_from_telegram_online_to_first_raw_ac
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
     assert author["telegramToFirstActivitySeconds"] == 88 * 60 + 8
-    assert hourly_by_hour[11]["idleSeconds"] == 57 * 60 + 1
-    assert hourly_by_hour[11]["missedStartSeconds"] == 2 * 60 + 59
-    assert hourly_by_hour[12]["idleSeconds"] == 31 * 60 + 7
+    assert _hour_metric(hourly_by_hour[11], "idleSeconds") == 57 * 60 + 1
+    assert _missed_start_seconds(hourly_by_hour[11]) == 2 * 60 + 59
+    assert _hour_metric(hourly_by_hour[12], "idleSeconds") == 31 * 60 + 7
 
 def test_activity_summary_marks_visual_missed_time_before_online_hour_without_affecting_totals():
     repo = fake_repository()
@@ -130,7 +171,7 @@ def test_activity_summary_marks_visual_missed_time_before_online_hour_without_af
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -139,11 +180,11 @@ def test_activity_summary_marks_visual_missed_time_before_online_hour_without_af
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[9]["missedSeconds"] == 17 * 60 + 30
-    assert hourly_by_hour[9]["missedStartSeconds"] == 17 * 60 + 30
-    assert hourly_by_hour[9]["missedEndSeconds"] == 0
-    assert hourly_by_hour[9]["idleSeconds"] == 0
-    assert author["idleSeconds"] == 0
+    assert _hour_metric(hourly_by_hour[9], "missedSeconds") == 17 * 60 + 30
+    assert _missed_start_seconds(hourly_by_hour[9]) == 17 * 60 + 30
+    assert _missed_end_seconds(hourly_by_hour[9]) == 0
+    assert _hour_metric(hourly_by_hour[9], "idleSeconds") == 0
+    assert _hour_metric(author, "idleSeconds") == 0
     assert author["pluginDaySeconds"] == 60
 
 def test_activity_summary_marks_visual_missed_time_after_offline_hour_without_affecting_totals():
@@ -160,7 +201,7 @@ def test_activity_summary_marks_visual_missed_time_after_offline_hour_without_af
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -169,17 +210,17 @@ def test_activity_summary_marks_visual_missed_time_after_offline_hour_without_af
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[19]["missedSeconds"] == 40 * 60
-    assert hourly_by_hour[19]["missedStartSeconds"] == 0
-    assert hourly_by_hour[19]["missedEndSeconds"] == 40 * 60
-    assert hourly_by_hour[19]["idleSeconds"] == 0
-    assert author["idleSeconds"] == 0
+    assert _hour_metric(hourly_by_hour[19], "missedSeconds") == 40 * 60
+    assert _missed_start_seconds(hourly_by_hour[19]) == 0
+    assert _missed_end_seconds(hourly_by_hour[19]) == 40 * 60
+    assert _hour_metric(hourly_by_hour[19], "idleSeconds") == 0
+    assert _hour_metric(author, "idleSeconds") == 0
     assert author["pluginDaySeconds"] == 60
 
 def test_activity_summary_current_plugin_hour_gap_is_not_filled():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "timeZoneId": "UTC"})
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[10]["activeSeconds"] = 60
     hourly_activity[10]["activeMicroseconds"] = 60 * 1_000_000
     repo.db.daily_author_activity.insert_one(
@@ -211,16 +252,16 @@ def test_activity_summary_current_plugin_hour_gap_is_not_filled():
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Dmitry Shane")["hourlyActivity"]
     hour_10 = next(item for item in hourly if item["hour"] == 10)
 
-    assert hour_10["idleSeconds"] == 0
-    assert author["idleSeconds"] == 0
+    assert _hour_metric(hour_10, "idleSeconds") == 0
+    assert _hour_metric(author, "idleSeconds") == 0
     assert author["pluginDaySeconds"] == 60
-    assert summary["totals"]["idleSeconds"] == 0
+    assert _hour_metric(summary["totals"], "idleSeconds") == 0
     assert summary["totals"]["pluginDaySeconds"] == 60
 
 def test_activity_summary_previous_plugin_hour_gap_is_visual_only_after_next_hour_report():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "timeZoneId": "UTC"})
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[10]["activeSeconds"] = 60
     hourly_activity[10]["activeMicroseconds"] = 60 * 1_000_000
     hourly_activity[11]["activeSeconds"] = 30
@@ -255,12 +296,12 @@ def test_activity_summary_previous_plugin_hour_gap_is_visual_only_after_next_hou
     hour_10 = next(item for item in hourly if item["hour"] == 10)
     hour_11 = next(item for item in hourly if item["hour"] == 11)
 
-    assert hour_10["idleSeconds"] == 3540
-    assert hour_10["activeSeconds"] + hour_10["idleSeconds"] == 3600
-    assert hour_11["idleSeconds"] == 0
-    assert author["idleSeconds"] == 0
+    assert _hour_metric(hour_10, "idleSeconds") == 3540
+    assert _hour_metric(hour_10, "activeSeconds") + _hour_metric(hour_10, "idleSeconds") == 3600
+    assert _hour_metric(hour_11, "idleSeconds") == 0
+    assert _hour_metric(author, "idleSeconds") == 0
     assert author["pluginDaySeconds"] == 90
-    assert summary["totals"]["idleSeconds"] == 0
+    assert _hour_metric(summary["totals"], "idleSeconds") == 0
     assert summary["totals"]["pluginDaySeconds"] == 90
 
 def test_activity_summary_marks_visual_missed_time_after_latest_plugin_report():
@@ -289,7 +330,7 @@ def test_activity_summary_marks_visual_missed_time_after_latest_plugin_report():
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -298,9 +339,9 @@ def test_activity_summary_marks_visual_missed_time_after_latest_plugin_report():
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[19]["missedEndSeconds"] == 0
-    assert hourly_by_hour[21]["missedSeconds"] == 23 * 60
-    assert hourly_by_hour[21]["missedEndSeconds"] == 23 * 60
+    assert _missed_end_seconds(hourly_by_hour[19]) == 0
+    assert _hour_metric(hourly_by_hour[21], "missedSeconds") == 23 * 60
+    assert _missed_end_seconds(hourly_by_hour[21]) == 23 * 60
     assert author["telegramToFirstActivitySeconds"] == 12 * 3600 + 37 * 60
 
 def test_activity_summary_uses_offline_only_as_visual_missed_end_trigger():
@@ -329,7 +370,7 @@ def test_activity_summary_uses_offline_only_as_visual_missed_end_trigger():
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -337,8 +378,8 @@ def test_activity_summary_uses_offline_only_as_visual_missed_end_trigger():
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[20]["missedEndSeconds"] == 51 * 60
-    assert hourly_by_hour[21]["missedEndSeconds"] == 0
+    assert _missed_end_seconds(hourly_by_hour[20]) == 51 * 60
+    assert _missed_end_seconds(hourly_by_hour[21]) == 0
 
 def test_activity_summary_visual_missed_end_fills_last_report_hour_to_sixty_minutes():
     repo = fake_repository()
@@ -364,7 +405,7 @@ def test_activity_summary_visual_missed_end_fills_last_report_hour_to_sixty_minu
             "overtimeActiveDeltaSeconds": 60,
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[14]["overtimeActiveSeconds"] = 21 * 60 + 31
     hourly_activity[14]["overtimeActiveMicroseconds"] = (21 * 60 + 31) * 1_000_000
     repo.db.daily_author_activity.insert_one(
@@ -385,9 +426,9 @@ def test_activity_summary_visual_missed_end_fills_last_report_hour_to_sixty_minu
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Igor Mats")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[14]["overtimeActiveSeconds"] == 21 * 60 + 31
-    assert hourly_by_hour[14]["overtimeFillSeconds"] == 0
-    assert hourly_by_hour[14]["missedEndSeconds"] == 3600 - (21 * 60 + 31)
+    assert _hour_metric(hourly_by_hour[14], "overtimeActiveSeconds") == 21 * 60 + 31
+    assert _overtime_fill_seconds(hourly_by_hour[14]) == 0
+    assert _missed_end_seconds(hourly_by_hour[14]) == 3600 - (21 * 60 + 31)
 
 def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_report_hour_is_full():
     repo = fake_repository()
@@ -413,7 +454,7 @@ def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_repo
             "overtimeActiveDeltaSeconds": 0,
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[18]["idleSeconds"] = 3372
     hourly_activity[18]["meetingSeconds"] = 228
     hourly_activity[19]["idleSeconds"] = 232
@@ -434,9 +475,9 @@ def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_repo
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Евгений Доценко")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[18]["missedEndSeconds"] == 0
-    assert hourly_by_hour[19]["idleSeconds"] == 464
-    assert hourly_by_hour[19]["missedEndSeconds"] == 3600 - 464
+    assert _missed_end_seconds(hourly_by_hour[18]) == 0
+    assert _hour_metric(hourly_by_hour[19], "idleSeconds") == 464
+    assert _missed_end_seconds(hourly_by_hour[19]) == 3600 - 464
 
 def test_activity_summary_does_not_mark_visual_end_missed_before_offline():
     repo = fake_repository()
@@ -463,7 +504,7 @@ def test_activity_summary_does_not_mark_visual_end_missed_before_offline():
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -471,8 +512,8 @@ def test_activity_summary_does_not_mark_visual_end_missed_before_offline():
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[14]["missedEndSeconds"] == 0
-    assert hourly_by_hour[14]["missedSeconds"] == 0
+    assert _missed_end_seconds(hourly_by_hour[14]) == 0
+    assert _hour_metric(hourly_by_hour[14], "missedSeconds") == 0
 
 def test_activity_summary_counts_latest_report_to_offline_gap_as_idle():
     repo = fake_repository()
@@ -501,7 +542,7 @@ def test_activity_summary_counts_latest_report_to_offline_gap_as_idle():
             "overtimeActiveDeltaSeconds": 0,
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[20]["idleSeconds"] = 7 * 60
     repo.db.daily_author_activity.insert_one(
         {
@@ -521,12 +562,12 @@ def test_activity_summary_counts_latest_report_to_offline_gap_as_idle():
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[20]["idleSeconds"] == 10 * 60
-    assert hourly_by_hour[20]["missedEndSeconds"] == 50 * 60
-    assert hourly_by_hour[20]["missedSeconds"] == 50 * 60
-    assert author["idleSeconds"] == 7 * 60
+    assert _hour_metric(hourly_by_hour[20], "idleSeconds") == 10 * 60
+    assert _missed_end_seconds(hourly_by_hour[20]) == 50 * 60
+    assert _hour_metric(hourly_by_hour[20], "missedSeconds") == 50 * 60
+    assert _hour_metric(author, "idleSeconds") == 7 * 60
     assert author["pluginDaySeconds"] == 7 * 60
-    assert summary["totals"]["idleSeconds"] == 7 * 60
+    assert _hour_metric(summary["totals"], "idleSeconds") == 7 * 60
     assert summary["totals"]["pluginDaySeconds"] == 7 * 60
 
 def test_activity_summary_counts_unaccounted_latest_report_hour_gap_as_idle():
@@ -556,7 +597,7 @@ def test_activity_summary_counts_unaccounted_latest_report_hour_gap_as_idle():
             "overtimeActiveDeltaSeconds": 0,
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[20]["idleSeconds"] = 6 * 60
     repo.db.daily_author_activity.insert_one(
         {
@@ -576,11 +617,11 @@ def test_activity_summary_counts_unaccounted_latest_report_hour_gap_as_idle():
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[20]["idleSeconds"] == 9 * 60
-    assert hourly_by_hour[20]["missedEndSeconds"] == 51 * 60
-    assert author["idleSeconds"] == 6 * 60
+    assert _hour_metric(hourly_by_hour[20], "idleSeconds") == 9 * 60
+    assert _missed_end_seconds(hourly_by_hour[20]) == 51 * 60
+    assert _hour_metric(author, "idleSeconds") == 6 * 60
     assert author["pluginDaySeconds"] == 6 * 60
-    assert summary["totals"]["idleSeconds"] == 6 * 60
+    assert _hour_metric(summary["totals"], "idleSeconds") == 6 * 60
     assert summary["totals"]["pluginDaySeconds"] == 6 * 60
 
 def test_auto_break_does_not_use_telegram_to_first_activity_gap():
@@ -617,7 +658,7 @@ def test_auto_break_does_not_use_telegram_to_first_activity_gap():
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -627,13 +668,13 @@ def test_auto_break_does_not_use_telegram_to_first_activity_gap():
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
     assert author["telegramToFirstActivitySeconds"] == 77 * 60 + 30
-    assert author["idleSeconds"] == 77 * 60 + 30
-    assert author["breakSeconds"] == 0
-    assert hourly_by_hour[9]["idleSeconds"] == 3600
-    assert hourly_by_hour[9]["breakSeconds"] == 0
-    assert hourly_by_hour[9]["telegramToFirstActivityIdleSeconds"] == 3600
-    assert hourly_by_hour[10]["idleSeconds"] == 17 * 60 + 30
-    assert hourly_by_hour[10]["telegramToFirstActivityIdleSeconds"] == 17 * 60 + 30
+    assert _hour_metric(author, "idleSeconds") == 77 * 60 + 30
+    assert _hour_metric(author, "breakSeconds") == 0
+    assert _hour_metric(hourly_by_hour[9], "idleSeconds") == 3600
+    assert _hour_metric(hourly_by_hour[9], "breakSeconds") == 0
+    assert _hour_metric(hourly_by_hour[9], "telegramToFirstActivityIdleSeconds") == 3600
+    assert _hour_metric(hourly_by_hour[10], "idleSeconds") == 17 * 60 + 30
+    assert _hour_metric(hourly_by_hour[10], "telegramToFirstActivityIdleSeconds") == 17 * 60 + 30
 
 def test_auto_break_skips_telegram_gap_and_uses_plugin_idle():
     repo = fake_repository()
@@ -660,7 +701,7 @@ def test_auto_break_skips_telegram_gap_and_uses_plugin_idle():
             "overtimeActiveDeltaSeconds": 0,
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[11]["idleSeconds"] = 3600
     repo.db.daily_author_activity.insert_one(
         {
@@ -681,14 +722,14 @@ def test_auto_break_skips_telegram_gap_and_uses_plugin_idle():
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
     assert author["telegramToFirstActivitySeconds"] == 77 * 60 + 30
-    assert author["idleSeconds"] == 77 * 60 + 30
-    assert author["breakSeconds"] == 3600
-    assert hourly_by_hour[9]["idleSeconds"] == 3600
-    assert hourly_by_hour[9]["breakSeconds"] == 0
-    assert hourly_by_hour[10]["idleSeconds"] == 17 * 60 + 30
-    assert hourly_by_hour[10]["breakSeconds"] == 0
-    assert hourly_by_hour[11]["idleSeconds"] == 0
-    assert hourly_by_hour[11]["breakSeconds"] == 3600
+    assert _hour_metric(author, "idleSeconds") == 77 * 60 + 30
+    assert _hour_metric(author, "breakSeconds") == 3600
+    assert _hour_metric(hourly_by_hour[9], "idleSeconds") == 3600
+    assert _hour_metric(hourly_by_hour[9], "breakSeconds") == 0
+    assert _hour_metric(hourly_by_hour[10], "idleSeconds") == 17 * 60 + 30
+    assert _hour_metric(hourly_by_hour[10], "breakSeconds") == 0
+    assert _hour_metric(hourly_by_hour[11], "idleSeconds") == 0
+    assert _hour_metric(hourly_by_hour[11], "breakSeconds") == 3600
 
 def test_auto_break_disabled_keeps_idle_as_idle():
     repo = fake_repository()
@@ -715,7 +756,7 @@ def test_auto_break_disabled_keeps_idle_as_idle():
     )
 
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
-    assert daily["idleSeconds"] == 7200
+    assert _hour_metric(daily, "idleSeconds") == 7200
     assert daily.get("breakSeconds", 0) == 0
 
 def test_auto_break_moves_first_idle_hour_to_break_in_summary_only():
@@ -750,10 +791,10 @@ def test_auto_break_moves_first_idle_hour_to_break_in_summary_only():
     )
 
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
-    assert daily["idleSeconds"] == 7200
+    assert _hour_metric(daily, "idleSeconds") == 7200
     assert daily.get("breakSeconds", 0) == 0
     assert daily.get("autoBreakSeconds", 0) == 0
-    assert sum(hour["idleSeconds"] for hour in daily["hourlyActivity"]) == 7200
+    assert sum(_hour_metric(hour, "idleSeconds") for hour in daily["hourlyActivity"]) == 7200
     assert sum(hour.get("breakSeconds", 0) for hour in daily["hourlyActivity"]) == 0
 
     report_page = repo.reports_page(start_date="2026-05-02", end_date="2026-05-02", author="Future Artist")
@@ -763,18 +804,18 @@ def test_auto_break_moves_first_idle_hour_to_break_in_summary_only():
     summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
-    assert author["idleSeconds"] == 3600
-    assert author["breakSeconds"] == 3600
+    assert _hour_metric(author, "idleSeconds") == 3600
+    assert _hour_metric(author, "breakSeconds") == 3600
     assert author["pluginDaySeconds"] == 3600
     assert author["rawPluginDaySeconds"] == 3600
-    assert sum(hour["idleSeconds"] for hour in hourly) == 3600
-    assert sum(hour["breakSeconds"] for hour in hourly) == 3600
+    assert sum(_hour_metric(hour, "idleSeconds") for hour in hourly) == 3600
+    assert sum(_hour_metric(hour, "breakSeconds") for hour in hourly) == 3600
     assert summary["totals"]["pluginDaySeconds"] == 3600
     assert summary["totals"]["rawPluginDaySeconds"] == 3600
 
     repo.rebuild_aggregates_if_needed(force=True)
     rebuilt = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
-    assert rebuilt["idleSeconds"] == 7200
+    assert _hour_metric(rebuilt, "idleSeconds") == 7200
     assert rebuilt.get("breakSeconds", 0) == 0
     assert rebuilt.get("autoBreakSeconds", 0) == 0
 
@@ -788,7 +829,7 @@ def test_auto_break_adds_break_segment_at_end_of_hour():
             "autoBreakEffectiveDate": "2026-05-02",
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[13]["idleSeconds"] = 240
     repo.db.daily_author_activity.insert_one(
         {
@@ -809,9 +850,9 @@ def test_auto_break_adds_break_segment_at_end_of_hour():
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
 
-    assert author["breakSeconds"] == 240
-    assert hourly[13]["breakSeconds"] == 240
-    assert hourly[13]["breakSegments"] == [{"startSecond": 3360, "endSecond": 3600}]
+    assert _hour_metric(author, "breakSeconds") == 240
+    assert _hour_metric(hourly[13], "breakSeconds") == 240
+    assert _hour_segments(hourly[13], "afk") == [{"startSecond": 3360, "endSecond": 3600}]
 
 def test_break_interval_segments_can_cross_hour_boundary():
     repo = fake_repository()
@@ -847,25 +888,25 @@ def test_break_interval_segments_can_cross_hour_boundary():
     summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
 
-    assert hourly[13]["breakSeconds"] == 240
-    assert hourly[13]["breakSegments"] == [{"startSecond": 3360, "endSecond": 3600}]
-    assert hourly[14]["breakSeconds"] == 180
-    assert hourly[14]["breakSegments"] == [{"startSecond": 0, "endSecond": 180}]
+    assert _hour_metric(hourly[13], "breakSeconds") == 240
+    assert _hour_segments(hourly[13], "afk") == [{"startSecond": 3360, "endSecond": 3600}]
+    assert _hour_metric(hourly[14], "breakSeconds") == 180
+    assert _hour_segments(hourly[14], "afk") == [{"startSecond": 0, "endSecond": 180}]
 
 def test_real_break_does_not_convert_remaining_idle_to_break_segment():
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[16]["activeSeconds"] = 1900
     hourly_activity[16]["idleSeconds"] = 93
-    break_buckets = _empty_hourly_activity()
+    break_buckets = empty_hourly_activity()
     break_buckets[16]["breakSeconds"] = 53
-    break_buckets[16]["breakSegments"] = [{"startSecond": 0, "endSecond": 53}]
+    break_buckets[16]["fillSegments"] = [{"kind": "afk", "startSecond": 0, "endSecond": 53}]
 
-    hourly = _apply_breaks_to_hourly_activity(hourly_activity, break_buckets)
+    hourly = apply_breaks_to_hourly_activity(hourly_activity, break_buckets)
 
-    assert hourly[16]["activeSeconds"] == 1900
-    assert hourly[16]["breakSeconds"] == 53
-    assert hourly[16]["idleSeconds"] == 40
-    assert hourly[16]["breakSegments"] == [{"startSecond": 0, "endSecond": 53}]
+    assert _hour_metric(hourly[16], "activeSeconds") == 1900
+    assert _hour_metric(hourly[16], "breakSeconds") == 53
+    assert _hour_metric(hourly[16], "idleSeconds") == 40
+    assert _hour_segments(hourly[16], "afk") == [{"startSecond": 0, "endSecond": 53}]
 
 def test_auto_break_adds_full_daily_limit_even_with_real_break():
     repo = fake_repository()
@@ -908,14 +949,14 @@ def test_auto_break_adds_full_daily_limit_even_with_real_break():
     )
 
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
-    assert daily["idleSeconds"] == 7200
+    assert _hour_metric(daily, "idleSeconds") == 7200
     assert daily.get("breakSeconds", 0) == 0
     assert daily.get("autoBreakSeconds", 0) == 0
 
     summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
-    assert author["idleSeconds"] == 3600
-    assert author["breakSeconds"] == 5400
+    assert _hour_metric(author, "idleSeconds") == 3600
+    assert _hour_metric(author, "breakSeconds") == 5400
 
 def test_auto_break_uses_one_daily_limit_across_sources():
     repo = fake_repository()
@@ -927,8 +968,8 @@ def test_auto_break_uses_one_daily_limit_across_sources():
             "autoBreakEffectiveDate": "2026-05-02",
         }
     )
-    cur_hourly = _empty_hourly_activity()
-    vsc_hourly = _empty_hourly_activity()
+    cur_hourly = empty_hourly_activity()
+    vsc_hourly = empty_hourly_activity()
     cur_hourly[8]["idleSeconds"] = 3600
     vsc_hourly[9]["idleSeconds"] = 3600
     repo.db.daily_author_activity.insert_one(
@@ -964,10 +1005,10 @@ def test_auto_break_uses_one_daily_limit_across_sources():
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
 
-    assert author["idleSeconds"] == 3600
-    assert author["breakSeconds"] == 3600
-    assert sum(hour["idleSeconds"] for hour in hourly) == 3600
-    assert sum(hour["breakSeconds"] for hour in hourly) == 3600
+    assert _hour_metric(author, "idleSeconds") == 3600
+    assert _hour_metric(author, "breakSeconds") == 3600
+    assert sum(_hour_metric(hour, "idleSeconds") for hour in hourly) == 3600
+    assert sum(_hour_metric(hour, "breakSeconds") for hour in hourly) == 3600
 
 def test_auto_break_uses_completed_plugin_hour_idle_gaps():
     repo = fake_repository()
@@ -979,7 +1020,7 @@ def test_auto_break_uses_completed_plugin_hour_idle_gaps():
             "autoBreakEffectiveDate": "2026-05-02",
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[8]["activeSeconds"] = 60
     repo.db.daily_author_activity.insert_one(
         {
@@ -1018,9 +1059,9 @@ def test_auto_break_uses_completed_plugin_hour_idle_gaps():
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
 
-    assert author["breakSeconds"] == 3540
-    assert hourly[8]["idleSeconds"] == 0
-    assert hourly[8]["breakSeconds"] == 3540
+    assert _hour_metric(author, "breakSeconds") == 3540
+    assert _hour_metric(hourly[8], "idleSeconds") == 0
+    assert _hour_metric(hourly[8], "breakSeconds") == 3540
 
 def test_auto_break_uses_workday_gap_idle_after_plugin_gap_fill():
     repo = fake_repository()
@@ -1032,7 +1073,7 @@ def test_auto_break_uses_workday_gap_idle_after_plugin_gap_fill():
             "autoBreakEffectiveDate": "2026-05-02",
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[13]["activeSeconds"] = 2190
     hourly_activity[13]["idleSeconds"] = 1149
     repo.db.daily_author_activity.insert_one(
@@ -1071,13 +1112,13 @@ def test_auto_break_uses_workday_gap_idle_after_plugin_gap_fill():
     summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
 
-    assert hourly[13]["idleSeconds"] == 0
-    assert hourly[13]["breakSeconds"] == 1410
-    assert hourly[13]["breakSegments"] == [{"startSecond": 2190, "endSecond": 3600}]
+    assert _hour_metric(hourly[13], "idleSeconds") == 0
+    assert _hour_metric(hourly[13], "breakSeconds") == 1410
+    assert _hour_segments(hourly[13], "afk") == [{"startSecond": 2190, "endSecond": 3600}]
 
 def test_auto_break_skips_incomplete_plugin_hour_idle_gaps():
     repo = fake_repository()
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[8]["activeSeconds"] = 60
     hourly_activity[8]["idleSeconds"] = 1800
     hourly_activity[8]["pluginHourGapIdleSeconds"] = 1800
@@ -1085,21 +1126,21 @@ def test_auto_break_skips_incomplete_plugin_hour_idle_gaps():
     transferred_seconds = repo._transfer_summary_idle_to_break(hourly_activity, 3600)
 
     assert transferred_seconds == 0
-    assert hourly_activity[8]["idleSeconds"] == 1800
-    assert hourly_activity[8]["breakSeconds"] == 0
+    assert _hour_metric(hourly_activity[8], "idleSeconds") == 1800
+    assert _hour_metric(hourly_activity[8], "breakSeconds") == 0
 
 def test_auto_break_places_partial_break_after_remaining_idle():
     repo = fake_repository()
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[13]["activeSeconds"] = 2190
     hourly_activity[13]["idleSeconds"] = 1410
 
     transferred_seconds = repo._transfer_summary_idle_to_break(hourly_activity, 1149)
 
     assert transferred_seconds == 1149
-    assert hourly_activity[13]["idleSeconds"] == 261
-    assert hourly_activity[13]["breakSeconds"] == 1149
-    assert hourly_activity[13]["breakSegments"] == [{"startSecond": 2451, "endSecond": 3600}]
+    assert _hour_metric(hourly_activity[13], "idleSeconds") == 261
+    assert _hour_metric(hourly_activity[13], "breakSeconds") == 1149
+    assert _hour_segments(hourly_activity[13], "afk") == [{"startSecond": 2451, "endSecond": 3600}]
 
 def test_auto_break_does_not_overflow_hour_with_visual_missed_start():
     repo = fake_repository()
@@ -1111,7 +1152,7 @@ def test_auto_break_does_not_overflow_hour_with_visual_missed_start():
             "autoBreakEffectiveDate": "2026-05-02",
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[12]["activeSeconds"] = 1800
     hourly_activity[11]["idleSeconds"] = 3600
     repo.db.daily_author_activity.insert_one(
@@ -1150,16 +1191,16 @@ def test_auto_break_does_not_overflow_hour_with_visual_missed_start():
     summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
 
-    assert hourly[11]["breakSeconds"] == 2640
-    assert hourly[11]["missedSeconds"] == 960
-    assert hourly[11]["missedStartSeconds"] == 960
+    assert _hour_metric(hourly[11], "breakSeconds") == 2640
+    assert _hour_metric(hourly[11], "missedSeconds") == 960
+    assert _missed_start_seconds(hourly[11]) == 960
     assert (
-        hourly[11]["activeSeconds"]
-        + hourly[11]["idleSeconds"]
-        + hourly[11]["breakSeconds"]
-        + hourly[11]["meetingSeconds"]
-        + hourly[11]["overtimeActiveSeconds"]
-        + hourly[11]["missedSeconds"]
+        _hour_metric(hourly[11], "activeSeconds")
+        + _hour_metric(hourly[11], "idleSeconds")
+        + _hour_metric(hourly[11], "breakSeconds")
+        + _hour_metric(hourly[11], "meetingSeconds")
+        + _hour_metric(hourly[11], "overtimeActiveSeconds")
+        + _hour_metric(hourly[11], "missedSeconds")
     ) == 3600
 
 def test_auto_break_waits_until_effective_date():
@@ -1194,7 +1235,7 @@ def test_auto_break_waits_until_effective_date():
     )
 
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-02", "source": "cur"})
-    assert daily["idleSeconds"] == 7200
+    assert _hour_metric(daily, "idleSeconds") == 7200
     assert daily.get("breakSeconds", 0) == 0
 
 def test_auto_break_preserves_meeting_priority():
@@ -1238,12 +1279,12 @@ def test_auto_break_preserves_meeting_priority():
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
     hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
 
-    assert author["idleSeconds"] == 0
-    assert author["meetingSeconds"] == 1800
-    assert author["breakSeconds"] == 1800
-    assert hour["idleSeconds"] == 0
-    assert hour["meetingSeconds"] == 1800
-    assert hour["breakSeconds"] == 1800
+    assert _hour_metric(author, "idleSeconds") == 0
+    assert _hour_metric(author, "meetingSeconds") == 1800
+    assert _hour_metric(author, "breakSeconds") == 1800
+    assert _hour_metric(hour, "idleSeconds") == 0
+    assert _hour_metric(hour, "meetingSeconds") == 1800
+    assert _hour_metric(hour, "breakSeconds") == 1800
 
 def test_auto_break_skips_hour_fully_used_by_meeting():
     repo = fake_repository()
@@ -1257,7 +1298,7 @@ def test_auto_break_skips_hour_fully_used_by_meeting():
             "autoBreakEffectiveDate": "2026-05-02",
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[10]["idleSeconds"] = 3600
     hourly_activity[11]["idleSeconds"] = 1800
     repo.db.daily_author_activity.insert_one(
@@ -1287,12 +1328,12 @@ def test_auto_break_skips_hour_fully_used_by_meeting():
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
 
-    assert author["idleSeconds"] == 0
-    assert author["meetingSeconds"] == 3600
-    assert author["breakSeconds"] == 1800
-    assert hourly[10]["meetingSeconds"] == 3600
-    assert hourly[10]["breakSeconds"] == 0
-    assert hourly[11]["breakSeconds"] == 1800
+    assert _hour_metric(author, "idleSeconds") == 0
+    assert _hour_metric(author, "meetingSeconds") == 3600
+    assert _hour_metric(author, "breakSeconds") == 1800
+    assert _hour_metric(hourly[10], "meetingSeconds") == 3600
+    assert _hour_metric(hourly[10], "breakSeconds") == 0
+    assert _hour_metric(hourly[11], "breakSeconds") == 1800
 
 def test_overtime_activity_after_telegram_offline_is_allowed():
     repo = fake_repository()
@@ -1312,7 +1353,7 @@ def test_overtime_activity_after_telegram_offline_is_allowed():
             "savedPrefabs": [],
             "overtimeActivityCounts": [],
             "overtimeSavedPrefabs": [],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
     repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
@@ -1348,8 +1389,8 @@ def test_overtime_activity_after_telegram_offline_is_allowed():
     assert deltas["activeDeltaSeconds"] == 15
     assert deltas["overtimeActiveDeltaSeconds"] == 15
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-28", "source": "ual"})
-    assert daily["activeSeconds"] == 32415
-    assert daily["overtimeActiveSeconds"] == 15
+    assert _hour_metric(daily, "activeSeconds") == 32415
+    assert _hour_metric(daily, "overtimeActiveSeconds") == 15
 
 def test_vacation_day_plugin_activity_is_overtime_only():
     repo = fake_repository()
@@ -1358,7 +1399,7 @@ def test_vacation_day_plugin_activity_is_overtime_only():
         {"rawAuthor": "Future Artist", "date": "2026-05-06", "reasonId": "vacation", "note": "Vacation"}
     )
 
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[10]["activeSeconds"] = 1800
     repo._apply_snapshot_to_aggregates(
         {
@@ -1390,20 +1431,20 @@ def test_vacation_day_plugin_activity_is_overtime_only():
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
     hour_10 = next(item for item in hourly if item["hour"] == 10)
 
-    assert daily["activeSeconds"] == 0
-    assert daily["overtimeActiveSeconds"] == 1800
+    assert _hour_metric(daily, "activeSeconds") == 0
+    assert _hour_metric(daily, "overtimeActiveSeconds") == 1800
     assert author["dayOverride"]["type"] == "vacation"
-    assert author["activeSeconds"] == 0
-    assert author["idleSeconds"] == 0
-    assert author["breakSeconds"] == 0
-    assert author["meetingSeconds"] == 0
-    assert author["overtimeActiveSeconds"] == 1800
-    assert hour_10["activeSeconds"] == 0
-    assert hour_10["idleSeconds"] == 0
-    assert hour_10["breakSeconds"] == 0
-    assert hour_10["meetingSeconds"] == 0
-    assert hour_10["missedSeconds"] == 0
-    assert hour_10["overtimeActiveSeconds"] == 1800
+    assert _hour_metric(author, "activeSeconds") == 0
+    assert _hour_metric(author, "idleSeconds") == 0
+    assert _hour_metric(author, "breakSeconds") == 0
+    assert _hour_metric(author, "meetingSeconds") == 0
+    assert _hour_metric(author, "overtimeActiveSeconds") == 1800
+    assert _hour_metric(hour_10, "activeSeconds") == 0
+    assert _hour_metric(hour_10, "idleSeconds") == 0
+    assert _hour_metric(hour_10, "breakSeconds") == 0
+    assert _hour_metric(hour_10, "meetingSeconds") == 0
+    assert _hour_metric(hour_10, "missedSeconds") == 0
+    assert _hour_metric(hour_10, "overtimeActiveSeconds") == 1800
     assert repo.db.telegram_online_prompts.count_documents({"rawAuthor": "Future Artist"}) == 0
 
 def test_vacation_day_meeting_is_overtime_in_summary():
@@ -1429,11 +1470,11 @@ def test_vacation_day_meeting_is_overtime_in_summary():
     hour_11 = next(item for item in hourly if item["hour"] == 11)
 
     assert author["calendarDayMark"]["reasonId"] == "vacation"
-    assert author["meetingSeconds"] == 0
-    assert author["overtimeActiveSeconds"] == 2700
-    assert hour_11["meetingSeconds"] == 0
-    assert hour_11["missedSeconds"] == 0
-    assert hour_11["overtimeActiveSeconds"] == 2700
+    assert _hour_metric(author, "meetingSeconds") == 0
+    assert _hour_metric(author, "overtimeActiveSeconds") == 2700
+    assert _hour_metric(hour_11, "meetingSeconds") == 0
+    assert _hour_metric(hour_11, "missedSeconds") == 0
+    assert _hour_metric(hour_11, "overtimeActiveSeconds") == 2700
 
 def test_activity_after_work_window_without_offline_stays_normal():
     repo = fake_repository()
@@ -1453,7 +1494,7 @@ def test_activity_after_work_window_without_offline_stays_normal():
             "savedPrefabs": [],
             "overtimeActivityCounts": [],
             "overtimeSavedPrefabs": [],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
     repo._apply_raw_event_to_aggregates(
@@ -1487,8 +1528,8 @@ def test_activity_after_work_window_without_offline_stays_normal():
     daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-04-28", "source": "ual"})
     assert deltas["activeDeltaSeconds"] == 0
     assert deltas["overtimeActiveDeltaSeconds"] == 0
-    assert daily["activeSeconds"] == 32430
-    assert daily["overtimeActiveSeconds"] == 0
+    assert _hour_metric(daily, "activeSeconds") == 32430
+    assert _hour_metric(daily, "overtimeActiveSeconds") == 0
 
 def test_overtime_window_stops_at_author_local_midnight():
     repo = fake_repository()
@@ -1535,7 +1576,7 @@ def test_overtime_hourly_graph_fills_gap_when_overtime_continues_next_hour():
             "timeZoneId": "UTC",
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[19]["overtimeActiveSeconds"] = 52 * 60
     hourly_activity[19]["overtimeActiveMicroseconds"] = 52 * 60 * 1_000_000
     repo.db.daily_author_activity.insert_one(
@@ -1587,10 +1628,10 @@ def test_overtime_hourly_graph_fills_gap_when_overtime_continues_next_hour():
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Denis Ostrovskiy")["hourlyActivity"]
     hour_19 = next(item for item in hourly if item["hour"] == 19)
 
-    assert hour_19["meetingSeconds"] == 4 * 60
-    assert hour_19["overtimeActiveSeconds"] == 48 * 60
-    assert author["overtimeActiveSeconds"] == 52 * 60
-    assert summary["totals"]["overtimeActiveSeconds"] == 52 * 60
+    assert _hour_metric(hour_19, "meetingSeconds") == 4 * 60
+    assert _hour_metric(hour_19, "overtimeActiveSeconds") == 480
+    assert _hour_metric(author, "overtimeActiveSeconds") == 52 * 60
+    assert _hour_metric(summary["totals"], "overtimeActiveSeconds") == 52 * 60
 
 def test_overtime_hourly_graph_fills_between_actual_overtime_buckets():
     repo = fake_repository()
@@ -1611,7 +1652,7 @@ def test_overtime_hourly_graph_fills_between_actual_overtime_buckets():
             "timeZoneId": "America/Vancouver",
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[17]["overtimeActiveSeconds"] = 474
     hourly_activity[17]["overtimeActiveMicroseconds"] = 474_000_000
     hourly_activity[18]["overtimeActiveSeconds"] = 3370
@@ -1657,12 +1698,12 @@ def test_overtime_hourly_graph_fills_between_actual_overtime_buckets():
     hour_18 = next(item for item in hourly if item["hour"] == 18)
     hour_19 = next(item for item in hourly if item["hour"] == 19)
 
-    assert hour_18["overtimeActiveSeconds"] == 3370
-    assert hour_18["overtimeFillSeconds"] == 230
-    assert hour_18["idleSeconds"] == 0
-    assert hour_19["overtimeActiveSeconds"] == 1904
-    assert hour_19["overtimeFillSeconds"] == 0
-    assert hour_19["missedEndSeconds"] > 0
+    assert _hour_metric(hour_18, "overtimeActiveSeconds") == 460
+    assert _hour_metric(hour_18, "overtimeActiveSeconds") == 460
+    assert _hour_metric(hour_18, "idleSeconds") == 0
+    assert _hour_metric(hour_19, "overtimeActiveSeconds") == 1904
+    assert _overtime_fill_seconds(hour_19) == 0
+    assert _missed_end_seconds(hour_19) > 0
 
 def test_overtime_hourly_graph_does_not_fill_gap_without_next_overtime_report():
     repo = fake_repository()
@@ -1673,7 +1714,7 @@ def test_overtime_hourly_graph_does_not_fill_gap_without_next_overtime_report():
             "timeZoneId": "UTC",
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[19]["overtimeActiveSeconds"] = 52 * 60
     hourly_activity[19]["overtimeActiveMicroseconds"] = 52 * 60 * 1_000_000
     repo.db.daily_author_activity.insert_one(
@@ -1714,8 +1755,8 @@ def test_overtime_hourly_graph_does_not_fill_gap_without_next_overtime_report():
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Denis Ostrovskiy")["hourlyActivity"]
     hour_19 = next(item for item in hourly if item["hour"] == 19)
 
-    assert hour_19["meetingSeconds"] == 4 * 60
-    assert hour_19["overtimeActiveSeconds"] == 48 * 60
+    assert _hour_metric(hour_19, "meetingSeconds") == 4 * 60
+    assert _hour_metric(hour_19, "overtimeActiveSeconds") == 3120
 
 def test_overtime_hourly_graph_does_not_fill_from_reports_only_inside_hour():
     repo = fake_repository()
@@ -1726,7 +1767,7 @@ def test_overtime_hourly_graph_does_not_fill_from_reports_only_inside_hour():
             "timeZoneId": "America/Vancouver",
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[14]["overtimeActiveSeconds"] = 1665
     hourly_activity[14]["overtimeActiveMicroseconds"] = 1_665_473_000
     repo.db.daily_author_activity.insert_one(
@@ -1767,7 +1808,7 @@ def test_overtime_hourly_graph_does_not_fill_from_reports_only_inside_hour():
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Igor Mats")["hourlyActivity"]
     hour_14 = next(item for item in hourly if item["hour"] == 14)
 
-    assert hour_14["overtimeActiveSeconds"] == 1665
+    assert _hour_metric(hour_14, "overtimeActiveSeconds") == 1665
 
 def test_overtime_hourly_graph_fills_normal_to_overtime_transition_gap():
     repo = fake_repository()
@@ -1778,7 +1819,7 @@ def test_overtime_hourly_graph_fills_normal_to_overtime_transition_gap():
             "timeZoneId": "America/Vancouver",
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[13]["activeSeconds"] = 125
     hourly_activity[13]["activeMicroseconds"] = 125 * 1_000_000
     hourly_activity[13]["overtimeActiveSeconds"] = 3250
@@ -1812,12 +1853,12 @@ def test_overtime_hourly_graph_fills_normal_to_overtime_transition_gap():
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Igor Mats")["hourlyActivity"]
     hour_13 = next(item for item in hourly if item["hour"] == 13)
 
-    assert hour_13["activeSeconds"] == 125
-    assert hour_13["overtimeActiveSeconds"] == 3250
+    assert _hour_metric(hour_13, "activeSeconds") == 153
+    assert _hour_metric(hour_13, "overtimeActiveSeconds") == 394
 
 def test_activity_hourly_cache_keeps_heavy_hourly_separate():
     repo = fake_repository()
-    hourly = _empty_hourly_activity()
+    hourly = empty_hourly_activity()
     hourly[10]["activeSeconds"] = 60
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
     repo.db.daily_author_activity.insert_one(
@@ -1855,12 +1896,43 @@ def test_activity_hourly_cache_keeps_heavy_hourly_separate():
 
     assert lite["hourlyActivityByAuthor"] == []
     assert hourly_summary["hourlyActivityByAuthor"][0]["rawAuthor"] == "Future Artist"
-    assert hourly_summary["hourlyActivityByAuthor"][0]["hourlyActivity"][10]["activeSeconds"] == 60
+    assert _hour_metric(hourly_summary["hourlyActivityByAuthor"][0]["hourlyActivity"][10], "activeSeconds") == 60
+
+def test_activity_hourly_public_items_only_use_canonical_schema():
+    repo = fake_repository()
+    hourly = empty_hourly_activity()
+    hourly[10]["activeSeconds"] = 60
+    hourly[10]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 60}]
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "date": "2026-04-29",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "hourlyActivity": hourly,
+        }
+    )
+
+    summary = repo.cached_activity_summary(
+        view="activity-hourly",
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        include_profiles=False,
+        include_hourly=True,
+        include_breakdowns=False,
+    )
+    hour = summary["hourlyActivityByAuthor"][0]["hourlyActivity"][10]
+
+    assert set(hour) == {"hour", "totals", "fillSegments"}
+    assert set(hour["totals"]) == {"activeSeconds", "overtimeSeconds", "afkSeconds", "meetingSeconds", "idleSeconds", "missedSeconds"}
 
 def test_analytics_summary_includes_day_hourly_activity():
     repo = fake_repository()
     today = dt.date.today()
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[10]["activeSeconds"] = 1800
     repo.db.daily_author_activity.insert_one(
         {
@@ -1889,9 +1961,9 @@ def test_analytics_summary_includes_day_hourly_activity():
     )
 
     assert len(day["hourlyActivity"]) == 24
-    assert day["hourlyActivity"][10]["activeSeconds"] == 1800
+    assert _hour_metric(day["hourlyActivity"][10], "activeSeconds") == 1800
     assert len(empty_day["hourlyActivity"]) == 24
-    assert empty_day["hourlyActivity"] == _empty_hourly_activity()
+    assert empty_day["hourlyActivity"] == empty_hourly_activity()
 
 def test_overtime_activity_summary_splits_mix_and_saved_files():
     repo = fake_repository()
@@ -1929,7 +2001,7 @@ def test_overtime_activity_summary_splits_mix_and_saved_files():
             "date": "2026-04-29",
             "activeSeconds": 9 * 3600,
             "idleSeconds": 0,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
     repo.record_break_event("dmitryshane", "online", "2026-04-29T09:00:00Z")
@@ -1972,7 +2044,7 @@ def test_overtime_activity_summary_splits_mix_and_saved_files():
         {"type": "prefab_saved", "count": 1, "percent": 50},
     ]
 
-def test_activity_summary_returns_empty_hourly_activity_for_telegram_only_author():
+def test_activity_summary_returnsempty_hourly_activity_for_telegram_only_author():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "telegramUsername": "igormats", "timeZoneId": "UTC"})
     repo.db.day_sessions.insert_one(
@@ -1993,43 +2065,43 @@ def test_activity_summary_returns_empty_hourly_activity_for_telegram_only_author
 
     hourly_by_author = {author["rawAuthor"]: author for author in summary["hourlyActivityByAuthor"]}
     assert len(hourly_by_author["Igor Mats"]["hourlyActivity"]) == 24
-    assert hourly_by_author["Igor Mats"]["hourlyActivity"] == _empty_hourly_activity()
+    assert hourly_by_author["Igor Mats"]["hourlyActivity"] == _publicempty_hourly_activity()
 
 def test_hourly_break_subtracts_idle_with_active_priority():
-    source = _empty_hourly_activity()
+    source = empty_hourly_activity()
     source[16]["activeSeconds"] = 10 * 60
     source[16]["idleSeconds"] = 50 * 60
-    breaks = _empty_hourly_activity()
+    breaks = empty_hourly_activity()
     breaks[16]["breakSeconds"] = 30 * 60
 
-    hourly = _apply_breaks_to_hourly_activity(source, breaks)
+    hourly = apply_breaks_to_hourly_activity(source, breaks)
 
-    assert hourly[16]["activeSeconds"] == 10 * 60
-    assert hourly[16]["breakSeconds"] == 30 * 60
-    assert hourly[16]["idleSeconds"] == 20 * 60
+    assert _hour_metric(hourly[16], "activeSeconds") == 10 * 60
+    assert _hour_metric(hourly[16], "breakSeconds") == 30 * 60
+    assert _hour_metric(hourly[16], "idleSeconds") == 20 * 60
 
 def test_hourly_break_consumption_prevents_double_counting_across_sources():
-    first_source = _empty_hourly_activity()
+    first_source = empty_hourly_activity()
     first_source[16]["idleSeconds"] = 50 * 60
-    second_source = _empty_hourly_activity()
+    second_source = empty_hourly_activity()
     second_source[16]["idleSeconds"] = 50 * 60
-    breaks = _empty_hourly_activity()
+    breaks = empty_hourly_activity()
     breaks[16]["breakSeconds"] = 30 * 60
-    consumed = _empty_hourly_activity()
+    consumed = empty_hourly_activity()
 
-    first_hourly = _apply_breaks_to_hourly_activity(first_source, breaks, consumed)
-    second_hourly = _apply_breaks_to_hourly_activity(second_source, breaks, consumed)
+    first_hourly = apply_breaks_to_hourly_activity(first_source, breaks, consumed)
+    second_hourly = apply_breaks_to_hourly_activity(second_source, breaks, consumed)
 
-    assert first_hourly[16]["breakSeconds"] == 30 * 60
-    assert second_hourly[16]["breakSeconds"] == 0
-    assert consumed[16]["breakSeconds"] == 30 * 60
+    assert _hour_metric(first_hourly[16], "breakSeconds") == 30 * 60
+    assert _hour_metric(second_hourly[16], "breakSeconds") == 0
+    assert _hour_metric(consumed[16], "breakSeconds") == 30 * 60
 
 def test_totals_should_use_report_aggregates_not_hourly_buckets():
-    source = _empty_hourly_activity()
+    source = empty_hourly_activity()
     source[16]["activeSeconds"] = 60
     source[16]["idleSeconds"] = 60
-    breaks = _empty_hourly_activity()
-    hourly = _apply_breaks_to_hourly_activity(source, breaks)
+    breaks = empty_hourly_activity()
+    hourly = apply_breaks_to_hourly_activity(source, breaks)
 
     report_active_seconds = 20 * 60
     report_idle_seconds = 60 * 60
@@ -2041,9 +2113,9 @@ def test_totals_should_use_report_aggregates_not_hourly_buckets():
     assert effective_idle_seconds == report_idle_seconds
 
 def test_hourly_break_splits_across_hours():
-    buckets = {("Dmitry Shane", "2026-04-28"): _empty_hourly_activity()}
+    buckets = {("Dmitry Shane", "2026-04-28"): empty_hourly_activity()}
 
-    _add_break_interval_to_buckets(
+    add_break_interval_to_buckets(
         buckets,
         "Dmitry Shane",
         dt.datetime(2026, 4, 28, 16, 50, tzinfo=dt.UTC),
@@ -2051,16 +2123,16 @@ def test_hourly_break_splits_across_hours():
         "UTC",
     )
 
-    assert buckets[("Dmitry Shane", "2026-04-28")][16]["breakSeconds"] == 10 * 60
-    assert buckets[("Dmitry Shane", "2026-04-28")][17]["breakSeconds"] == 20 * 60
+    assert _hour_metric(buckets[("Dmitry Shane", "2026-04-28")][16], "breakSeconds") == 10 * 60
+    assert _hour_metric(buckets[("Dmitry Shane", "2026-04-28")][17], "breakSeconds") == 20 * 60
 
 def test_hourly_break_splits_across_midnight():
     buckets = {
-        ("Dmitry Shane", "2026-04-28"): _empty_hourly_activity(),
-        ("Dmitry Shane", "2026-04-29"): _empty_hourly_activity(),
+        ("Dmitry Shane", "2026-04-28"): empty_hourly_activity(),
+        ("Dmitry Shane", "2026-04-29"): empty_hourly_activity(),
     }
 
-    _add_break_interval_to_buckets(
+    add_break_interval_to_buckets(
         buckets,
         "Dmitry Shane",
         dt.datetime(2026, 4, 28, 23, 50, tzinfo=dt.UTC),
@@ -2068,13 +2140,13 @@ def test_hourly_break_splits_across_midnight():
         "UTC",
     )
 
-    assert buckets[("Dmitry Shane", "2026-04-28")][23]["breakSeconds"] == 10 * 60
-    assert buckets[("Dmitry Shane", "2026-04-29")][0]["breakSeconds"] == 20 * 60
+    assert _hour_metric(buckets[("Dmitry Shane", "2026-04-28")][23], "breakSeconds") == 10 * 60
+    assert _hour_metric(buckets[("Dmitry Shane", "2026-04-29")][0], "breakSeconds") == 20 * 60
 
 def test_hourly_break_uses_author_time_zone():
-    buckets = {("Dmitry", "2026-04-29"): _empty_hourly_activity()}
+    buckets = {("Dmitry", "2026-04-29"): empty_hourly_activity()}
 
-    _add_break_interval_to_buckets(
+    add_break_interval_to_buckets(
         buckets,
         "Dmitry",
         dt.datetime(2026, 4, 29, 9, 36, 39, tzinfo=dt.UTC),
@@ -2082,52 +2154,52 @@ def test_hourly_break_uses_author_time_zone():
         "Europe/Madrid",
     )
 
-    assert buckets[("Dmitry", "2026-04-29")][9]["breakSeconds"] == 0
-    assert buckets[("Dmitry", "2026-04-29")][10]["breakSeconds"] == 0
-    assert buckets[("Dmitry", "2026-04-29")][11]["breakSeconds"] == 1401
-    assert buckets[("Dmitry", "2026-04-29")][12]["breakSeconds"] == 1919
+    assert _hour_metric(buckets[("Dmitry", "2026-04-29")][9], "breakSeconds") == 0
+    assert _hour_metric(buckets[("Dmitry", "2026-04-29")][10], "breakSeconds") == 0
+    assert _hour_metric(buckets[("Dmitry", "2026-04-29")][11], "breakSeconds") == 1401
+    assert _hour_metric(buckets[("Dmitry", "2026-04-29")][12], "breakSeconds") == 1919
 
 def test_hourly_break_suppresses_small_idle_artifact():
-    source = _empty_hourly_activity()
-    break_buckets = _empty_hourly_activity()
+    source = empty_hourly_activity()
+    break_buckets = empty_hourly_activity()
     source[15]["activeSeconds"] = 553
     source[15]["idleSeconds"] = 2991
     break_buckets[15]["breakSeconds"] = 2806
 
-    hourly = _apply_breaks_to_hourly_activity(source, break_buckets)
+    hourly = apply_breaks_to_hourly_activity(source, break_buckets)
 
-    assert hourly[15]["activeSeconds"] == 553
-    assert hourly[15]["breakSeconds"] == 2806
-    assert hourly[15]["idleSeconds"] == 185
+    assert _hour_metric(hourly[15], "activeSeconds") == 553
+    assert _hour_metric(hourly[15], "breakSeconds") == 2806
+    assert _hour_metric(hourly[15], "idleSeconds") == 185
 
 def test_hourly_activity_does_not_infer_small_report_gap_as_idle():
-    source = _empty_hourly_activity()
+    source = empty_hourly_activity()
     source[14]["activeSeconds"] = 3379
 
-    hourly = _apply_breaks_to_hourly_activity(source, _empty_hourly_activity())
+    hourly = apply_breaks_to_hourly_activity(source, empty_hourly_activity())
 
-    assert hourly[14]["activeSeconds"] == 3379
-    assert hourly[14]["idleSeconds"] == 0
+    assert _hour_metric(hourly[14], "activeSeconds") == 3379
+    assert _hour_metric(hourly[14], "idleSeconds") == 0
 
 def test_hourly_activity_does_not_infer_past_hour_gap_as_idle():
-    source = _empty_hourly_activity()
+    source = empty_hourly_activity()
     source[10]["activeSeconds"] = 1743
     source[10]["idleSeconds"] = 1143
 
-    hourly = _apply_breaks_to_hourly_activity(source, _empty_hourly_activity())
+    hourly = apply_breaks_to_hourly_activity(source, empty_hourly_activity())
 
-    assert hourly[10]["activeSeconds"] == 1743
-    assert hourly[10]["idleSeconds"] == 1143
+    assert _hour_metric(hourly[10], "activeSeconds") == 1743
+    assert _hour_metric(hourly[10], "idleSeconds") == 1143
 
 def test_hourly_activity_keeps_dmitriy_zero_idle_gap_zero():
-    source = _empty_hourly_activity()
+    source = empty_hourly_activity()
     source[18]["activeSeconds"] = 3446
 
-    hourly = _apply_breaks_to_hourly_activity(source, _empty_hourly_activity())
+    hourly = apply_breaks_to_hourly_activity(source, empty_hourly_activity())
 
-    assert hourly[18]["activeSeconds"] == 3446
-    assert hourly[18]["idleSeconds"] == 0
-    assert hourly[18]["breakSeconds"] == 0
+    assert _hour_metric(hourly[18], "activeSeconds") == 3446
+    assert _hour_metric(hourly[18], "idleSeconds") == 0
+    assert _hour_metric(hourly[18], "breakSeconds") == 0
 
 def test_hourly_activity_preserves_fractional_active_segments():
     batch = _empty_event_deltas()
@@ -2142,21 +2214,20 @@ def test_hourly_activity_preserves_fractional_active_segments():
         cursor = segment_end
 
     assert batch["activeDeltaSeconds"] == 3600
-    assert batch["hourlyActivityDelta"][18]["activeSeconds"] == 3600
-    assert batch["hourlyActivityDelta"][18]["idleSeconds"] == 0
+    assert _hour_metric(batch["hourlyActivityDelta"][18], "activeSeconds") == 3600
+    assert _hour_metric(batch["hourlyActivityDelta"][18], "idleSeconds") == 0
 
-    hourly = _apply_breaks_to_hourly_activity(batch["hourlyActivityDelta"], _empty_hourly_activity())
+    hourly = apply_breaks_to_hourly_activity(batch["hourlyActivityDelta"], empty_hourly_activity())
 
-    assert hourly[18]["activeSeconds"] == 3600
-    assert hourly[18]["idleSeconds"] == 0
+    assert _hour_metric(hourly[18], "activeSeconds") == 3600
+    assert _hour_metric(hourly[18], "idleSeconds") == 0
 
 def test_hourly_activity_does_not_infer_current_hour_idle():
-    source = _empty_hourly_activity()
+    source = empty_hourly_activity()
     source[18]["activeSeconds"] = 1800
 
-    hourly = _apply_breaks_to_hourly_activity(source, _empty_hourly_activity())
+    hourly = apply_breaks_to_hourly_activity(source, empty_hourly_activity())
 
-    assert hourly[18]["activeSeconds"] == 1800
-    assert hourly[18]["idleSeconds"] == 0
-    assert hourly[19]["idleSeconds"] == 0
-
+    assert _hour_metric(hourly[18], "activeSeconds") == 1800
+    assert _hour_metric(hourly[18], "idleSeconds") == 0
+    assert _hour_metric(hourly[19], "idleSeconds") == 0

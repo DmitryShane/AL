@@ -2,11 +2,14 @@ import { AnalyticsActivityChart, type AnalyticsActivityBar, type AnalyticsActivi
 
 export type AnalyticsHourlyActivity = {
   hour: number;
-  activeSeconds: number;
-  idleSeconds: number;
-  breakSeconds?: number;
-  meetingSeconds?: number;
-  overtimeActiveSeconds?: number;
+  totals: {
+    activeSeconds: number;
+    idleSeconds: number;
+    afkSeconds: number;
+    meetingSeconds: number;
+    overtimeSeconds: number;
+    missedSeconds: number;
+  };
 };
 
 export type AnalyticsDayActivity = {
@@ -42,24 +45,27 @@ function toHourlyBars(day: AnalyticsDayActivity): AnalyticsActivityBar[] {
     title: formatHourTitle(hour),
     maxSeconds: 3600,
     totals: {
-      activeSeconds: hour.activeSeconds,
-      idleSeconds: hour.idleSeconds,
-      breakSeconds: hour.breakSeconds ?? 0,
-      meetingSeconds: hour.meetingSeconds ?? 0,
-      overtimeActiveSeconds: hour.overtimeActiveSeconds ?? 0,
+      activeSeconds: hour.totals.activeSeconds,
+      idleSeconds: hour.totals.idleSeconds,
+      breakSeconds: hour.totals.afkSeconds,
+      meetingSeconds: hour.totals.meetingSeconds,
+      overtimeActiveSeconds: hour.totals.overtimeSeconds,
       productivity: day.totals.productivity
     }
   }));
 }
 
 function normalizeHourlyActivity(source: AnalyticsHourlyActivity[]) {
-  const hours = Array.from({ length: 24 }, (_, hour) => ({
+  const hours: AnalyticsHourlyActivity[] = Array.from({ length: 24 }, (_, hour) => ({
     hour,
-    activeSeconds: 0,
-    idleSeconds: 0,
-    breakSeconds: 0,
-    meetingSeconds: 0,
-    overtimeActiveSeconds: 0
+    totals: {
+      activeSeconds: 0,
+      idleSeconds: 0,
+      afkSeconds: 0,
+      meetingSeconds: 0,
+      overtimeSeconds: 0,
+      missedSeconds: 0
+    }
   }));
 
   for (const sourceHour of source ?? []) {
@@ -69,11 +75,14 @@ function normalizeHourlyActivity(source: AnalyticsHourlyActivity[]) {
 
     hours[sourceHour.hour] = {
       hour: sourceHour.hour,
-      activeSeconds: sourceHour.activeSeconds ?? 0,
-      idleSeconds: sourceHour.idleSeconds ?? 0,
-      breakSeconds: sourceHour.breakSeconds ?? 0,
-      meetingSeconds: sourceHour.meetingSeconds ?? 0,
-      overtimeActiveSeconds: sourceHour.overtimeActiveSeconds ?? 0
+      totals: {
+        activeSeconds: sourceHour.totals?.activeSeconds ?? 0,
+        idleSeconds: sourceHour.totals?.idleSeconds ?? 0,
+        afkSeconds: sourceHour.totals?.afkSeconds ?? 0,
+        meetingSeconds: sourceHour.totals?.meetingSeconds ?? 0,
+        overtimeSeconds: sourceHour.totals?.overtimeSeconds ?? 0,
+        missedSeconds: sourceHour.totals?.missedSeconds ?? 0
+      }
     };
   }
 
@@ -90,8 +99,8 @@ function formatHour(hour: number) {
   return String(hour).padStart(2, "0");
 }
 
-function formatHourTitle(hour: Required<AnalyticsHourlyActivity>) {
-  return `${formatHour(hour.hour)}:00: ${formatMinutes(hour.activeSeconds)} active, ${formatMinutes(hour.overtimeActiveSeconds)} overtime, ${formatMinutes(hour.breakSeconds)} AFK, ${formatMinutes(hour.meetingSeconds)} meeting, ${formatMinutes(hour.idleSeconds)} idle`;
+function formatHourTitle(hour: AnalyticsHourlyActivity) {
+  return `${formatHour(hour.hour)}:00: ${formatMinutes(hour.totals.activeSeconds)} active, ${formatMinutes(hour.totals.overtimeSeconds)} overtime, ${formatMinutes(hour.totals.afkSeconds)} AFK, ${formatMinutes(hour.totals.meetingSeconds)} meeting, ${formatMinutes(hour.totals.idleSeconds)} idle`;
 }
 
 function formatMinutes(seconds: number) {

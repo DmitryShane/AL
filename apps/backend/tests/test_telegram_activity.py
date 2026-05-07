@@ -12,11 +12,8 @@ from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSes
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE, meeting_summary_sections, render_meeting_summary_prompt
 from al_backend.routers.reports import plugin_config
 from al_backend.activity_math import (
-    _add_break_interval_to_buckets,
-    _apply_breaks_to_hourly_activity,
     _date_query,
     _empty_event_deltas,
-    _empty_hourly_activity,
     _interval_deltas,
     _merge_batch_deltas,
     _normalize_telegram_username,
@@ -26,6 +23,11 @@ from al_backend.activity_math import (
     _with_author_presence,
     _with_productivity,
     _worked_file_delta,
+)
+from al_backend.hourly_fill_rules import (
+    empty_hourly_activity,
+    apply_breaks_to_hourly_activity,
+    add_break_interval_to_buckets,
 )
 from al_backend.telegram_bot import (
     BotConfig,
@@ -429,7 +431,7 @@ def test_telegram_to_first_activity_gap_counts_as_idle_hourly_activity():
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -501,7 +503,7 @@ def test_telegram_to_first_activity_uses_first_raw_activity_event_before_report_
             "activeSeconds": 120,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -555,7 +557,7 @@ def test_telegram_to_first_activity_falls_back_to_first_positive_report_row_with
             "activeSeconds": 120,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 

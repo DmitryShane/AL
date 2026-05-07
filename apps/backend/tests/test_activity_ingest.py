@@ -12,11 +12,8 @@ from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSes
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE, meeting_summary_sections, render_meeting_summary_prompt
 from al_backend.routers.reports import plugin_config
 from al_backend.activity_math import (
-    _add_break_interval_to_buckets,
-    _apply_breaks_to_hourly_activity,
     _date_query,
     _empty_event_deltas,
-    _empty_hourly_activity,
     _interval_deltas,
     _merge_batch_deltas,
     _normalize_telegram_username,
@@ -26,6 +23,11 @@ from al_backend.activity_math import (
     _with_author_presence,
     _with_productivity,
     _worked_file_delta,
+)
+from al_backend.hourly_fill_rules import (
+    empty_hourly_activity,
+    apply_breaks_to_hourly_activity,
+    add_break_interval_to_buckets,
 )
 from al_backend.telegram_bot import (
     BotConfig,
@@ -468,7 +470,7 @@ def test_device_summary_uses_application_name_as_saved_item():
             "savedPrefabs": [],
             "overtimeActivityCounts": [],
             "overtimeSavedPrefabs": [],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -604,7 +606,7 @@ def test_author_local_today_includes_explicit_ui_date_for_device_local_timezone(
             "savedPrefabs": [],
             "overtimeActivityCounts": [],
             "overtimeSavedPrefabs": [],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -966,7 +968,7 @@ def test_cursor_activity_project_appears_in_saved_files_without_file_save():
             "idleSeconds": 0,
             "activityCounts": [{"type": "scene_changed", "count": 3}],
             "savedPrefabs": [],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
     repo.db.daily_author_activity.insert_one(
@@ -979,7 +981,7 @@ def test_cursor_activity_project_appears_in_saved_files_without_file_save():
             "idleSeconds": 0,
             "activityCounts": [{"type": "selection", "count": 1}],
             "savedPrefabs": [{"path": "Assets/Project/Levels/Level.008/Level.008.prefab", "name": "Level.008", "saveCount": 1}],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -1007,7 +1009,7 @@ def test_activity_summary_author_source_uses_latest_report_row():
             "activeSeconds": 120,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
     repo.db.report_rows.insert_one(
@@ -1130,7 +1132,7 @@ def test_activity_summary_keeps_mix_and_saved_files_per_author():
             "idleSeconds": 0,
             "activityCounts": [{"type": "selection", "count": 3}],
             "savedPrefabs": [{"path": "Assets/Dmitry.prefab", "name": "Dmitry", "saveCount": 2}],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
     repo.db.daily_author_activity.insert_one(
@@ -1141,7 +1143,7 @@ def test_activity_summary_keeps_mix_and_saved_files_per_author():
             "idleSeconds": 0,
             "activityCounts": [{"type": "play_mode", "count": 5}],
             "savedPrefabs": [{"path": "Assets/Igor.prefab", "name": "Igor", "saveCount": 4}],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -1166,7 +1168,7 @@ def test_activity_summary_groups_author_breakdowns_by_source():
             "savedPrefabs": [{"path": "cursor:AL", "name": "AL", "projectId": "AL", "saveCount": 6}],
             "overtimeActivityCounts": [{"type": "focus", "count": 2}],
             "overtimeSavedPrefabs": [{"path": "cursor:OT", "name": "OT", "projectId": "AL", "saveCount": 1}],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
     repo.db.daily_author_activity.insert_one(
@@ -1180,7 +1182,7 @@ def test_activity_summary_groups_author_breakdowns_by_source():
             "savedPrefabs": [{"path": "Assets/Bike.prefab", "name": "Bike", "saveCount": 2}],
             "overtimeActivityCounts": [{"type": "scene_changed", "count": 1}],
             "overtimeSavedPrefabs": [{"path": "Assets/Overtime.prefab", "name": "Overtime", "saveCount": 3}],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 

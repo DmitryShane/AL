@@ -8,10 +8,8 @@ from pymongo import DESCENDING
 
 from ..activity_math import (
     MICROSECONDS_PER_SECOND,
-    _add_meeting_interval_to_buckets,
     _coerce_datetime,
     _empty_event_deltas,
-    _empty_hourly_activity,
     _iso,
     _looks_like_missing_transcript_summary,
     _looks_like_no_work_content_summary,
@@ -23,6 +21,8 @@ from ..activity_math import (
     _telegram_event_date,
     _valid_time_zone_id,
 )
+from ..hourly_fill_rules import add_meeting_interval_to_buckets
+from ..hourly_fill_rules import empty_hourly_activity
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 from ..telegram_bot import format_meeting_summary_message
@@ -330,8 +330,8 @@ class DiscordMeetingService(MongoComposableMixin):
         if self.db.report_rows.find_one({"reportId": report_id}, {"_id": 1}):
             return 0
 
-        hourly_activity_delta = _empty_hourly_activity()
-        _add_meeting_interval_to_buckets(
+        hourly_activity_delta = empty_hourly_activity()
+        add_meeting_interval_to_buckets(
             {(raw_author, event_date): hourly_activity_delta},
             raw_author,
             started_at,
@@ -1062,5 +1062,4 @@ def _meeting_event_item_id(event: dict[str, Any]) -> str:
     discord_user_id = str(event.get("discordUserId") or "")
     event_type = str(event.get("eventType") or "")
     return f"voice:{event_type}:{discord_user_id}:{timestamp}"
-
 

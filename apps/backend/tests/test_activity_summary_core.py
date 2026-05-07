@@ -12,11 +12,8 @@ from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSes
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE, meeting_summary_sections, render_meeting_summary_prompt
 from al_backend.routers.reports import plugin_config
 from al_backend.activity_math import (
-    _add_break_interval_to_buckets,
-    _apply_breaks_to_hourly_activity,
     _date_query,
     _empty_event_deltas,
-    _empty_hourly_activity,
     _interval_deltas,
     _merge_batch_deltas,
     _normalize_telegram_username,
@@ -26,6 +23,11 @@ from al_backend.activity_math import (
     _with_author_presence,
     _with_productivity,
     _worked_file_delta,
+)
+from al_backend.hourly_fill_rules import (
+    empty_hourly_activity,
+    apply_breaks_to_hourly_activity,
+    add_break_interval_to_buckets,
 )
 from al_backend.telegram_bot import (
     BotConfig,
@@ -135,7 +137,7 @@ def test_activity_summary_exposes_telegram_to_first_activity_time():
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -156,7 +158,7 @@ def test_activity_summary_fills_intraday_partial_hour_gap_as_idle_not_missed():
             "timeZoneId": "Europe/Moscow",
         }
     )
-    hourly_activity = _empty_hourly_activity()
+    hourly_activity = empty_hourly_activity()
     hourly_activity[16]["activeSeconds"] = 2679
     hourly_activity[16]["activeMicroseconds"] = 2679 * 1_000_000
     hourly_activity[16]["idleSeconds"] = 837
@@ -179,10 +181,11 @@ def test_activity_summary_fills_intraday_partial_hour_gap_as_idle_not_missed():
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Denis Ostrovskiy")["hourlyActivity"]
     hour_16 = next(item for item in hourly if item["hour"] == 16)
 
-    assert hour_16["activeSeconds"] == 2679
-    assert hour_16["idleSeconds"] == 921
-    assert hour_16["missedSeconds"] == 0
-    assert hour_16["activeSeconds"] + hour_16["idleSeconds"] == 3600
+    assert set(hour_16) == {"hour", "totals", "fillSegments"}
+    assert hour_16["totals"]["activeSeconds"] == 2679
+    assert hour_16["totals"]["idleSeconds"] == 921
+    assert hour_16["totals"]["missedSeconds"] == 0
+    assert hour_16["totals"]["activeSeconds"] + hour_16["totals"]["idleSeconds"] == 3600
     assert author["idleSeconds"] == 837
     assert author["pluginDaySeconds"] == 3516
     assert summary["totals"]["idleSeconds"] == 837
@@ -225,7 +228,7 @@ def test_activity_summary_overtime_bracket_fill_is_visual_only():
             "idleSeconds": 0,
             "overtimeActiveSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -233,8 +236,9 @@ def test_activity_summary_overtime_bracket_fill_is_visual_only():
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Igor Mats")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert hourly_by_hour[15]["overtimeActiveSeconds"] == 0
-    assert hourly_by_hour[15]["overtimeFillSeconds"] == 3600
+    assert set(hourly_by_hour[15]) == {"hour", "totals", "fillSegments"}
+    assert hourly_by_hour[15]["totals"]["overtimeSeconds"] == 3600
+    assert hourly_by_hour[15]["fillSegments"] == [{"kind": "overtime", "startSecond": 0, "endSecond": 3600}]
 
 def test_activity_summary_cache_hits_and_invalidates():
     repo = fake_repository()
@@ -251,7 +255,7 @@ def test_activity_summary_cache_hits_and_invalidates():
             "savedPrefabs": [],
             "overtimeActivityCounts": [],
             "overtimeSavedPrefabs": [],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 
@@ -301,7 +305,7 @@ def test_activity_summary_clears_report_metadata_for_zero_activity_author():
             "activeSeconds": 0,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
     repo.db.report_rows.insert_one(
@@ -344,7 +348,7 @@ def test_activity_summary_keeps_report_metadata_for_nonzero_activity_author():
             "activeSeconds": 120,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
     repo.db.report_rows.insert_one(
@@ -709,4 +713,3 @@ def test_effective_idle_fits_inside_plugin_day_cap():
 
     assert effective_active_seconds == 30 * 60
     assert effective_idle_seconds == (8 * 3600) + (30 * 60)
-

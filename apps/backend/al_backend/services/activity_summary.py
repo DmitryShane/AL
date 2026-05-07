@@ -1,30 +1,30 @@
 from __future__ import annotations
 
 from ..activity_math import *
+from ..hourly_fill_rules import (
+    INTERNAL_MISSED_END_SECONDS,
+    INTERNAL_MISSED_START_SECONDS,
+    add_afk_fill_segment_to_hour,
+    add_idle_seconds_to_hour,
+    add_idle_interval_to_buckets,
+    add_report_activity_fill_segments,
+    add_visual_missed_seconds,
+    apply_breaks_to_hourly_activity,
+    apply_meetings_to_hourly_activity,
+    empty_hourly_activity,
+    fill_normal_to_overtime_transition_hours,
+    fill_overtime_hours_between_overtime_buckets,
+    fill_overtime_hours_bracketed_by_reports,
+    merge_hourly_activity,
+    merge_meeting_buckets_into_hourly_author_rows,
+    normalize_fill_segments_in_hour,
+    public_hourly_activity,
+    visual_hour_occupied_seconds,
+    visual_hour_available_seconds,
+    visual_missed_end_hour,
+)
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
-
-
-def _normalize_break_segments(hour: dict[str, Any]) -> None:
-    segments = []
-
-    for segment in hour.get("breakSegments", []):
-        start_second = max(0, min(3600, int(segment.get("startSecond", 0))))
-        end_second = max(0, min(3600, int(segment.get("endSecond", 0))))
-
-        if end_second > start_second:
-            segments.append({"startSecond": start_second, "endSecond": end_second})
-
-    segments.sort(key=lambda item: (item["startSecond"], item["endSecond"]))
-    merged_segments = []
-
-    for segment in segments:
-        if merged_segments and segment["startSecond"] <= merged_segments[-1]["endSecond"]:
-            merged_segments[-1]["endSecond"] = max(merged_segments[-1]["endSecond"], segment["endSecond"])
-        else:
-            merged_segments.append(segment)
-
-    hour["breakSegments"] = merged_segments
 
 
 class ActivitySummaryService(MongoComposableMixin):
@@ -756,15 +756,27 @@ class ActivitySummaryService(MongoComposableMixin):
                 summary_dates_by_author.setdefault(raw_author, set()).add(item_date)
             profile = profiles.get(raw_author, {})
             display_name = _display_name(raw_author, profile)
-            hourly_activity = _apply_breaks_to_hourly_activity(
-                item.get("hourlyActivity", []),
-                break_buckets.get(author_date_key, []),
-                break_consumed_by_author_date_hour.setdefault(author_date_key, _empty_hourly_activity()),
+            source_hourly_activity = item.get("hourlyActivity", [])
+            source_reports = list(
+                self.db.report_rows.find(
+                    {"author": raw_author, "date": item_date, "source": item.get("source")},
+                    {"_id": 0, "recordedAt": 1, "activeDeltaSeconds": 1, "overtimeActiveDeltaSeconds": 1},
+                ).sort("recordedAt", 1)
             )
-            hourly_activity = _apply_meetings_to_hourly_activity(
+            add_report_activity_fill_segments(
+                source_hourly_activity,
+                source_reports,
+                _author_time_zone_id(raw_author, profiles, item.get("timeZoneId")),
+            )
+            hourly_activity = apply_breaks_to_hourly_activity(
+                source_hourly_activity,
+                break_buckets.get(author_date_key, []),
+                break_consumed_by_author_date_hour.setdefault(author_date_key, empty_hourly_activity()),
+            )
+            hourly_activity = apply_meetings_to_hourly_activity(
                 hourly_activity,
                 meeting_buckets.get(author_date_key, []),
-                meeting_consumed_by_author_date_hour.setdefault(author_date_key, _empty_hourly_activity()),
+                meeting_consumed_by_author_date_hour.setdefault(author_date_key, empty_hourly_activity()),
             )
             vacation_mark = composed(self).vacation_mark_for_author_date(raw_author, item_date)
             telegram_gap = telegram_gaps.get(author_date_key, {})
@@ -777,7 +789,7 @@ class ActivitySummaryService(MongoComposableMixin):
             )
 
             if telegram_gap_seconds:
-                _merge_hourly_activity(hourly_activity, telegram_gap_hours)
+                merge_hourly_activity(hourly_activity, telegram_gap_hours)
                 telegram_gap_counted.add(author_date_key)
 
             if vacation_mark:
@@ -998,7 +1010,7 @@ class ActivitySummaryService(MongoComposableMixin):
                     "rawAuthor": raw_author,
                     "timeZoneId": item.get("timeZoneId"),
                     "timeZoneDisplayName": item.get("timeZoneDisplayName"),
-                    "hourlyActivity": _empty_hourly_activity(),
+                    "hourlyActivity": empty_hourly_activity(),
                 }
                 hourly_by_author[raw_author] = current_author
             else:
@@ -1007,7 +1019,7 @@ class ActivitySummaryService(MongoComposableMixin):
                     "timeZoneDisplayName"
                 )
 
-            _merge_hourly_activity(current_author["hourlyActivity"], hourly_activity)
+            merge_hourly_activity(current_author["hourlyActivity"], hourly_activity)
 
         activity_mix = _activity_mix_from_counts(activity_counts)
         overtime_activity_mix = _activity_mix_from_counts(overtime_activity_counts)
@@ -1026,7 +1038,7 @@ class ActivitySummaryService(MongoComposableMixin):
             meeting_seconds_by_author_date,
             meeting_buckets,
         )
-        meeting_hourly_adjustments = _merge_meeting_buckets_into_hourly_author_rows(hourly_by_author, meeting_buckets, profiles)
+        meeting_hourly_adjustments = merge_meeting_buckets_into_hourly_author_rows(hourly_by_author, meeting_buckets, profiles, _display_name)
 
         for raw_author, adjustment in meeting_hourly_adjustments.items():
             author_row = authors_by_raw.get(raw_author)
@@ -1059,7 +1071,7 @@ class ActivitySummaryService(MongoComposableMixin):
                 "rawAuthor": raw_author,
                 "timeZoneId": profiles.get(raw_author, {}).get("timeZoneId"),
                 "timeZoneDisplayName": profiles.get(raw_author, {}).get("timeZoneDisplayName"),
-                "hourlyActivity": _empty_hourly_activity(),
+                "hourlyActivity": empty_hourly_activity(),
             }
 
         self._apply_vacation_summary_overrides(
@@ -1182,7 +1194,7 @@ class ActivitySummaryService(MongoComposableMixin):
             )
             author_rows.append(summary_author)
         hourly_author_rows = [
-            {**item, "hourlyActivity": _public_hourly_activity(item.get("hourlyActivity", []))}
+            {**item, "hourlyActivity": public_hourly_activity(item.get("hourlyActivity", []))}
             for item in hourly_by_author.values()
         ]
 
@@ -1286,7 +1298,7 @@ class ActivitySummaryService(MongoComposableMixin):
             idle_seconds = max(0, int(hour.get("idleSeconds", 0)))
             telegram_gap_idle_seconds = max(0, int(hour.get("telegramToFirstActivityIdleSeconds", 0)))
             plugin_hour_gap_idle_seconds = max(0, int(hour.get("pluginHourGapIdleSeconds", 0)))
-            visual_occupied_seconds = _visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
+            visual_occupied_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
             blocked_plugin_gap_idle_seconds = plugin_hour_gap_idle_seconds if visual_occupied_seconds < 3600 else 0
             convertible_idle_seconds = max(0, idle_seconds - telegram_gap_idle_seconds - blocked_plugin_gap_idle_seconds)
 
@@ -1315,8 +1327,8 @@ class ActivitySummaryService(MongoComposableMixin):
             hour["breakSeconds"] = int(hour.get("breakSeconds", 0)) + move_seconds
             remaining_idle_seconds = max(0, idle_seconds - move_seconds)
             break_start_seconds = occupied_seconds + remaining_idle_seconds if occupied_seconds > 0 else 3600 - move_seconds
-            _add_break_segment_to_hour(hour, break_start_seconds, break_start_seconds + move_seconds)
-            _normalize_break_segments(hour)
+            add_afk_fill_segment_to_hour(hour, break_start_seconds, break_start_seconds + move_seconds)
+            normalize_fill_segments_in_hour(hour)
             transferred_seconds += move_seconds
 
         return transferred_seconds
@@ -1426,7 +1438,7 @@ class ActivitySummaryService(MongoComposableMixin):
 
             for hour_index in range(0, min(local_latest_report_at.hour, len(hourly_activity))):
                 hour = hourly_activity[hour_index]
-                accounted_seconds = _visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
+                accounted_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
 
                 if accounted_seconds <= 0:
                     continue
@@ -1438,7 +1450,7 @@ class ActivitySummaryService(MongoComposableMixin):
                 if idle_seconds <= 0:
                     continue
 
-                _add_idle_seconds_to_hour(hour, idle_seconds)
+                add_idle_seconds_to_hour(hour, idle_seconds)
                 hour["pluginHourGapIdleSeconds"] = int(hour.get("pluginHourGapIdleSeconds", 0)) + idle_seconds
                 visual_plugin_seconds += idle_seconds
 
@@ -1487,9 +1499,9 @@ class ActivitySummaryService(MongoComposableMixin):
                 continue
 
             idle_end = latest_report_at + dt.timedelta(seconds=idle_seconds)
-            hourly_activity = _empty_hourly_activity()
-            _add_idle_interval_to_buckets(hourly_activity, latest_report_at, idle_end, time_zone_id)
-            _merge_hourly_activity(hourly_author["hourlyActivity"], hourly_activity)
+            hourly_activity = empty_hourly_activity()
+            add_idle_interval_to_buckets(hourly_activity, latest_report_at, idle_end, time_zone_id)
+            merge_hourly_activity(hourly_author["hourlyActivity"], hourly_activity)
 
     def _apply_workday_hour_idle_gaps(
         self,
@@ -1551,7 +1563,7 @@ class ActivitySummaryService(MongoComposableMixin):
 
                     expected_end = hour_end
                     expected_seconds = max(0, int((expected_end - expected_start).total_seconds()))
-                    occupied_seconds = _visual_hour_occupied_seconds(hourly_activity[hour_index]) + int(
+                    occupied_seconds = visual_hour_occupied_seconds(hourly_activity[hour_index]) + int(
                         hourly_activity[hour_index].get("missedSeconds", 0)
                     )
 
@@ -1567,7 +1579,7 @@ class ActivitySummaryService(MongoComposableMixin):
                     idle_seconds = min(gap_seconds, remaining_plugin_seconds)
 
                     if idle_seconds > 0:
-                        _add_idle_seconds_to_hour(hourly_activity[hour_index], idle_seconds)
+                        add_idle_seconds_to_hour(hourly_activity[hour_index], idle_seconds)
 
                 current_hour += dt.timedelta(hours=1)
 
@@ -1613,7 +1625,7 @@ class ActivitySummaryService(MongoComposableMixin):
                     "rawAuthor": raw_author,
                     "timeZoneId": profile.get("timeZoneId") or session.get("timeZoneId"),
                     "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
-                    "hourlyActivity": _empty_hourly_activity(),
+                    "hourlyActivity": empty_hourly_activity(),
                 }
                 hourly_by_author[raw_author] = hourly_author
 
@@ -1693,7 +1705,7 @@ class ActivitySummaryService(MongoComposableMixin):
         local_start = _to_local_datetime(started_at, time_zone_id)
         hour_start = local_start.replace(minute=0, second=0, microsecond=0)
         missed_seconds = max(0, int((local_start - hour_start).total_seconds()))
-        _add_visual_missed_seconds(hourly_activity, local_start.hour, missed_seconds, "missedStartSeconds")
+        add_visual_missed_seconds(hourly_activity, local_start.hour, missed_seconds, INTERNAL_MISSED_START_SECONDS)
         self._trim_visual_idle_overflow(hourly_activity, local_start.hour)
 
     def _add_visual_missed_end(
@@ -1710,15 +1722,15 @@ class ActivitySummaryService(MongoComposableMixin):
         local_end = _to_local_datetime(ended_at, time_zone_id)
 
         if fill_to_hour:
-            target_hour = _visual_missed_end_hour(hourly_activity, local_end.hour, _to_local_datetime(offline_at, time_zone_id) if offline_at else None)
-            missed_seconds = _visual_hour_available_seconds(target_hour)
+            target_hour = visual_missed_end_hour(hourly_activity, local_end.hour, _to_local_datetime(offline_at, time_zone_id) if offline_at else None)
+            missed_seconds = visual_hour_available_seconds(target_hour)
             target_hour_index = int(target_hour.get("hour", local_end.hour))
         else:
             hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
             missed_seconds = max(0, int((hour_end - local_end).total_seconds()))
             target_hour_index = local_end.hour
 
-        _add_visual_missed_seconds(hourly_activity, target_hour_index, missed_seconds, "missedEndSeconds")
+        add_visual_missed_seconds(hourly_activity, target_hour_index, missed_seconds, INTERNAL_MISSED_END_SECONDS)
         self._trim_visual_idle_overflow(hourly_activity, target_hour_index)
 
     def _trim_visual_idle_overflow(self, hourly_activity: list[dict[str, Any]], hour_index: int) -> None:
@@ -1726,7 +1738,7 @@ class ActivitySummaryService(MongoComposableMixin):
             return
 
         hour = hourly_activity[hour_index]
-        occupied_seconds = _visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
+        occupied_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
         overflow_seconds = max(0, occupied_seconds - 3600)
 
         if overflow_seconds <= 0:
@@ -1803,9 +1815,9 @@ class ActivitySummaryService(MongoComposableMixin):
             hourly_activity = hourly_author.get("hourlyActivity", [])
             ordered_reports = sorted(reports)
 
-            _fill_overtime_hours_bracketed_by_reports(hourly_activity, ordered_reports)
-            _fill_overtime_hours_between_overtime_buckets(hourly_activity)
-            _fill_normal_to_overtime_transition_hours(hourly_activity)
+            fill_overtime_hours_bracketed_by_reports(hourly_activity, ordered_reports)
+            fill_overtime_hours_between_overtime_buckets(hourly_activity)
+            fill_normal_to_overtime_transition_hours(hourly_activity)
 
     def _apply_latest_report_metadata(
         self,
@@ -2137,5 +2149,3 @@ def _saved_prefab_source_groups(items_by_source: dict[str, list[dict[str, Any]]]
         )
 
     return sorted(groups, key=lambda item: (-int(item.get("totalSaveCount", 0)), str(item.get("source") or "")))
-
-

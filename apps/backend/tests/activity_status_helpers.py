@@ -1,4 +1,4 @@
-from al_backend.activity_math import _empty_hourly_activity
+from al_backend.hourly_fill_rules import empty_hourly_activity
 
 
 def _insert_presence_daily_activity(repo, received_at):
@@ -16,7 +16,7 @@ def _insert_presence_daily_activity(repo, received_at):
             "savedPrefabs": [],
             "overtimeActivityCounts": [],
             "overtimeSavedPrefabs": [],
-            "hourlyActivity": _empty_hourly_activity(),
+            "hourlyActivity": empty_hourly_activity(),
         }
     )
 

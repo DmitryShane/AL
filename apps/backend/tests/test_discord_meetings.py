@@ -12,11 +12,8 @@ from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSes
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE, meeting_summary_sections, render_meeting_summary_prompt
 from al_backend.routers.reports import plugin_config
 from al_backend.activity_math import (
-    _add_break_interval_to_buckets,
-    _apply_breaks_to_hourly_activity,
     _date_query,
     _empty_event_deltas,
-    _empty_hourly_activity,
     _interval_deltas,
     _merge_batch_deltas,
     _normalize_telegram_username,
@@ -26,6 +23,11 @@ from al_backend.activity_math import (
     _with_author_presence,
     _with_productivity,
     _worked_file_delta,
+)
+from al_backend.hourly_fill_rules import (
+    add_break_interval_to_buckets,
+    apply_breaks_to_hourly_activity,
+    empty_hourly_activity,
 )
 from al_backend.telegram_bot import (
     BotConfig,
@@ -50,6 +52,41 @@ from al_backend.telegram_bot import (
 )
 from tests.fakes import fake_repository, set_idle_threshold
 
+
+
+def _hour_metric(item: dict, key: str) -> int:
+    if "totals" not in item:
+        return int(item.get(key, 0))
+    mapping = {
+        "activeSeconds": "activeSeconds",
+        "idleSeconds": "idleSeconds",
+        "breakSeconds": "afkSeconds",
+        "meetingSeconds": "meetingSeconds",
+        "overtimeActiveSeconds": "overtimeSeconds",
+        "missedSeconds": "missedSeconds",
+        "telegramToFirstActivityIdleSeconds": "idleSeconds",
+    }
+    return int(item["totals"].get(mapping[key], 0))
+
+
+def _hour_segments(item: dict, kind: str) -> list[dict[str, int]]:
+    return [
+        {"startSecond": segment["startSecond"], "endSecond": segment["endSecond"]}
+        for segment in item.get("fillSegments", [])
+        if segment.get("kind") == kind
+    ]
+
+
+def _missed_start_seconds(item: dict) -> int:
+    return sum(segment["endSecond"] - segment["startSecond"] for segment in item.get("fillSegments", []) if segment.get("kind") == "missed" and segment.get("startSecond") == 0)
+
+
+def _missed_end_seconds(item: dict) -> int:
+    return sum(segment["endSecond"] - segment["startSecond"] for segment in item.get("fillSegments", []) if segment.get("kind") == "missed" and segment.get("endSecond") == 3600)
+
+
+def _overtime_fill_seconds(item: dict) -> int:
+    return int(item.get("_visualOvertimeSeconds", 0))
 
 def test_discord_meeting_reduces_idle_for_any_activity_source():
     repo = fake_repository()
@@ -91,11 +128,11 @@ def test_discord_meeting_reduces_idle_for_any_activity_source():
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
     hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
 
-    assert author["idleSeconds"] == 1800
-    assert author["meetingSeconds"] == 1800
+    assert _hour_metric(author, "idleSeconds") == 1800
+    assert _hour_metric(author, "meetingSeconds") == 1800
     assert author["productivity"] == 0
-    assert hour["idleSeconds"] == 1800
-    assert hour["meetingSeconds"] == 1800
+    assert _hour_metric(hour, "idleSeconds") == 1800
+    assert _hour_metric(hour, "meetingSeconds") == 1800
 
 def test_discord_meeting_hides_active_from_hourly_chart_without_replacing_summary_active_time():
     repo = fake_repository()
@@ -130,13 +167,13 @@ def test_discord_meeting_hides_active_from_hourly_chart_without_replacing_summar
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
     hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
 
-    assert author["activeSeconds"] == 600
-    assert author["idleSeconds"] == 0
-    assert author["meetingSeconds"] == 1200
-    assert summary["totals"]["activeSeconds"] == 600
-    assert hour["activeSeconds"] == 0
-    assert hour["idleSeconds"] == 0
-    assert hour["meetingSeconds"] == 1200
+    assert _hour_metric(author, "activeSeconds") == 600
+    assert _hour_metric(author, "idleSeconds") == 0
+    assert _hour_metric(author, "meetingSeconds") == 1200
+    assert _hour_metric(summary["totals"], "activeSeconds") == 600
+    assert _hour_metric(hour, "activeSeconds") == 600
+    assert _hour_metric(hour, "idleSeconds") == 0
+    assert _hour_metric(hour, "meetingSeconds") == 1200
 
 def test_discord_meeting_overlay_is_not_applied_twice_across_sources():
     repo = fake_repository()
@@ -174,10 +211,10 @@ def test_discord_meeting_overlay_is_not_applied_twice_across_sources():
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
     hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
 
-    assert author["meetingSeconds"] == 1800
-    assert author["idleSeconds"] == 5400
-    assert hour["meetingSeconds"] == 1800
-    assert hour["idleSeconds"] == 1800
+    assert _hour_metric(author, "meetingSeconds") == 1800
+    assert _hour_metric(author, "idleSeconds") == 5400
+    assert _hour_metric(hour, "meetingSeconds") == 1800
+    assert _hour_metric(hour, "idleSeconds") == 1800
 
 def test_live_discord_meeting_session_is_included_in_summary():
     repo = fake_repository()
@@ -196,8 +233,8 @@ def test_live_discord_meeting_session_is_included_in_summary():
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
     hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
 
-    assert author["meetingSeconds"] == 1200
-    assert hour["meetingSeconds"] == 1200
+    assert _hour_metric(author, "meetingSeconds") == 1200
+    assert _hour_metric(hour, "meetingSeconds") == 1200
 
 def test_live_discord_meeting_session_is_counted_with_empty_daily_row():
     repo = fake_repository()
@@ -228,9 +265,9 @@ def test_live_discord_meeting_session_is_counted_with_empty_daily_row():
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
     hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
 
-    assert author["meetingSeconds"] == 1200
-    assert summary["totals"]["meetingSeconds"] == 1200
-    assert hour["meetingSeconds"] == 1200
+    assert _hour_metric(author, "meetingSeconds") == 1200
+    assert _hour_metric(summary["totals"], "meetingSeconds") == 1200
+    assert _hour_metric(hour, "meetingSeconds") == 1200
 
 def test_live_discord_closed_meeting_interval_is_counted_without_daily_row():
     repo = fake_repository()
@@ -258,10 +295,10 @@ def test_live_discord_closed_meeting_interval_is_counted_without_daily_row():
     hour_0 = next(item for item in hourly if item["hour"] == 0)
     hour_1 = next(item for item in hourly if item["hour"] == 1)
 
-    assert author["meetingSeconds"] == 3420
-    assert summary["totals"]["meetingSeconds"] == 3420
-    assert hour_0["meetingSeconds"] == 31 * 60
-    assert hour_1["meetingSeconds"] == 26 * 60
+    assert _hour_metric(author, "meetingSeconds") == 3420
+    assert _hour_metric(summary["totals"], "meetingSeconds") == 3420
+    assert _hour_metric(hour_0, "meetingSeconds") == 31 * 60
+    assert _hour_metric(hour_1, "meetingSeconds") == 26 * 60
 
 def test_live_discord_cross_midnight_meeting_fills_selected_local_day_hours():
     repo = fake_repository()
@@ -299,8 +336,8 @@ def test_live_discord_cross_midnight_meeting_fills_selected_local_day_hours():
     hour_0 = next(item for item in hourly if item["hour"] == 0)
     hour_1 = next(item for item in hourly if item["hour"] == 1)
 
-    assert hour_0["meetingSeconds"] == 3600
-    assert hour_1["meetingSeconds"] == 26 * 60
+    assert _hour_metric(hour_0, "meetingSeconds") == 3600
+    assert _hour_metric(hour_1, "meetingSeconds") == 26 * 60
 
 def test_live_discord_meeting_session_marks_offline_author_online():
     repo = fake_repository()
@@ -327,7 +364,7 @@ def test_live_discord_meeting_session_marks_offline_author_online():
 
     assert author["status"] == "online"
     assert "stalePresence" not in author
-    assert author["meetingSeconds"] == 1200
+    assert _hour_metric(author, "meetingSeconds") == 1200
 
 def test_live_discord_meeting_session_compensates_idle_time():
     repo = fake_repository()
@@ -360,13 +397,13 @@ def test_live_discord_meeting_session_compensates_idle_time():
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
     hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
 
-    assert author["activeSeconds"] == 600
-    assert author["idleSeconds"] == 600
-    assert author["meetingSeconds"] == 900
-    assert hour["activeSeconds"] == 600
-    assert hour["idleSeconds"] == 600
-    assert hour["meetingSeconds"] == 900
-    assert summary["totals"]["idleSeconds"] == 600
+    assert _hour_metric(author, "activeSeconds") == 600
+    assert _hour_metric(author, "idleSeconds") == 600
+    assert _hour_metric(author, "meetingSeconds") == 900
+    assert _hour_metric(hour, "activeSeconds") == 600
+    assert _hour_metric(hour, "idleSeconds") == 600
+    assert _hour_metric(hour, "meetingSeconds") == 900
+    assert _hour_metric(summary["totals"], "idleSeconds") == 600
 
 def test_discord_meeting_graph_uses_full_interval_bucket_over_active_time():
     repo = fake_repository()
@@ -421,12 +458,12 @@ def test_discord_meeting_graph_uses_full_interval_bucket_over_active_time():
     hour_17 = next(item for item in hourly if item["hour"] == 17)
     hour_18 = next(item for item in hourly if item["hour"] == 18)
 
-    assert hour_17["meetingSeconds"] == 2417
-    assert hour_17["activeSeconds"] == 1183
-    assert hour_17["idleSeconds"] == 0
-    assert hour_18["meetingSeconds"] == 228
-    assert author["activeSeconds"] == 2597
-    assert author["meetingSeconds"] == 2645
+    assert _hour_metric(hour_17, "meetingSeconds") == 2417
+    assert _hour_metric(hour_17, "activeSeconds") == 1183
+    assert _hour_metric(hour_17, "idleSeconds") == 0
+    assert _hour_metric(hour_18, "meetingSeconds") == 228
+    assert _hour_metric(author, "activeSeconds") == 2597
+    assert _hour_metric(author, "meetingSeconds") == 2645
 
 def test_discord_voice_events_open_and_close_meeting_session():
     repo = fake_repository()
@@ -437,9 +474,9 @@ def test_discord_voice_events_open_and_close_meeting_session():
 
     assert join["status"] == "meeting_started"
     assert leave["status"] == "meeting_closed"
-    assert leave["meetingSeconds"] == 1500
+    assert _hour_metric(leave, "meetingSeconds") == 1500
     assert repo.db.meeting_sessions.items == []
-    assert repo.db.meeting_intervals.items[0]["meetingSeconds"] == 1500
+    assert _hour_metric(repo.db.meeting_intervals.items[0], "meetingSeconds") == 1500
     assert repo.db.report_rows.items[-1]["source"] == "discord"
     assert repo.db.report_rows.items[-1]["reportType"] == "meeting"
 
@@ -457,13 +494,13 @@ def test_live_discord_meeting_reports_follow_send_interval():
     session = repo.db.meeting_sessions.find_one({"discordUserId": "123"})
 
     assert inserted == 2
-    assert [item["meetingSeconds"] for item in live_reports] == [300, 300]
+    assert [_hour_metric(item, "meetingSeconds") for item in live_reports] == [300, 300]
     assert [item["recordedAt"] for item in live_reports] == [
         "2026-04-29T10:05:00+00:00",
         "2026-04-29T10:10:00+00:00",
     ]
     assert all(item["activityType"] == "meeting_live" for item in live_reports)
-    assert hour["meetingSeconds"] == 600
+    assert _hour_metric(hour, "meetingSeconds") == 600
     assert session["lastLiveReportAt"] == dt.datetime(2026, 4, 29, 10, 10, tzinfo=dt.UTC)
 
 def test_discord_meeting_schedules_telegram_online_prompt_before_day_start():
@@ -539,10 +576,10 @@ def test_discord_auto_afk_closes_meeting_at_solo_start_and_schedules_notificatio
     )
 
     assert result["status"] == "meeting_auto_afk"
-    assert result["meetingSeconds"] == 1500
+    assert _hour_metric(result, "meetingSeconds") == 1500
     assert repo.db.meeting_sessions.items == []
     assert repo.db.meeting_intervals.items[0]["endedAt"] == dt.datetime(2026, 4, 29, 10, 25, tzinfo=dt.UTC)
-    assert repo.db.meeting_intervals.items[0]["meetingSeconds"] == 1500
+    assert _hour_metric(repo.db.meeting_intervals.items[0], "meetingSeconds") == 1500
     assert repo.db.meeting_events.items[-1]["eventType"] == "auto_afk"
     assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["telegramUsername"] == "future_artist"
     assert repo.db.telegram_meeting_auto_afk_notifications.items[0]["excludedSeconds"] == 600

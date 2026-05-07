@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Callable
 
 from ..activity_math import *
+from ..hourly_fill_rules import empty_hourly_activity
+from ..hourly_fill_rules import merge_hourly_activity
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
@@ -1009,7 +1011,7 @@ class ActivityAggregationService(MongoComposableMixin):
             returned_deltas["activeDeltaSeconds"] = 0
             returned_deltas["idleDeltaMicroseconds"] = 0
             returned_deltas["idleDeltaSeconds"] = 0
-            returned_deltas["hourlyActivityDelta"] = _empty_hourly_activity()
+            returned_deltas["hourlyActivityDelta"] = empty_hourly_activity()
             return returned_deltas
 
         return _empty_event_deltas() if suppress_deltas else deltas
@@ -1190,8 +1192,8 @@ class ActivityAggregationService(MongoComposableMixin):
             "date": snapshot.get("date") or "",
         }
         current = self.db.daily_author_activity.find_one(key, {"_id": 0}) or {}
-        hourly_activity = current.get("hourlyActivity") or _empty_hourly_activity()
-        _merge_hourly_activity(hourly_activity, deltas.get("hourlyActivityDelta", []))
+        hourly_activity = current.get("hourlyActivity") or empty_hourly_activity()
+        merge_hourly_activity(hourly_activity, deltas.get("hourlyActivityDelta", []))
         activity_counts = _merge_count_list(current.get("activityCounts", []), deltas.get("activityCountDeltas", []), "type", "count")
         saved_prefabs = _merge_count_list(current.get("savedPrefabs", []), deltas.get("savedPrefabDeltas", []), "path", "saveCount")
         overtime_activity_counts = _merge_count_list(
@@ -1239,4 +1241,3 @@ class ActivityAggregationService(MongoComposableMixin):
             },
             upsert=True,
         )
-

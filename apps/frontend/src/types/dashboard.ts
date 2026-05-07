@@ -160,14 +160,27 @@ export type SavedPrefabsSourceGroup = {
   savedPrefabs: SavedPrefab[];
 };
 
+export type HourlyFillKind = "active" | "overtime" | "afk" | "meeting" | "idle" | "missed";
+
+export type HourlyFillTotals = {
+  activeSeconds: number;
+  overtimeSeconds: number;
+  afkSeconds: number;
+  meetingSeconds: number;
+  idleSeconds: number;
+  missedSeconds: number;
+};
+
+export type HourlyFillSegment = {
+  kind: HourlyFillKind;
+  startSecond: number;
+  endSecond: number;
+};
+
 export type HourlyActivity = {
   hour: number;
-  activeSeconds: number;
-  idleSeconds: number;
-  breakSeconds?: number;
-  breakSegments?: Array<{ startSecond: number; endSecond: number }>;
-  meetingSeconds?: number;
-  overtimeActiveSeconds?: number;
+  totals: HourlyFillTotals;
+  fillSegments: HourlyFillSegment[];
 };
 
 export type AuthorHourlyActivity = {
@@ -451,4 +464,3 @@ export type DateRange = {
   endDate: string;
   preset: "live" | "yesterday" | "custom";
 };
-

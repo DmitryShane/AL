@@ -3,6 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from ..activity_math import *
+from ..hourly_fill_rules import (
+    add_break_interval_to_buckets,
+    add_idle_interval_to_buckets,
+    add_meeting_interval_to_buckets,
+    empty_hourly_activity,
+    merge_hourly_activity,
+)
 from ..mongo_composable import MongoComposableMixin
 
 
@@ -22,7 +29,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
         profiles = self._profiles_by_raw_author()
         min_start = _date_start(dates[0]) - dt.timedelta(days=1)
         max_end = _date_start(dates[-1]) + dt.timedelta(days=2)
-        buckets = {key: _empty_hourly_activity() for key in author_dates}
+        buckets = {key: empty_hourly_activity() for key in author_dates}
 
         interval_query = {
             "rawAuthor": {"$in": authors},
@@ -31,7 +38,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
         }
 
         for interval in self.db.break_intervals.find(interval_query, {"_id": 0}):
-            _add_break_interval_to_buckets(
+            add_break_interval_to_buckets(
                 buckets,
                 interval.get("rawAuthor"),
                 _coerce_datetime(interval.get("startedAt")),
@@ -47,7 +54,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
             if not started_at:
                 continue
 
-            _add_break_interval_to_buckets(
+            add_break_interval_to_buckets(
                 buckets,
                 session.get("rawAuthor"),
                 started_at,
@@ -74,7 +81,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
         profiles = self._profiles_by_raw_author()
         min_start = _date_start(dates[0]) - dt.timedelta(days=1)
         max_end = _date_start(dates[-1]) + dt.timedelta(days=2)
-        buckets = {key: _empty_hourly_activity() for key in author_dates}
+        buckets = {key: empty_hourly_activity() for key in author_dates}
 
         for item in daily_items:
             key = (str(item.get("author") or "Unknown User"), str(item.get("date") or ""))
@@ -97,7 +104,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
         }
 
         for interval in self.db.meeting_intervals.find(interval_query, {"_id": 0}):
-            _add_meeting_interval_to_buckets(
+            add_meeting_interval_to_buckets(
                 buckets,
                 interval.get("rawAuthor"),
                 _coerce_datetime(interval.get("startedAt")),
@@ -250,8 +257,8 @@ class ActivityLiveSummaryService(MongoComposableMixin):
             if gap_seconds <= 0:
                 continue
 
-            hourly_activity = _empty_hourly_activity()
-            _add_idle_interval_to_buckets(
+            hourly_activity = empty_hourly_activity()
+            add_idle_interval_to_buckets(
                 hourly_activity,
                 first_online_at,
                 first_activity_at,
@@ -345,8 +352,8 @@ class ActivityLiveSummaryService(MongoComposableMixin):
                 if meeting_key in meeting_bucket_keys_from_daily_items:
                     continue
 
-                interval_bucket = {meeting_key: _empty_hourly_activity()}
-                _add_meeting_interval_to_buckets(
+                interval_bucket = {meeting_key: empty_hourly_activity()}
+                add_meeting_interval_to_buckets(
                     interval_bucket,
                     raw_author,
                     _coerce_datetime(interval.get("startedAt")),
@@ -365,8 +372,8 @@ class ActivityLiveSummaryService(MongoComposableMixin):
                 author_row["meetingSeconds"] += meeting_delta_seconds
                 totals["meetingSeconds"] += meeting_delta_seconds
                 meeting_seconds_by_author_date[meeting_key] = existing_meeting_seconds + meeting_delta_seconds
-                meeting_bucket = meeting_buckets.setdefault(meeting_key, _empty_hourly_activity())
-                _merge_hourly_activity(meeting_bucket, interval_bucket[meeting_key])
+                meeting_bucket = meeting_buckets.setdefault(meeting_key, empty_hourly_activity())
+                merge_hourly_activity(meeting_bucket, interval_bucket[meeting_key])
 
                 hourly_author = hourly_by_author.get(raw_author)
 
@@ -377,11 +384,11 @@ class ActivityLiveSummaryService(MongoComposableMixin):
                         "rawAuthor": raw_author,
                         "timeZoneId": profile.get("timeZoneId") or interval.get("timeZoneId"),
                         "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
-                        "hourlyActivity": _empty_hourly_activity(),
+                        "hourlyActivity": empty_hourly_activity(),
                     }
                     hourly_by_author[raw_author] = hourly_author
 
-                _merge_hourly_activity(hourly_author["hourlyActivity"], interval_bucket[meeting_key])
+                merge_hourly_activity(hourly_author["hourlyActivity"], interval_bucket[meeting_key])
 
         for session in self.db.meeting_sessions.find({}, {"_id": 0}):
             raw_author = session.get("rawAuthor") or "Unknown User"

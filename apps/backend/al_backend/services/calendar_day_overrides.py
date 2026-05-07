@@ -12,6 +12,7 @@ from ..activity_math import (
     _time_microseconds,
     _valid_time_zone_id,
 )
+from ..hourly_fill_rules import INTERNAL_MISSED_END_SECONDS, INTERNAL_MISSED_START_SECONDS
 from ..mongo_composable import MongoComposableMixin
 
 
@@ -143,8 +144,8 @@ class CalendarDayOverrideService(MongoComposableMixin):
             hour["breakSeconds"] = 0
             hour["meetingSeconds"] = 0
             hour["missedSeconds"] = 0
-            hour["missedStartSeconds"] = 0
-            hour["missedEndSeconds"] = 0
+            hour[INTERNAL_MISSED_START_SECONDS] = 0
+            hour[INTERNAL_MISSED_END_SECONDS] = 0
 
             if overtime_seconds > 0 or overtime_microseconds > 0:
                 hour["overtimeActiveMicroseconds"] = overtime_microseconds

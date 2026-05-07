@@ -15,6 +15,7 @@ from pymongo.database import Database
 from .meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE
 from .settings import Settings
 from .auth import hash_password, new_session_token, session_token_hash, verify_password
+from .hourly_fill_rules import add_interval_to_hourly, empty_hourly_activity, hourly_deltas, merge_hourly_activity, public_hourly_activity
 
 LOW_PRODUCTIVITY_THRESHOLD = 50
 LONG_BREAK_THRESHOLD_SECONDS = 3600
@@ -97,7 +98,7 @@ def _empty_event_deltas() -> dict[str, Any]:
         "savedPrefabDeltas": [],
         "overtimeActivityCountDeltas": [],
         "overtimeSavedPrefabDeltas": [],
-        "hourlyActivityDelta": _empty_hourly_activity(),
+        "hourlyActivityDelta": empty_hourly_activity(),
     }
 
 
@@ -127,7 +128,7 @@ def _merge_batch_deltas(target: dict[str, Any], source: dict[str, Any]) -> None:
     target["breakDeltaSeconds"] = _seconds_from_microseconds(break_microseconds)
     target["overtimeActiveDeltaSeconds"] = _seconds_from_microseconds(overtime_active_microseconds)
     target["autoBreakDeltaSeconds"] = int(target.get("autoBreakDeltaSeconds", 0)) + int(source.get("autoBreakDeltaSeconds", 0))
-    _merge_hourly_activity(target["hourlyActivityDelta"], source.get("hourlyActivityDelta", []))
+    merge_hourly_activity(target["hourlyActivityDelta"], source.get("hourlyActivityDelta", []))
     target["activityCountDeltas"] = _merge_count_list(
         target.get("activityCountDeltas", []), source.get("activityCountDeltas", []), "type", "count"
     )
@@ -554,7 +555,7 @@ def _interval_deltas(
             local_idle_end = local_start + (idle_end - start)
             deltas["idleDeltaMicroseconds"] += idle_microseconds
             deltas["idleDeltaSeconds"] = _seconds_from_microseconds(deltas["idleDeltaMicroseconds"])
-            _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_idle_end, "idle")
+            add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_idle_end, "idle")
 
         if count_idle_as_overtime:
             overtime_end = min(end, overtime_window[1])
@@ -566,7 +567,7 @@ def _interval_deltas(
                 local_overtime_end = local_start + (overtime_end - start)
                 deltas["overtimeActiveDeltaMicroseconds"] += overtime_microseconds
                 deltas["overtimeActiveDeltaSeconds"] = _seconds_from_microseconds(deltas["overtimeActiveDeltaMicroseconds"])
-                _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_overtime_start, local_overtime_end, "overtime")
+                add_interval_to_hourly(deltas["hourlyActivityDelta"], local_overtime_start, local_overtime_end, "overtime")
 
         return deltas
 
@@ -576,7 +577,7 @@ def _interval_deltas(
         delta_seconds_key = "activeDeltaSeconds" if is_active else "idleDeltaSeconds"
         deltas[delta_microseconds_key] += interval_microseconds
         deltas[delta_seconds_key] = _seconds_from_microseconds(deltas[delta_microseconds_key])
-        _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_end, bucket)
+        add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_end, bucket)
         return deltas
 
     overtime_start, overtime_end = overtime_window
@@ -587,7 +588,7 @@ def _interval_deltas(
         local_normal_end = local_start + (normal_end - start)
         deltas["activeDeltaMicroseconds"] += normal_microseconds
         deltas["activeDeltaSeconds"] = _seconds_from_microseconds(deltas["activeDeltaMicroseconds"])
-        _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_normal_end, "active")
+        add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_normal_end, "active")
 
     overtime_segment_start = max(start, overtime_start)
     overtime_segment_end = min(end, overtime_end)
@@ -598,47 +599,16 @@ def _interval_deltas(
         local_overtime_end = local_start + (overtime_segment_end - start)
         deltas["overtimeActiveDeltaMicroseconds"] += overtime_microseconds
         deltas["overtimeActiveDeltaSeconds"] = _seconds_from_microseconds(deltas["overtimeActiveDeltaMicroseconds"])
-        _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_overtime_start, local_overtime_end, "overtime")
+        add_interval_to_hourly(deltas["hourlyActivityDelta"], local_overtime_start, local_overtime_end, "overtime")
 
     if end > overtime_end:
         local_after_overtime_start = local_start + (overtime_end - start)
         after_overtime_microseconds = _duration_microseconds(overtime_end, end)
         deltas["activeDeltaMicroseconds"] += after_overtime_microseconds
         deltas["activeDeltaSeconds"] = _seconds_from_microseconds(deltas["activeDeltaMicroseconds"])
-        _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_after_overtime_start, local_end, "active")
+        add_interval_to_hourly(deltas["hourlyActivityDelta"], local_after_overtime_start, local_end, "active")
 
     return deltas
-
-
-def _add_interval_to_hourly(target: list[dict[str, Any]], start: dt.datetime, end: dt.datetime, bucket: str) -> None:
-    target_by_hour = {int(item.get("hour", 0)): item for item in target}
-    cursor = start
-
-    while cursor < end:
-        hour_end = cursor.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
-        segment_end = min(hour_end, end)
-        microseconds = _duration_microseconds(cursor, segment_end)
-        item = target_by_hour.get(cursor.hour)
-
-        if item:
-            if bucket == "active":
-                active_microseconds = _time_microseconds(item, "activeSeconds", "activeMicroseconds") + microseconds
-                item["activeMicroseconds"] = active_microseconds
-                item["activeSeconds"] = _seconds_from_microseconds(active_microseconds)
-            elif bucket == "idle":
-                idle_microseconds = _time_microseconds(item, "idleSeconds", "idleMicroseconds") + microseconds
-                item["idleMicroseconds"] = idle_microseconds
-                item["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
-            elif bucket == "break":
-                item["breakSeconds"] = int(item.get("breakSeconds", 0)) + _seconds_from_microseconds(microseconds)
-            elif bucket == "overtime":
-                overtime_active_microseconds = (
-                    _time_microseconds(item, "overtimeActiveSeconds", "overtimeActiveMicroseconds") + microseconds
-                )
-                item["overtimeActiveMicroseconds"] = overtime_active_microseconds
-                item["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_active_microseconds)
-
-        cursor = segment_end
 
 
 def _move_hourly_idle_to_break(hourly_activity: list[dict[str, Any]], transfer_seconds: int) -> None:
@@ -1253,6 +1223,45 @@ def _parse_date(value: str) -> dt.date:
     return dt.date.fromisoformat(value)
 
 
+def _date_start(value: str) -> dt.datetime:
+    return dt.datetime.fromisoformat(value).replace(tzinfo=dt.UTC)
+
+
+def _insert_many_if_supported(collection: Any, docs: list[dict[str, Any]]) -> None:
+    if not docs:
+        return
+
+    insert_many = getattr(collection, "insert_many", None)
+
+    if insert_many:
+        insert_many(docs)
+        return
+
+    for doc in docs:
+        collection.insert_one(doc)
+
+
+def _merge_count_list(
+    current: list[dict[str, Any]], deltas: list[dict[str, Any]], key_name: str, count_name: str
+) -> list[dict[str, Any]]:
+    by_key = {item.get(key_name): dict(item) for item in current if item.get(key_name)}
+
+    for delta_item in deltas:
+        key = delta_item.get(key_name)
+
+        if not key:
+            continue
+
+        existing = by_key.get(key)
+
+        if existing:
+            existing[count_name] = int(existing.get(count_name, 0)) + int(delta_item.get(count_name, 0))
+        else:
+            by_key[key] = dict(delta_item)
+
+    return sorted(by_key.values(), key=lambda item: item.get(count_name, 0), reverse=True)
+
+
 def _analytics_year_months(docs: list[dict[str, Any]], year: int) -> list[dict[str, Any]]:
     docs_by_date = {str(item.get("date") or ""): item for item in docs if item.get("date")}
     months = []
@@ -1315,7 +1324,7 @@ def _analytics_month_weeks(
                     "label": day.strftime("%a %d"),
                     "inMonth": month_start <= day <= month_end,
                     "totals": day_totals,
-                    "hourlyActivity": _public_hourly_activity(doc.get("hourlyActivity", [])) if doc else _empty_hourly_activity(),
+                    "hourlyActivity": public_hourly_activity(doc.get("hourlyActivity", [])) if doc else empty_hourly_activity(),
                 }
             )
 
@@ -1541,7 +1550,7 @@ def _build_deltas(snapshot: dict[str, Any], previous: dict[str, Any]) -> dict[st
         "overtimeActiveDeltaSeconds": overtime_delta,
         "activityCountDeltas": _count_deltas(snapshot.get("activityCounts", []), previous.get("activityCounts", []), "type", "count"),
         "savedPrefabDeltas": _count_deltas(snapshot.get("savedPrefabs", []), previous.get("savedPrefabs", []), "path", "saveCount"),
-        "hourlyActivityDelta": _hourly_deltas(snapshot.get("hourlyActivity", []), previous.get("hourlyActivity", [])),
+        "hourlyActivityDelta": hourly_deltas(snapshot.get("hourlyActivity", []), previous.get("hourlyActivity", [])),
     }
 
 
@@ -1598,606 +1607,6 @@ def _count_deltas(current: list[dict[str, Any]], previous: list[dict[str, Any]],
     return deltas
 
 
-def _empty_hourly_activity() -> list[dict[str, int]]:
-    return [
-        {
-            "hour": hour,
-            "activeSeconds": 0,
-            "idleSeconds": 0,
-            "breakSeconds": 0,
-            "meetingSeconds": 0,
-            "overtimeActiveSeconds": 0,
-            "overtimeFillSeconds": 0,
-            "missedSeconds": 0,
-            "missedStartSeconds": 0,
-            "missedEndSeconds": 0,
-            "breakSegments": [],
-            "telegramToFirstActivityIdleSeconds": 0,
-        }
-        for hour in range(24)
-    ]
-
-
-def _public_hourly_activity(source: list[dict[str, Any]]) -> list[dict[str, int]]:
-    return [
-        {
-            "hour": int(item.get("hour", 0)),
-            "activeSeconds": int(item.get("activeSeconds", 0)),
-            "idleSeconds": int(item.get("idleSeconds", 0)),
-            "breakSeconds": int(item.get("breakSeconds", 0)),
-            "meetingSeconds": int(item.get("meetingSeconds", 0)),
-            "overtimeActiveSeconds": int(item.get("overtimeActiveSeconds", 0)),
-            "overtimeFillSeconds": int(item.get("overtimeFillSeconds", 0)),
-            "missedSeconds": int(item.get("missedSeconds", 0)),
-            "missedStartSeconds": int(item.get("missedStartSeconds", 0)),
-            "missedEndSeconds": int(item.get("missedEndSeconds", 0)),
-            "breakSegments": _public_break_segments(item.get("breakSegments", [])),
-            "telegramToFirstActivityIdleSeconds": int(item.get("telegramToFirstActivityIdleSeconds", 0)),
-        }
-        for item in source
-    ]
-
-
-def _public_break_segments(source: Any) -> list[dict[str, int]]:
-    segments = []
-
-    if not isinstance(source, list):
-        return segments
-
-    for segment in source:
-        if not isinstance(segment, dict):
-            continue
-
-        start_second = max(0, min(3600, int(segment.get("startSecond", 0))))
-        end_second = max(0, min(3600, int(segment.get("endSecond", 0))))
-
-        if end_second <= start_second:
-            continue
-
-        segments.append({"startSecond": start_second, "endSecond": end_second})
-
-    return segments
-
-
-def _add_break_segment_to_hour(hour: dict[str, Any], start_second: int, end_second: int) -> None:
-    start_second = max(0, min(3600, start_second))
-    end_second = max(0, min(3600, end_second))
-
-    if end_second <= start_second:
-        return
-
-    segments = hour.setdefault("breakSegments", [])
-    segments.append({"startSecond": start_second, "endSecond": end_second})
-
-
-def _break_segments_after_consumed_seconds(
-    source: Any,
-    consumed_seconds: int,
-    target_seconds: int,
-) -> list[dict[str, int]]:
-    if target_seconds <= 0:
-        return []
-
-    remaining_consumed_seconds = max(0, consumed_seconds)
-    remaining_target_seconds = max(0, target_seconds)
-    segments = []
-
-    for segment in _public_break_segments(source):
-        segment_start = int(segment["startSecond"])
-        segment_end = int(segment["endSecond"])
-        segment_seconds = segment_end - segment_start
-
-        if remaining_consumed_seconds >= segment_seconds:
-            remaining_consumed_seconds -= segment_seconds
-            continue
-
-        start_second = segment_start + remaining_consumed_seconds
-        available_seconds = segment_end - start_second
-        selected_seconds = min(available_seconds, remaining_target_seconds)
-
-        if selected_seconds > 0:
-            segments.append({"startSecond": start_second, "endSecond": start_second + selected_seconds})
-            remaining_target_seconds -= selected_seconds
-
-        remaining_consumed_seconds = 0
-
-        if remaining_target_seconds <= 0:
-            break
-
-    return segments
-
-
-def _add_visual_missed_seconds(hourly_activity: list[dict[str, Any]], hour: int, seconds: int, segment_key: str) -> None:
-    if seconds <= 0:
-        return
-
-    if hour < 0 or hour >= len(hourly_activity):
-        return
-
-    hourly_activity[hour]["missedSeconds"] = int(hourly_activity[hour].get("missedSeconds", 0)) + seconds
-    hourly_activity[hour][segment_key] = int(hourly_activity[hour].get(segment_key, 0)) + seconds
-
-
-def _add_idle_seconds_to_hour(hour: dict[str, Any], seconds: int) -> None:
-    if seconds <= 0:
-        return
-
-    idle_microseconds = _time_microseconds(hour, "idleSeconds", "idleMicroseconds") + (seconds * MICROSECONDS_PER_SECOND)
-    hour["idleMicroseconds"] = idle_microseconds
-    hour["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
-
-
-def _visual_missed_end_hour(
-    hourly_activity: list[dict[str, Any]], start_hour: int, local_offline_at: dt.datetime | None
-) -> dict[str, Any]:
-    if not hourly_activity:
-        return {}
-
-    clamped_start = min(max(0, start_hour), len(hourly_activity) - 1)
-
-    if _visual_hour_available_seconds(hourly_activity[clamped_start]) > 0:
-        return hourly_activity[clamped_start]
-
-    end_hour = local_offline_at.hour if local_offline_at else clamped_start
-
-    for hour_index in range(clamped_start + 1, min(end_hour, len(hourly_activity) - 1) + 1):
-        hour = hourly_activity[hour_index]
-
-        if _visual_hour_occupied_seconds(hour) > 0 and _visual_hour_available_seconds(hour) > 0:
-            return hour
-
-    return hourly_activity[clamped_start]
-
-
-def _visual_hour_occupied_seconds(hour: dict[str, Any]) -> int:
-    return (
-        int(hour.get("activeSeconds", 0))
-        + int(hour.get("idleSeconds", 0))
-        + int(hour.get("breakSeconds", 0))
-        + int(hour.get("meetingSeconds", 0))
-        + int(hour.get("overtimeActiveSeconds", 0))
-        + int(hour.get("overtimeFillSeconds", 0))
-    )
-
-
-def _visual_hour_available_seconds(hour: dict[str, Any]) -> int:
-    return max(0, 3600 - _visual_hour_occupied_seconds(hour))
-
-
-def _fill_overtime_hours_bracketed_by_reports(hourly_activity: list[dict[str, Any]], reports: list[dt.datetime]) -> None:
-    if len(reports) < 2:
-        return
-
-    earliest_report = reports[0]
-    latest_report = reports[-1]
-
-    for hour in hourly_activity:
-        hour_index = int(hour.get("hour", 0))
-        hour_start = earliest_report.replace(hour=hour_index, minute=0, second=0, microsecond=0)
-        hour_end = hour_start + dt.timedelta(hours=1)
-
-        if earliest_report >= hour_start or latest_report <= hour_end:
-            continue
-
-        _fill_visual_overtime_hour(hour)
-
-
-def _fill_overtime_hours_between_overtime_buckets(hourly_activity: list[dict[str, Any]]) -> None:
-    overtime_hour_indexes = [
-        index
-        for index, hour in enumerate(hourly_activity)
-        if int(hour.get("overtimeActiveSeconds", 0)) > 0
-        or _time_microseconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds") > 0
-    ]
-
-    if len(overtime_hour_indexes) < 2:
-        return
-
-    for hour_index in range(overtime_hour_indexes[0] + 1, overtime_hour_indexes[-1]):
-        _fill_visual_overtime_hour(hourly_activity[hour_index], replace_visual_idle=True)
-
-
-def _fill_visual_overtime_hour(hour: dict[str, Any], replace_visual_idle: bool = False) -> None:
-    visual_idle_seconds = max(0, int(hour.get("idleSeconds", 0))) if replace_visual_idle else 0
-    overtime_seconds = _visual_hour_available_seconds(hour) + visual_idle_seconds
-
-    if overtime_seconds <= 0:
-        return
-
-    if visual_idle_seconds > 0:
-        hour["idleSeconds"] = 0
-        hour["idleMicroseconds"] = 0
-
-    hour["overtimeFillSeconds"] = int(hour.get("overtimeFillSeconds", 0)) + overtime_seconds
-    _remove_visual_missed_seconds(hour, overtime_seconds)
-
-
-def _fill_normal_to_overtime_transition_hours(hourly_activity: list[dict[str, Any]]) -> None:
-    for hour in hourly_activity:
-        if int(hour.get("activeSeconds", 0)) <= 0:
-            continue
-
-        if int(hour.get("overtimeActiveSeconds", 0)) <= 0:
-            continue
-
-        _fill_visual_overtime_hour(hour)
-
-
-def _remove_visual_missed_seconds(hour: dict[str, Any], seconds: int) -> None:
-    remaining_seconds = max(0, seconds)
-
-    for key in ("missedEndSeconds", "missedStartSeconds"):
-        if remaining_seconds <= 0:
-            return
-
-        current_seconds = int(hour.get(key, 0))
-        removed_seconds = min(current_seconds, remaining_seconds)
-
-        if removed_seconds <= 0:
-            continue
-
-        hour[key] = current_seconds - removed_seconds
-        hour["missedSeconds"] = max(0, int(hour.get("missedSeconds", 0)) - removed_seconds)
-        remaining_seconds -= removed_seconds
-
-
-def _hourly_deltas(current: list[dict[str, Any]], previous: list[dict[str, Any]]) -> list[dict[str, int]]:
-    previous_by_hour = {int(item.get("hour", 0)): item for item in previous}
-    deltas = []
-
-    for item in current:
-        hour = int(item.get("hour", 0))
-        previous_item = previous_by_hour.get(hour, {})
-        active_delta = _delta(item.get("activeSeconds"), previous_item.get("activeSeconds"))
-        idle_delta = _delta(item.get("idleSeconds"), previous_item.get("idleSeconds"))
-
-        deltas.append({"hour": hour, "activeSeconds": active_delta, "idleSeconds": idle_delta})
-
-    return deltas
-
-
-def _merge_hourly_activity(target: list[dict[str, Any]], deltas: list[dict[str, Any]]) -> None:
-    target_by_hour = {int(item.get("hour", 0)): item for item in target}
-
-    for delta_item in deltas:
-        hour = int(delta_item.get("hour", 0))
-        target_item = target_by_hour.get(hour)
-
-        if not target_item:
-            continue
-
-        active_microseconds = _time_microseconds(target_item, "activeSeconds", "activeMicroseconds") + _time_microseconds(
-            delta_item, "activeSeconds", "activeMicroseconds"
-        )
-        idle_microseconds = _time_microseconds(target_item, "idleSeconds", "idleMicroseconds") + _time_microseconds(
-            delta_item, "idleSeconds", "idleMicroseconds"
-        )
-        overtime_active_microseconds = _time_microseconds(
-            target_item, "overtimeActiveSeconds", "overtimeActiveMicroseconds"
-        ) + _time_microseconds(delta_item, "overtimeActiveSeconds", "overtimeActiveMicroseconds")
-        target_item["activeMicroseconds"] = active_microseconds
-        target_item["idleMicroseconds"] = idle_microseconds
-        target_item["overtimeActiveMicroseconds"] = overtime_active_microseconds
-        target_item["activeSeconds"] = _seconds_from_microseconds(active_microseconds)
-        target_item["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
-        target_item["breakSeconds"] = int(target_item.get("breakSeconds", 0)) + int(delta_item.get("breakSeconds", 0))
-        target_item["meetingSeconds"] = int(target_item.get("meetingSeconds", 0)) + int(delta_item.get("meetingSeconds", 0))
-        target_item["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_active_microseconds)
-        target_item.setdefault("breakSegments", []).extend(_public_break_segments(delta_item.get("breakSegments", [])))
-        target_item["telegramToFirstActivityIdleSeconds"] = int(target_item.get("telegramToFirstActivityIdleSeconds", 0)) + int(
-            delta_item.get("telegramToFirstActivityIdleSeconds", 0)
-        )
-
-
-def _apply_breaks_to_hourly_activity(
-    source: list[dict[str, Any]],
-    break_buckets: list[dict[str, Any]],
-    consumed_buckets: list[dict[str, int]] | None = None,
-) -> list[dict[str, int]]:
-    source_by_hour = {int(item.get("hour", 0)): item for item in source}
-    breaks_by_hour = {int(item.get("hour", 0)): item for item in break_buckets}
-    consumed_by_hour = {int(item.get("hour", 0)): item for item in consumed_buckets or []}
-    hourly_activity = []
-
-    for hour in range(24):
-        source_hour = source_by_hour.get(hour, {})
-        break_hour = breaks_by_hour.get(hour, {})
-        consumed_hour = consumed_by_hour.get(hour, {})
-        active_seconds = min(3600, _time_seconds(source_hour, "activeSeconds", "activeMicroseconds"))
-        overtime_active_seconds = min(3600, _time_seconds(source_hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds"))
-        raw_idle_seconds = _time_seconds(source_hour, "idleSeconds", "idleMicroseconds")
-        requested_break_seconds = max(0, int(break_hour.get("breakSeconds", 0)))
-        consumed_break_seconds = max(0, int(consumed_hour.get("breakSeconds", 0)))
-        available_break_seconds = max(0, requested_break_seconds - consumed_break_seconds)
-        break_seconds = min(available_break_seconds, max(0, 3600 - active_seconds - overtime_active_seconds))
-        idle_seconds = max(0, raw_idle_seconds - break_seconds)
-        idle_seconds = min(idle_seconds, max(0, 3600 - active_seconds - overtime_active_seconds - break_seconds))
-        break_segments = _break_segments_after_consumed_seconds(
-            break_hour.get("breakSegments", []),
-            consumed_break_seconds,
-            break_seconds,
-        )
-
-        if consumed_buckets is not None:
-            consumed_hour["breakSeconds"] = consumed_break_seconds + break_seconds
-
-        hourly_activity.append(
-            {
-                "hour": hour,
-                "activeSeconds": active_seconds,
-                "idleSeconds": idle_seconds,
-                "breakSeconds": break_seconds,
-                "breakSegments": break_segments,
-                "meetingSeconds": int(source_hour.get("meetingSeconds", 0)),
-                "overtimeActiveSeconds": overtime_active_seconds,
-            }
-        )
-
-    return hourly_activity
-
-
-def _apply_meetings_to_hourly_activity(
-    source: list[dict[str, Any]],
-    meeting_buckets: list[dict[str, Any]],
-    consumed_buckets: list[dict[str, Any]],
-) -> list[dict[str, int]]:
-    source_by_hour = {int(item.get("hour", 0)): item for item in source}
-    meeting_by_hour = {int(item.get("hour", 0)): item for item in meeting_buckets}
-    consumed_by_hour = {int(item.get("hour", 0)): item for item in consumed_buckets}
-    hourly_activity = []
-
-    for hour in range(24):
-        source_hour = source_by_hour.get(hour, {})
-        consumed_hour = consumed_by_hour.get(hour, {})
-        break_seconds = int(source_hour.get("breakSeconds", 0))
-        requested_meeting_seconds = max(0, int((meeting_by_hour.get(hour, {}) or {}).get("meetingSeconds", 0)))
-        consumed_meeting_seconds = max(0, int(consumed_hour.get("meetingSeconds", 0)))
-        available_meeting_seconds = max(0, requested_meeting_seconds - consumed_meeting_seconds)
-        available_hour_seconds = max(0, 3600 - break_seconds)
-        meeting_seconds = min(available_meeting_seconds, available_hour_seconds)
-        meeting_overlap_seconds = meeting_seconds
-        raw_idle_seconds = max(0, int(source_hour.get("idleSeconds", 0)))
-        idle_seconds = max(0, raw_idle_seconds - meeting_overlap_seconds)
-        meeting_overlap_seconds = max(0, meeting_overlap_seconds - raw_idle_seconds)
-        raw_active_seconds = max(0, int(source_hour.get("activeSeconds", 0)))
-        active_seconds = max(0, raw_active_seconds - meeting_overlap_seconds)
-        meeting_overlap_seconds = max(0, meeting_overlap_seconds - raw_active_seconds)
-        raw_overtime_active_seconds = max(0, int(source_hour.get("overtimeActiveSeconds", 0)))
-        overtime_active_seconds = max(0, raw_overtime_active_seconds - meeting_overlap_seconds)
-        visual_seconds = idle_seconds + active_seconds + overtime_active_seconds
-
-        if visual_seconds > available_hour_seconds - meeting_seconds:
-            overflow_seconds = visual_seconds - max(0, available_hour_seconds - meeting_seconds)
-            overtime_active_seconds = max(0, overtime_active_seconds - overflow_seconds)
-            overflow_seconds = max(0, overflow_seconds - raw_overtime_active_seconds)
-            active_seconds = max(0, active_seconds - overflow_seconds)
-        consumed_hour["meetingSeconds"] = consumed_meeting_seconds + meeting_seconds
-
-        hourly_activity.append(
-            {
-                "hour": hour,
-                "activeSeconds": active_seconds,
-                "idleSeconds": idle_seconds,
-                "breakSeconds": break_seconds,
-                "breakSegments": _public_break_segments(source_hour.get("breakSegments", [])),
-                "meetingSeconds": meeting_seconds,
-                "overtimeActiveSeconds": overtime_active_seconds,
-            }
-        )
-
-    return hourly_activity
-
-
-def _merge_meeting_buckets_into_hourly_author_rows(
-    hourly_by_author: dict[str, dict[str, Any]],
-    meeting_buckets: dict[tuple[str, str], list[dict[str, int]]],
-    profiles: dict[str, dict[str, Any]],
-) -> dict[str, dict[str, int]]:
-    adjustments_by_author: dict[str, dict[str, int]] = {}
-
-    for (raw_author, _date), meeting_hours in meeting_buckets.items():
-        author_row = hourly_by_author.get(raw_author)
-
-        if not author_row:
-            profile = profiles.get(raw_author, {})
-            author_row = {
-                "author": _display_name(raw_author, profile),
-                "rawAuthor": raw_author,
-                "timeZoneId": profile.get("timeZoneId"),
-                "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
-                "hourlyActivity": _empty_hourly_activity(),
-            }
-            hourly_by_author[raw_author] = author_row
-
-        current_by_hour = {int(item.get("hour", 0)): item for item in author_row.get("hourlyActivity", [])}
-
-        for meeting_hour in meeting_hours:
-            hour = int(meeting_hour.get("hour", 0))
-            target_hour = current_by_hour.get(hour)
-
-            if not target_hour:
-                continue
-
-            meeting_seconds = int(meeting_hour.get("meetingSeconds", 0))
-            current_meeting_seconds = int(target_hour.get("meetingSeconds", 0))
-
-            target_meeting_seconds = current_meeting_seconds
-            added_meeting_seconds = 0
-
-            if meeting_seconds > current_meeting_seconds:
-                added_meeting_seconds = min(meeting_seconds - current_meeting_seconds, max(0, 3600 - current_meeting_seconds))
-                target_meeting_seconds = current_meeting_seconds + added_meeting_seconds
-                target_hour["meetingSeconds"] = target_meeting_seconds
-
-            if target_meeting_seconds <= 0:
-                continue
-
-            current_idle_seconds = max(0, int(target_hour.get("idleSeconds", 0)))
-            current_active_seconds = max(0, int(target_hour.get("activeSeconds", 0)))
-            current_overtime_active_seconds = max(0, int(target_hour.get("overtimeActiveSeconds", 0)))
-            meeting_overlap_seconds = max(
-                0,
-                int(target_hour.get("breakSeconds", 0))
-                + target_meeting_seconds
-                + current_idle_seconds
-                + current_active_seconds
-                + current_overtime_active_seconds
-                - 3600,
-            )
-            target_hour["idleSeconds"] = max(0, current_idle_seconds - meeting_overlap_seconds)
-            meeting_overlap_seconds = max(0, meeting_overlap_seconds - current_idle_seconds)
-            target_hour["activeSeconds"] = max(0, current_active_seconds - meeting_overlap_seconds)
-            meeting_overlap_seconds = max(0, meeting_overlap_seconds - current_active_seconds)
-            target_hour["overtimeActiveSeconds"] = max(0, current_overtime_active_seconds - meeting_overlap_seconds)
-            idle_reduction = current_idle_seconds - int(target_hour.get("idleSeconds", 0))
-            if idle_reduction and added_meeting_seconds > 0:
-                adjustment = adjustments_by_author.setdefault(raw_author, {"idleSeconds": 0, "meetingSeconds": 0})
-                adjustment["idleSeconds"] += idle_reduction
-
-            if added_meeting_seconds > 0:
-                adjustment = adjustments_by_author.setdefault(raw_author, {"idleSeconds": 0, "meetingSeconds": 0})
-                adjustment["meetingSeconds"] += added_meeting_seconds
-
-    return adjustments_by_author
-
-
-def _add_break_interval_to_buckets(
-    buckets: dict[tuple[str, str], list[dict[str, int]]],
-    raw_author: Any,
-    started_at: dt.datetime | None,
-    ended_at: dt.datetime | None,
-    time_zone_id: str,
-) -> None:
-    if not raw_author or not started_at or not ended_at or ended_at <= started_at:
-        return
-
-    try:
-        zone = ZoneInfo(time_zone_id)
-    except ZoneInfoNotFoundError:
-        zone = dt.UTC
-
-    current = started_at.astimezone(zone)
-    local_end = ended_at.astimezone(zone)
-
-    while current < local_end:
-        hour_end = current.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
-        segment_end = min(hour_end, local_end)
-        date = current.date().isoformat()
-        key = (str(raw_author), date)
-        target = buckets.get(key)
-
-        if target:
-            seconds = max(0, int((segment_end - current).total_seconds()))
-            target[current.hour]["breakSeconds"] = int(target[current.hour].get("breakSeconds", 0)) + seconds
-            start_second = current.minute * 60 + current.second
-            end_second = segment_end.minute * 60 + segment_end.second
-
-            if segment_end == hour_end:
-                end_second = 3600
-
-            _add_break_segment_to_hour(target[current.hour], start_second, end_second)
-
-        current = segment_end
-
-
-def _add_idle_interval_to_buckets(
-    buckets: list[dict[str, int]],
-    started_at: dt.datetime | None,
-    ended_at: dt.datetime | None,
-    time_zone_id: str,
-) -> None:
-    if not started_at or not ended_at or ended_at <= started_at:
-        return
-
-    try:
-        zone = ZoneInfo(time_zone_id)
-    except ZoneInfoNotFoundError:
-        zone = dt.UTC
-
-    current = started_at.astimezone(zone)
-    local_end = ended_at.astimezone(zone)
-
-    while current < local_end:
-        hour_end = current.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
-        segment_end = min(hour_end, local_end)
-        seconds = max(0, int((segment_end - current).total_seconds()))
-
-        if 0 <= current.hour < len(buckets):
-            buckets[current.hour]["idleSeconds"] = int(buckets[current.hour].get("idleSeconds", 0)) + seconds
-
-        current = segment_end
-
-
-def _add_meeting_interval_to_buckets(
-    buckets: dict[tuple[str, str], list[dict[str, int]]],
-    raw_author: Any,
-    started_at: dt.datetime | None,
-    ended_at: dt.datetime | None,
-    time_zone_id: str,
-) -> None:
-    if not raw_author or not started_at or not ended_at or ended_at <= started_at:
-        return
-
-    try:
-        zone = ZoneInfo(time_zone_id)
-    except ZoneInfoNotFoundError:
-        zone = dt.UTC
-
-    current = started_at.astimezone(zone)
-    local_end = ended_at.astimezone(zone)
-
-    while current < local_end:
-        hour_end = current.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
-        segment_end = min(hour_end, local_end)
-        date = current.date().isoformat()
-        key = (str(raw_author), date)
-        target = buckets.get(key)
-
-        if target:
-            seconds = max(0, int((segment_end - current).total_seconds()))
-            target[current.hour]["meetingSeconds"] = int(target[current.hour].get("meetingSeconds", 0)) + seconds
-
-        current = segment_end
-
-
-def _date_start(value: str) -> dt.datetime:
-    return dt.datetime.fromisoformat(value).replace(tzinfo=dt.UTC)
-
-
-def _merge_count_list(
-    current: list[dict[str, Any]], deltas: list[dict[str, Any]], key_name: str, count_name: str
-) -> list[dict[str, Any]]:
-    by_key = {item.get(key_name): dict(item) for item in current if item.get(key_name)}
-
-    for delta_item in deltas:
-        key = delta_item.get(key_name)
-
-        if not key:
-            continue
-
-        existing = by_key.get(key)
-
-        if existing:
-            existing[count_name] = int(existing.get(count_name, 0)) + int(delta_item.get(count_name, 0))
-        else:
-            by_key[key] = dict(delta_item)
-
-    return sorted(by_key.values(), key=lambda item: item.get(count_name, 0), reverse=True)
-
-
-def _insert_many_if_supported(collection: Any, docs: list[dict[str, Any]]) -> None:
-    if not docs:
-        return
-
-    insert_many = getattr(collection, "insert_many", None)
-
-    if insert_many:
-        insert_many(docs)
-        return
-
-    for doc in docs:
-        collection.insert_one(doc)
-
 
 __all__: tuple[str, ...] = (
     "AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS",
@@ -2242,19 +1651,10 @@ __all__: tuple[str, ...] = (
     "_activity_count_type",
     "_activity_mix_from_counts",
     "_activity_mix_from_list",
-    "_add_break_segment_to_hour",
-    "_add_break_interval_to_buckets",
-    "_add_idle_interval_to_buckets",
-    "_add_idle_seconds_to_hour",
-    "_add_interval_to_hourly",
-    "_add_meeting_interval_to_buckets",
-    "_add_visual_missed_seconds",
     "_analytics_deltas",
     "_analytics_month_weeks",
     "_analytics_totals",
     "_analytics_year_months",
-    "_apply_breaks_to_hourly_activity",
-    "_apply_meetings_to_hourly_activity",
     "_author_color",
     "_author_configured_time_zone_id",
     "_author_has_summary_activity",
@@ -2276,17 +1676,11 @@ __all__: tuple[str, ...] = (
     "_duration_microseconds",
     "_empty_batch_deltas",
     "_empty_event_deltas",
-    "_empty_hourly_activity",
-    "_fill_normal_to_overtime_transition_hours",
-    "_fill_overtime_hours_between_overtime_buckets",
-    "_fill_overtime_hours_bracketed_by_reports",
-    "_fill_visual_overtime_hour",
     "_github_login_from_profile_doc",
     "_github_username_for_avatar_fetch",
     "_github_username_ui_default",
     "_has_active_or_overtime_delta",
     "_has_time_delta",
-    "_hourly_deltas",
     "_insert_many_if_supported",
     "_interval_deltas",
     "_is_activity_event",
@@ -2305,8 +1699,6 @@ __all__: tuple[str, ...] = (
     "_merge_count_list",
     "_merge_event_delta_items",
     "_merge_event_delta_items_by_date",
-    "_merge_hourly_activity",
-    "_merge_meeting_buckets_into_hourly_author_rows",
     "_move_hourly_idle_to_break",
     "_new_id",
     "_next_author_local_date",
@@ -2322,13 +1714,11 @@ __all__: tuple[str, ...] = (
     "_parse_timestamp",
     "_plugin_day_seconds",
     "_productivity",
-    "_public_hourly_activity",
     "_public_site_user",
     "_raw_event_activity_scope",
     "_raw_event_author_day_key",
     "_raw_event_session_key",
     "_raw_event_time",
-    "_remove_visual_missed_seconds",
     "_report_date_query",
     "_report_matches_hour_filter",
     "_report_row_time",
@@ -2347,9 +1737,6 @@ __all__: tuple[str, ...] = (
     "_to_local_datetime",
     "_valid_color",
     "_valid_time_zone_id",
-    "_visual_hour_available_seconds",
-    "_visual_hour_occupied_seconds",
-    "_visual_missed_end_hour",
     "_with_activity_mix",
     "_with_author_presence",
     "_with_productivity",
