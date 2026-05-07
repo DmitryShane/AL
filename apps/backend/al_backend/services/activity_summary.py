@@ -10,7 +10,6 @@ from ..hourly_fill_rules import (
     apply_overtime_start_boundaries,
     apply_breaks_to_hourly_activity,
     apply_meetings_to_hourly_activity,
-    apply_workday_hour_idle_gaps,
     convert_hourly_to_vacation_overtime,
     empty_hourly_activity,
     merge_hourly_activity,
@@ -1100,16 +1099,6 @@ class ActivitySummaryService(MongoComposableMixin):
             date_mode,
             now,
         )
-        self._apply_workday_hour_idle_gaps(
-            authors_by_raw,
-            hourly_by_author,
-            totals,
-            profiles,
-            start_date,
-            end_date,
-            date_mode,
-            now,
-        )
         self._apply_summary_auto_breaks(
             authors_by_raw,
             hourly_by_author,
@@ -1383,7 +1372,6 @@ class ActivitySummaryService(MongoComposableMixin):
             authors_by_raw,
             hourly_by_author,
             latest_report_by_author_date,
-            default_plugin_work_window_seconds=DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
             time_zone_id_for_author=lambda raw_author, time_zone_id: _author_time_zone_id(raw_author, profiles, time_zone_id),
             is_date_in_scope=lambda day_date, raw_author, time_zone_id: _date_in_summary_scope(
                 day_date,
@@ -1429,44 +1417,6 @@ class ActivitySummaryService(MongoComposableMixin):
                 date_mode,
             ),
             is_vacation_day=lambda raw_author, day_date: composed(self).is_vacation_day(raw_author, day_date),
-        )
-
-    def _apply_workday_hour_idle_gaps(
-        self,
-        authors_by_raw: dict[str, dict[str, Any]],
-        hourly_by_author: dict[str, dict[str, Any]],
-        totals: dict[str, int],
-        profiles: dict[str, dict[str, Any]],
-        start_date: str | None,
-        end_date: str | None,
-        date_mode: str | None,
-        now: dt.datetime,
-    ) -> None:
-        latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
-        session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
-        apply_workday_hour_idle_gaps(
-            authors_by_raw,
-            hourly_by_author,
-            list(self.db.day_sessions.find(session_query, {"_id": 0})),
-            latest_report_by_author_date,
-            default_plugin_work_window_seconds=DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
-            time_zone_id_for_author=lambda raw_author, time_zone_id: _author_time_zone_id(raw_author, profiles, time_zone_id),
-            is_date_in_scope=lambda day_date, raw_author, time_zone_id: _date_in_summary_scope(
-                day_date,
-                raw_author,
-                profiles,
-                time_zone_id,
-                now,
-                start_date,
-                end_date,
-                date_mode,
-            ),
-            is_vacation_day=lambda raw_author, day_date: composed(self).is_vacation_day(raw_author, day_date),
-            auto_break_allowance_seconds_for_author_date=lambda raw_author, day_date: self._summary_auto_break_remaining_seconds(
-                raw_author,
-                profiles,
-                {day_date},
-            ),
         )
 
     def _apply_visual_missed_hours(
