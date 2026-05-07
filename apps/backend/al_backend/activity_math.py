@@ -1782,11 +1782,31 @@ def _fill_overtime_hours_bracketed_by_reports(hourly_activity: list[dict[str, An
         _fill_visual_overtime_hour(hour)
 
 
-def _fill_visual_overtime_hour(hour: dict[str, Any]) -> None:
-    overtime_seconds = _visual_hour_available_seconds(hour)
+def _fill_overtime_hours_between_overtime_buckets(hourly_activity: list[dict[str, Any]]) -> None:
+    overtime_hour_indexes = [
+        index
+        for index, hour in enumerate(hourly_activity)
+        if int(hour.get("overtimeActiveSeconds", 0)) > 0
+        or _time_microseconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds") > 0
+    ]
+
+    if len(overtime_hour_indexes) < 2:
+        return
+
+    for hour_index in range(overtime_hour_indexes[0] + 1, overtime_hour_indexes[-1]):
+        _fill_visual_overtime_hour(hourly_activity[hour_index], replace_visual_idle=True)
+
+
+def _fill_visual_overtime_hour(hour: dict[str, Any], replace_visual_idle: bool = False) -> None:
+    visual_idle_seconds = max(0, int(hour.get("idleSeconds", 0))) if replace_visual_idle else 0
+    overtime_seconds = _visual_hour_available_seconds(hour) + visual_idle_seconds
 
     if overtime_seconds <= 0:
         return
+
+    if visual_idle_seconds > 0:
+        hour["idleSeconds"] = 0
+        hour["idleMicroseconds"] = 0
 
     hour["overtimeFillSeconds"] = int(hour.get("overtimeFillSeconds", 0)) + overtime_seconds
     _remove_visual_missed_seconds(hour, overtime_seconds)
@@ -2258,6 +2278,7 @@ __all__: tuple[str, ...] = (
     "_empty_event_deltas",
     "_empty_hourly_activity",
     "_fill_normal_to_overtime_transition_hours",
+    "_fill_overtime_hours_between_overtime_buckets",
     "_fill_overtime_hours_bracketed_by_reports",
     "_fill_visual_overtime_hour",
     "_github_login_from_profile_doc",

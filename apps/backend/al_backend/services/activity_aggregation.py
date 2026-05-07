@@ -741,7 +741,6 @@ class ActivityAggregationService(MongoComposableMixin):
                 False,
                 consumed_normal_microseconds,
                 overtime_window,
-                count_idle_as_overtime,
             )
             _merge_batch_deltas(deltas, status_idle_deltas)
             last_accounting_at = status_online_at
@@ -776,15 +775,25 @@ class ActivityAggregationService(MongoComposableMixin):
 
                 if accounting_start_at < occurred_at:
                     interval_is_active = (occurred_at - interval_activity_at).total_seconds() < idle_threshold_seconds
+                    interval_end_at = occurred_at
+                    interval_end_local_at = occurred_local_at
+
+                    if not interval_is_active and count_idle_as_overtime:
+                        interval_end_at = min(
+                            occurred_at,
+                            interval_activity_at + dt.timedelta(seconds=idle_threshold_seconds),
+                        )
+                        interval_end_local_at = accounting_start_local_at + (interval_end_at - accounting_start_at)
+                        interval_is_active = interval_end_at > accounting_start_at
+
                     interval_deltas = _interval_deltas(
                         accounting_start_at,
-                        occurred_at,
+                        interval_end_at,
                         accounting_start_local_at,
-                        occurred_local_at,
+                        interval_end_local_at,
                         interval_is_active,
                         consumed_normal_microseconds,
                         overtime_window,
-                        count_idle_as_overtime,
                     )
                     _merge_batch_deltas(deltas, interval_deltas)
 
@@ -850,15 +859,28 @@ class ActivityAggregationService(MongoComposableMixin):
                 if interval_seconds < MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS:
                     return deltas
 
+                interval_end_at = heartbeat_end
+                interval_end_local_at = heartbeat_local_end
+                interval_is_active = False
+
+                if count_idle_as_overtime:
+                    interval_end_at = min(
+                        heartbeat_end,
+                        last_activity_at + dt.timedelta(seconds=idle_threshold_seconds),
+                    )
+                    interval_end_local_at = (last_accounting_local_at or last_accounting_at) + (
+                        interval_end_at - last_accounting_at
+                    )
+                    interval_is_active = interval_end_at > last_accounting_at
+
                 interval_deltas = _interval_deltas(
                     last_accounting_at,
-                    heartbeat_end,
+                    interval_end_at,
                     last_accounting_local_at or last_accounting_at,
-                    heartbeat_local_end,
-                    False,
+                    interval_end_local_at,
+                    interval_is_active,
                     consumed_normal_microseconds,
                     overtime_window,
-                    count_idle_as_overtime,
                 )
                 _merge_batch_deltas(deltas, interval_deltas)
                 last_accounting_at = heartbeat_end

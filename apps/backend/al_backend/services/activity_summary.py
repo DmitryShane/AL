@@ -1804,6 +1804,7 @@ class ActivitySummaryService(MongoComposableMixin):
             ordered_reports = sorted(reports)
 
             _fill_overtime_hours_bracketed_by_reports(hourly_activity, ordered_reports)
+            _fill_overtime_hours_between_overtime_buckets(hourly_activity)
             _fill_normal_to_overtime_transition_hours(hourly_activity)
 
     def _apply_latest_report_metadata(
