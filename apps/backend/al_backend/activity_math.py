@@ -765,13 +765,11 @@ def _report_date_query(
     profiles: dict[str, dict[str, Any]],
     now: dt.datetime,
 ) -> dict[str, Any]:
-    if date_mode == "authorLocalToday" and not start_date and not end_date:
-        dates = {now.astimezone(dt.UTC).date().isoformat()}
+    if date_mode == "authorLocalToday":
+        dates = _live_scope_candidate_dates(start_date, end_date, profiles, now)
 
-        for profile in profiles.values():
-            dates.add(_local_date_for_time_zone(now, _author_time_zone_id(profile.get("rawAuthor"), profiles)))
-
-        return {"date": {"$in": sorted(dates)}}
+        if dates:
+            return {"date": {"$in": dates}}
 
     return _date_query(start_date, end_date)
 
@@ -871,10 +869,61 @@ def _date_in_summary_scope(
     end_date: str | None,
     date_mode: str | None,
 ) -> bool:
-    if date_mode == "authorLocalToday" and not start_date and not end_date:
-        return _is_author_local_today(value, raw_author, profiles, fallback_time_zone_id, now)
+    if date_mode == "authorLocalToday":
+        return live_date_in_scope(value, raw_author, profiles, fallback_time_zone_id, now, start_date, end_date)
 
     return _date_in_range(value, start_date, end_date)
+
+
+def live_date_in_scope(
+    value: Any,
+    raw_author: str,
+    profiles: dict[str, dict[str, Any]],
+    fallback_time_zone_id: Any,
+    now: dt.datetime,
+    start_date: str | None,
+    end_date: str | None,
+) -> bool:
+    date_value = str(value or "")
+
+    if not date_value:
+        return False
+
+    observer_dates = _live_observer_dates(start_date, end_date, now)
+
+    if date_value in observer_dates:
+        return True
+
+    observer_latest_date = max(observer_dates)
+    author_local_today = _local_date_for_time_zone(now, _author_time_zone_id(raw_author, profiles, fallback_time_zone_id))
+    return date_value == author_local_today and author_local_today <= observer_latest_date
+
+
+def _live_scope_candidate_dates(
+    start_date: str | None,
+    end_date: str | None,
+    profiles: dict[str, dict[str, Any]],
+    now: dt.datetime,
+) -> list[str]:
+    dates = set(_live_observer_dates(start_date, end_date, now))
+    observer_latest_date = max(dates)
+
+    for profile in profiles.values():
+        author_local_today = _local_date_for_time_zone(now, _author_time_zone_id(profile.get("rawAuthor"), profiles))
+
+        if author_local_today <= observer_latest_date:
+            dates.add(author_local_today)
+
+    return sorted(dates)
+
+
+def _live_observer_dates(start_date: str | None, end_date: str | None, now: dt.datetime) -> list[str]:
+    dates = _date_values_between(start_date, end_date)
+
+    if dates:
+        return dates
+
+    return [now.astimezone(dt.UTC).date().isoformat()]
 
 
 def _should_track_plugin_staleness(
@@ -2156,6 +2205,7 @@ __all__: tuple[str, ...] = (
     "WINDOWS_TIME_ZONE_IDS",
     "ZoneInfo",
     "ZoneInfoNotFoundError",
+    "live_date_in_scope",
     "_activity_count_type",
     "_activity_mix_from_counts",
     "_activity_mix_from_list",

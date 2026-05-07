@@ -733,7 +733,15 @@ class ActivitySummaryService(MongoComposableMixin):
             daily_items = [
                 item
                 for item in daily_items
-                if _date_in_range(str(item.get("date") or ""), start_date, end_date)
+                if live_date_in_scope(
+                    item.get("date"),
+                    item.get("author") or "Unknown User",
+                    profiles,
+                    item.get("timeZoneId"),
+                    now,
+                    start_date,
+                    end_date,
+                )
             ]
         break_buckets = composed(self)._break_buckets_for_daily_items(daily_items)
         meeting_buckets = composed(self)._meeting_buckets_for_daily_items(daily_items, now)
@@ -2087,10 +2095,7 @@ def _is_live_date_match(
     start_date: str | None,
     end_date: str | None,
 ) -> bool:
-    if not start_date and not end_date:
-        return _is_author_local_today(value, raw_author, profiles, fallback_time_zone_id, now)
-
-    return _date_in_range(str(value or ""), start_date, end_date)
+    return live_date_in_scope(value, raw_author, profiles, fallback_time_zone_id, now, start_date, end_date)
 
 
 def _activity_mix_source_groups(items_by_source: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:

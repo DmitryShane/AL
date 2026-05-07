@@ -5,6 +5,7 @@ from typing import Any
 from ..activity_math import (
     DESCENDING,
     dt,
+    live_date_in_scope,
     _date_in_range,
     _display_name,
     _is_author_local_today,
@@ -263,7 +264,4 @@ def _is_live_date_match(
     start_date: str | None,
     end_date: str | None,
 ) -> bool:
-    if not start_date and not end_date:
-        return _is_author_local_today(value, raw_author, profiles, fallback_time_zone_id, now)
-
-    return _date_in_range(str(value or ""), start_date, end_date)
+    return live_date_in_scope(value, raw_author, profiles, fallback_time_zone_id, now, start_date, end_date)

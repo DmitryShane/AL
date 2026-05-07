@@ -510,47 +510,64 @@ def test_configured_author_time_zone_normalizes_saved_report_row():
 
 def test_author_local_today_summary_uses_observer_selected_date_for_activity():
     repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Madrid Author", "displayName": "Madrid Author", "timeZoneId": "Europe/Madrid"})
-    repo.db.author_profiles.insert_one({"rawAuthor": "Utc Author", "displayName": "Utc Author", "timeZoneId": "UTC"})
-    repo.db.author_profiles.insert_one({"rawAuthor": "No Activity Author", "displayName": "No Activity Author", "timeZoneId": "UTC"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Kyiv Author", "displayName": "Kyiv Author", "timeZoneId": "Europe/Kyiv"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Vancouver Author", "displayName": "Vancouver Author", "timeZoneId": "America/Vancouver"})
     repo.db.daily_author_activity.insert_one(
         {
             "source": "ual",
             "projectId": "unity",
-            "author": "Madrid Author",
-            "date": "2026-04-29",
+            "author": "Kyiv Author",
+            "date": "2026-05-06",
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "timeZoneId": "Europe/Madrid",
+            "timeZoneId": "Europe/Kyiv",
         }
     )
     repo.db.daily_author_activity.insert_one(
         {
             "source": "ual",
             "projectId": "unity",
-            "author": "Utc Author",
-            "date": "2026-04-28",
+            "author": "Kyiv Author",
+            "date": "2026-05-07",
+            "activeSeconds": 600,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "timeZoneId": "Europe/Kyiv",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "projectId": "unity",
+            "author": "Vancouver Author",
+            "date": "2026-05-06",
             "activeSeconds": 120,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
-            "timeZoneId": "UTC",
+            "timeZoneId": "America/Vancouver",
         }
     )
 
-    summary = repo.activity_summary(
-        start_date="2026-04-29",
-        end_date="2026-04-29",
+    vancouver_observer_summary = repo.activity_summary(
+        start_date="2026-05-06",
+        end_date="2026-05-06",
         date_mode="authorLocalToday",
-        now=dt.datetime(2026, 4, 28, 22, 30, tzinfo=dt.UTC),
+        now=dt.datetime(2026, 5, 7, 0, 30, tzinfo=dt.UTC),
     )
+    vancouver_observer_authors = {author["rawAuthor"]: author for author in vancouver_observer_summary["authors"]}
+    assert vancouver_observer_authors["Kyiv Author"]["activeSeconds"] == 60
+    assert vancouver_observer_authors["Vancouver Author"]["activeSeconds"] == 120
 
-    authors = {author["rawAuthor"]: author for author in summary["authors"]}
-    assert authors["Madrid Author"]["activeSeconds"] == 60
-    assert authors["Utc Author"]["activeSeconds"] == 0
-    assert authors["No Activity Author"]["activeSeconds"] == 0
-    assert authors["No Activity Author"]["status"] == "stale"
-    assert authors["No Activity Author"]["stalePresence"] == "telegram"
+    kyiv_observer_summary = repo.activity_summary(
+        start_date="2026-05-07",
+        end_date="2026-05-07",
+        date_mode="authorLocalToday",
+        now=dt.datetime(2026, 5, 7, 0, 30, tzinfo=dt.UTC),
+    )
+    kyiv_observer_authors = {author["rawAuthor"]: author for author in kyiv_observer_summary["authors"]}
+    assert kyiv_observer_authors["Kyiv Author"]["activeSeconds"] == 600
+    assert kyiv_observer_authors["Vancouver Author"]["activeSeconds"] == 120
 
 def test_activity_summary_regular_date_keeps_calendar_filter_and_all_authors():
     repo = fake_repository()
