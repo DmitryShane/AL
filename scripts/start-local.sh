@@ -58,6 +58,8 @@ if [ -f "$BACKEND_LOCAL_ENV" ]; then
   done < "$BACKEND_LOCAL_ENV"
 fi
 
+export AL_CLOSE_IMPORTED_OPEN_LIVE_STATES="\${AL_CLOSE_IMPORTED_OPEN_LIVE_STATES:-1}"
+
 exec "$UV_BIN" run uvicorn al_backend.main:app --host 127.0.0.1 --port 8000
 SH
   chmod +x "$BACKEND_RUNNER"
