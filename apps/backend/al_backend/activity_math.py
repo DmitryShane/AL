@@ -536,6 +536,7 @@ def _interval_deltas(
     is_active: bool,
     consumed_normal_microseconds: int,
     overtime_window: tuple[dt.datetime, dt.datetime] | None = None,
+    count_idle_as_overtime: bool = False,
 ) -> dict[str, Any]:
     deltas = _empty_event_deltas()
 
@@ -554,6 +555,18 @@ def _interval_deltas(
             deltas["idleDeltaMicroseconds"] += idle_microseconds
             deltas["idleDeltaSeconds"] = _seconds_from_microseconds(deltas["idleDeltaMicroseconds"])
             _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_start, local_idle_end, "idle")
+
+        if count_idle_as_overtime:
+            overtime_end = min(end, overtime_window[1])
+            overtime_segment_start = max(start, overtime_start)
+
+            if overtime_end > overtime_segment_start:
+                overtime_microseconds = _duration_microseconds(overtime_segment_start, overtime_end)
+                local_overtime_start = local_start + (overtime_segment_start - start)
+                local_overtime_end = local_start + (overtime_end - start)
+                deltas["overtimeActiveDeltaMicroseconds"] += overtime_microseconds
+                deltas["overtimeActiveDeltaSeconds"] = _seconds_from_microseconds(deltas["overtimeActiveDeltaMicroseconds"])
+                _add_interval_to_hourly(deltas["hourlyActivityDelta"], local_overtime_start, local_overtime_end, "overtime")
 
         return deltas
 

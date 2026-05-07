@@ -704,6 +704,7 @@ class ActivityAggregationService(MongoComposableMixin):
         is_activity = raw_is_activity and (source_is_focused is not False or event_type == "focus")
         consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
         overtime_window = self._overtime_window_for_event(event)
+        count_idle_as_overtime = self._is_telegram_overtime_window_for_event(event)
         idle_threshold_seconds = composed(self).get_idle_threshold_for_author(
             str(event.get("author") or "Unknown User"),
             current_source,
@@ -740,6 +741,7 @@ class ActivityAggregationService(MongoComposableMixin):
                 False,
                 consumed_normal_microseconds,
                 overtime_window,
+                count_idle_as_overtime,
             )
             _merge_batch_deltas(deltas, status_idle_deltas)
             last_accounting_at = status_online_at
@@ -782,6 +784,7 @@ class ActivityAggregationService(MongoComposableMixin):
                         interval_is_active,
                         consumed_normal_microseconds,
                         overtime_window,
+                        count_idle_as_overtime,
                     )
                     _merge_batch_deltas(deltas, interval_deltas)
 
@@ -855,6 +858,7 @@ class ActivityAggregationService(MongoComposableMixin):
                     False,
                     consumed_normal_microseconds,
                     overtime_window,
+                    count_idle_as_overtime,
                 )
                 _merge_batch_deltas(deltas, interval_deltas)
                 last_accounting_at = heartbeat_end
@@ -1058,6 +1062,25 @@ class ActivityAggregationService(MongoComposableMixin):
             return None
 
         return overtime_started_at, day_end_at
+
+    def _is_telegram_overtime_window_for_event(self, event: dict[str, Any]) -> bool:
+        raw_author = str(event.get("author") or "Unknown User")
+        day_date = str(event.get("date") or "")
+        event_time = _coerce_datetime(event.get("occurredAtUtc")) or _coerce_datetime(event.get("occurredAt"))
+
+        if not raw_author or not day_date or not event_time:
+            return False
+
+        day_session = self.db.day_sessions.find_one(
+            {"rawAuthor": raw_author, "date": day_date},
+            {"_id": 0, "lastOfflineAt": 1, "reminderAction": 1},
+        )
+
+        if str((day_session or {}).get("reminderAction") or "") != "overtime":
+            return False
+
+        overtime_started_at = _coerce_datetime((day_session or {}).get("lastOfflineAt"))
+        return bool(overtime_started_at and event_time >= overtime_started_at)
 
     def _status_interval_context_for_event(
         self,
