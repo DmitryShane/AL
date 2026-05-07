@@ -166,4 +166,3 @@ wait_for_url "Frontend" "http://127.0.0.1:5173/" || true
 echo
 echo "Site:    http://127.0.0.1:5173/"
 echo "API:     http://127.0.0.1:8000"
-echo "API doc: http://127.0.0.1:8000/docs"

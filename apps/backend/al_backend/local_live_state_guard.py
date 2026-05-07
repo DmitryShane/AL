@@ -7,7 +7,7 @@ from typing import Any
 from .activity_math import _coerce_datetime, _telegram_event_date, _valid_time_zone_id
 
 
-def close_imported_open_live_states(services: Any) -> dict[str, int]:
+def close_imported_open_live_states(services: Any) -> dict[str, Any]:
     if os.getenv("AL_CLOSE_IMPORTED_OPEN_LIVE_STATES", "").strip().lower() not in {"1", "true", "yes"}:
         return {}
 
@@ -20,29 +20,31 @@ class _ImportedOpenLiveStateGuard:
         self.services = services
         self.db = services.db
 
-    def close_all(self) -> dict[str, int]:
-        result = {
-            "daySessions": self._close_day_sessions(),
+    def close_all(self) -> dict[str, Any]:
+        repaired_count, repaired_dates = self._repair_guard_polluted_day_sessions()
+        result: dict[str, Any] = {
+            "daySessionsRepaired": repaired_count,
             "breakSessions": self._close_break_sessions(),
             "meetingSessions": self._close_meeting_sessions(),
             "statusEvents": self._close_status_events(),
         }
 
-        dates = sorted(self._affected_dates(result))
+        dates = sorted(set(repaired_dates) | self._affected_dates(result))
 
         if dates:
             self.services.invalidate_activity_summary_cache(dates)
 
         return result
 
-    def _affected_dates(self, result: dict[str, int]) -> set[str]:
-        if not any(result.values()):
+    def _affected_dates(self, result: dict[str, Any]) -> set[str]:
+        numeric_counts = {key: value for key, value in result.items() if key != "daySessionsRepaired" and isinstance(value, int)}
+
+        if not any(numeric_counts.values()):
             return set()
 
         return {
             str(item.get("date") or "")
             for collection in (
-                self.db.day_sessions,
                 self.db.break_intervals,
                 self.db.meeting_intervals,
                 self.db.status_events,
@@ -51,33 +53,15 @@ class _ImportedOpenLiveStateGuard:
             if item.get("date")
         }
 
-    def _close_day_sessions(self) -> int:
-        closed = 0
-
-        for session in self.db.day_sessions.find({"lastOfflineAt": {"$exists": False}}, {"_id": 0}):
-            raw_author = str(session.get("rawAuthor") or "Unknown User")
-            started_at = _coerce_datetime(session.get("startedAt"))
-            day_date = str(session.get("date") or "")
-
-            if not started_at or not day_date:
-                continue
-
-            ended_at = self._close_time(raw_author, day_date, started_at)
-            day_seconds = max(0, int((ended_at - started_at).total_seconds()))
-            self.db.day_sessions.update_one(
-                {"rawAuthor": raw_author, "date": day_date, "lastOfflineAt": {"$exists": False}},
-                {
-                    "$set": {
-                        "lastOfflineAt": ended_at,
-                        "daySeconds": day_seconds,
-                        "updatedAt": dt.datetime.now(dt.UTC),
-                        "metadata.localImportGuard": True,
-                    }
-                },
-            )
-            closed += 1
-
-        return closed
+    def _repair_guard_polluted_day_sessions(self) -> tuple[int, list[str]]:
+        """Undo synthetic Telegram day close written by an older guard revision."""
+        query = {"metadata.localImportGuard": True}
+        dates = sorted(str(item) for item in self.db.day_sessions.distinct("date", query) if item)
+        update_result = self.db.day_sessions.update_many(
+            query,
+            {"$unset": {"lastOfflineAt": "", "daySeconds": "", "metadata.localImportGuard": "", "updatedAt": ""}},
+        )
+        return update_result.modified_count, dates
 
     def _close_break_sessions(self) -> int:
         closed = 0
