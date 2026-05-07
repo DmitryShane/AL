@@ -4575,6 +4575,10 @@ p {
   background: #8b5cf6;
 }
 
+.hourly-chart-segment.overtime-fill {
+  background: #c4a8fb;
+}
+
 .hourly-chart-segment.afk {
   background: #4fa4ff;
 }

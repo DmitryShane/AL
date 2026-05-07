@@ -57,12 +57,17 @@ from tests.fakes import fake_repository, set_idle_threshold
 def _hour_metric(item: dict, key: str) -> int:
     if "totals" not in item:
         return int(item.get(key, 0))
+    if key == "overtimeActiveSeconds":
+        return sum(
+            segment["endSecond"] - segment["startSecond"]
+            for segment in item.get("fillSegments", [])
+            if segment.get("kind") == "overtime"
+        )
     mapping = {
         "activeSeconds": "activeSeconds",
         "idleSeconds": "idleSeconds",
         "breakSeconds": "afkSeconds",
         "meetingSeconds": "meetingSeconds",
-        "overtimeActiveSeconds": "overtimeSeconds",
         "missedSeconds": "missedSeconds",
         "telegramToFirstActivityIdleSeconds": "idleSeconds",
     }
@@ -86,10 +91,16 @@ def _missed_end_seconds(item: dict) -> int:
 
 
 def _overtime_fill_seconds(item: dict) -> int:
+    if "fillSegments" in item:
+        return sum(
+            segment["endSecond"] - segment["startSecond"]
+            for segment in item.get("fillSegments", [])
+            if segment.get("kind") == "overtime-fill"
+        )
     return int(item.get("_visualOvertimeSeconds", 0))
 
 
-def _publicempty_hourly_activity() -> list[dict]:
+def _public_empty_hourly_activity() -> list[dict]:
     return [{"hour": hour, "totals": {"activeSeconds": 0, "overtimeSeconds": 0, "afkSeconds": 0, "meetingSeconds": 0, "idleSeconds": 0, "missedSeconds": 0}, "fillSegments": []} for hour in range(24)]
 
 def test_activity_summary_fills_hourly_idle_from_telegram_online_to_first_raw_activity():
@@ -1629,7 +1640,7 @@ def test_overtime_hourly_graph_fills_gap_when_overtime_continues_next_hour():
     hour_19 = next(item for item in hourly if item["hour"] == 19)
 
     assert _hour_metric(hour_19, "meetingSeconds") == 4 * 60
-    assert _hour_metric(hour_19, "overtimeActiveSeconds") == 480
+    assert _hour_metric(hour_19, "overtimeActiveSeconds") == 2880
     assert _hour_metric(author, "overtimeActiveSeconds") == 52 * 60
     assert _hour_metric(summary["totals"], "overtimeActiveSeconds") == 52 * 60
 
@@ -1698,8 +1709,8 @@ def test_overtime_hourly_graph_fills_between_actual_overtime_buckets():
     hour_18 = next(item for item in hourly if item["hour"] == 18)
     hour_19 = next(item for item in hourly if item["hour"] == 19)
 
-    assert _hour_metric(hour_18, "overtimeActiveSeconds") == 460
-    assert _hour_metric(hour_18, "overtimeActiveSeconds") == 460
+    assert _hour_metric(hour_18, "overtimeActiveSeconds") == 3370
+    assert _hour_metric(hour_18, "overtimeActiveSeconds") == 3370
     assert _hour_metric(hour_18, "idleSeconds") == 0
     assert _hour_metric(hour_19, "overtimeActiveSeconds") == 1904
     assert _overtime_fill_seconds(hour_19) == 0
@@ -1756,7 +1767,7 @@ def test_overtime_hourly_graph_does_not_fill_gap_without_next_overtime_report():
     hour_19 = next(item for item in hourly if item["hour"] == 19)
 
     assert _hour_metric(hour_19, "meetingSeconds") == 4 * 60
-    assert _hour_metric(hour_19, "overtimeActiveSeconds") == 3120
+    assert _hour_metric(hour_19, "overtimeActiveSeconds") == 2880
 
 def test_overtime_hourly_graph_does_not_fill_from_reports_only_inside_hour():
     repo = fake_repository()
@@ -1854,7 +1865,7 @@ def test_overtime_hourly_graph_fills_normal_to_overtime_transition_gap():
     hour_13 = next(item for item in hourly if item["hour"] == 13)
 
     assert _hour_metric(hour_13, "activeSeconds") == 153
-    assert _hour_metric(hour_13, "overtimeActiveSeconds") == 394
+    assert _hour_metric(hour_13, "overtimeActiveSeconds") == 3250
 
 def test_activity_hourly_cache_keeps_heavy_hourly_separate():
     repo = fake_repository()
@@ -2065,7 +2076,7 @@ def test_activity_summary_returnsempty_hourly_activity_for_telegram_only_author(
 
     hourly_by_author = {author["rawAuthor"]: author for author in summary["hourlyActivityByAuthor"]}
     assert len(hourly_by_author["Igor Mats"]["hourlyActivity"]) == 24
-    assert hourly_by_author["Igor Mats"]["hourlyActivity"] == _publicempty_hourly_activity()
+    assert hourly_by_author["Igor Mats"]["hourlyActivity"] == _public_empty_hourly_activity()
 
 def test_hourly_break_subtracts_idle_with_active_priority():
     source = empty_hourly_activity()

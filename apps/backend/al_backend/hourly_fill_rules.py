@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 MICROSECONDS_PER_SECOND = 1_000_000
-FILL_KINDS = ("active", "overtime", "afk", "meeting", "idle", "missed")
+FILL_KINDS = ("active", "overtime", "overtime-fill", "afk", "meeting", "idle", "missed")
 INTERNAL_OVERTIME_FILL_SECONDS = "_visualOvertimeSeconds"
 INTERNAL_MISSED_START_SECONDS = "_visualMissedStartSeconds"
 INTERNAL_MISSED_END_SECONDS = "_visualMissedEndSeconds"
@@ -57,7 +57,7 @@ def public_hour(item: dict[str, Any]) -> dict[str, Any]:
     visible_totals = _totals_from_segments(fill_segments)
     totals = {
         "activeSeconds": visible_totals["active"],
-        "overtimeSeconds": visible_totals["overtime"],
+        "overtimeSeconds": visible_totals["overtime"] + visible_totals["overtime-fill"],
         "afkSeconds": visible_totals["afk"],
         "meetingSeconds": visible_totals["meeting"],
         "idleSeconds": visible_totals["idle"],
@@ -92,7 +92,7 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
         generated.extend(overtime_segments)
     else:
         _append_available_seconds(generated, "overtime", time_seconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds"))
-    _append_available_seconds(generated, "overtime", int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)))
+    _append_available_seconds(generated, "overtime-fill", int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)))
     _append_available_seconds(generated, "idle", time_seconds(hour, "idleSeconds", "idleMicroseconds"))
     return normalize_hour_fill(generated)
 
@@ -103,7 +103,7 @@ def normalize_hour_fill(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not sanitized:
         return []
 
-    priority = {kind: index for index, kind in enumerate(("idle", "active", "overtime", "afk", "meeting", "missed"))}
+    priority = {kind: index for index, kind in enumerate(("idle", "active", "overtime-fill", "overtime", "afk", "meeting", "missed"))}
     timeline: list[str | None] = [None] * 3600
 
     for segment in sanitized:
@@ -300,8 +300,20 @@ def apply_meetings_to_hourly_activity(
         meeting_overlap_seconds = meeting_seconds
         raw_idle_seconds = max(0, int(source_hour.get("idleSeconds", 0)))
         idle_seconds = max(0, raw_idle_seconds - meeting_overlap_seconds)
+        meeting_overlap_seconds = max(0, meeting_overlap_seconds - raw_idle_seconds)
         raw_active_seconds = max(0, int(source_hour.get("activeSeconds", 0)))
+        active_seconds = max(0, raw_active_seconds - meeting_overlap_seconds)
+        meeting_overlap_seconds = max(0, meeting_overlap_seconds - raw_active_seconds)
         raw_overtime_seconds = max(0, int(source_hour.get("overtimeActiveSeconds", 0)))
+        overtime_seconds = max(0, raw_overtime_seconds - meeting_overlap_seconds)
+        visual_seconds = idle_seconds + active_seconds + overtime_seconds
+
+        if visual_seconds > 3600 - meeting_seconds:
+            overflow_seconds = visual_seconds - max(0, 3600 - meeting_seconds)
+            overtime_seconds = max(0, overtime_seconds - overflow_seconds)
+            overflow_seconds = max(0, overflow_seconds - raw_overtime_seconds)
+            active_seconds = max(0, active_seconds - overflow_seconds)
+
         consumed_hour["meetingSeconds"] = consumed_meeting_seconds + meeting_seconds
         meeting_segments = segments_after_consumed_seconds(
             _segments_for_kind((meeting_by_hour.get(hour, {}) or {}), "meeting"),
@@ -312,11 +324,11 @@ def apply_meetings_to_hourly_activity(
         hourly_activity.append(
             {
                 "hour": hour,
-                "activeSeconds": raw_active_seconds,
+                "activeSeconds": active_seconds,
                 "idleSeconds": idle_seconds,
                 "breakSeconds": break_seconds,
                 "meetingSeconds": meeting_seconds,
-                "overtimeActiveSeconds": raw_overtime_seconds,
+                "overtimeActiveSeconds": overtime_seconds,
                 INTERNAL_OVERTIME_FILL_SECONDS: int(source_hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)),
                 "missedSeconds": int(source_hour.get("missedSeconds", 0)),
                 INTERNAL_MISSED_START_SECONDS: int(source_hour.get(INTERNAL_MISSED_START_SECONDS, 0)),
@@ -534,7 +546,7 @@ def fill_visual_overtime_hour(hour: dict[str, Any], replace_visual_idle: bool = 
         hour["idleMicroseconds"] = 0
 
     hour[INTERNAL_OVERTIME_FILL_SECONDS] = int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)) + overtime_seconds
-    _append_available_seconds(hour.setdefault("fillSegments", []), "overtime", overtime_seconds)
+    _append_available_seconds(hour.setdefault("fillSegments", []), "overtime-fill", overtime_seconds)
     remove_visual_missed_seconds(hour, overtime_seconds)
 
 
@@ -789,6 +801,7 @@ def _allowed_kinds_for_hour(hour: dict[str, Any]) -> set[str]:
         allowed.add("active")
     if time_seconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds") > 0 or int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)) > 0:
         allowed.add("overtime")
+        allowed.add("overtime-fill")
     if int(hour.get("breakSeconds", 0)) > 0:
         allowed.add("afk")
     if int(hour.get("meetingSeconds", 0)) > 0:

@@ -57,12 +57,17 @@ from tests.fakes import fake_repository, set_idle_threshold
 def _hour_metric(item: dict, key: str) -> int:
     if "totals" not in item:
         return int(item.get(key, 0))
+    if key == "overtimeActiveSeconds":
+        return sum(
+            segment["endSecond"] - segment["startSecond"]
+            for segment in item.get("fillSegments", [])
+            if segment.get("kind") == "overtime"
+        )
     mapping = {
         "activeSeconds": "activeSeconds",
         "idleSeconds": "idleSeconds",
         "breakSeconds": "afkSeconds",
         "meetingSeconds": "meetingSeconds",
-        "overtimeActiveSeconds": "overtimeSeconds",
         "missedSeconds": "missedSeconds",
         "telegramToFirstActivityIdleSeconds": "idleSeconds",
     }
@@ -86,6 +91,12 @@ def _missed_end_seconds(item: dict) -> int:
 
 
 def _overtime_fill_seconds(item: dict) -> int:
+    if "fillSegments" in item:
+        return sum(
+            segment["endSecond"] - segment["startSecond"]
+            for segment in item.get("fillSegments", [])
+            if segment.get("kind") == "overtime-fill"
+        )
     return int(item.get("_visualOvertimeSeconds", 0))
 
 def test_discord_meeting_reduces_idle_for_any_activity_source():
@@ -171,7 +182,7 @@ def test_discord_meeting_hides_active_from_hourly_chart_without_replacing_summar
     assert _hour_metric(author, "idleSeconds") == 0
     assert _hour_metric(author, "meetingSeconds") == 1200
     assert _hour_metric(summary["totals"], "activeSeconds") == 600
-    assert _hour_metric(hour, "activeSeconds") == 600
+    assert _hour_metric(hour, "activeSeconds") == 0
     assert _hour_metric(hour, "idleSeconds") == 0
     assert _hour_metric(hour, "meetingSeconds") == 1200
 
@@ -878,4 +889,3 @@ def test_idle_only_reports_during_open_break_are_hidden_from_latest_reports():
     reports = repo.latest_reports(start_date="2026-04-29", end_date="2026-04-29")
 
     assert reports == []
-

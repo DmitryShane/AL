@@ -1,4 +1,4 @@
-type FillKind = "active" | "overtime" | "afk" | "meeting" | "idle" | "missed";
+type FillKind = "active" | "overtime" | "overtime-fill" | "afk" | "meeting" | "idle" | "missed";
 
 type HourlyFillTotals = {
   activeSeconds: number;
@@ -33,7 +33,7 @@ export type HourlyActivityChartProps = {
   authors: AuthorHourlyActivity[];
 };
 
-const FILL_KINDS: FillKind[] = ["active", "overtime", "afk", "meeting", "idle", "missed"];
+const FILL_KINDS: FillKind[] = ["active", "overtime", "overtime-fill", "afk", "meeting", "idle", "missed"];
 
 export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
   const authorCharts = authors.map(toAuthorHourlyActivity);

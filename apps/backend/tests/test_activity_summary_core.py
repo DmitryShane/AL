@@ -238,7 +238,7 @@ def test_activity_summary_overtime_bracket_fill_is_visual_only():
 
     assert set(hourly_by_hour[15]) == {"hour", "totals", "fillSegments"}
     assert hourly_by_hour[15]["totals"]["overtimeSeconds"] == 3600
-    assert hourly_by_hour[15]["fillSegments"] == [{"kind": "overtime", "startSecond": 0, "endSecond": 3600}]
+    assert hourly_by_hour[15]["fillSegments"] == [{"kind": "overtime-fill", "startSecond": 0, "endSecond": 3600}]
 
 def test_activity_summary_cache_hits_and_invalidates():
     repo = fake_repository()
