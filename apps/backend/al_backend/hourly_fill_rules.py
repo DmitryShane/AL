@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 MICROSECONDS_PER_SECOND = 1_000_000
 FILL_KINDS = ("active", "overtime", "overtime-fill", "afk", "auto-afk", "meeting", "telegram-idle", "idle", "missed")
 BOTTOM_STACK_KINDS = ("active",)
+MEETING_STACK_KINDS = ("meeting",)
 AUTO_AFK_STACK_KINDS = ("auto-afk",)
 MIDDLE_STACK_KINDS = ("idle",)
 POST_ACTIVITY_STACK_KINDS = ("overtime",)
@@ -173,6 +174,7 @@ def normalize_hour_fill(
 
 def _apply_stack_layers(timeline: list[str | None], *, post_activity_start_second: Any = None) -> None:
     bottom_stack_seconds = _stack_seconds_by_kind(timeline, BOTTOM_STACK_KINDS)
+    meeting_stack_seconds = _stack_seconds_by_kind(timeline, MEETING_STACK_KINDS)
     auto_afk_stack_seconds = _stack_seconds_by_kind(timeline, AUTO_AFK_STACK_KINDS)
     middle_stack_seconds = _stack_seconds_by_kind(timeline, MIDDLE_STACK_KINDS)
     post_activity_stack_seconds = _stack_seconds_by_kind(timeline, POST_ACTIVITY_STACK_KINDS)
@@ -181,6 +183,7 @@ def _apply_stack_layers(timeline: list[str | None], *, post_activity_start_secon
 
     if (
         not bottom_stack_seconds
+        and not meeting_stack_seconds
         and not auto_afk_stack_seconds
         and not middle_stack_seconds
         and not post_activity_stack_seconds
@@ -192,6 +195,7 @@ def _apply_stack_layers(timeline: list[str | None], *, post_activity_start_secon
     for index, kind in enumerate(timeline):
         if (
             kind in BOTTOM_STACK_KINDS
+            or kind in MEETING_STACK_KINDS
             or kind in AUTO_AFK_STACK_KINDS
             or kind in MIDDLE_STACK_KINDS
             or kind in POST_ACTIVITY_STACK_KINDS
@@ -205,6 +209,9 @@ def _apply_stack_layers(timeline: list[str | None], *, post_activity_start_secon
 
     for kind in BOTTOM_STACK_KINDS:
         _fill_empty_timeline_slots(timeline, kind, bottom_stack_seconds.get(kind, 0), range(3600))
+
+    for kind in MEETING_STACK_KINDS:
+        _fill_empty_timeline_slots(timeline, kind, meeting_stack_seconds.get(kind, 0), range(3600))
 
     for kind in AUTO_AFK_STACK_KINDS:
         _fill_empty_timeline_slots(timeline, kind, auto_afk_stack_seconds.get(kind, 0), range(3600))
@@ -930,10 +937,10 @@ def apply_meetings_to_hourly_activity(
         break_seconds = int(source_hour.get("breakSeconds", 0))
         auto_break_seconds = int(source_hour.get("autoBreakSeconds", 0))
         requested_meeting_seconds = max(0, int((meeting_by_hour.get(hour, {}) or {}).get("meetingSeconds", 0)))
+        meeting_capacity_seconds = min(requested_meeting_seconds, max(0, 3600 - break_seconds))
         consumed_meeting_seconds = max(0, int(consumed_hour.get("meetingSeconds", 0)))
-        available_meeting_seconds = max(0, requested_meeting_seconds - consumed_meeting_seconds)
-        meeting_seconds = min(available_meeting_seconds, max(0, 3600 - break_seconds))
-        meeting_overlap_seconds = meeting_seconds
+        meeting_seconds = max(0, meeting_capacity_seconds - consumed_meeting_seconds)
+        meeting_overlap_seconds = meeting_capacity_seconds
         raw_idle_seconds = max(0, int(source_hour.get("idleSeconds", 0)))
         idle_seconds = max(0, raw_idle_seconds - meeting_overlap_seconds)
         meeting_overlap_seconds = max(0, meeting_overlap_seconds - raw_idle_seconds)
@@ -1031,6 +1038,10 @@ def merge_meeting_buckets_into_hourly_author_rows(
             )
             adjustment = adjustments_by_author.setdefault(raw_author, {"idleSeconds": 0, "meetingSeconds": 0})
             adjustment["meetingSeconds"] += added_meeting_seconds
+            idle_reduction = min(int(target_hour.get("idleSeconds", 0)), added_meeting_seconds)
+            if idle_reduction > 0:
+                target_hour["idleSeconds"] = int(target_hour.get("idleSeconds", 0)) - idle_reduction
+                adjustment["idleSeconds"] += idle_reduction
 
     return adjustments_by_author
 
@@ -1453,7 +1464,7 @@ def _visible_generic_idle_seconds(hour: dict[str, Any], telegram_idle_seconds: i
         + max(0, int(hour.get("overtimeBoundaryIdleSeconds", 0)))
     )
 
-    return max(0, generic_idle_seconds - synthetic_after_telegram_seconds - max(0, int(hidden_generic_idle_seconds)))
+    return max(0, generic_idle_seconds - synthetic_after_telegram_seconds)
 
 
 def _stacked_segments(kind: str, seconds: int, cursor: int) -> list[dict[str, Any]]:

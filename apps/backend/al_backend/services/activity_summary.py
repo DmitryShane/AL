@@ -1051,7 +1051,11 @@ class ActivitySummaryService(MongoComposableMixin):
             if idle_reduction > 0:
                 applied_reduction = min(int(author_row.get("idleSeconds", 0)), idle_reduction)
                 author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) - applied_reduction
+                author_row["pluginDaySeconds"] = max(0, int(author_row.get("pluginDaySeconds", 0)) - applied_reduction)
+                author_row["rawPluginDaySeconds"] = max(0, int(author_row.get("rawPluginDaySeconds", 0)) - applied_reduction)
                 totals["idleSeconds"] = max(0, int(totals.get("idleSeconds", 0)) - applied_reduction)
+                totals["pluginDaySeconds"] = max(0, int(totals.get("pluginDaySeconds", 0)) - applied_reduction)
+                totals["rawPluginDaySeconds"] = max(0, int(totals.get("rawPluginDaySeconds", 0)) - applied_reduction)
 
         for raw_author in composed(self).list_authors():
             composed(self)._ensure_summary_author(authors_by_raw, raw_author, profiles)

@@ -746,6 +746,29 @@ def test_plugin_hour_gap_after_telegram_to_first_activity_extends_active_fill():
     assert _hour_segments(public_hourly[12], "active") == [{"startSecond": 860, "endSecond": 3600}]
     assert _hour_segments(public_hourly[12], "idle") == []
 
+def test_plugin_hour_gap_after_telegram_to_first_activity_keeps_real_idle_visible():
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[10]["activeSeconds"] = 1462
+    hourly_activity[10]["activeMicroseconds"] = 1462 * 1_000_000
+    hourly_activity[10]["idleSeconds"] = 1028
+    hourly_activity[10]["idleMicroseconds"] = 1028 * 1_000_000
+    hourly_activity[10]["missedSeconds"] = 1122
+    hourly_activity[10]["_visualMissedStartSeconds"] = 1122
+    hourly_activity[10]["telegramToFirstActivityIdleSeconds"] = 39
+    hourly_activity[10]["pluginHourGapIdleSeconds"] = 208
+    hourly_activity[10]["fillSegments"] = [
+        {"kind": "missed", "startSecond": 0, "endSecond": 1122},
+        {"kind": "idle", "startSecond": 1122, "endSecond": 1161},
+        {"kind": "active", "startSecond": 1368, "endSecond": 1709},
+        {"kind": "active", "startSecond": 1697, "endSecond": 2309},
+        {"kind": "active", "startSecond": 2404, "endSecond": 2913},
+    ]
+
+    public_hourly = public_hourly_activity(hourly_activity)
+
+    assert sum(public_hourly[10]["totals"].values()) == 3600
+    assert _hour_metric(public_hourly[10], "idleSeconds") == 820
+
 def test_auto_break_skips_telegram_gap_and_uses_plugin_idle():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(

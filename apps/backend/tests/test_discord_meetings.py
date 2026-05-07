@@ -182,6 +182,7 @@ def test_discord_meeting_hides_active_from_hourly_chart_without_replacing_summar
     assert _hour_metric(author, "idleSeconds") == 0
     assert _hour_metric(author, "meetingSeconds") == 1200
     assert _hour_metric(summary["totals"], "activeSeconds") == 600
+    assert author["productivity"] == 100
     assert _hour_metric(hour, "activeSeconds") == 0
     assert _hour_metric(hour, "idleSeconds") == 0
     assert _hour_metric(hour, "meetingSeconds") == 1200
@@ -223,7 +224,7 @@ def test_discord_meeting_overlay_is_not_applied_twice_across_sources():
     hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
 
     assert _hour_metric(author, "meetingSeconds") == 1800
-    assert _hour_metric(author, "idleSeconds") == 5400
+    assert _hour_metric(author, "idleSeconds") == 3600
     assert _hour_metric(hour, "meetingSeconds") == 1800
     assert _hour_metric(hour, "idleSeconds") == 1800
 
