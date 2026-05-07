@@ -14,6 +14,7 @@ export type AuthorsTableRow = {
   daySeconds: number;
   telegramDaySeconds: number;
   pluginDaySeconds: number;
+  rawPluginDaySeconds?: number;
   activeSeconds: number;
   idleSeconds: number;
   meetingSeconds: number;
@@ -61,7 +62,7 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
           </div>
           <span>{author.team || "-"}</span>
           <span>{formatDuration(author.telegramDaySeconds ?? author.daySeconds)}</span>
-          <span>{formatDuration(author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds)}</span>
+          <span>{formatDuration(author.rawPluginDaySeconds ?? author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds)}</span>
           <span>{formatDuration(author.activeSeconds)}</span>
           <span>{formatDuration(author.idleSeconds)}</span>
           <span>{formatDuration(author.meetingSeconds ?? 0)}</span>

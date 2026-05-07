@@ -906,6 +906,10 @@ p {
   opacity: 0;
   pointer-events: none;
   transform: translate3d(0, -100%, 0);
+  transition:
+    opacity 180ms ease,
+    transform 220ms ease,
+    visibility 0s linear 220ms;
   visibility: hidden;
 }
 
@@ -913,6 +917,10 @@ p {
   opacity: 1;
   pointer-events: auto;
   transform: translate3d(0, 0, 0);
+  transition:
+    opacity 180ms ease,
+    transform 420ms cubic-bezier(0.2, 1.28, 0.36, 1),
+    visibility 0s linear 0s;
   visibility: visible;
 }
 
@@ -1095,10 +1103,17 @@ p {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .activity-author-floating-strip,
+  .activity-author-floating-strip.is-visible,
   .author-mini-card.is-online .author-mini-card-status,
   .author-mini-card.is-offline .author-mini-card-status,
   .author-mini-card.is-telegram-offline .author-mini-card-status {
     animation: none;
+  }
+
+  .activity-author-floating-strip,
+  .activity-author-floating-strip.is-visible {
+    transition: none;
   }
 }
 
