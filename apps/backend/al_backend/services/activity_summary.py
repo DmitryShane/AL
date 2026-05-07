@@ -2,26 +2,21 @@ from __future__ import annotations
 
 from ..activity_math import *
 from ..hourly_fill_rules import (
-    INTERNAL_MISSED_END_SECONDS,
-    INTERNAL_MISSED_START_SECONDS,
-    add_afk_fill_segment_to_hour,
-    add_idle_seconds_to_hour,
-    add_idle_interval_to_buckets,
     add_report_activity_fill_segments,
-    add_visual_missed_seconds,
+    apply_offline_idle_gaps,
+    apply_visual_missed_hours,
+    apply_visual_overtime_hour_gaps,
+    apply_plugin_hour_idle_gaps,
+    apply_overtime_start_boundaries,
     apply_breaks_to_hourly_activity,
     apply_meetings_to_hourly_activity,
+    apply_workday_hour_idle_gaps,
+    convert_hourly_to_vacation_overtime,
     empty_hourly_activity,
-    fill_normal_to_overtime_transition_hours,
-    fill_overtime_hours_between_overtime_buckets,
-    fill_overtime_hours_bracketed_by_reports,
     merge_hourly_activity,
     merge_meeting_buckets_into_hourly_author_rows,
-    normalize_fill_segments_in_hour,
     public_hourly_activity,
-    visual_hour_occupied_seconds,
-    visual_hour_available_seconds,
-    visual_missed_end_hour,
+    transfer_summary_idle_to_auto_break,
 )
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
@@ -793,7 +788,7 @@ class ActivitySummaryService(MongoComposableMixin):
                 telegram_gap_counted.add(author_date_key)
 
             if vacation_mark:
-                hourly_activity = composed(self).convert_hourly_to_vacation_overtime(hourly_activity)
+                hourly_activity = convert_hourly_to_vacation_overtime(hourly_activity)
 
             report_active_seconds = int(item.get("activeSeconds", 0))
             report_idle_seconds = sum(int(hour.get("idleSeconds", 0)) for hour in hourly_activity)
@@ -1124,6 +1119,26 @@ class ActivitySummaryService(MongoComposableMixin):
         )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_start=False)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
+        apply_overtime_start_boundaries(
+            hourly_by_author,
+            list(self.db.day_sessions.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0})),
+            time_zone_id_for_author=lambda raw_author, session_time_zone_id: _author_time_zone_id(
+                raw_author,
+                profiles,
+                session_time_zone_id,
+            ),
+            is_date_in_scope=lambda day_date, raw_author, time_zone_id: _date_in_summary_scope(
+                day_date,
+                raw_author,
+                profiles,
+                time_zone_id,
+                now,
+                start_date,
+                end_date,
+                date_mode,
+            ),
+            is_vacation_day=lambda raw_author, day_date: composed(self).is_vacation_day(raw_author, day_date),
+        )
         self._apply_latest_report_metadata(
             authors_by_raw,
             start_date,
@@ -1237,7 +1252,7 @@ class ActivitySummaryService(MongoComposableMixin):
             if remaining_seconds <= 0:
                 continue
 
-            transferred_seconds = self._transfer_summary_idle_to_break(
+            transferred_seconds = transfer_summary_idle_to_auto_break(
                 hourly_author.get("hourlyActivity", []),
                 remaining_seconds,
             )
@@ -1285,54 +1300,6 @@ class ActivitySummaryService(MongoComposableMixin):
 
         return remaining_seconds
 
-    def _transfer_summary_idle_to_break(self, hourly_activity: list[dict[str, Any]], remaining_seconds: int) -> int:
-        if remaining_seconds <= 0:
-            return 0
-
-        transferred_seconds = 0
-
-        for hour in sorted(hourly_activity, key=lambda item: int(item.get("hour", 0))):
-            if transferred_seconds >= remaining_seconds:
-                break
-
-            idle_seconds = max(0, int(hour.get("idleSeconds", 0)))
-            telegram_gap_idle_seconds = max(0, int(hour.get("telegramToFirstActivityIdleSeconds", 0)))
-            plugin_hour_gap_idle_seconds = max(0, int(hour.get("pluginHourGapIdleSeconds", 0)))
-            visual_occupied_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
-            blocked_plugin_gap_idle_seconds = plugin_hour_gap_idle_seconds if visual_occupied_seconds < 3600 else 0
-            convertible_idle_seconds = max(0, idle_seconds - telegram_gap_idle_seconds - blocked_plugin_gap_idle_seconds)
-
-            if convertible_idle_seconds <= 0:
-                continue
-
-            occupied_seconds = (
-                max(0, int(hour.get("activeSeconds", 0)))
-                + max(0, int(hour.get("meetingSeconds", 0)))
-                + max(0, int(hour.get("breakSeconds", 0)))
-                + max(0, int(hour.get("overtimeActiveSeconds", 0)))
-            )
-            available_break_seconds = max(0, 3600 - occupied_seconds)
-
-            if available_break_seconds <= 0:
-                continue
-
-            move_seconds = min(convertible_idle_seconds, available_break_seconds, remaining_seconds - transferred_seconds)
-            idle_microseconds = max(
-                0,
-                _time_microseconds(hour, "idleSeconds", "idleMicroseconds") - (move_seconds * MICROSECONDS_PER_SECOND),
-            )
-            hour["idleMicroseconds"] = idle_microseconds
-            hour["idleSeconds"] = _seconds_from_microseconds(idle_microseconds)
-            hour["pluginHourGapIdleSeconds"] = min(plugin_hour_gap_idle_seconds, hour["idleSeconds"])
-            hour["breakSeconds"] = int(hour.get("breakSeconds", 0)) + move_seconds
-            remaining_idle_seconds = max(0, idle_seconds - move_seconds)
-            break_start_seconds = occupied_seconds + remaining_idle_seconds if occupied_seconds > 0 else 3600 - move_seconds
-            add_afk_fill_segment_to_hour(hour, break_start_seconds, break_start_seconds + move_seconds)
-            normalize_fill_segments_in_hour(hour)
-            transferred_seconds += move_seconds
-
-        return transferred_seconds
-
     def _apply_vacation_summary_overrides(
         self,
         authors_by_raw: dict[str, dict[str, Any]],
@@ -1376,7 +1343,7 @@ class ActivitySummaryService(MongoComposableMixin):
             if hourly_author:
                 hourly_author["dayOverride"] = author_row.get("dayOverride")
                 hourly_author["calendarDayMark"] = author_row.get("calendarDayMark")
-                hourly_author["hourlyActivity"] = composed(self).convert_hourly_to_vacation_overtime(
+                hourly_author["hourlyActivity"] = convert_hourly_to_vacation_overtime(
                     hourly_author.get("hourlyActivity", [])
                 )
 
@@ -1412,47 +1379,24 @@ class ActivitySummaryService(MongoComposableMixin):
         now: dt.datetime,
     ) -> None:
         latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
-
-        for (raw_author, day_date), latest_report_at in latest_report_by_author_date.items():
-            time_zone_id = _author_time_zone_id(raw_author, profiles, None)
-
-            if not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
-                continue
-
-            if composed(self).is_vacation_day(raw_author, day_date):
-                continue
-
-            author_row = authors_by_raw.get(raw_author)
-            hourly_author = hourly_by_author.get(raw_author)
-
-            if not author_row or not hourly_author:
-                continue
-
-            local_latest_report_at = _to_local_datetime(latest_report_at, time_zone_id)
-            hourly_activity = hourly_author.get("hourlyActivity", [])
-
-            if not hourly_activity:
-                continue
-
-            visual_plugin_seconds = int(author_row.get("pluginDaySeconds", 0))
-
-            for hour_index in range(0, min(local_latest_report_at.hour, len(hourly_activity))):
-                hour = hourly_activity[hour_index]
-                accounted_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
-
-                if accounted_seconds <= 0:
-                    continue
-
-                gap_seconds = max(0, 3600 - min(3600, accounted_seconds))
-                remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - visual_plugin_seconds)
-                idle_seconds = min(gap_seconds, remaining_plugin_seconds)
-
-                if idle_seconds <= 0:
-                    continue
-
-                add_idle_seconds_to_hour(hour, idle_seconds)
-                hour["pluginHourGapIdleSeconds"] = int(hour.get("pluginHourGapIdleSeconds", 0)) + idle_seconds
-                visual_plugin_seconds += idle_seconds
+        apply_plugin_hour_idle_gaps(
+            authors_by_raw,
+            hourly_by_author,
+            latest_report_by_author_date,
+            default_plugin_work_window_seconds=DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
+            time_zone_id_for_author=lambda raw_author, time_zone_id: _author_time_zone_id(raw_author, profiles, time_zone_id),
+            is_date_in_scope=lambda day_date, raw_author, time_zone_id: _date_in_summary_scope(
+                day_date,
+                raw_author,
+                profiles,
+                time_zone_id,
+                now,
+                start_date,
+                end_date,
+                date_mode,
+            ),
+            is_vacation_day=lambda raw_author, day_date: composed(self).is_vacation_day(raw_author, day_date),
+        )
 
     def _apply_offline_idle_gaps(
         self,
@@ -1467,41 +1411,25 @@ class ActivitySummaryService(MongoComposableMixin):
     ) -> None:
         latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
         session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
-
-        for session in self.db.day_sessions.find(session_query, {"_id": 0}):
-            raw_author = str(session.get("rawAuthor") or "Unknown User")
-            day_date = str(session.get("date") or "")
-            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
-
-            if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
-                continue
-
-            if composed(self).is_vacation_day(raw_author, day_date):
-                continue
-
-            latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
-            ended_at = _coerce_datetime(session.get("lastOfflineAt"))
-
-            if not latest_report_at or not ended_at or ended_at <= latest_report_at:
-                continue
-
-            author_row = authors_by_raw.get(raw_author)
-            hourly_author = hourly_by_author.get(raw_author)
-
-            if not author_row or not hourly_author:
-                continue
-
-            gap_seconds = max(0, int((ended_at - latest_report_at).total_seconds()))
-            remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - int(author_row.get("pluginDaySeconds", 0)))
-            idle_seconds = min(gap_seconds, remaining_plugin_seconds)
-
-            if idle_seconds <= 0:
-                continue
-
-            idle_end = latest_report_at + dt.timedelta(seconds=idle_seconds)
-            hourly_activity = empty_hourly_activity()
-            add_idle_interval_to_buckets(hourly_activity, latest_report_at, idle_end, time_zone_id)
-            merge_hourly_activity(hourly_author["hourlyActivity"], hourly_activity)
+        apply_offline_idle_gaps(
+            authors_by_raw,
+            hourly_by_author,
+            list(self.db.day_sessions.find(session_query, {"_id": 0})),
+            latest_report_by_author_date,
+            default_plugin_work_window_seconds=DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
+            time_zone_id_for_author=lambda raw_author, time_zone_id: _author_time_zone_id(raw_author, profiles, time_zone_id),
+            is_date_in_scope=lambda day_date, raw_author, time_zone_id: _date_in_summary_scope(
+                day_date,
+                raw_author,
+                profiles,
+                time_zone_id,
+                now,
+                start_date,
+                end_date,
+                date_mode,
+            ),
+            is_vacation_day=lambda raw_author, day_date: composed(self).is_vacation_day(raw_author, day_date),
+        )
 
     def _apply_workday_hour_idle_gaps(
         self,
@@ -1516,72 +1444,30 @@ class ActivitySummaryService(MongoComposableMixin):
     ) -> None:
         latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
         session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
-
-        for session in self.db.day_sessions.find(session_query, {"_id": 0}):
-            raw_author = str(session.get("rawAuthor") or "Unknown User")
-            day_date = str(session.get("date") or "")
-            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
-
-            if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
-                continue
-
-            if composed(self).is_vacation_day(raw_author, day_date):
-                continue
-
-            started_at = _coerce_datetime(session.get("startedAt"))
-            ended_at = _coerce_datetime(session.get("lastOfflineAt")) or latest_report_by_author_date.get((raw_author, day_date))
-
-            if not started_at or not ended_at or ended_at <= started_at:
-                continue
-
-            author_row = authors_by_raw.get(raw_author)
-            hourly_author = hourly_by_author.get(raw_author)
-
-            if not author_row or not hourly_author:
-                continue
-
-            hourly_activity = hourly_author.get("hourlyActivity", [])
-
-            if not hourly_activity:
-                continue
-
-            local_start = _to_local_datetime(started_at, time_zone_id)
-            local_end = _to_local_datetime(ended_at, time_zone_id)
-            current_hour = local_start.replace(minute=0, second=0, microsecond=0)
-            final_hour = local_end.replace(minute=0, second=0, microsecond=0)
-
-            while current_hour <= final_hour:
-                hour_index = current_hour.hour
-
-                if 0 <= hour_index < len(hourly_activity):
-                    hour_start = current_hour
-                    hour_end = current_hour + dt.timedelta(hours=1)
-                    expected_start = max(local_start, hour_start)
-                    if hour_end > local_end:
-                        current_hour += dt.timedelta(hours=1)
-                        continue
-
-                    expected_end = hour_end
-                    expected_seconds = max(0, int((expected_end - expected_start).total_seconds()))
-                    occupied_seconds = visual_hour_occupied_seconds(hourly_activity[hour_index]) + int(
-                        hourly_activity[hour_index].get("missedSeconds", 0)
-                    )
-
-                    if occupied_seconds <= 0:
-                        current_hour += dt.timedelta(hours=1)
-                        continue
-
-                    occupied_seconds = min(expected_seconds, occupied_seconds)
-                    gap_seconds = max(0, expected_seconds - occupied_seconds)
-                    auto_break_allowance_seconds = self._summary_auto_break_remaining_seconds(raw_author, profiles, {day_date})
-                    effective_plugin_day_seconds = max(0, int(author_row.get("pluginDaySeconds", 0)) - auto_break_allowance_seconds)
-                    remaining_plugin_seconds = max(0, DEFAULT_PLUGIN_WORK_WINDOW_SECONDS - effective_plugin_day_seconds)
-                    idle_seconds = min(gap_seconds, remaining_plugin_seconds)
-
-                    if idle_seconds > 0:
-                        add_idle_seconds_to_hour(hourly_activity[hour_index], idle_seconds)
-
-                current_hour += dt.timedelta(hours=1)
+        apply_workday_hour_idle_gaps(
+            authors_by_raw,
+            hourly_by_author,
+            list(self.db.day_sessions.find(session_query, {"_id": 0})),
+            latest_report_by_author_date,
+            default_plugin_work_window_seconds=DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
+            time_zone_id_for_author=lambda raw_author, time_zone_id: _author_time_zone_id(raw_author, profiles, time_zone_id),
+            is_date_in_scope=lambda day_date, raw_author, time_zone_id: _date_in_summary_scope(
+                day_date,
+                raw_author,
+                profiles,
+                time_zone_id,
+                now,
+                start_date,
+                end_date,
+                date_mode,
+            ),
+            is_vacation_day=lambda raw_author, day_date: composed(self).is_vacation_day(raw_author, day_date),
+            auto_break_allowance_seconds_for_author_date=lambda raw_author, day_date: self._summary_auto_break_remaining_seconds(
+                raw_author,
+                profiles,
+                {day_date},
+            ),
+        )
 
     def _apply_visual_missed_hours(
         self,
@@ -1596,50 +1482,30 @@ class ActivitySummaryService(MongoComposableMixin):
     ) -> None:
         latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
         session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
-
-        for session in self.db.day_sessions.find(session_query, {"_id": 0}):
-            raw_author = str(session.get("rawAuthor") or "Unknown User")
-            day_date = str(session.get("date") or "")
-            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
-
-            if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
-                continue
-
-            if composed(self).is_vacation_day(raw_author, day_date):
-                continue
-
-            started_at = _coerce_datetime(session.get("startedAt"))
-            ended_at = _coerce_datetime(session.get("lastOfflineAt"))
-            latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
-            latest_signal_at = (latest_report_at or ended_at) if ended_at else None
-
-            if not started_at and not latest_signal_at:
-                continue
-
-            profile = profiles.get(raw_author, {})
-            hourly_author = hourly_by_author.get(raw_author)
-
-            if not hourly_author:
-                hourly_author = {
-                    "author": _display_name(raw_author, profile),
-                    "rawAuthor": raw_author,
-                    "timeZoneId": profile.get("timeZoneId") or session.get("timeZoneId"),
-                    "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
-                    "hourlyActivity": empty_hourly_activity(),
-                }
-                hourly_by_author[raw_author] = hourly_author
-
-            hourly_activity = hourly_author.get("hourlyActivity", [])
-            if include_start:
-                self._add_visual_missed_start(hourly_activity, started_at, time_zone_id)
-            if include_end:
-                self._add_visual_missed_end(
-                    hourly_activity,
-                    latest_signal_at,
-                    time_zone_id,
-                    fill_to_hour=latest_report_at is not None,
-                    offline_at=ended_at,
-                )
+        apply_visual_missed_hours(
+            hourly_by_author,
+            list(self.db.day_sessions.find(session_query, {"_id": 0})),
+            latest_report_by_author_date,
+            include_start=include_start,
+            include_end=include_end,
+            time_zone_id_for_author=lambda raw_author, session_time_zone_id: _author_time_zone_id(
+                raw_author,
+                profiles,
+                session_time_zone_id,
+            ),
+            is_date_in_scope=lambda day_date, raw_author, time_zone_id: _date_in_summary_scope(
+                day_date,
+                raw_author,
+                profiles,
+                time_zone_id,
+                now,
+                start_date,
+                end_date,
+                date_mode,
+            ),
+            is_vacation_day=lambda raw_author, day_date: composed(self).is_vacation_day(raw_author, day_date),
+            display_name_for_author=lambda raw_author: _display_name(raw_author, profiles.get(raw_author, {})),
+        )
 
     def _latest_report_times_by_author_date(
         self,
@@ -1693,62 +1559,6 @@ class ActivitySummaryService(MongoComposableMixin):
 
         return latest_by_key
 
-    def _add_visual_missed_start(
-        self,
-        hourly_activity: list[dict[str, Any]],
-        started_at: dt.datetime | None,
-        time_zone_id: str,
-    ) -> None:
-        if not started_at:
-            return
-
-        local_start = _to_local_datetime(started_at, time_zone_id)
-        hour_start = local_start.replace(minute=0, second=0, microsecond=0)
-        missed_seconds = max(0, int((local_start - hour_start).total_seconds()))
-        add_visual_missed_seconds(hourly_activity, local_start.hour, missed_seconds, INTERNAL_MISSED_START_SECONDS)
-        self._trim_visual_idle_overflow(hourly_activity, local_start.hour)
-
-    def _add_visual_missed_end(
-        self,
-        hourly_activity: list[dict[str, Any]],
-        ended_at: dt.datetime | None,
-        time_zone_id: str,
-        fill_to_hour: bool = False,
-        offline_at: dt.datetime | None = None,
-    ) -> None:
-        if not ended_at:
-            return
-
-        local_end = _to_local_datetime(ended_at, time_zone_id)
-
-        if fill_to_hour:
-            target_hour = visual_missed_end_hour(hourly_activity, local_end.hour, _to_local_datetime(offline_at, time_zone_id) if offline_at else None)
-            missed_seconds = visual_hour_available_seconds(target_hour)
-            target_hour_index = int(target_hour.get("hour", local_end.hour))
-        else:
-            hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
-            missed_seconds = max(0, int((hour_end - local_end).total_seconds()))
-            target_hour_index = local_end.hour
-
-        add_visual_missed_seconds(hourly_activity, target_hour_index, missed_seconds, INTERNAL_MISSED_END_SECONDS)
-        self._trim_visual_idle_overflow(hourly_activity, target_hour_index)
-
-    def _trim_visual_idle_overflow(self, hourly_activity: list[dict[str, Any]], hour_index: int) -> None:
-        if hour_index < 0 or hour_index >= len(hourly_activity):
-            return
-
-        hour = hourly_activity[hour_index]
-        occupied_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
-        overflow_seconds = max(0, occupied_seconds - 3600)
-
-        if overflow_seconds <= 0:
-            return
-
-        idle_microseconds = _time_microseconds(hour, "idleSeconds", "idleMicroseconds")
-        overflow_microseconds = overflow_seconds * MICROSECONDS_PER_SECOND
-        hour["idleMicroseconds"] = max(0, idle_microseconds - overflow_microseconds)
-        hour["idleSeconds"] = _seconds_from_microseconds(hour["idleMicroseconds"])
-
     def _apply_visual_overtime_hour_gaps(
         self,
         hourly_by_author: dict[str, dict[str, Any]],
@@ -1759,65 +1569,40 @@ class ActivitySummaryService(MongoComposableMixin):
         now: dt.datetime,
     ) -> None:
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
-        overtime_reports_by_key: dict[tuple[str, str], list[dt.datetime]] = {}
-
-        for report in self.db.report_rows.find(
-            query,
-            {
-                "_id": 0,
-                "author": 1,
-                "date": 1,
-                "source": 1,
-                "reportType": 1,
-                "timeZoneId": 1,
-                "recordedAt": 1,
-                "lastRecordedAt": 1,
-                "receivedAt": 1,
-                "lastReceivedAt": 1,
-                "overtimeActiveDeltaSeconds": 1,
-                "overtimeActiveDeltaMicroseconds": 1,
-            },
-        ):
-            if report.get("source") in {"telegram", "discord", "status"} or report.get("reportType") in {"telegram", "meeting", "status"}:
-                continue
-
-            if _time_microseconds(report, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") <= 0:
-                continue
-
-            raw_author = str(report.get("author") or "Unknown User")
-            report_date = str(report.get("date") or "")
-            time_zone_id = _author_time_zone_id(raw_author, profiles, report.get("timeZoneId"))
-
-            if not report_date or not _date_in_summary_scope(report_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
-                continue
-
-            if composed(self).is_vacation_day(raw_author, report_date):
-                continue
-
-            occurred_at = (
-                _coerce_datetime(report.get("recordedAt"))
-                or _coerce_datetime(report.get("lastRecordedAt"))
-                or _coerce_datetime(report.get("receivedAt"))
-                or _coerce_datetime(report.get("lastReceivedAt"))
-            )
-
-            if not occurred_at:
-                continue
-
-            overtime_reports_by_key.setdefault((raw_author, report_date), []).append(_to_local_datetime(occurred_at, time_zone_id))
-
-        for (raw_author, _report_date), reports in overtime_reports_by_key.items():
-            hourly_author = hourly_by_author.get(raw_author)
-
-            if not hourly_author:
-                continue
-
-            hourly_activity = hourly_author.get("hourlyActivity", [])
-            ordered_reports = sorted(reports)
-
-            fill_overtime_hours_bracketed_by_reports(hourly_activity, ordered_reports)
-            fill_overtime_hours_between_overtime_buckets(hourly_activity)
-            fill_normal_to_overtime_transition_hours(hourly_activity)
+        apply_visual_overtime_hour_gaps(
+            hourly_by_author,
+            list(
+                self.db.report_rows.find(
+                    query,
+                    {
+                        "_id": 0,
+                        "author": 1,
+                        "date": 1,
+                        "source": 1,
+                        "reportType": 1,
+                        "timeZoneId": 1,
+                        "recordedAt": 1,
+                        "lastRecordedAt": 1,
+                        "receivedAt": 1,
+                        "lastReceivedAt": 1,
+                        "overtimeActiveDeltaSeconds": 1,
+                        "overtimeActiveDeltaMicroseconds": 1,
+                    },
+                )
+            ),
+            time_zone_id_for_author=lambda raw_author, report_time_zone_id: _author_time_zone_id(raw_author, profiles, report_time_zone_id),
+            is_date_in_scope=lambda day_date, raw_author, time_zone_id: _date_in_summary_scope(
+                day_date,
+                raw_author,
+                profiles,
+                time_zone_id,
+                now,
+                start_date,
+                end_date,
+                date_mode,
+            ),
+            is_vacation_day=lambda raw_author, day_date: composed(self).is_vacation_day(raw_author, day_date),
+        )
 
     def _apply_latest_report_metadata(
         self,

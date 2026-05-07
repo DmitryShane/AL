@@ -4521,6 +4521,7 @@ p {
   position: absolute;
   right: 0;
   left: 0;
+  overflow: hidden;
 }
 
 @keyframes currentHourPulse {
@@ -4589,6 +4590,10 @@ p {
 
 .hourly-chart-segment.idle {
   background: #ffcf75;
+}
+
+.hourly-chart-segment.telegram-idle {
+  background: #f2b84f;
 }
 
 .hourly-chart-segment.missed {

@@ -28,6 +28,8 @@ from al_backend.hourly_fill_rules import (
     add_break_interval_to_buckets,
     apply_breaks_to_hourly_activity,
     empty_hourly_activity,
+    public_hourly_activity,
+    transfer_summary_idle_to_auto_break,
 )
 from al_backend.telegram_bot import (
     BotConfig,
@@ -168,6 +170,7 @@ def test_activity_summary_fills_hourly_idle_from_telegram_online_to_first_raw_ac
     assert _hour_metric(hourly_by_hour[11], "idleSeconds") == 57 * 60 + 1
     assert _missed_start_seconds(hourly_by_hour[11]) == 2 * 60 + 59
     assert _hour_metric(hourly_by_hour[12], "idleSeconds") == 31 * 60 + 7
+    assert _hour_segments(hourly_by_hour[12], "telegram-idle")[0] == {"startSecond": 0, "endSecond": 31 * 60 + 7}
 
 def test_activity_summary_marks_visual_missed_time_before_online_hour_without_affecting_totals():
     repo = fake_repository()
@@ -686,6 +689,7 @@ def test_auto_break_does_not_use_telegram_to_first_activity_gap():
     assert _hour_metric(hourly_by_hour[9], "telegramToFirstActivityIdleSeconds") == 3600
     assert _hour_metric(hourly_by_hour[10], "idleSeconds") == 17 * 60 + 30
     assert _hour_metric(hourly_by_hour[10], "telegramToFirstActivityIdleSeconds") == 17 * 60 + 30
+    assert _hour_segments(hourly_by_hour[10], "telegram-idle")[0] == {"startSecond": 0, "endSecond": 17 * 60 + 30}
 
 def test_auto_break_skips_telegram_gap_and_uses_plugin_idle():
     repo = fake_repository()
@@ -863,7 +867,7 @@ def test_auto_break_adds_break_segment_at_end_of_hour():
 
     assert _hour_metric(author, "breakSeconds") == 240
     assert _hour_metric(hourly[13], "breakSeconds") == 240
-    assert _hour_segments(hourly[13], "afk") == [{"startSecond": 3360, "endSecond": 3600}]
+    assert _hour_segments(hourly[13], "auto-afk") == [{"startSecond": 0, "endSecond": 240}]
 
 def test_break_interval_segments_can_cross_hour_boundary():
     repo = fake_repository()
@@ -1070,9 +1074,9 @@ def test_auto_break_uses_completed_plugin_hour_idle_gaps():
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
 
-    assert _hour_metric(author, "breakSeconds") == 3540
-    assert _hour_metric(hourly[8], "idleSeconds") == 0
-    assert _hour_metric(hourly[8], "breakSeconds") == 3540
+    assert _hour_metric(author, "breakSeconds") == 0
+    assert _hour_metric(hourly[8], "idleSeconds") == 3540
+    assert _hour_metric(hourly[8], "breakSeconds") == 0
 
 def test_auto_break_uses_workday_gap_idle_after_plugin_gap_fill():
     repo = fake_repository()
@@ -1123,9 +1127,9 @@ def test_auto_break_uses_workday_gap_idle_after_plugin_gap_fill():
     summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
 
-    assert _hour_metric(hourly[13], "idleSeconds") == 0
-    assert _hour_metric(hourly[13], "breakSeconds") == 1410
-    assert _hour_segments(hourly[13], "afk") == [{"startSecond": 2190, "endSecond": 3600}]
+    assert _hour_metric(hourly[13], "idleSeconds") == 261
+    assert _hour_metric(hourly[13], "breakSeconds") == 1149
+    assert _hour_segments(hourly[13], "auto-afk") == [{"startSecond": 2190, "endSecond": 3339}]
 
 def test_auto_break_skips_incomplete_plugin_hour_idle_gaps():
     repo = fake_repository()
@@ -1134,7 +1138,7 @@ def test_auto_break_skips_incomplete_plugin_hour_idle_gaps():
     hourly_activity[8]["idleSeconds"] = 1800
     hourly_activity[8]["pluginHourGapIdleSeconds"] = 1800
 
-    transferred_seconds = repo._transfer_summary_idle_to_break(hourly_activity, 3600)
+    transferred_seconds = transfer_summary_idle_to_auto_break(hourly_activity, 3600)
 
     assert transferred_seconds == 0
     assert _hour_metric(hourly_activity[8], "idleSeconds") == 1800
@@ -1146,12 +1150,14 @@ def test_auto_break_places_partial_break_after_remaining_idle():
     hourly_activity[13]["activeSeconds"] = 2190
     hourly_activity[13]["idleSeconds"] = 1410
 
-    transferred_seconds = repo._transfer_summary_idle_to_break(hourly_activity, 1149)
+    transferred_seconds = transfer_summary_idle_to_auto_break(hourly_activity, 1149)
 
     assert transferred_seconds == 1149
     assert _hour_metric(hourly_activity[13], "idleSeconds") == 261
     assert _hour_metric(hourly_activity[13], "breakSeconds") == 1149
-    assert _hour_segments(hourly_activity[13], "afk") == [{"startSecond": 2451, "endSecond": 3600}]
+    public_hourly = public_hourly_activity(hourly_activity)
+    assert _hour_segments(public_hourly[13], "auto-afk") == [{"startSecond": 2190, "endSecond": 3339}]
+    assert _hour_segments(public_hourly[13], "idle") == [{"startSecond": 3339, "endSecond": 3600}]
 
 def test_auto_break_does_not_overflow_hour_with_visual_missed_start():
     repo = fake_repository()
@@ -1714,7 +1720,8 @@ def test_overtime_hourly_graph_fills_between_actual_overtime_buckets():
     assert _hour_metric(hour_18, "idleSeconds") == 0
     assert _hour_metric(hour_19, "overtimeActiveSeconds") == 1904
     assert _overtime_fill_seconds(hour_19) == 0
-    assert _missed_end_seconds(hour_19) > 0
+    assert _hour_segments(hour_19, "overtime")[0]["startSecond"] >= (28 * 60 + 16)
+    assert _missed_end_seconds(hour_19) == 0
 
 def test_overtime_hourly_graph_does_not_fill_gap_without_next_overtime_report():
     repo = fake_repository()
@@ -2136,6 +2143,27 @@ def test_hourly_break_splits_across_hours():
 
     assert _hour_metric(buckets[("Dmitry Shane", "2026-04-28")][16], "breakSeconds") == 10 * 60
     assert _hour_metric(buckets[("Dmitry Shane", "2026-04-28")][17], "breakSeconds") == 20 * 60
+
+def test_hourly_break_uses_exact_break_on_and_off_positions():
+    source = empty_hourly_activity()
+    source[15]["activeSeconds"] = 3600
+    source[16]["activeSeconds"] = 3600
+    break_buckets = {("Future Artist", "2026-05-02"): empty_hourly_activity()}
+    add_break_interval_to_buckets(
+        break_buckets,
+        "Future Artist",
+        dt.datetime(2026, 5, 2, 15, 40, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 2, 16, 40, tzinfo=dt.UTC),
+        "UTC",
+    )
+
+    hourly = apply_breaks_to_hourly_activity(source, break_buckets[("Future Artist", "2026-05-02")])
+    public_hourly = public_hourly_activity(hourly)
+
+    assert _hour_segments(public_hourly[15], "afk") == [{"startSecond": 40 * 60, "endSecond": 3600}]
+    assert _hour_segments(public_hourly[16], "afk") == [{"startSecond": 0, "endSecond": 40 * 60}]
+    assert _hour_metric(public_hourly[15], "activeSeconds") == 40 * 60
+    assert _hour_metric(public_hourly[16], "activeSeconds") == 20 * 60
 
 def test_hourly_break_splits_across_midnight():
     buckets = {

@@ -6,8 +6,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 MICROSECONDS_PER_SECOND = 1_000_000
-FILL_KINDS = ("active", "overtime", "overtime-fill", "afk", "meeting", "idle", "missed")
+FILL_KINDS = ("active", "overtime", "overtime-fill", "afk", "auto-afk", "meeting", "telegram-idle", "idle", "missed")
+BOTTOM_STACK_KINDS = ("active",)
+AUTO_AFK_STACK_KINDS = ("auto-afk",)
+MIDDLE_STACK_KINDS = ("idle",)
+POST_ACTIVITY_STACK_KINDS = ("overtime",)
+TOP_STACK_KINDS = ("overtime-fill",)
 INTERNAL_OVERTIME_FILL_SECONDS = "_visualOvertimeSeconds"
+INTERNAL_OVERTIME_START_SECOND = "_overtimeStartSecond"
 INTERNAL_MISSED_START_SECONDS = "_visualMissedStartSeconds"
 INTERNAL_MISSED_END_SECONDS = "_visualMissedEndSeconds"
 
@@ -34,9 +40,11 @@ def empty_hourly_activity() -> list[dict[str, Any]]:
             "activeSeconds": 0,
             "idleSeconds": 0,
             "breakSeconds": 0,
+            "autoBreakSeconds": 0,
             "meetingSeconds": 0,
             "overtimeActiveSeconds": 0,
             INTERNAL_OVERTIME_FILL_SECONDS: 0,
+            INTERNAL_OVERTIME_START_SECOND: None,
             "missedSeconds": 0,
             INTERNAL_MISSED_START_SECONDS: 0,
             INTERNAL_MISSED_END_SECONDS: 0,
@@ -58,9 +66,9 @@ def public_hour(item: dict[str, Any]) -> dict[str, Any]:
     totals = {
         "activeSeconds": visible_totals["active"],
         "overtimeSeconds": visible_totals["overtime"] + visible_totals["overtime-fill"],
-        "afkSeconds": visible_totals["afk"],
+        "afkSeconds": visible_totals["afk"] + visible_totals["auto-afk"],
         "meetingSeconds": visible_totals["meeting"],
-        "idleSeconds": visible_totals["idle"],
+        "idleSeconds": visible_totals["idle"] + visible_totals["telegram-idle"],
         "missedSeconds": visible_totals["missed"],
     }
     return {"hour": hour, "totals": totals, "fillSegments": fill_segments}
@@ -73,7 +81,11 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
     missed_end_seconds = int(hour.get(INTERNAL_MISSED_END_SECONDS, 0))
     _append_stacked_seconds(generated, "missed", missed_end_seconds, 3600 - missed_end_seconds)
     afk_positioned = bool(_segments_for_kind(hour, "afk"))
-    afk_segments = _positioned_or_stacked_segments(hour, "afk", "breakSeconds", cursor)
+    afk_segments = _segments_for_kind(hour, "afk") if afk_positioned else _stacked_segments(
+        "afk",
+        max(0, int(hour.get("breakSeconds", 0)) - int(hour.get("autoBreakSeconds", 0))),
+        cursor,
+    )
     generated.extend(afk_segments)
     if afk_segments and not afk_positioned:
         cursor = max(cursor, max(segment["endSecond"] for segment in afk_segments))
@@ -82,6 +94,8 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
     generated.extend(meeting_segments)
     if meeting_segments and not meeting_positioned:
         cursor = max(cursor, max(segment["endSecond"] for segment in meeting_segments))
+    telegram_idle_segments = _telegram_idle_segments(hour)
+    generated.extend(telegram_idle_segments)
     active_segments = _segments_for_kind(hour, "active")
     if active_segments:
         generated.extend(active_segments)
@@ -92,18 +106,32 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
         generated.extend(overtime_segments)
     else:
         _append_available_seconds(generated, "overtime", time_seconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds"))
+    _append_available_seconds(generated, "auto-afk", int(hour.get("autoBreakSeconds", 0)))
     _append_available_seconds(generated, "overtime-fill", int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)))
-    _append_available_seconds(generated, "idle", time_seconds(hour, "idleSeconds", "idleMicroseconds"))
-    return normalize_hour_fill(generated)
+    generic_idle_seconds = max(
+        0,
+        time_seconds(hour, "idleSeconds", "idleMicroseconds") - _segments_total_seconds(telegram_idle_segments),
+    )
+    _append_available_seconds(generated, "idle", generic_idle_seconds)
+    overtime_start_second = hour.get(INTERNAL_OVERTIME_START_SECOND)
+    return normalize_hour_fill(generated, post_activity_start_second=overtime_start_second)
 
 
-def normalize_hour_fill(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def normalize_hour_fill(
+    segments: list[dict[str, Any]],
+    *,
+    apply_stack_rules: bool = True,
+    post_activity_start_second: Any = None,
+) -> list[dict[str, Any]]:
     sanitized = _sanitize_fill_segments(segments)
 
     if not sanitized:
         return []
 
-    priority = {kind: index for index, kind in enumerate(("idle", "active", "overtime-fill", "overtime", "afk", "meeting", "missed"))}
+    priority = {
+        kind: index
+        for index, kind in enumerate(("idle", "active", "overtime-fill", "overtime", "telegram-idle", "afk", "auto-afk", "meeting", "missed"))
+    }
     timeline: list[str | None] = [None] * 3600
 
     for segment in sanitized:
@@ -115,6 +143,9 @@ def normalize_hour_fill(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
             current_kind = timeline[second]
             if current_kind is None or priority[kind] >= priority[current_kind]:
                 timeline[second] = kind
+
+    if apply_stack_rules:
+        _apply_stack_layers(timeline, post_activity_start_second=post_activity_start_second)
 
     normalized = []
     cursor = 0
@@ -134,6 +165,133 @@ def normalize_hour_fill(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
         cursor = end_second
 
     return normalized
+
+
+def _apply_stack_layers(timeline: list[str | None], *, post_activity_start_second: Any = None) -> None:
+    bottom_stack_seconds = _stack_seconds_by_kind(timeline, BOTTOM_STACK_KINDS)
+    auto_afk_stack_seconds = _stack_seconds_by_kind(timeline, AUTO_AFK_STACK_KINDS)
+    middle_stack_seconds = _stack_seconds_by_kind(timeline, MIDDLE_STACK_KINDS)
+    post_activity_stack_seconds = _stack_seconds_by_kind(timeline, POST_ACTIVITY_STACK_KINDS)
+    top_stack_seconds = _stack_seconds_by_kind(timeline, TOP_STACK_KINDS)
+    missed_end_seconds = _top_run_seconds(timeline, "missed")
+
+    if (
+        not bottom_stack_seconds
+        and not auto_afk_stack_seconds
+        and not middle_stack_seconds
+        and not post_activity_stack_seconds
+        and not top_stack_seconds
+        and missed_end_seconds <= 0
+    ):
+        return
+
+    for index, kind in enumerate(timeline):
+        if (
+            kind in BOTTOM_STACK_KINDS
+            or kind in AUTO_AFK_STACK_KINDS
+            or kind in MIDDLE_STACK_KINDS
+            or kind in POST_ACTIVITY_STACK_KINDS
+            or kind in TOP_STACK_KINDS
+        ):
+            timeline[index] = None
+
+    if missed_end_seconds > 0:
+        for index in range(3600 - missed_end_seconds, 3600):
+            timeline[index] = None
+
+    for kind in BOTTOM_STACK_KINDS:
+        _fill_empty_timeline_slots(timeline, kind, bottom_stack_seconds.get(kind, 0), range(3600))
+
+    for kind in AUTO_AFK_STACK_KINDS:
+        _fill_empty_timeline_slots(timeline, kind, auto_afk_stack_seconds.get(kind, 0), range(3600))
+
+    for kind in MIDDLE_STACK_KINDS:
+        _fill_empty_timeline_slots(timeline, kind, middle_stack_seconds.get(kind, 0), range(3600))
+
+    post_activity_start = _clamp_second(post_activity_start_second)
+    post_activity_indexes = range(post_activity_start, 3600) if post_activity_start is not None else range(3600)
+
+    for kind in POST_ACTIVITY_STACK_KINDS:
+        _fill_empty_timeline_slots(timeline, kind, post_activity_stack_seconds.get(kind, 0), post_activity_indexes)
+
+    for kind in TOP_STACK_KINDS:
+        _fill_empty_timeline_slots(timeline, kind, top_stack_seconds.get(kind, 0), range(3599, -1, -1))
+
+    _fill_empty_timeline_slots(timeline, "missed", missed_end_seconds, range(3599, -1, -1))
+    if missed_end_seconds > 0:
+        _fill_missed_hour_tail(timeline)
+
+
+def _stack_seconds_by_kind(timeline: list[str | None], kinds: tuple[str, ...]) -> dict[str, int]:
+    return {kind: sum(1 for timeline_kind in timeline if timeline_kind == kind) for kind in kinds}
+
+
+def _top_run_seconds(timeline: list[str | None], kind: str) -> int:
+    seconds = 0
+
+    for index in range(3599, -1, -1):
+        if timeline[index] != kind:
+            break
+
+        seconds += 1
+
+    return seconds
+
+
+def _fill_missed_hour_tail(timeline: list[str | None]) -> None:
+    last_occupied_index = -1
+
+    for index, kind in enumerate(timeline):
+        if kind is not None and kind != "missed":
+            last_occupied_index = index
+
+    if last_occupied_index < 0:
+        return
+
+    for index in range(last_occupied_index + 1, 3600):
+        timeline[index] = "missed"
+
+
+def _fill_empty_timeline_slots(timeline: list[str | None], kind: str, seconds: int, indexes: range) -> None:
+    remaining_seconds = max(0, int(seconds))
+
+    if remaining_seconds <= 0:
+        return
+
+    for index in indexes:
+        if timeline[index] is not None:
+            continue
+
+        timeline[index] = kind
+        remaining_seconds -= 1
+
+        if remaining_seconds <= 0:
+            return
+
+
+def _clamp_second(value: Any) -> int | None:
+    if value is None:
+        return None
+
+    try:
+        return min(3600, max(0, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _clamp_synthetic_idle_counters(hour: dict[str, Any]) -> None:
+    remaining_idle_seconds = max(0, int(hour.get("idleSeconds", 0)))
+
+    for key in (
+        "telegramToFirstActivityIdleSeconds",
+        "pluginHourGapIdleSeconds",
+        "offlineIdleGapSeconds",
+        "workdayHourGapIdleSeconds",
+        "overtimeBoundaryIdleSeconds",
+    ):
+        seconds = min(remaining_idle_seconds, max(0, int(hour.get(key, 0))))
+        hour[key] = seconds
+        remaining_idle_seconds -= seconds
 
 
 def merge_hourly_activity(target: list[dict[str, Any]], deltas: list[dict[str, Any]]) -> None:
@@ -161,16 +319,23 @@ def merge_hourly_activity(target: list[dict[str, Any]], deltas: list[dict[str, A
         target_item["activeSeconds"] = seconds_from_microseconds(active_microseconds)
         target_item["idleSeconds"] = seconds_from_microseconds(idle_microseconds)
         target_item["breakSeconds"] = int(target_item.get("breakSeconds", 0)) + int(delta_item.get("breakSeconds", 0))
+        target_item["autoBreakSeconds"] = int(target_item.get("autoBreakSeconds", 0)) + int(delta_item.get("autoBreakSeconds", 0))
         target_item["meetingSeconds"] = int(target_item.get("meetingSeconds", 0)) + int(delta_item.get("meetingSeconds", 0))
         target_item["overtimeActiveSeconds"] = seconds_from_microseconds(overtime_microseconds)
         target_item["telegramToFirstActivityIdleSeconds"] = int(target_item.get("telegramToFirstActivityIdleSeconds", 0)) + int(
             delta_item.get("telegramToFirstActivityIdleSeconds", 0)
         )
+        for key in ("pluginHourGapIdleSeconds", "offlineIdleGapSeconds", "workdayHourGapIdleSeconds", "overtimeBoundaryIdleSeconds"):
+            target_item[key] = int(target_item.get(key, 0)) + int(delta_item.get(key, 0))
         target_item.setdefault("fillSegments", []).extend(_sanitize_fill_segments(delta_item.get("fillSegments", [])))
 
 
 def add_afk_fill_segment_to_hour(hour: dict[str, Any], start_second: int, end_second: int) -> None:
     _add_fill_segment(hour, "afk", start_second, end_second)
+
+
+def add_auto_afk_fill_segment_to_hour(hour: dict[str, Any], start_second: int, end_second: int) -> None:
+    _add_fill_segment(hour, "auto-afk", start_second, end_second)
 
 
 def add_idle_seconds_to_hour(hour: dict[str, Any], seconds: int) -> None:
@@ -185,8 +350,557 @@ def add_idle_seconds_to_hour(hour: dict[str, Any], seconds: int) -> None:
 
 def normalize_fill_segments_in_hour(hour: dict[str, Any]) -> None:
     afk_segments = _segments_for_kind(hour, "afk")
-    hour["fillSegments"] = [segment for segment in _sanitize_fill_segments(hour.get("fillSegments", [])) if segment["kind"] != "afk"]
+    auto_afk_segments = _segments_for_kind(hour, "auto-afk")
+    hour["fillSegments"] = [
+        segment
+        for segment in _sanitize_fill_segments(hour.get("fillSegments", []))
+        if segment["kind"] not in {"afk", "auto-afk"}
+    ]
     hour["fillSegments"].extend(afk_segments)
+    hour["fillSegments"].extend(auto_afk_segments)
+
+
+def apply_overtime_start_boundary(hourly_activity: list[dict[str, Any]], overtime_started_at: dt.datetime, time_zone_id: str) -> None:
+    try:
+        zone = ZoneInfo(time_zone_id)
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
+
+    local_started_at = overtime_started_at.astimezone(zone)
+    hour_index = local_started_at.hour
+
+    if hour_index < 0 or hour_index >= len(hourly_activity):
+        return
+
+    start_second = _second_of_hour(local_started_at)
+
+    if start_second <= 0 or start_second >= 3600:
+        return
+
+    hour = hourly_activity[hour_index]
+
+    if (
+        time_seconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds") <= 0
+        and int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)) <= 0
+    ):
+        return
+
+    current_boundary = _clamp_second(hour.get(INTERNAL_OVERTIME_START_SECOND))
+    hour[INTERNAL_OVERTIME_START_SECOND] = start_second if current_boundary is None else min(current_boundary, start_second)
+
+    visible_totals = _totals_from_segments(normalized_fill_segments({**hour, INTERNAL_OVERTIME_START_SECOND: None}))
+    pre_overtime_seconds = (
+        int(visible_totals.get("active", 0))
+        + int(visible_totals.get("afk", 0))
+        + int(visible_totals.get("meeting", 0))
+        + int(visible_totals.get("idle", 0))
+    )
+    missing_pre_overtime_seconds = max(0, start_second - pre_overtime_seconds)
+
+    if missing_pre_overtime_seconds <= 0:
+        return
+
+    add_idle_seconds_to_hour(hour, missing_pre_overtime_seconds)
+    hour["overtimeBoundaryIdleSeconds"] = int(hour.get("overtimeBoundaryIdleSeconds", 0)) + missing_pre_overtime_seconds
+    visual_overtime_seconds = int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0))
+    hour[INTERNAL_OVERTIME_FILL_SECONDS] = max(0, visual_overtime_seconds - missing_pre_overtime_seconds)
+
+
+def apply_overtime_start_boundaries(
+    hourly_by_author: dict[str, dict[str, Any]],
+    sessions: list[dict[str, Any]],
+    *,
+    time_zone_id_for_author: Any,
+    is_date_in_scope: Any,
+    is_vacation_day: Any,
+) -> None:
+    for session in sessions:
+        if str(session.get("reminderAction") or "") != "overtime":
+            continue
+
+        raw_author = str(session.get("rawAuthor") or "Unknown User")
+        day_date = str(session.get("date") or "")
+        time_zone_id = time_zone_id_for_author(raw_author, session.get("timeZoneId"))
+
+        if not day_date or not is_date_in_scope(day_date, raw_author, time_zone_id):
+            continue
+
+        if is_vacation_day(raw_author, day_date):
+            continue
+
+        overtime_started_at = _coerce_datetime(session.get("lastOfflineAt"))
+        hourly_author = hourly_by_author.get(raw_author)
+
+        if not overtime_started_at or not hourly_author:
+            continue
+
+        apply_overtime_start_boundary(hourly_author.get("hourlyActivity", []), overtime_started_at, time_zone_id)
+
+
+def transfer_summary_idle_to_auto_break(hourly_activity: list[dict[str, Any]], remaining_seconds: int) -> int:
+    if remaining_seconds <= 0:
+        return 0
+
+    transferred_seconds = 0
+
+    for hour in sorted(hourly_activity, key=lambda item: int(item.get("hour", 0))):
+        _disable_regular_afk_for_auto_break_hour(hour)
+        if transferred_seconds >= remaining_seconds:
+            continue
+
+        idle_seconds = max(0, int(hour.get("idleSeconds", 0)))
+        synthetic_idle_seconds = (
+            max(0, int(hour.get("telegramToFirstActivityIdleSeconds", 0)))
+            + max(0, int(hour.get("pluginHourGapIdleSeconds", 0)))
+            + max(0, int(hour.get("offlineIdleGapSeconds", 0)))
+            + max(0, int(hour.get("workdayHourGapIdleSeconds", 0)))
+            + max(0, int(hour.get("overtimeBoundaryIdleSeconds", 0)))
+        )
+        visual_occupied_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
+        convertible_idle_seconds = max(0, idle_seconds - synthetic_idle_seconds)
+
+        if convertible_idle_seconds <= 0:
+            continue
+
+        occupied_seconds = (
+            max(0, int(hour.get("activeSeconds", 0)))
+            + max(0, int(hour.get("meetingSeconds", 0)))
+            + max(0, int(hour.get("breakSeconds", 0)))
+            + max(0, int(hour.get("overtimeActiveSeconds", 0)))
+        )
+        available_break_seconds = max(0, 3600 - occupied_seconds)
+
+        if available_break_seconds <= 0:
+            continue
+
+        move_seconds = min(convertible_idle_seconds, available_break_seconds, remaining_seconds - transferred_seconds)
+        idle_microseconds = max(
+            0,
+            time_microseconds(hour, "idleSeconds", "idleMicroseconds") - (move_seconds * MICROSECONDS_PER_SECOND),
+        )
+        hour["idleMicroseconds"] = idle_microseconds
+        hour["idleSeconds"] = seconds_from_microseconds(idle_microseconds)
+        _clamp_synthetic_idle_counters(hour)
+        hour["breakSeconds"] = int(hour.get("breakSeconds", 0)) + move_seconds
+        hour["autoBreakSeconds"] = int(hour.get("autoBreakSeconds", 0)) + move_seconds
+        normalize_fill_segments_in_hour(hour)
+        transferred_seconds += move_seconds
+
+    return transferred_seconds
+
+
+def convert_hourly_to_vacation_overtime(hourly_activity: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+
+    for source_hour in hourly_activity:
+        hour = dict(source_hour)
+        active_seconds = int(hour.get("activeSeconds", 0))
+        meeting_seconds = int(hour.get("meetingSeconds", 0))
+        overtime_microseconds = time_microseconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds")
+        overtime_microseconds += (active_seconds + meeting_seconds) * MICROSECONDS_PER_SECOND
+
+        hour["activeSeconds"] = 0
+        hour["activeMicroseconds"] = 0
+        hour["idleSeconds"] = 0
+        hour["idleMicroseconds"] = 0
+        hour["breakSeconds"] = 0
+        hour["autoBreakSeconds"] = 0
+        hour["meetingSeconds"] = 0
+        hour["missedSeconds"] = 0
+        hour[INTERNAL_OVERTIME_FILL_SECONDS] = 0
+        hour[INTERNAL_OVERTIME_START_SECOND] = None
+        hour[INTERNAL_MISSED_START_SECONDS] = 0
+        hour[INTERNAL_MISSED_END_SECONDS] = 0
+        hour["fillSegments"] = [
+            segment
+            for segment in _sanitize_fill_segments(hour.get("fillSegments", []))
+            if segment["kind"] == "overtime"
+        ]
+
+        if overtime_microseconds > 0:
+            hour["overtimeActiveMicroseconds"] = overtime_microseconds
+            hour["overtimeActiveSeconds"] = seconds_from_microseconds(overtime_microseconds)
+            if not _segments_for_kind(hour, "overtime"):
+                _append_available_seconds(hour.setdefault("fillSegments", []), "overtime", hour["overtimeActiveSeconds"])
+        else:
+            hour["overtimeActiveSeconds"] = 0
+            hour["overtimeActiveMicroseconds"] = 0
+
+        converted.append(hour)
+
+    return converted
+
+
+def apply_visual_missed_hours(
+    hourly_by_author: dict[str, dict[str, Any]],
+    sessions: list[dict[str, Any]],
+    latest_report_by_author_date: dict[tuple[str, str], dt.datetime],
+    *,
+    include_start: bool = True,
+    include_end: bool = True,
+    time_zone_id_for_author: Any,
+    is_date_in_scope: Any,
+    is_vacation_day: Any,
+    display_name_for_author: Any,
+) -> None:
+    for session in sessions:
+        raw_author = str(session.get("rawAuthor") or "Unknown User")
+        day_date = str(session.get("date") or "")
+        time_zone_id = time_zone_id_for_author(raw_author, session.get("timeZoneId"))
+
+        if not day_date or not is_date_in_scope(day_date, raw_author, time_zone_id):
+            continue
+
+        if is_vacation_day(raw_author, day_date):
+            continue
+
+        started_at = _coerce_datetime(session.get("startedAt"))
+        ended_at = _coerce_datetime(session.get("lastOfflineAt"))
+        latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
+        latest_signal_at = (latest_report_at or ended_at) if ended_at else None
+
+        if not started_at and not latest_signal_at:
+            continue
+
+        hourly_author = hourly_by_author.get(raw_author)
+
+        if not hourly_author:
+            hourly_author = {
+                "author": display_name_for_author(raw_author),
+                "rawAuthor": raw_author,
+                "timeZoneId": session.get("timeZoneId"),
+                "timeZoneDisplayName": session.get("timeZoneDisplayName"),
+                "hourlyActivity": empty_hourly_activity(),
+            }
+            hourly_by_author[raw_author] = hourly_author
+
+        hourly_activity = hourly_author.get("hourlyActivity", [])
+        if include_start:
+            add_visual_missed_start(hourly_activity, started_at, time_zone_id)
+        if include_end:
+            add_visual_missed_end(
+                hourly_activity,
+                latest_signal_at,
+                time_zone_id,
+                fill_to_hour=latest_report_at is not None,
+                offline_at=ended_at,
+            )
+
+
+def add_visual_missed_start(
+    hourly_activity: list[dict[str, Any]],
+    started_at: dt.datetime | None,
+    time_zone_id: str,
+) -> None:
+    if not started_at:
+        return
+
+    local_start = _to_local_datetime(started_at, time_zone_id)
+    hour_start = local_start.replace(minute=0, second=0, microsecond=0)
+    missed_seconds = max(0, int((local_start - hour_start).total_seconds()))
+    add_visual_missed_seconds(hourly_activity, local_start.hour, missed_seconds, INTERNAL_MISSED_START_SECONDS)
+    trim_visual_idle_overflow(hourly_activity, local_start.hour)
+
+
+def add_visual_missed_end(
+    hourly_activity: list[dict[str, Any]],
+    ended_at: dt.datetime | None,
+    time_zone_id: str,
+    fill_to_hour: bool = False,
+    offline_at: dt.datetime | None = None,
+) -> None:
+    if not ended_at:
+        return
+
+    local_end = _to_local_datetime(ended_at, time_zone_id)
+
+    if fill_to_hour:
+        target_hour = visual_missed_end_hour(
+            hourly_activity,
+            local_end.hour,
+            _to_local_datetime(offline_at, time_zone_id) if offline_at else None,
+        )
+        missed_seconds = visual_hour_available_seconds(target_hour)
+        target_hour_index = int(target_hour.get("hour", local_end.hour))
+    else:
+        hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+        missed_seconds = max(0, int((hour_end - local_end).total_seconds()))
+        target_hour_index = local_end.hour
+
+    add_visual_missed_seconds(hourly_activity, target_hour_index, missed_seconds, INTERNAL_MISSED_END_SECONDS)
+    trim_visual_idle_overflow(hourly_activity, target_hour_index)
+
+
+def trim_visual_idle_overflow(hourly_activity: list[dict[str, Any]], hour_index: int) -> None:
+    if hour_index < 0 or hour_index >= len(hourly_activity):
+        return
+
+    hour = hourly_activity[hour_index]
+    occupied_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
+    overflow_seconds = max(0, occupied_seconds - 3600)
+
+    if overflow_seconds <= 0:
+        return
+
+    idle_microseconds = time_microseconds(hour, "idleSeconds", "idleMicroseconds")
+    overflow_microseconds = overflow_seconds * MICROSECONDS_PER_SECOND
+    hour["idleMicroseconds"] = max(0, idle_microseconds - overflow_microseconds)
+    hour["idleSeconds"] = seconds_from_microseconds(hour["idleMicroseconds"])
+
+
+def apply_visual_overtime_hour_gaps(
+    hourly_by_author: dict[str, dict[str, Any]],
+    reports: list[dict[str, Any]],
+    *,
+    time_zone_id_for_author: Any,
+    is_date_in_scope: Any,
+    is_vacation_day: Any,
+) -> None:
+    overtime_reports_by_key: dict[tuple[str, str], list[dt.datetime]] = {}
+
+    for report in reports:
+        if report.get("source") in {"telegram", "discord", "status"} or report.get("reportType") in {"telegram", "meeting", "status"}:
+            continue
+
+        if time_microseconds(report, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") <= 0:
+            continue
+
+        raw_author = str(report.get("author") or "Unknown User")
+        report_date = str(report.get("date") or "")
+        time_zone_id = time_zone_id_for_author(raw_author, report.get("timeZoneId"))
+
+        if not report_date or not is_date_in_scope(report_date, raw_author, time_zone_id):
+            continue
+
+        if is_vacation_day(raw_author, report_date):
+            continue
+
+        occurred_at = (
+            _coerce_datetime(report.get("recordedAt"))
+            or _coerce_datetime(report.get("lastRecordedAt"))
+            or _coerce_datetime(report.get("receivedAt"))
+            or _coerce_datetime(report.get("lastReceivedAt"))
+        )
+
+        if not occurred_at:
+            continue
+
+        overtime_reports_by_key.setdefault((raw_author, report_date), []).append(_to_local_datetime(occurred_at, time_zone_id))
+
+    for (raw_author, _report_date), reports_for_author in overtime_reports_by_key.items():
+        hourly_author = hourly_by_author.get(raw_author)
+
+        if not hourly_author:
+            continue
+
+        hourly_activity = hourly_author.get("hourlyActivity", [])
+        ordered_reports = sorted(reports_for_author)
+
+        fill_overtime_hours_bracketed_by_reports(hourly_activity, ordered_reports)
+        fill_overtime_hours_between_overtime_buckets(hourly_activity)
+        fill_normal_to_overtime_transition_hours(hourly_activity)
+
+
+def apply_plugin_hour_idle_gaps(
+    authors_by_raw: dict[str, dict[str, Any]],
+    hourly_by_author: dict[str, dict[str, Any]],
+    latest_report_by_author_date: dict[tuple[str, str], dt.datetime],
+    *,
+    default_plugin_work_window_seconds: int,
+    time_zone_id_for_author: Any,
+    is_date_in_scope: Any,
+    is_vacation_day: Any,
+) -> None:
+    for (raw_author, day_date), latest_report_at in latest_report_by_author_date.items():
+        time_zone_id = time_zone_id_for_author(raw_author, None)
+
+        if not is_date_in_scope(day_date, raw_author, time_zone_id):
+            continue
+
+        if is_vacation_day(raw_author, day_date):
+            continue
+
+        author_row = authors_by_raw.get(raw_author)
+        hourly_author = hourly_by_author.get(raw_author)
+
+        if not author_row or not hourly_author:
+            continue
+
+        local_latest_report_at = _to_local_datetime(latest_report_at, time_zone_id)
+        hourly_activity = hourly_author.get("hourlyActivity", [])
+
+        if not hourly_activity:
+            continue
+
+        visual_plugin_seconds = int(author_row.get("pluginDaySeconds", 0))
+
+        for hour_index in range(0, min(local_latest_report_at.hour, len(hourly_activity))):
+            hour = hourly_activity[hour_index]
+            accounted_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
+
+            if accounted_seconds <= 0:
+                continue
+
+            gap_seconds = max(0, 3600 - min(3600, accounted_seconds))
+            remaining_plugin_seconds = max(0, default_plugin_work_window_seconds - visual_plugin_seconds)
+            idle_seconds = min(gap_seconds, remaining_plugin_seconds)
+
+            if idle_seconds <= 0:
+                continue
+
+            add_idle_seconds_to_hour(hour, idle_seconds)
+            hour["pluginHourGapIdleSeconds"] = int(hour.get("pluginHourGapIdleSeconds", 0)) + idle_seconds
+            visual_plugin_seconds += idle_seconds
+
+
+def apply_offline_idle_gaps(
+    authors_by_raw: dict[str, dict[str, Any]],
+    hourly_by_author: dict[str, dict[str, Any]],
+    sessions: list[dict[str, Any]],
+    latest_report_by_author_date: dict[tuple[str, str], dt.datetime],
+    *,
+    default_plugin_work_window_seconds: int,
+    time_zone_id_for_author: Any,
+    is_date_in_scope: Any,
+    is_vacation_day: Any,
+) -> None:
+    for session in sessions:
+        raw_author = str(session.get("rawAuthor") or "Unknown User")
+        day_date = str(session.get("date") or "")
+        time_zone_id = time_zone_id_for_author(raw_author, session.get("timeZoneId"))
+
+        if not day_date or not is_date_in_scope(day_date, raw_author, time_zone_id):
+            continue
+
+        if is_vacation_day(raw_author, day_date):
+            continue
+
+        latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
+        ended_at = _coerce_datetime(session.get("lastOfflineAt"))
+
+        if not latest_report_at or not ended_at or ended_at <= latest_report_at:
+            continue
+
+        author_row = authors_by_raw.get(raw_author)
+        hourly_author = hourly_by_author.get(raw_author)
+
+        if not author_row or not hourly_author:
+            continue
+
+        gap_seconds = max(0, int((ended_at - latest_report_at).total_seconds()))
+        remaining_plugin_seconds = max(0, default_plugin_work_window_seconds - int(author_row.get("pluginDaySeconds", 0)))
+        idle_seconds = min(gap_seconds, remaining_plugin_seconds)
+
+        if idle_seconds <= 0:
+            continue
+
+        idle_end = latest_report_at + dt.timedelta(seconds=idle_seconds)
+        hourly_activity = empty_hourly_activity()
+        add_idle_interval_to_buckets(hourly_activity, latest_report_at, idle_end, time_zone_id)
+        for hour in hourly_activity:
+            idle_gap_seconds = int(hour.get("idleSeconds", 0))
+            if idle_gap_seconds > 0:
+                hour["offlineIdleGapSeconds"] = idle_gap_seconds
+        merge_hourly_activity(hourly_author["hourlyActivity"], hourly_activity)
+
+
+def apply_workday_hour_idle_gaps(
+    authors_by_raw: dict[str, dict[str, Any]],
+    hourly_by_author: dict[str, dict[str, Any]],
+    sessions: list[dict[str, Any]],
+    latest_report_by_author_date: dict[tuple[str, str], dt.datetime],
+    *,
+    default_plugin_work_window_seconds: int,
+    time_zone_id_for_author: Any,
+    is_date_in_scope: Any,
+    is_vacation_day: Any,
+    auto_break_allowance_seconds_for_author_date: Any,
+) -> None:
+    for session in sessions:
+        raw_author = str(session.get("rawAuthor") or "Unknown User")
+        day_date = str(session.get("date") or "")
+        time_zone_id = time_zone_id_for_author(raw_author, session.get("timeZoneId"))
+
+        if not day_date or not is_date_in_scope(day_date, raw_author, time_zone_id):
+            continue
+
+        if is_vacation_day(raw_author, day_date):
+            continue
+
+        started_at = _coerce_datetime(session.get("startedAt"))
+        ended_at = _coerce_datetime(session.get("lastOfflineAt")) or latest_report_by_author_date.get((raw_author, day_date))
+
+        if not started_at or not ended_at or ended_at <= started_at:
+            continue
+
+        author_row = authors_by_raw.get(raw_author)
+        hourly_author = hourly_by_author.get(raw_author)
+
+        if not author_row or not hourly_author:
+            continue
+
+        hourly_activity = hourly_author.get("hourlyActivity", [])
+
+        if not hourly_activity:
+            continue
+
+        local_start = _to_local_datetime(started_at, time_zone_id)
+        local_end = _to_local_datetime(ended_at, time_zone_id)
+        current_hour = local_start.replace(minute=0, second=0, microsecond=0)
+        final_hour = local_end.replace(minute=0, second=0, microsecond=0)
+
+        while current_hour <= final_hour:
+            hour_index = current_hour.hour
+
+            if 0 <= hour_index < len(hourly_activity):
+                hour_start = current_hour
+                hour_end = current_hour + dt.timedelta(hours=1)
+                expected_start = max(local_start, hour_start)
+                if hour_end > local_end:
+                    current_hour += dt.timedelta(hours=1)
+                    continue
+
+                expected_end = hour_end
+                expected_seconds = max(0, int((expected_end - expected_start).total_seconds()))
+                occupied_seconds = visual_hour_occupied_seconds(hourly_activity[hour_index]) + int(
+                    hourly_activity[hour_index].get("missedSeconds", 0)
+                )
+
+                if occupied_seconds <= 0:
+                    current_hour += dt.timedelta(hours=1)
+                    continue
+
+                occupied_seconds = min(expected_seconds, occupied_seconds)
+                gap_seconds = max(0, expected_seconds - occupied_seconds)
+                auto_break_allowance_seconds = auto_break_allowance_seconds_for_author_date(raw_author, day_date)
+                effective_plugin_day_seconds = max(0, int(author_row.get("pluginDaySeconds", 0)) - auto_break_allowance_seconds)
+                remaining_plugin_seconds = max(0, default_plugin_work_window_seconds - effective_plugin_day_seconds)
+                idle_seconds = min(gap_seconds, remaining_plugin_seconds)
+
+                if idle_seconds > 0:
+                    add_idle_seconds_to_hour(hourly_activity[hour_index], idle_seconds)
+                    hourly_activity[hour_index]["workdayHourGapIdleSeconds"] = int(
+                        hourly_activity[hour_index].get("workdayHourGapIdleSeconds", 0)
+                    ) + idle_seconds
+
+            current_hour += dt.timedelta(hours=1)
+
+
+def _to_local_datetime(value: dt.datetime, time_zone_id: str | None) -> dt.datetime:
+    try:
+        zone = ZoneInfo(time_zone_id or "UTC")
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
+
+    return value.astimezone(zone)
+
+
+def _disable_regular_afk_for_auto_break_hour(hour: dict[str, Any]) -> None:
+    auto_break_seconds = max(0, int(hour.get("autoBreakSeconds", 0)))
+    hour["breakSeconds"] = auto_break_seconds
+    hour["fillSegments"] = [
+        segment for segment in _sanitize_fill_segments(hour.get("fillSegments", [])) if segment["kind"] != "afk"
+    ]
 
 
 def add_interval_to_hourly(target: list[dict[str, Any]], start: dt.datetime, end: dt.datetime, bucket: str) -> None:
@@ -240,11 +954,12 @@ def apply_breaks_to_hourly_activity(
         consumed_hour = consumed_by_hour.get(hour, {})
         active_seconds = min(3600, time_seconds(source_hour, "activeSeconds", "activeMicroseconds"))
         overtime_seconds = min(3600, time_seconds(source_hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds"))
+        auto_break_seconds = max(0, int(source_hour.get("autoBreakSeconds", 0)))
         raw_idle_seconds = time_seconds(source_hour, "idleSeconds", "idleMicroseconds")
         requested_break_seconds = max(0, int(break_hour.get("breakSeconds", 0)))
         consumed_break_seconds = max(0, int(consumed_hour.get("breakSeconds", 0)))
         available_break_seconds = max(0, requested_break_seconds - consumed_break_seconds)
-        break_seconds = min(available_break_seconds, max(0, 3600 - active_seconds - overtime_seconds))
+        break_seconds = min(available_break_seconds, 3600)
         idle_seconds = min(max(0, raw_idle_seconds - break_seconds), max(0, 3600 - active_seconds - overtime_seconds - break_seconds))
         break_segments = segments_after_consumed_seconds(
             _segments_for_kind(break_hour, "afk"),
@@ -260,6 +975,7 @@ def apply_breaks_to_hourly_activity(
             "activeSeconds": active_seconds,
             "idleSeconds": idle_seconds,
             "breakSeconds": break_seconds,
+            "autoBreakSeconds": auto_break_seconds,
             "meetingSeconds": int(source_hour.get("meetingSeconds", 0)),
             "overtimeActiveSeconds": overtime_seconds,
             INTERNAL_OVERTIME_FILL_SECONDS: int(source_hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)),
@@ -267,8 +983,13 @@ def apply_breaks_to_hourly_activity(
             INTERNAL_MISSED_START_SECONDS: int(source_hour.get(INTERNAL_MISSED_START_SECONDS, 0)),
             INTERNAL_MISSED_END_SECONDS: int(source_hour.get(INTERNAL_MISSED_END_SECONDS, 0)),
             "telegramToFirstActivityIdleSeconds": int(source_hour.get("telegramToFirstActivityIdleSeconds", 0)),
+            "pluginHourGapIdleSeconds": int(source_hour.get("pluginHourGapIdleSeconds", 0)),
+            "offlineIdleGapSeconds": int(source_hour.get("offlineIdleGapSeconds", 0)),
+            "workdayHourGapIdleSeconds": int(source_hour.get("workdayHourGapIdleSeconds", 0)),
+            "overtimeBoundaryIdleSeconds": int(source_hour.get("overtimeBoundaryIdleSeconds", 0)),
             "fillSegments": _segments_for_kind(source_hour, "active")
             + _segments_for_kind(source_hour, "overtime")
+            + _segments_for_kind(source_hour, "auto-afk")
             + break_segments
             + _segments_for_kind(source_hour, "meeting")
             + _segments_for_kind(source_hour, "idle")
@@ -293,6 +1014,7 @@ def apply_meetings_to_hourly_activity(
         source_hour = source_by_hour.get(hour, {})
         consumed_hour = consumed_by_hour.get(hour, {})
         break_seconds = int(source_hour.get("breakSeconds", 0))
+        auto_break_seconds = int(source_hour.get("autoBreakSeconds", 0))
         requested_meeting_seconds = max(0, int((meeting_by_hour.get(hour, {}) or {}).get("meetingSeconds", 0)))
         consumed_meeting_seconds = max(0, int(consumed_hour.get("meetingSeconds", 0)))
         available_meeting_seconds = max(0, requested_meeting_seconds - consumed_meeting_seconds)
@@ -327,6 +1049,7 @@ def apply_meetings_to_hourly_activity(
                 "activeSeconds": active_seconds,
                 "idleSeconds": idle_seconds,
                 "breakSeconds": break_seconds,
+                "autoBreakSeconds": auto_break_seconds,
                 "meetingSeconds": meeting_seconds,
                 "overtimeActiveSeconds": overtime_seconds,
                 INTERNAL_OVERTIME_FILL_SECONDS: int(source_hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)),
@@ -334,9 +1057,14 @@ def apply_meetings_to_hourly_activity(
                 INTERNAL_MISSED_START_SECONDS: int(source_hour.get(INTERNAL_MISSED_START_SECONDS, 0)),
                 INTERNAL_MISSED_END_SECONDS: int(source_hour.get(INTERNAL_MISSED_END_SECONDS, 0)),
                 "telegramToFirstActivityIdleSeconds": int(source_hour.get("telegramToFirstActivityIdleSeconds", 0)),
+                "pluginHourGapIdleSeconds": int(source_hour.get("pluginHourGapIdleSeconds", 0)),
+                "offlineIdleGapSeconds": int(source_hour.get("offlineIdleGapSeconds", 0)),
+                "workdayHourGapIdleSeconds": int(source_hour.get("workdayHourGapIdleSeconds", 0)),
+                "overtimeBoundaryIdleSeconds": int(source_hour.get("overtimeBoundaryIdleSeconds", 0)),
                 "fillSegments": _segments_for_kind(source_hour, "active")
                 + _segments_for_kind(source_hour, "overtime")
                 + _segments_for_kind(source_hour, "afk")
+                + _segments_for_kind(source_hour, "auto-afk")
                 + meeting_segments
                 + _segments_for_kind(source_hour, "idle")
                 + _segments_for_kind(source_hour, "missed"),
@@ -717,7 +1445,7 @@ def _append_available_seconds(segments: list[dict[str, Any]], kind: str, seconds
 
     occupied = [False] * 3600
 
-    for segment in normalize_hour_fill(segments):
+    for segment in normalize_hour_fill(segments, apply_stack_rules=False):
         for second in range(segment["startSecond"], segment["endSecond"]):
             occupied[second] = True
 
@@ -748,6 +1476,49 @@ def _positioned_or_stacked_segments(hour: dict[str, Any], kind: str, seconds_key
         return positioned
 
     seconds = max(0, int(hour.get(seconds_key, 0)))
+    if seconds <= 0:
+        return []
+
+    return [{"kind": kind, "startSecond": cursor, "endSecond": min(3600, cursor + seconds)}]
+
+
+def _telegram_idle_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
+    target_seconds = min(
+        time_seconds(hour, "idleSeconds", "idleMicroseconds"),
+        max(0, int(hour.get("telegramToFirstActivityIdleSeconds", 0))),
+    )
+
+    if target_seconds <= 0:
+        return []
+
+    source_segments = _segments_for_kind(hour, "idle")
+
+    if not source_segments:
+        return [{"kind": "telegram-idle", "startSecond": 0, "endSecond": min(3600, target_seconds)}]
+
+    telegram_segments: list[dict[str, Any]] = []
+    remaining_seconds = target_seconds
+
+    for segment in source_segments:
+        if remaining_seconds <= 0:
+            break
+
+        start_second = int(segment["startSecond"])
+        end_second = int(segment["endSecond"])
+        segment_seconds = min(remaining_seconds, end_second - start_second)
+        if segment_seconds <= 0:
+            continue
+
+        telegram_segments.append(
+            {"kind": "telegram-idle", "startSecond": start_second, "endSecond": start_second + segment_seconds}
+        )
+        remaining_seconds -= segment_seconds
+
+    return telegram_segments
+
+
+def _stacked_segments(kind: str, seconds: int, cursor: int) -> list[dict[str, Any]]:
+    seconds = max(0, int(seconds))
     if seconds <= 0:
         return []
 
@@ -794,6 +1565,10 @@ def _totals_from_segments(segments: list[dict[str, Any]]) -> dict[str, int]:
     return totals
 
 
+def _segments_total_seconds(segments: list[dict[str, Any]]) -> int:
+    return sum(int(segment["endSecond"]) - int(segment["startSecond"]) for segment in segments)
+
+
 def _allowed_kinds_for_hour(hour: dict[str, Any]) -> set[str]:
     allowed: set[str] = set()
 
@@ -804,10 +1579,14 @@ def _allowed_kinds_for_hour(hour: dict[str, Any]) -> set[str]:
         allowed.add("overtime-fill")
     if int(hour.get("breakSeconds", 0)) > 0:
         allowed.add("afk")
+    if int(hour.get("autoBreakSeconds", 0)) > 0:
+        allowed.add("auto-afk")
     if int(hour.get("meetingSeconds", 0)) > 0:
         allowed.add("meeting")
     if time_seconds(hour, "idleSeconds", "idleMicroseconds") > 0:
         allowed.add("idle")
+    if int(hour.get("telegramToFirstActivityIdleSeconds", 0)) > 0:
+        allowed.add("telegram-idle")
     if (
         int(hour.get("missedSeconds", 0)) > 0
         or int(hour.get(INTERNAL_MISSED_START_SECONDS, 0)) > 0

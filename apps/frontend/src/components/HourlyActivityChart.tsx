@@ -1,4 +1,4 @@
-type FillKind = "active" | "overtime" | "overtime-fill" | "afk" | "meeting" | "idle" | "missed";
+type FillKind = "active" | "overtime" | "overtime-fill" | "afk" | "auto-afk" | "meeting" | "telegram-idle" | "idle" | "missed";
 
 type HourlyFillTotals = {
   activeSeconds: number;
@@ -33,7 +33,7 @@ export type HourlyActivityChartProps = {
   authors: AuthorHourlyActivity[];
 };
 
-const FILL_KINDS: FillKind[] = ["active", "overtime", "overtime-fill", "afk", "meeting", "idle", "missed"];
+const FILL_KINDS: FillKind[] = ["active", "overtime", "overtime-fill", "afk", "auto-afk", "meeting", "telegram-idle", "idle", "missed"];
 
 export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
   const authorCharts = authors.map(toAuthorHourlyActivity);
@@ -67,7 +67,7 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
                           <div className={barClassName} title={formatHourTitle(hour)}>
                             {hour.fillSegments.map((segment, index) => (
                               <div
-                                className={`hourly-chart-segment ${segment.kind}`}
+                                className={`hourly-chart-segment ${toSegmentClassName(segment.kind)}`}
                                 key={`${segment.kind}-${segment.startSecond}-${segment.endSecond}-${index}`}
                                 style={{
                                   bottom: `${toPercentOfHour(segment.startSecond)}%`,
@@ -187,12 +187,47 @@ function normalizeFillSegments(source: HourlyFillSegment[] | undefined) {
   });
 }
 
+function toSegmentClassName(kind: FillKind) {
+  return kind === "auto-afk" ? "afk" : kind;
+}
+
 function toPercentOfHour(seconds: number) {
   return Math.min(100, Math.max(0, (seconds / 3600) * 100));
 }
 
 function hasHourlyActivity(hour: HourlyActivity) {
   return Object.values(hour.totals).some((value) => value > 0) || hour.fillSegments.length > 0;
+}
+
+function hourlyTooltipBreakdown(hour: HourlyActivity): HourlyFillTotals {
+  const fromSegments = hour.fillSegments.reduce(
+    (totals, segment) => {
+      const seconds = segment.endSecond - segment.startSecond;
+
+      if (segment.kind === "auto-afk") {
+        totals.afkSeconds += seconds;
+      } else if (segment.kind === "telegram-idle") {
+        totals.idleSeconds += seconds;
+      } else if (segment.kind === "overtime-fill") {
+        return totals;
+      } else {
+        const key = `${segment.kind}Seconds` as keyof HourlyFillTotals;
+        totals[key] += seconds;
+      }
+
+      return totals;
+    },
+    {
+      activeSeconds: 0,
+      overtimeSeconds: 0,
+      afkSeconds: 0,
+      meetingSeconds: 0,
+      idleSeconds: 0,
+      missedSeconds: 0
+    }
+  );
+
+  return fromSegments;
 }
 
 function findInProgressHour(hours: HourlyActivity[]) {
@@ -208,12 +243,14 @@ function findInProgressHour(hours: HourlyActivity[]) {
   return null;
 }
 
-function formatHour(hour: number) {
-  return `${String(hour).padStart(2, "0")}:00`;
+function formatHourTitle(hour: HourlyActivity) {
+  const breakdown = hourlyTooltipBreakdown(hour);
+
+  return `${formatHour(hour.hour)}: ${formatMinutes(breakdown.activeSeconds)} active, ${formatMinutes(breakdown.overtimeSeconds)} overtime, ${formatMinutes(breakdown.afkSeconds)} AFK, ${formatMinutes(breakdown.meetingSeconds)} meeting, ${formatMinutes(breakdown.idleSeconds)} idle, ${formatMinutes(breakdown.missedSeconds)} missed`;
 }
 
-function formatHourTitle(hour: HourlyActivity) {
-  return `${formatHour(hour.hour)}: ${formatMinutes(hour.totals.activeSeconds)} active, ${formatMinutes(hour.totals.overtimeSeconds)} overtime, ${formatMinutes(hour.totals.afkSeconds)} AFK, ${formatMinutes(hour.totals.meetingSeconds)} meeting, ${formatMinutes(hour.totals.idleSeconds)} idle, ${formatMinutes(hour.totals.missedSeconds)} missed`;
+function formatHour(hour: number) {
+  return `${String(hour).padStart(2, "0")}:00`;
 }
 
 function formatMinutes(seconds: number) {

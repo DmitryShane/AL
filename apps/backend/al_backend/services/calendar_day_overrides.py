@@ -12,7 +12,7 @@ from ..activity_math import (
     _time_microseconds,
     _valid_time_zone_id,
 )
-from ..hourly_fill_rules import INTERNAL_MISSED_END_SECONDS, INTERNAL_MISSED_START_SECONDS
+from ..hourly_fill_rules import convert_hourly_to_vacation_overtime as convert_hourly_to_vacation_overtime_rules
 from ..mongo_composable import MongoComposableMixin
 
 
@@ -127,33 +127,4 @@ class CalendarDayOverrideService(MongoComposableMixin):
         return converted
 
     def convert_hourly_to_vacation_overtime(self, hourly_activity: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        converted: list[dict[str, Any]] = []
-
-        for source_hour in hourly_activity:
-            hour = dict(source_hour)
-            active_seconds = int(hour.get("activeSeconds", 0))
-            meeting_seconds = int(hour.get("meetingSeconds", 0))
-            overtime_seconds = int(hour.get("overtimeActiveSeconds", 0))
-            overtime_microseconds = _time_microseconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds")
-            overtime_microseconds += (active_seconds + meeting_seconds) * MICROSECONDS_PER_SECOND
-
-            hour["activeSeconds"] = 0
-            hour["activeMicroseconds"] = 0
-            hour["idleSeconds"] = 0
-            hour["idleMicroseconds"] = 0
-            hour["breakSeconds"] = 0
-            hour["meetingSeconds"] = 0
-            hour["missedSeconds"] = 0
-            hour[INTERNAL_MISSED_START_SECONDS] = 0
-            hour[INTERNAL_MISSED_END_SECONDS] = 0
-
-            if overtime_seconds > 0 or overtime_microseconds > 0:
-                hour["overtimeActiveMicroseconds"] = overtime_microseconds
-                hour["overtimeActiveSeconds"] = _seconds_from_microseconds(overtime_microseconds)
-            else:
-                hour["overtimeActiveSeconds"] = 0
-                hour["overtimeActiveMicroseconds"] = 0
-
-            converted.append(hour)
-
-        return converted
+        return convert_hourly_to_vacation_overtime_rules(hourly_activity)

@@ -160,7 +160,7 @@ export type SavedPrefabsSourceGroup = {
   savedPrefabs: SavedPrefab[];
 };
 
-export type HourlyFillKind = "active" | "overtime" | "overtime-fill" | "afk" | "meeting" | "idle" | "missed";
+export type HourlyFillKind = "active" | "overtime" | "overtime-fill" | "afk" | "auto-afk" | "meeting" | "telegram-idle" | "idle" | "missed";
 
 export type HourlyFillTotals = {
   activeSeconds: number;
