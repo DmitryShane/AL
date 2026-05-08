@@ -854,6 +854,50 @@ def test_reports_page_hides_only_source_rows_after_open_status_offline():
         ("ual", None),
     ]
 
+def test_reports_page_keeps_telegram_offline_inside_open_status_offline():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.record_status_event(
+        "Future Artist",
+        "offline",
+        dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+        "UTC",
+        "reports_stopped",
+        dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "pluginVersion": "unity-plugin",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T09:05:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "telegram",
+            "reportType": "telegram",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T09:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 9, 10, tzinfo=dt.UTC),
+            "telegramEventType": "offline",
+            "reminderAction": "overtime",
+        }
+    )
+
+    page = repo.reports_page(start_date="2026-04-29", end_date="2026-04-29")
+
+    assert [(report["source"], report.get("telegramEventType")) for report in page["reports"]] == [
+        ("telegram", "offline"),
+        ("status", None),
+    ]
+
 def test_status_offline_interval_turns_return_report_into_idle_delta():
     repo = fake_repository()
     set_idle_threshold(repo, 300)
@@ -1364,4 +1408,3 @@ def test_reports_stopped_open_interval_hides_current_plugin_report_rows():
     intervals = repo._status_intervals_for_reports(status_rows)
 
     assert repo._is_report_inside_status_interval(plugin_row, intervals) is True
-

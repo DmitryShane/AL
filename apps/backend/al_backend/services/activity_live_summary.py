@@ -243,6 +243,28 @@ class ActivityLiveSummaryService(MongoComposableMixin):
             if occurred_at and (key not in first_activity_by_key or occurred_at < first_activity_by_key[key]):
                 first_activity_by_key[key] = occurred_at
 
+        min_start = _date_start(dates[0]) - dt.timedelta(days=1)
+        max_end = _date_start(dates[-1]) + dt.timedelta(days=2)
+        for interval in self.db.meeting_intervals.find(
+            {
+                "rawAuthor": {"$in": authors},
+                "startedAt": {"$gte": min_start, "$lt": max_end},
+            },
+            {"_id": 0, "rawAuthor": 1, "date": 1, "startedAt": 1},
+        ):
+            key = (str(interval.get("rawAuthor") or "Unknown User"), str(interval.get("date") or ""))
+
+            if key not in author_dates:
+                continue
+
+            started_at = _coerce_datetime(interval.get("startedAt"))
+
+            if started_at and not is_after_first_online(key, started_at):
+                continue
+
+            if started_at and (key not in first_activity_by_key or started_at < first_activity_by_key[key]):
+                first_activity_by_key[key] = started_at
+
         gaps: dict[tuple[str, str], dict[str, Any]] = {}
 
         for key, first_activity_at in first_activity_by_key.items():

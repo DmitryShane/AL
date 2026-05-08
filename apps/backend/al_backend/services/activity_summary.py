@@ -7,11 +7,13 @@ from ..hourly_fill_rules import (
     apply_visual_missed_hours,
     apply_visual_overtime_hour_gaps,
     apply_plugin_hour_idle_gaps,
+    apply_workday_idle_fill,
     apply_overtime_start_boundaries,
     apply_breaks_to_hourly_activity,
     apply_meetings_to_hourly_activity,
     convert_hourly_to_vacation_overtime,
     empty_hourly_activity,
+    hourly_activity_has_workday_signal,
     merge_hourly_activity,
     merge_meeting_buckets_into_hourly_author_rows,
     public_hourly_activity,
@@ -431,7 +433,7 @@ class ActivitySummaryService(MongoComposableMixin):
         if report_row.get("source") == "status" or report_row.get("reportType") == "status":
             return False
 
-        if report_row.get("source") == "telegram" and report_row.get("telegramEventType") == "online":
+        if report_row.get("source") == "telegram" or report_row.get("reportType") == "telegram":
             return False
 
         raw_author = str(report_row.get("author") or "Unknown User")
@@ -710,6 +712,8 @@ class ActivitySummaryService(MongoComposableMixin):
         telegram_seconds_by_author_date: dict[tuple[str, str], int] = {}
         break_seconds_by_author_date: dict[tuple[str, str], int] = {}
         meeting_seconds_by_author_date: dict[tuple[str, str], int] = {}
+        meeting_active_overlap_by_author_date: dict[tuple[str, str], int] = {}
+        meeting_plugin_overlap_by_author_date: dict[tuple[str, str], int] = {}
         break_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         meeting_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         summary_dates_by_author: dict[str, set[str]] = {}
@@ -767,15 +771,35 @@ class ActivitySummaryService(MongoComposableMixin):
                 break_buckets.get(author_date_key, []),
                 break_consumed_by_author_date_hour.setdefault(author_date_key, empty_hourly_activity()),
             )
+            pre_meeting_active_seconds = sum(int(hour.get("activeSeconds", 0)) for hour in hourly_activity)
+            pre_meeting_plugin_seconds = sum(
+                int(hour.get("activeSeconds", 0))
+                + int(hour.get("idleSeconds", 0))
+                + int(hour.get("overtimeActiveSeconds", 0))
+                for hour in hourly_activity
+            )
             hourly_activity = apply_meetings_to_hourly_activity(
                 hourly_activity,
                 meeting_buckets.get(author_date_key, []),
                 meeting_consumed_by_author_date_hour.setdefault(author_date_key, empty_hourly_activity()),
             )
+            post_meeting_active_seconds = sum(int(hour.get("activeSeconds", 0)) for hour in hourly_activity)
+            post_meeting_plugin_seconds = sum(
+                int(hour.get("activeSeconds", 0))
+                + int(hour.get("idleSeconds", 0))
+                + int(hour.get("overtimeActiveSeconds", 0))
+                for hour in hourly_activity
+            )
+            meeting_active_overlap_by_author_date[author_date_key] = meeting_active_overlap_by_author_date.get(
+                author_date_key, 0
+            ) + max(0, pre_meeting_active_seconds - post_meeting_active_seconds)
+            meeting_plugin_overlap_by_author_date[author_date_key] = meeting_plugin_overlap_by_author_date.get(
+                author_date_key, 0
+            ) + max(0, pre_meeting_plugin_seconds - post_meeting_plugin_seconds)
             vacation_mark = composed(self).vacation_mark_for_author_date(raw_author, item_date)
             telegram_gap = telegram_gaps.get(author_date_key, {})
             telegram_gap_hours = telegram_gap.get("hourlyActivity", [])
-            can_apply_telegram_gap = item.get("source") not in {"telegram", "discord"}
+            can_apply_telegram_gap = item.get("source") != "telegram"
             telegram_gap_seconds = (
                 int(telegram_gap.get("seconds", 0))
                 if can_apply_telegram_gap and author_date_key not in telegram_gap_counted
@@ -791,7 +815,8 @@ class ActivitySummaryService(MongoComposableMixin):
 
             report_active_seconds = int(item.get("activeSeconds", 0))
             report_idle_seconds = sum(int(hour.get("idleSeconds", 0)) for hour in hourly_activity)
-            raw_plugin_day_seconds = max(0, int(item.get("activeSeconds", 0)) + int(item.get("idleSeconds", 0)) + telegram_gap_seconds)
+            plugin_idle_seconds = max(0, report_idle_seconds - telegram_gap_seconds)
+            raw_plugin_day_seconds = max(0, int(item.get("activeSeconds", 0)) + int(item.get("idleSeconds", 0)))
             effective_break_seconds = sum(int(hour.get("breakSeconds", 0)) for hour in hourly_activity)
             effective_meeting_seconds = sum(int(hour.get("meetingSeconds", 0)) for hour in hourly_activity)
             vacation_overtime_seconds = 0
@@ -808,12 +833,9 @@ class ActivitySummaryService(MongoComposableMixin):
             work_window_seconds = int(item.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS)
             normal_consumed = normal_consumed_by_author_date.get(author_date_key, 0)
             normal_available = max(0, work_window_seconds - normal_consumed)
-            plugin_day_seconds = min(max(0, report_active_seconds + report_idle_seconds), normal_available)
+            plugin_day_seconds = min(max(0, report_active_seconds + plugin_idle_seconds), normal_available)
             effective_active_seconds = min(report_active_seconds, plugin_day_seconds)
-            effective_idle_seconds = min(
-                max(0, report_idle_seconds),
-                max(0, plugin_day_seconds - effective_active_seconds),
-            )
+            effective_idle_seconds = max(0, report_idle_seconds)
             normal_consumed_by_author_date[author_date_key] = normal_consumed + plugin_day_seconds
             telegram_seconds_by_author_date[author_date_key] = telegram_seconds_by_author_date.get(author_date_key, 0) + telegram_day_seconds
             break_seconds_by_author_date[author_date_key] = break_seconds_by_author_date.get(author_date_key, 0) + effective_break_seconds
@@ -1015,6 +1037,39 @@ class ActivitySummaryService(MongoComposableMixin):
 
             merge_hourly_activity(current_author["hourlyActivity"], hourly_activity)
 
+        for author_date_key, meeting_seconds in meeting_seconds_by_author_date.items():
+            meeting_active_addition = max(
+                0,
+                int(meeting_seconds) - int(meeting_active_overlap_by_author_date.get(author_date_key, 0)),
+            )
+            meeting_plugin_addition = max(
+                0,
+                int(meeting_seconds) - int(meeting_plugin_overlap_by_author_date.get(author_date_key, 0)),
+            )
+
+            if meeting_active_addition <= 0 and meeting_plugin_addition <= 0:
+                continue
+
+            raw_author, _item_date = author_date_key
+            author_row = authors_by_raw.get(raw_author)
+
+            if not author_row:
+                continue
+
+            work_window_seconds = DEFAULT_PLUGIN_WORK_WINDOW_SECONDS
+            normal_consumed = normal_consumed_by_author_date.get(author_date_key, 0)
+            normal_available = max(0, work_window_seconds - normal_consumed)
+            effective_meeting_plugin_addition = min(meeting_plugin_addition, normal_available)
+            effective_meeting_active_addition = min(meeting_active_addition, effective_meeting_plugin_addition)
+            normal_consumed_by_author_date[author_date_key] = normal_consumed + effective_meeting_plugin_addition
+
+            author_row["pluginDaySeconds"] += effective_meeting_plugin_addition
+            author_row["rawPluginDaySeconds"] += effective_meeting_plugin_addition
+            author_row["activeSeconds"] += effective_meeting_active_addition
+            totals["pluginDaySeconds"] += effective_meeting_plugin_addition
+            totals["rawPluginDaySeconds"] += effective_meeting_plugin_addition
+            totals["activeSeconds"] += effective_meeting_active_addition
+
         activity_mix = _activity_mix_from_counts(activity_counts)
         overtime_activity_mix = _activity_mix_from_counts(overtime_activity_counts)
 
@@ -1094,6 +1149,16 @@ class ActivitySummaryService(MongoComposableMixin):
             now,
         )
         self._apply_offline_idle_gaps(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+        )
+        self._apply_workday_idle_fill(
             authors_by_raw,
             hourly_by_author,
             totals,
@@ -1422,6 +1487,60 @@ class ActivitySummaryService(MongoComposableMixin):
             ),
             is_vacation_day=lambda raw_author, day_date: composed(self).is_vacation_day(raw_author, day_date),
         )
+
+    def _apply_workday_idle_fill(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+        sessions = list(self.db.day_sessions.find(session_query, {"_id": 0}))
+
+        for session in sessions:
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            day_date = str(session.get("date") or "")
+            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
+
+            if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            if composed(self).is_vacation_day(raw_author, day_date):
+                continue
+
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not hourly_author:
+                continue
+
+            hourly_activity = hourly_author.get("hourlyActivity", [])
+            added_idle_seconds = apply_workday_idle_fill(
+                hourly_activity,
+                _coerce_datetime(session.get("startedAt")),
+                _coerce_datetime(session.get("lastOfflineAt")),
+                time_zone_id,
+                hourly_activity_has_workday_signal(hourly_activity),
+            )
+
+            if added_idle_seconds <= 0:
+                continue
+
+            author_row = authors_by_raw.get(raw_author)
+
+            if not author_row:
+                continue
+
+            author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) + added_idle_seconds
+            author_row["pluginDaySeconds"] = int(author_row.get("pluginDaySeconds", 0)) + added_idle_seconds
+            author_row["rawPluginDaySeconds"] = int(author_row.get("rawPluginDaySeconds", 0)) + added_idle_seconds
+            totals["idleSeconds"] = int(totals.get("idleSeconds", 0)) + added_idle_seconds
+            totals["pluginDaySeconds"] = int(totals.get("pluginDaySeconds", 0)) + added_idle_seconds
+            totals["rawPluginDaySeconds"] = int(totals.get("rawPluginDaySeconds", 0)) + added_idle_seconds
 
     def _apply_visual_missed_hours(
         self,

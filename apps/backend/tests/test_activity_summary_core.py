@@ -146,6 +146,124 @@ def test_activity_summary_exposes_telegram_to_first_activity_time():
 
     assert author["telegramToFirstActivitySeconds"] == 17 * 60 + 30
 
+
+def test_activity_summary_counts_meeting_as_active_without_plugin_overlap_double_count():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[12]["activeSeconds"] = 10 * 60
+    hourly_activity[12]["activeMicroseconds"] = 10 * 60 * 1_000_000
+    hourly_activity[12]["fillSegments"] = [{"kind": "active", "startSecond": 5 * 60, "endSecond": 15 * 60}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Future Artist",
+            "projectId": "future",
+            "date": "2026-04-28",
+            "activeSeconds": 10 * 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 4, 28, 12, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 28, 12, 30, tzinfo=dt.UTC),
+            "date": "2026-04-28",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 30 * 60,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    hour_12 = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 12)
+
+    assert author["activeSeconds"] == 30 * 60
+    assert author["pluginDaySeconds"] == 30 * 60
+    assert author["meetingSeconds"] == 30 * 60
+    assert hour_12["totals"]["activeSeconds"] == 0
+    assert hour_12["totals"]["meetingSeconds"] == 30 * 60
+
+
+def test_activity_summary_adds_plugin_active_outside_meeting_to_meeting_active():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[13]["activeSeconds"] = 10 * 60
+    hourly_activity[13]["activeMicroseconds"] = 10 * 60 * 1_000_000
+    hourly_activity[13]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 10 * 60}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Future Artist",
+            "projectId": "future",
+            "date": "2026-04-28",
+            "activeSeconds": 10 * 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 4, 28, 12, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 28, 12, 30, tzinfo=dt.UTC),
+            "date": "2026-04-28",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 30 * 60,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+    assert author["activeSeconds"] == 40 * 60
+    assert author["pluginDaySeconds"] == 40 * 60
+    assert author["meetingSeconds"] == 30 * 60
+
+
+def test_activity_summary_uses_meeting_as_first_activity_after_telegram_online():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"}
+    )
+    repo.record_break_event("future_artist", "online", "2026-04-28T12:27:00Z")
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "discord",
+            "author": "Future Artist",
+            "projectId": "",
+            "date": "2026-04-28",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 4, 28, 12, 41, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 28, 13, 0, tzinfo=dt.UTC),
+            "date": "2026-04-28",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 19 * 60,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+    assert author["telegramToFirstActivitySeconds"] == 14 * 60
+    assert author["activeSeconds"] == 19 * 60
+    assert author["pluginDaySeconds"] == 19 * 60
+    assert author["meetingSeconds"] == 19 * 60
+
+
 def test_activity_summary_fills_intraday_partial_hour_gap_as_idle_not_missed():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Denis Ostrovskiy", "displayName": "Denis Ostrovskiy", "timeZoneId": "Europe/Moscow"})
@@ -186,10 +304,10 @@ def test_activity_summary_fills_intraday_partial_hour_gap_as_idle_not_missed():
     assert hour_16["totals"]["idleSeconds"] == 921
     assert hour_16["totals"]["missedSeconds"] == 0
     assert hour_16["totals"]["activeSeconds"] + hour_16["totals"]["idleSeconds"] == 3600
-    assert author["idleSeconds"] == 837
-    assert author["pluginDaySeconds"] == 3516
-    assert summary["totals"]["idleSeconds"] == 837
-    assert summary["totals"]["pluginDaySeconds"] == 3516
+    assert author["idleSeconds"] == 29841
+    assert author["pluginDaySeconds"] == 32520
+    assert summary["totals"]["idleSeconds"] == 29841
+    assert summary["totals"]["pluginDaySeconds"] == 32520
 
 def test_activity_summary_overtime_bracket_fill_is_visual_only():
     repo = fake_repository()

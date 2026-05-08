@@ -25,9 +25,14 @@ from al_backend.activity_math import (
     _worked_file_delta,
 )
 from al_backend.hourly_fill_rules import (
+    INTERNAL_MISSED_END_SECONDS,
     add_break_interval_to_buckets,
+    add_meeting_interval_to_buckets,
+    add_visual_missed_seconds,
+    apply_workday_idle_fill,
     apply_breaks_to_hourly_activity,
     empty_hourly_activity,
+    hourly_activity_has_workday_signal,
     public_hourly_activity,
     transfer_summary_idle_to_auto_break,
 )
@@ -431,7 +436,7 @@ def test_activity_summary_uses_offline_only_as_visual_missed_end_trigger():
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert _missed_end_seconds(hourly_by_hour[20]) == 51 * 60
+    assert _missed_end_seconds(hourly_by_hour[20]) == 50 * 60
     assert _missed_end_seconds(hourly_by_hour[21]) == 0
 
 def test_activity_summary_visual_missed_end_fills_last_report_hour_to_sixty_minutes():
@@ -529,8 +534,8 @@ def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_repo
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
     assert _missed_end_seconds(hourly_by_hour[18]) == 0
-    assert _hour_metric(hourly_by_hour[19], "idleSeconds") == 464
-    assert _missed_end_seconds(hourly_by_hour[19]) == 3600 - 464
+    assert _hour_metric(hourly_by_hour[19], "idleSeconds") == 465
+    assert _missed_end_seconds(hourly_by_hour[19]) == 3600 - 465
 
 def test_activity_summary_does_not_mark_visual_end_missed_before_offline():
     repo = fake_repository()
@@ -618,10 +623,10 @@ def test_activity_summary_counts_latest_report_to_offline_gap_as_idle():
     assert _hour_metric(hourly_by_hour[20], "idleSeconds") == 10 * 60
     assert _missed_end_seconds(hourly_by_hour[20]) == 50 * 60
     assert _hour_metric(hourly_by_hour[20], "missedSeconds") == 50 * 60
-    assert _hour_metric(author, "idleSeconds") == 7 * 60
-    assert author["pluginDaySeconds"] == 7 * 60
-    assert _hour_metric(summary["totals"], "idleSeconds") == 7 * 60
-    assert summary["totals"]["pluginDaySeconds"] == 7 * 60
+    assert _hour_metric(author, "idleSeconds") == 40020
+    assert author["pluginDaySeconds"] == 40020
+    assert _hour_metric(summary["totals"], "idleSeconds") == 40020
+    assert summary["totals"]["pluginDaySeconds"] == 40020
 
 def test_activity_summary_counts_unaccounted_latest_report_hour_gap_as_idle():
     repo = fake_repository()
@@ -670,12 +675,12 @@ def test_activity_summary_counts_unaccounted_latest_report_hour_gap_as_idle():
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
-    assert _hour_metric(hourly_by_hour[20], "idleSeconds") == 9 * 60
-    assert _missed_end_seconds(hourly_by_hour[20]) == 51 * 60
-    assert _hour_metric(author, "idleSeconds") == 6 * 60
-    assert author["pluginDaySeconds"] == 6 * 60
-    assert _hour_metric(summary["totals"], "idleSeconds") == 6 * 60
-    assert summary["totals"]["pluginDaySeconds"] == 6 * 60
+    assert _hour_metric(hourly_by_hour[20], "idleSeconds") == 10 * 60
+    assert _missed_end_seconds(hourly_by_hour[20]) == 50 * 60
+    assert _hour_metric(author, "idleSeconds") == 40020
+    assert author["pluginDaySeconds"] == 40020
+    assert _hour_metric(summary["totals"], "idleSeconds") == 40020
+    assert summary["totals"]["pluginDaySeconds"] == 40020
 
 def test_auto_break_does_not_use_telegram_to_first_activity_gap():
     repo = fake_repository()
@@ -768,6 +773,80 @@ def test_plugin_hour_gap_after_telegram_to_first_activity_keeps_real_idle_visibl
 
     assert sum(public_hourly[10]["totals"].values()) == 3600
     assert _hour_metric(public_hourly[10], "idleSeconds") == 820
+
+
+def test_plugin_hour_gap_fills_empty_in_workday_hour_as_idle():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "timeZoneId": "America/Los_Angeles",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[17]["activeSeconds"] = 60
+    hourly_activity[17]["activeMicroseconds"] = 60 * 1_000_000
+    hourly_activity[17]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 60}]
+    hourly_activity[22]["activeSeconds"] = 60
+    hourly_activity[22]["activeMicroseconds"] = 60 * 1_000_000
+    hourly_activity[22]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 60}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "projectId": "Bike Rush 2",
+            "date": "2026-05-07",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+            "lastRecordedAt": "2026-05-07T22:01:00-07:00",
+            "lastReceivedAt": dt.datetime(2026, 5, 8, 5, 1, tzinfo=dt.UTC),
+            "timeZoneId": "America/Los_Angeles",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "author": "Igor Mats",
+            "date": "2026-05-07",
+            "source": "vsc",
+            "reportType": "auto",
+            "recordedAt": "2026-05-07T22:01:00-07:00",
+            "receivedAt": dt.datetime(2026, 5, 8, 5, 1, tzinfo=dt.UTC),
+            "timeZoneId": "America/Los_Angeles",
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-07", end_date="2026-05-07")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Igor Mats")["hourlyActivity"]
+
+    assert _hour_metric(hourly[16], "idleSeconds") == 0
+    assert _hour_metric(hourly[18], "idleSeconds") == 3600
+    assert _hour_segments(hourly[18], "idle") == [{"startSecond": 0, "endSecond": 3600}]
+
+
+def test_fractional_meeting_start_does_not_leave_active_sliver_after_missed():
+    repo = fake_repository()
+    buckets = {("Igor Mats", "2026-05-07"): empty_hourly_activity()}
+    add_meeting_interval_to_buckets(
+        buckets,
+        "Igor Mats",
+        dt.datetime(2026, 5, 7, 14, 48, 11, 740000, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 7, 16, 1, 21, 352000, tzinfo=dt.UTC),
+        "America/Vancouver",
+    )
+    hourly_activity = buckets[("Igor Mats", "2026-05-07")]
+    hourly_activity[7]["missedSeconds"] = 2891
+    hourly_activity[7]["_visualMissedStartSeconds"] = 2891
+    hourly_activity[7]["fillSegments"].append({"kind": "missed", "startSecond": 0, "endSecond": 2891})
+
+    public_hourly = public_hourly_activity(hourly_activity)
+
+    assert _hour_metric(public_hourly[7], "activeSeconds") == 0
+    assert _hour_segments(public_hourly[7], "missed") == [{"startSecond": 0, "endSecond": 2891}]
+    assert _hour_segments(public_hourly[7], "meeting") == [{"startSecond": 2891, "endSecond": 3600}]
+
 
 def test_auto_break_skips_telegram_gap_and_uses_plugin_idle():
     repo = fake_repository()
@@ -2295,3 +2374,70 @@ def test_hourly_activity_does_not_infer_current_hour_idle():
     assert _hour_metric(hourly[18], "activeSeconds") == 1800
     assert _hour_metric(hourly[18], "idleSeconds") == 0
     assert _hour_metric(hourly[19], "idleSeconds") == 0
+
+def test_workday_idle_fill_fills_empty_workday_gaps_when_meeting_is_signal():
+    hourly = empty_hourly_activity()
+    buckets = {("Future Artist", "2026-05-07"): empty_hourly_activity()}
+    add_meeting_interval_to_buckets(
+        buckets,
+        "Future Artist",
+        dt.datetime(2026, 5, 7, 12, 30, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 7, 13, 0, tzinfo=dt.UTC),
+        "UTC",
+    )
+    hourly = buckets[("Future Artist", "2026-05-07")]
+
+    assert hourly_activity_has_workday_signal(hourly) is True
+
+    apply_workday_idle_fill(
+        hourly,
+        dt.datetime(2026, 5, 7, 12, 0, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 7, 14, 0, tzinfo=dt.UTC),
+        "UTC",
+        hourly_activity_has_workday_signal(hourly),
+    )
+    public = public_hourly_activity(hourly)
+
+    assert _hour_metric(public[12], "idleSeconds") == 1800
+    assert _hour_metric(public[12], "meetingSeconds") == 1800
+    assert _hour_metric(public[13], "idleSeconds") == 3600
+    assert _hour_metric(public[11], "idleSeconds") == 0
+    assert _hour_metric(public[14], "idleSeconds") == 0
+
+def test_workday_idle_fill_requires_real_activity_signal():
+    hourly = empty_hourly_activity()
+    hourly[12]["idleSeconds"] = 900
+    hourly[12]["idleMicroseconds"] = 900_000_000
+    hourly[12]["telegramToFirstActivityIdleSeconds"] = 900
+
+    assert hourly_activity_has_workday_signal(hourly) is False
+
+    apply_workday_idle_fill(
+        hourly,
+        dt.datetime(2026, 5, 7, 12, 0, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 7, 14, 0, tzinfo=dt.UTC),
+        "UTC",
+        hourly_activity_has_workday_signal(hourly),
+    )
+
+    assert _hour_metric(public_hourly_activity(hourly)[13], "idleSeconds") == 0
+
+def test_workday_idle_fill_preserves_existing_missed_and_active_segments():
+    hourly = empty_hourly_activity()
+    hourly[9]["activeSeconds"] = 1200
+    hourly[9]["activeMicroseconds"] = 1_200_000_000
+    hourly[9]["fillSegments"].append({"kind": "active", "startSecond": 1200, "endSecond": 2400})
+    add_visual_missed_seconds(hourly, 9, 600, INTERNAL_MISSED_END_SECONDS)
+
+    apply_workday_idle_fill(
+        hourly,
+        dt.datetime(2026, 5, 7, 9, 0, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 7, 10, 0, tzinfo=dt.UTC),
+        "UTC",
+        hourly_activity_has_workday_signal(hourly),
+    )
+    public = public_hourly_activity(hourly)
+
+    assert _hour_metric(public[9], "idleSeconds") == 1800
+    assert _hour_metric(public[9], "activeSeconds") == 1200
+    assert _hour_segments(public[9], "missed") == [{"startSecond": 3000, "endSecond": 3600}]
