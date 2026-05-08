@@ -533,6 +533,24 @@ def _format_meeting_summary_participant_mentions(names: list[str]) -> str:
     return ", ".join(tokens)
 
 
+def _format_meeting_recording_participant_names(names: list[str]) -> str:
+    tokens: list[str] = []
+
+    for raw in names:
+        name = str(raw).strip()
+
+        while name.startswith("@"):
+            name = name[1:].strip()
+
+        if name:
+            tokens.append(name)
+
+    if not tokens:
+        return "Unknown participants"
+
+    return ", ".join(tokens)
+
+
 def format_meeting_summary_message(notification: dict[str, Any], summary_text: str) -> str:
     started_at = format_meeting_summary_date(str(notification.get("startedAt") or ""))
     duration_seconds = int(notification.get("durationSeconds") or 0)
@@ -571,7 +589,7 @@ def format_meeting_recording_notification_message(notification: dict[str, Any]) 
         else notification.get("participantNames")
     )
     participants = raw_participants if isinstance(raw_participants, list) else []
-    participants_text = _format_meeting_summary_participant_mentions([str(item) for item in participants])
+    participants_text = _format_meeting_recording_participant_names([str(item) for item in participants])
 
     if notification.get("kind") == "ended":
         return f"Hi {participants_text}. Your meeting has ended. Thanks everyone, please wait for the summary."

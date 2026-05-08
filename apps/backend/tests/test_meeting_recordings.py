@@ -531,7 +531,7 @@ def test_meeting_summary_message_falls_back_on_invalid_telegram_template():
     assert "Meeting summary" in message
     assert "Participants: @Dmitry, @Igor" in message
 
-def test_meeting_recording_notification_message_starts_with_hi_and_mentions_participants():
+def test_meeting_recording_notification_message_starts_with_hi_and_lists_participants_without_mentions():
     start_message = format_meeting_recording_notification_message(
         {
             "kind": "started",
@@ -547,8 +547,8 @@ def test_meeting_recording_notification_message_starts_with_hi_and_mentions_part
         }
     )
 
-    assert start_message == "Hi @dmitryshane, @igormats. Your meeting has started. Hope it goes smoothly!"
-    assert end_message == "Hi @dmitryshane, @igormats. Your meeting has ended. Thanks everyone, please wait for the summary."
+    assert start_message == "Hi dmitryshane, igormats. Your meeting has started. Hope it goes smoothly!"
+    assert end_message == "Hi dmitryshane, igormats. Your meeting has ended. Thanks everyone, please wait for the summary."
 
 def test_recent_meeting_recordings_include_summary_delivery_status():
     repo = fake_repository()
@@ -729,4 +729,3 @@ def test_cleanup_old_retained_recordings_removes_recovery_files(tmp_path):
     assert not expired_track.exists()
     assert not expired_manifest.exists()
     assert unrelated.exists()
-
