@@ -394,17 +394,17 @@ def _report_matches_hour_filter(
 
 def _report_sort_datetime(report: dict[str, Any]) -> dt.datetime | None:
     return (
-        _coerce_datetime(report.get("receivedAt"))
-        or _coerce_datetime(report.get("lastReceivedAt"))
-        or _coerce_datetime(report.get("recordedAt"))
+        _coerce_datetime(report.get("recordedAt"))
         or _coerce_datetime(report.get("lastRecordedAt"))
+        or _coerce_datetime(report.get("receivedAt"))
+        or _coerce_datetime(report.get("lastReceivedAt"))
     )
 
 
 def _report_table_sort_key(
     report: dict[str, Any],
     status_intervals: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]] | None = None,
-) -> tuple[dt.datetime, int, dt.datetime]:
+) -> tuple[dt.datetime, int, int, dt.datetime]:
     sort_at = _report_sort_datetime(report) or dt.datetime.min.replace(tzinfo=dt.UTC)
     recorded_at = (
         _coerce_datetime(report.get("recordedAt"))
@@ -414,6 +414,10 @@ def _report_table_sort_key(
     is_status = report.get("source") == "status" or report.get("reportType") == "status"
     event_type = str(report.get("statusEventType") or report.get("activityType") or "")
     status_priority = 3
+    day_start_priority = 1
+
+    if report.get("source") == "telegram" and report.get("telegramEventType") == "online":
+        day_start_priority = 0
 
     if is_status:
         status_priority = 1
@@ -427,9 +431,9 @@ def _report_table_sort_key(
 
         for opened_at, closed_at in status_intervals.get((raw_author, report_date), []):
             if closed_at and opened_at == sort_at:
-                return closed_at, 1, recorded_at
+                return closed_at, 1, day_start_priority, recorded_at
 
-    return sort_at, status_priority, recorded_at
+    return sort_at, status_priority, day_start_priority, recorded_at
 
 
 def _is_activity_event(event: dict[str, Any] | str) -> bool:

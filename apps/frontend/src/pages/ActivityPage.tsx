@@ -15,7 +15,7 @@ import { formatDuration, formatSource } from "../utils/format";
 import { activityColor, compareAuthorCardStatus, formatActivityType, loadSavedReportsPage, paletteColor, savedFileLabel } from "./pageHelpers";
 
 const ACTIVITY_HOURLY_CACHE_PREFIX = "AL.Dashboard.ActivityHourly.";
-const ACTIVITY_REPORTS_CACHE_PREFIX = "AL.Dashboard.ActivityReports.";
+const ACTIVITY_REPORTS_CACHE_PREFIX = "AL.Dashboard.ActivityReports.v2.";
 
 export function ActivityPage({
   summary,

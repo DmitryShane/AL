@@ -103,6 +103,51 @@ def test_reports_page_filters_by_author_local_hour():
     assert len(page["reports"]) == 1
     assert page["reports"][0]["recordedAt"] == "2026-05-01T13:30:00Z"
 
+def test_reports_page_orders_by_recorded_time_with_telegram_online_as_first_local_day_report():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats"})
+    same_time = dt.datetime(2026, 5, 8, 15, 16, tzinfo=dt.UTC)
+    repo.db.report_rows.insert_one(
+        {
+            "source": "discord",
+            "author": "Igor Mats",
+            "date": "2026-05-08",
+            "recordedAt": same_time.isoformat(),
+            "receivedAt": same_time,
+            "meetingEventType": "meeting_join",
+            "reportType": "discord_meeting",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "telegram",
+            "author": "Igor Mats",
+            "date": "2026-05-08",
+            "recordedAt": same_time.isoformat(),
+            "receivedAt": same_time,
+            "activityType": "telegram_online",
+            "telegramEventType": "online",
+            "telegramStatus": "online_recorded",
+            "reportType": "telegram",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "date": "2026-05-08",
+            "recordedAt": "2026-05-08T16:35:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 8, 16, 35, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 436,
+            "idleDeltaSeconds": 0,
+            "reportType": "plugin",
+        }
+    )
+
+    page = repo.reports_page(start_date="2026-05-08", end_date="2026-05-08", author="Igor Mats")
+
+    assert [report["source"] for report in page["reports"]] == ["vsc", "discord", "telegram"]
+
 def test_reports_page_includes_alias_source_rows_for_selected_author():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
@@ -668,4 +713,3 @@ def test_author_alias_delete_restores_source_author_listing():
     repo.delete_author_alias("Unknown User")
 
     assert "Unknown User" in {profile["rawAuthor"] for profile in repo.author_profiles()}
-

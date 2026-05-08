@@ -711,6 +711,7 @@ function clearDashboardSessionCaches() {
     DASHBOARD_SUMMARY_CACHE_PREFIX,
     "AL.Dashboard.ActivityHourly.",
     "AL.Dashboard.ActivityReports.",
+    "AL.Dashboard.ActivityReports.v2.",
     "AL.Dashboard.AnalyticsSummary",
     "AL.Dashboard.CalendarSummary"
   ];
@@ -719,6 +720,7 @@ function clearDashboardSessionCaches() {
     ACTIVITY_SUMMARY_CACHE_PREFIX,
     "AL.Dashboard.ActivityHourly.",
     "AL.Dashboard.ActivityReports.",
+    "AL.Dashboard.ActivityReports.v2.",
     SETTINGS_SUMMARY_CACHE_KEY
   ];
 
