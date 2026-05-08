@@ -124,6 +124,7 @@ class ActivityAggregationService(MongoComposableMixin):
         scoped_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
         raw_author_query = self._aggregate_rebuild_query(target_dates, target_authors, "rawAuthor")
         self._report_rebuild_progress(progress_callback, "Clearing scoped derived data", 0, 1)
+        backfilled_live_meeting_events = self._backfill_live_meeting_events_from_report_rows(scoped_query)
         deleted_report_rows = self.db.report_rows.delete_many(scoped_query).deleted_count
         deleted_daily = self.db.daily_author_activity.delete_many(scoped_query).deleted_count
         deleted_state = self.db.aggregate_session_state.delete_many(scoped_query).deleted_count
@@ -168,8 +169,66 @@ class ActivityAggregationService(MongoComposableMixin):
             "deletedAggregateSessionState": deleted_state,
             "deletedAggregateDayState": deleted_day_state,
             "capturedAggregateDayState": state_count,
+            "backfilledLiveMeetingEvents": backfilled_live_meeting_events,
             "rawAuthorQuery": raw_author_query,
         }
+
+    def _backfill_live_meeting_events_from_report_rows(self, scoped_query: dict[str, Any]) -> int:
+        query = {
+            **scoped_query,
+            "source": "discord",
+            "reportType": "meeting",
+            "$or": [{"activityType": "meeting_live"}, {"discordEventType": "live"}, {"discordStatus": "meeting_live"}],
+        }
+        inserted = 0
+
+        for row in self.db.report_rows.find(query, {"_id": 0}):
+            metadata = row.get("metadata") or {}
+            event_time = _coerce_datetime(row.get("recordedAt") or row.get("lastRecordedAt") or row.get("receivedAt"))
+            started_at = _coerce_datetime(metadata.get("startedAt"))
+            ended_at = _coerce_datetime(metadata.get("endedAt")) or event_time
+
+            if not event_time or not started_at or not ended_at:
+                continue
+
+            meeting_seconds = int(row.get("meetingSeconds") or metadata.get("meetingSeconds") or 0)
+
+            if meeting_seconds <= 0:
+                meeting_seconds = max(0, int((ended_at - started_at).total_seconds()))
+
+            if meeting_seconds <= 0:
+                continue
+
+            discord_user_id = str(row.get("discordUserId") or row.get("sessionId") or "")
+            live_event_id = str(row.get("reportId") or f"discord-meeting-live:{discord_user_id}:{ended_at.isoformat()}")
+            before = self.db.meeting_events.count_documents({"liveEventId": live_event_id})
+            self.db.meeting_events.update_one(
+                {"liveEventId": live_event_id},
+                {
+                    "$setOnInsert": {
+                        "discordUserId": discord_user_id,
+                        "discordUsername": str(row.get("discordUsername") or ""),
+                        "rawAuthor": str(row.get("author") or "Unknown User"),
+                        "eventType": "live",
+                        "guildId": str(metadata.get("guildId") or ""),
+                        "channelId": str(metadata.get("channelId") or ""),
+                        "timestamp": event_time,
+                        "date": str(row.get("date") or _telegram_event_date(event_time, str(row.get("timeZoneId") or "UTC"))),
+                        "timeZoneId": str(row.get("timeZoneId") or "UTC"),
+                        "liveEventId": live_event_id,
+                        "startedAt": started_at,
+                        "endedAt": ended_at,
+                        "meetingSeconds": meeting_seconds,
+                        "createdAt": _coerce_datetime(row.get("receivedAt")) or event_time,
+                    }
+                },
+                upsert=True,
+            )
+
+            if before == 0:
+                inserted += 1
+
+        return inserted
 
     def rebuild_aggregates_for_author_dates(self, authors: list[str] | tuple[str, ...] | set[str]) -> dict[str, Any]:
         raw_authors = {str(author or "Unknown User") for author in authors if str(author or "").strip()}
@@ -467,18 +526,31 @@ class ActivityAggregationService(MongoComposableMixin):
 
             received_at = _coerce_datetime(event.get("createdAt")) or event_time
             time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
+            event_type = str(event.get("eventType") or "reconcile")
+            metadata = {}
+
+            if event_type == "live":
+                metadata = {
+                    "live": True,
+                    "startedAt": event.get("startedAt"),
+                    "endedAt": event.get("endedAt") or event_time,
+                    "meetingSeconds": int(event.get("meetingSeconds") or 0),
+                    "reportId": str(event.get("liveEventId") or f"discord-meeting-live:{event.get('discordUserId') or ''}:{event_time.isoformat()}"),
+                }
+
             composed(self)._insert_discord_meeting_report_row(
                 str(event.get("rawAuthor") or "Unknown User"),
                 str(event.get("discordUserId") or ""),
                 str(event.get("discordUsername") or ""),
-                str(event.get("eventType") or "reconcile"),
+                event_type,
                 event_time,
                 str(event.get("date") or _telegram_event_date(event_time, time_zone_id)),
                 time_zone_id,
                 received_at,
-                str(event.get("eventType") or "meeting"),
+                "meeting_live" if event_type == "live" else str(event.get("eventType") or "meeting"),
                 str(event.get("guildId") or ""),
                 str(event.get("channelId") or ""),
+                metadata,
             )
 
         if meeting_total == 0:

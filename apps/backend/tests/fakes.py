@@ -123,6 +123,12 @@ class FakeCollection:
 
     def _matches(self, item, query):
         for key, value in query.items():
+            if key == "$or":
+                if not any(self._matches(item, option) for option in value):
+                    return False
+
+                continue
+
             item_value = item.get(key)
 
             if isinstance(value, dict):

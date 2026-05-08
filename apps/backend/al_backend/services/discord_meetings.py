@@ -271,32 +271,61 @@ class DiscordMeetingService(MongoComposableMixin):
             return
 
         deltas = _empty_event_deltas()
-        self.db.report_rows.insert_one(
-            {
-                "source": "discord",
-                "pluginVersion": "discord-bot",
-                "author": raw_author,
-                "authorEmail": "",
-                "projectId": "discord",
-                "sessionId": discord_user_id,
-                "deviceId": "",
-                "date": event_date,
-                "recordedAt": event_time.isoformat(),
-                "receivedAt": received_at,
-                "lastRecordedAt": event_time.isoformat(),
-                "lastReceivedAt": received_at,
-                "timeZoneId": time_zone_id,
-                "timeZoneDisplayName": time_zone_id,
-                "reportType": "meeting",
-                "activityType": f"meeting_{event_type}",
-                "discordEventType": event_type,
-                "discordStatus": status,
-                "discordUserId": discord_user_id,
-                "discordUsername": discord_username,
-                "metadata": {"guildId": str(guild_id or ""), "channelId": str(channel_id or ""), **(metadata or {})},
-                **deltas,
-            }
-        )
+        metadata = metadata or {}
+
+        if event_type == "live":
+            started_at = _coerce_datetime(metadata.get("startedAt"))
+            ended_at = _coerce_datetime(metadata.get("endedAt")) or event_time
+            meeting_seconds = max(0, int(metadata.get("meetingSeconds") or 0))
+
+            if meeting_seconds <= 0 and started_at and ended_at:
+                meeting_seconds = max(0, int((ended_at - started_at).total_seconds()))
+
+            if started_at and ended_at and meeting_seconds > 0:
+                hourly_activity_delta = empty_hourly_activity()
+                add_meeting_interval_to_buckets(
+                    {(raw_author, event_date): hourly_activity_delta},
+                    raw_author,
+                    started_at,
+                    ended_at,
+                    time_zone_id,
+                )
+                deltas["meetingSeconds"] = meeting_seconds
+                deltas["meetingMicroseconds"] = meeting_seconds * MICROSECONDS_PER_SECOND
+                deltas["hourlyActivityDelta"] = hourly_activity_delta
+
+                if composed(self).is_vacation_day(raw_author, event_date):
+                    deltas = composed(self).convert_deltas_to_vacation_overtime(deltas)
+
+        row = {
+            **({"reportId": str(metadata.get("reportId"))} if metadata.get("reportId") else {}),
+            "source": "discord",
+            "pluginVersion": "discord-bot",
+            "author": raw_author,
+            "authorEmail": "",
+            "projectId": "discord",
+            "sessionId": discord_user_id,
+            "deviceId": "",
+            "date": event_date,
+            "recordedAt": event_time.isoformat(),
+            "receivedAt": received_at,
+            "lastRecordedAt": event_time.isoformat(),
+            "lastReceivedAt": received_at,
+            "timeZoneId": time_zone_id,
+            "timeZoneDisplayName": time_zone_id,
+            "reportType": "meeting",
+            "activityType": f"meeting_{event_type}",
+            "discordEventType": event_type,
+            "discordStatus": status,
+            "discordUserId": discord_user_id,
+            "discordUsername": discord_username,
+            "metadata": {"guildId": str(guild_id or ""), "channelId": str(channel_id or ""), **metadata},
+            **deltas,
+        }
+        self.db.report_rows.insert_one(row)
+
+        if int(deltas.get("meetingSeconds", 0)) > 0:
+            composed(self)._update_daily_author_activity(row, deltas)
         if not composed(self).should_suppress_vacation_prompt(raw_author, event_date):
             composed(self)._schedule_telegram_online_prompt_if_needed(
                 raw_author,
@@ -326,9 +355,30 @@ class DiscordMeetingService(MongoComposableMixin):
             return 0
 
         report_id = f"discord-meeting-live:{discord_user_id}:{ended_at.isoformat()}"
+        live_event_id = report_id
 
-        if self.db.report_rows.find_one({"reportId": report_id}, {"_id": 1}):
-            return 0
+        self.db.meeting_events.update_one(
+            {"liveEventId": live_event_id},
+            {
+                "$setOnInsert": {
+                    "discordUserId": discord_user_id,
+                    "discordUsername": str(session.get("discordUsername") or ""),
+                    "rawAuthor": raw_author,
+                    "eventType": "live",
+                    "guildId": str(session.get("guildId") or ""),
+                    "channelId": str(session.get("channelId") or ""),
+                    "timestamp": ended_at,
+                    "date": event_date,
+                    "timeZoneId": time_zone_id,
+                    "liveEventId": live_event_id,
+                    "startedAt": started_at,
+                    "endedAt": ended_at,
+                    "meetingSeconds": meeting_seconds,
+                    "createdAt": ended_at,
+                }
+            },
+            upsert=True,
+        )
 
         hourly_activity_delta = empty_hourly_activity()
         add_meeting_interval_to_buckets(
@@ -345,6 +395,9 @@ class DiscordMeetingService(MongoComposableMixin):
 
         if composed(self).is_vacation_day(raw_author, event_date):
             deltas = composed(self).convert_deltas_to_vacation_overtime(deltas)
+
+        if self.db.report_rows.find_one({"reportId": report_id}, {"_id": 1}):
+            return 0
 
         row = {
             "reportId": report_id,
@@ -1062,4 +1115,3 @@ def _meeting_event_item_id(event: dict[str, Any]) -> str:
     discord_user_id = str(event.get("discordUserId") or "")
     event_type = str(event.get("eventType") or "")
     return f"voice:{event_type}:{discord_user_id}:{timestamp}"
-

@@ -2461,6 +2461,72 @@ def test_workday_idle_fill_fills_empty_workday_gaps_when_meeting_is_signal():
     assert _hour_metric(public[11], "idleSeconds") == 0
     assert _hour_metric(public[14], "idleSeconds") == 0
 
+
+def test_open_workday_idle_fill_uses_later_discord_meeting_as_gap_boundary():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-08",
+            "startedAt": dt.datetime(2026, 5, 8, 10, 28, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[10]["idleSeconds"] = 1222
+    hourly_activity[10]["idleMicroseconds"] = 1_222_000_000
+    hourly_activity[11]["idleSeconds"] = 2209
+    hourly_activity[11]["idleMicroseconds"] = 2_209_000_000
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "bike-rush-2",
+            "date": "2026-05-08",
+            "activeSeconds": 0,
+            "idleSeconds": 3431,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 5, 8, 17, 16, 19, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 8, 17, 43, 32, tzinfo=dt.UTC),
+            "date": "2026-05-08",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 27 * 60 + 13,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "discord",
+            "reportType": "meeting",
+            "author": "Future Artist",
+            "date": "2026-05-08",
+            "recordedAt": "2026-05-08T17:43:32+00:00",
+            "receivedAt": dt.datetime(2026, 5, 8, 17, 43, 32, tzinfo=dt.UTC),
+            "activityType": "meeting_leave",
+            "discordEventType": "leave",
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-08", end_date="2026-05-08", now=dt.datetime(2026, 5, 8, 18, tzinfo=dt.UTC))
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+
+    assert _hour_metric(hourly[12], "idleSeconds") == 3600
+    assert _hour_metric(hourly[13], "idleSeconds") == 3600
+    assert _hour_metric(hourly[14], "idleSeconds") == 3600
+    assert _hour_metric(hourly[15], "idleSeconds") == 3600
+    assert _hour_metric(hourly[16], "idleSeconds") == 3600
+    assert _hour_metric(hourly[17], "idleSeconds") == 16 * 60 + 19
+    assert _hour_metric(hourly[17], "meetingSeconds") == 27 * 60 + 13
+    assert author["idleSeconds"] >= 5 * 3600
+
+
 def test_workday_idle_fill_requires_real_activity_signal():
     hourly = empty_hourly_activity()
     hourly[12]["idleSeconds"] = 900
