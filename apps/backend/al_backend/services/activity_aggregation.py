@@ -1,12 +1,39 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 from ..activity_math import *
 from ..hourly_fill_rules import empty_hourly_activity
 from ..hourly_fill_rules import merge_hourly_activity
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+
+
+DEVICE_EDITOR_ACTIVITY_AUTHOR = "Evgeniy Dotsenko"
+
+
+def _is_suppressed_device_editor_event(event: dict[str, Any]) -> bool:
+    if str(event.get("source") or "") != "dev":
+        return False
+
+    metadata = event.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        return False
+
+    if not (_metadata_bool(metadata.get("isEditor")) or _metadata_bool(metadata.get("isEditorPlayMode"))):
+        return False
+
+    return _normalize_author(event.get("author")) != DEVICE_EDITOR_ACTIVITY_AUTHOR
+
+
+def _metadata_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    return bool(value)
 
 
 class ActivityAggregationService(MongoComposableMixin):
@@ -694,6 +721,9 @@ class ActivityAggregationService(MongoComposableMixin):
         source_is_focused = state.get("isFocused")
         current_source = str(event.get("source") or "")
         current_scope = _raw_event_activity_scope(event)
+        if _is_suppressed_device_editor_event(event):
+            return _empty_event_deltas()
+
         author_first_activity_at = _coerce_datetime(author_state.get("firstActivityAt"))
         author_last_activity_at = _coerce_datetime(author_state.get("lastActivityAt"))
         author_last_accounting_at = _coerce_datetime(author_state.get("lastAccountingAt"))

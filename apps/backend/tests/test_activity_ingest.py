@@ -455,6 +455,147 @@ def test_device_click_counts_as_activity_and_heartbeat_counts_idle():
     assert daily is not None
     assert daily["idleSeconds"] == 600
 
+def test_device_hold_counts_as_activity_during_long_press():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one(
+        {"kind": "global", "idleThresholdSeconds": 300, "deviceIdleThresholdSeconds": 10}
+    )
+    repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
+
+    base_event = {
+        "source": "dev",
+        "author": "Device1",
+        "projectId": "Bike Rush 2",
+        "deviceId": "advertising-id-1",
+        "date": "2026-05-04",
+    }
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "click",
+            "occurredAtUtc": "2026-05-04T10:00:00Z",
+            "occurredAtLocal": "2026-05-04T10:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 4, 10, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    hold_deltas = []
+
+    for second in (5, 10, 15):
+        hold_deltas.append(
+            repo._apply_raw_event_to_aggregates(
+                {
+                    **base_event,
+                    "eventType": "hold",
+                    "occurredAtUtc": f"2026-05-04T10:00:{second:02d}Z",
+                    "occurredAtLocal": f"2026-05-04T10:00:{second:02d}+00:00",
+                    "receivedAt": dt.datetime(2026, 5, 4, 10, 0, second, tzinfo=dt.UTC),
+                    "metadata": {"holdDurationSeconds": second, "touchCount": 1},
+                }
+            )
+        )
+
+    assert [item["idleDeltaSeconds"] for item in hold_deltas] == [0, 0, 0]
+    assert [item["activeDeltaSeconds"] for item in hold_deltas] == [5, 5, 5]
+    assert hold_deltas[-1]["activityCountDeltas"] == [{"type": "hold", "count": 1}]
+    daily = repo.db.daily_author_activity.find_one({"author": "Device1", "date": "2026-05-04", "source": "dev"})
+    assert daily is not None
+    assert daily["activeSeconds"] == 15
+    assert daily["idleSeconds"] == 0
+    assert {item["type"]: item["count"] for item in daily["activityCounts"]} == {"click": 1, "hold": 3}
+
+def test_device_editor_activity_counts_for_evgeniy_dotsenko_alias():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Evgeniy Dotsenko", "displayName": "Evgeniy Dotsenko"})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device1", "targetRawAuthor": "Evgeniy Dotsenko"})
+
+    repo.save_report(
+        source="dev",
+        plugin_version="0.1.0",
+        encrypted_packet="packet",
+        challenge_id="challenge",
+        device_id="editor-device-1",
+        payload={
+            "source": "dev",
+            "author": "Device1",
+            "projectId": "Bike Rush 2",
+            "sessionId": "editor-session",
+            "deviceId": "editor-device-1",
+            "events": [
+                {
+                    "eventId": "editor-click-1",
+                    "eventType": "click",
+                    "occurredAtUtc": "2026-05-04T10:00:00Z",
+                    "occurredAtLocal": "2026-05-04T10:00:00+00:00",
+                    "date": "2026-05-04",
+                    "metadata": {"isEditor": True, "isEditorPlayMode": True},
+                },
+                {
+                    "eventId": "editor-hold-1",
+                    "eventType": "hold",
+                    "occurredAtUtc": "2026-05-04T10:00:05Z",
+                    "occurredAtLocal": "2026-05-04T10:00:05+00:00",
+                    "date": "2026-05-04",
+                    "metadata": {"isEditor": True, "isEditorPlayMode": True, "holdDurationSeconds": 5},
+                },
+            ],
+        },
+    )
+
+    raw_events = list(repo.db.raw_activity_events.find({"author": "Evgeniy Dotsenko"}))
+    assert len(raw_events) == 2
+    daily = repo.db.daily_author_activity.find_one(
+        {"author": "Evgeniy Dotsenko", "date": "2026-05-04", "source": "dev"}
+    )
+    assert daily is not None
+    assert daily["activeSeconds"] == 5
+    assert daily["idleSeconds"] == 0
+    assert {item["type"]: item["count"] for item in daily["activityCounts"]} == {"click": 1, "hold": 1}
+    assert repo.db.report_rows.count_documents({"author": "Evgeniy Dotsenko", "source": "dev"}) == 1
+
+def test_device_editor_activity_is_raw_only_for_other_authors():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Other Author", "displayName": "Other Author"})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device2", "targetRawAuthor": "Other Author"})
+
+    repo.save_report(
+        source="dev",
+        plugin_version="0.1.0",
+        encrypted_packet="packet",
+        challenge_id="challenge",
+        device_id="editor-device-2",
+        payload={
+            "source": "dev",
+            "author": "Device2",
+            "projectId": "Bike Rush 2",
+            "sessionId": "editor-session",
+            "deviceId": "editor-device-2",
+            "events": [
+                {
+                    "eventId": "editor-click-2",
+                    "eventType": "click",
+                    "occurredAtUtc": "2026-05-04T10:00:00Z",
+                    "occurredAtLocal": "2026-05-04T10:00:00+00:00",
+                    "date": "2026-05-04",
+                    "metadata": {"isEditor": True, "isEditorPlayMode": True},
+                },
+                {
+                    "eventId": "editor-hold-2",
+                    "eventType": "hold",
+                    "occurredAtUtc": "2026-05-04T10:00:05Z",
+                    "occurredAtLocal": "2026-05-04T10:00:05+00:00",
+                    "date": "2026-05-04",
+                    "metadata": {"isEditor": True, "isEditorPlayMode": True, "holdDurationSeconds": 5},
+                },
+            ],
+        },
+    )
+
+    raw_events = list(repo.db.raw_activity_events.find({"author": "Other Author"}))
+    assert len(raw_events) == 2
+    assert repo.db.daily_author_activity.find_one({"author": "Other Author", "source": "dev"}) is None
+    assert repo.db.report_rows.count_documents({"author": "Other Author", "source": "dev"}) == 0
+
 def test_device_summary_uses_application_name_as_saved_item():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
@@ -1908,4 +2049,3 @@ def test_non_figma_file_saved_still_requires_blend_file():
     )
 
     assert saved is None
-

@@ -45,6 +45,7 @@ AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS = 300
 REPORT_CHALLENGE_TTL_SECONDS = 120
 RAW_ACTIVITY_EVENT_TYPES = {
     "click",
+    "hold",
     "selection",
     "select",
     "scene_saved",
