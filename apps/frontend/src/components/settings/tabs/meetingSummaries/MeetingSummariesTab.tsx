@@ -24,6 +24,7 @@ type MeetingSummariesTabProps = {
   openAIStats: OpenAIStats | null;
   openAIStatsError: string;
   openAIStatsLoading: boolean;
+  openAIStatsRefreshMode: "month" | "totals" | null;
   settingsReadOnly: boolean;
   saving: string | null;
   saveStatus: Record<string, "saved" | "error" | undefined>;
@@ -62,6 +63,7 @@ export function MeetingSummariesTab({
   openAIStats,
   openAIStatsError,
   openAIStatsLoading,
+  openAIStatsRefreshMode,
   settingsReadOnly,
   saving,
   saveStatus,
@@ -167,6 +169,7 @@ export function MeetingSummariesTab({
           openAIStats={openAIStats}
           openAIStatsError={openAIStatsError}
           openAIStatsLoading={openAIStatsLoading}
+          openAIStatsRefreshMode={openAIStatsRefreshMode}
           onRefresh={onRefreshOpenAIStats}
           onRefreshTotals={onRefreshOpenAIStatsTotals}
         />

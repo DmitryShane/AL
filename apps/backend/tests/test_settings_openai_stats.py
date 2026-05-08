@@ -201,6 +201,34 @@ def test_openai_stats_month_refresh_without_accumulator_does_not_bootstrap(monke
     assert repo.db.system_settings.find_one({"kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND}) is None
 
 
+def test_openai_stats_uses_legacy_cache_when_new_accumulator_is_missing(monkeypatch) -> None:
+    repo = fake_repository()
+    repo.openai_usage_api_key = "usage-key"
+    now = dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC)
+    monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
+    repo.db.system_settings.insert_one(
+        {
+            "kind": settings_repo.OPENAI_STATS_LEGACY_CACHE_KIND,
+            "cachedAt": now.isoformat(),
+            "stats": {
+                "configured": True,
+                "totalSpend": 12.5,
+                "monthSpend": 3.5,
+                "totalTokens": 123,
+                "totalRequests": 4,
+                "projectId": "old-project",
+            },
+        }
+    )
+
+    stats = repo.get_openai_stats(refresh="month")
+
+    assert stats["totalSpend"] == 12.5
+    assert stats["monthSpend"] == 3.5
+    assert stats["syncStatus"] == "totalsMissing"
+    assert "projectId" not in stats
+
+
 def test_openai_stats_totals_refresh_queues_background_sync(monkeypatch) -> None:
     repo = fake_repository()
     repo.openai_usage_api_key = "usage-key"

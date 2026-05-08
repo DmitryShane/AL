@@ -35,6 +35,7 @@ OPENAI_STATS_USAGE_ENDPOINTS = ("completions", "audio_transcriptions")
 OPENAI_STATS_HISTORY_START = dt.datetime(2020, 1, 1, tzinfo=dt.UTC)
 OPENAI_STATS_ACCUMULATOR_KIND = "openai_stats_accumulator_v1"
 OPENAI_STATS_RESPONSE_CACHE_KIND = "openai_stats_response_cache_v1"
+OPENAI_STATS_LEGACY_CACHE_KIND = "openai_stats_cache"
 OPENAI_STATS_SYNC_STALE_SECONDS = 3600
 OPENAI_STATS_MONTH_REFRESH_SECONDS = 6 * 3600
 
@@ -472,7 +473,7 @@ class SettingsRepository(MongoComposableMixin):
             return {"configured": False, "error": "AL_OPENAI_USAGE_API_KEY is not configured"}
 
         refresh_mode = self._normalize_openai_stats_refresh_mode(refresh)
-        cached = self.db.system_settings.find_one({"kind": OPENAI_STATS_RESPONSE_CACHE_KIND}, {"_id": 0}) or {}
+        cached = self._openai_stats_cached_response()
         cached_at = _coerce_datetime(cached.get("cachedAt"))
         now = dt.datetime.now(dt.UTC)
 
@@ -529,6 +530,23 @@ class SettingsRepository(MongoComposableMixin):
         )
         self._store_openai_stats_cache(stats, now)
         return stats
+
+    def _openai_stats_cached_response(self) -> dict[str, Any]:
+        cached = self.db.system_settings.find_one({"kind": OPENAI_STATS_RESPONSE_CACHE_KIND}, {"_id": 0}) or {}
+        if cached.get("stats"):
+            return cached
+
+        legacy = self.db.system_settings.find_one({"kind": OPENAI_STATS_LEGACY_CACHE_KIND}, {"_id": 0}) or {}
+        if not legacy.get("stats"):
+            return {}
+
+        stats = dict(legacy["stats"])
+        stats.pop("projectId", None)
+        return {
+            "kind": OPENAI_STATS_RESPONSE_CACHE_KIND,
+            "cachedAt": legacy.get("cachedAt"),
+            "stats": stats,
+        }
 
     def _normalize_openai_stats_refresh_mode(self, refresh: str | bool | None) -> str | None:
         if refresh is True:

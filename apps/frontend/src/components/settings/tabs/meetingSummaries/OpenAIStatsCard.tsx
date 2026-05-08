@@ -5,11 +5,21 @@ type OpenAIStatsCardProps = {
   openAIStats: OpenAIStats | null;
   openAIStatsError: string;
   openAIStatsLoading: boolean;
+  openAIStatsRefreshMode: "month" | "totals" | null;
   onRefresh: () => void;
   onRefreshTotals: () => void;
 };
 
-export function OpenAIStatsCard({ openAIStats, openAIStatsError, openAIStatsLoading, onRefresh, onRefreshTotals }: OpenAIStatsCardProps) {
+export function OpenAIStatsCard({
+  openAIStats,
+  openAIStatsError,
+  openAIStatsLoading,
+  openAIStatsRefreshMode,
+  onRefresh,
+  onRefreshTotals
+}: OpenAIStatsCardProps) {
+  const controlsDisabled = openAIStatsLoading || openAIStatsRefreshMode !== null;
+
   return (
     <div className="panel meeting-summary-openai-panel">
       <div className="meeting-summary-panel-header">
@@ -20,11 +30,11 @@ export function OpenAIStatsCard({ openAIStats, openAIStatsError, openAIStatsLoad
           </a>
         </div>
         <div className="openai-stats-actions">
-          <button className="primary-outline-button" onClick={onRefresh} disabled={openAIStatsLoading}>
-            {openAIStatsLoading ? "Loading..." : "Refresh"}
+          <button className="primary-outline-button" onClick={onRefresh} disabled={controlsDisabled}>
+            {openAIStatsRefreshMode === "month" ? "Loading..." : "Refresh"}
           </button>
-          <button className="primary-outline-button" onClick={onRefreshTotals} disabled={openAIStatsLoading}>
-            Refresh totals
+          <button className="primary-outline-button" onClick={onRefreshTotals} disabled={controlsDisabled}>
+            {openAIStatsRefreshMode === "totals" ? "Loading..." : "Refresh totals"}
           </button>
         </div>
       </div>

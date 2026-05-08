@@ -121,6 +121,7 @@ export function SettingsPage({
   const [openAIStats, setOpenAIStats] = useState<OpenAIStats | null>(() => cachedOpenAIStats);
   const [openAIStatsError, setOpenAIStatsError] = useState("");
   const [openAIStatsLoading, setOpenAIStatsLoading] = useState(() => cachedOpenAIStats === null);
+  const [openAIStatsRefreshMode, setOpenAIStatsRefreshMode] = useState<"month" | "totals" | null>(null);
   const openAIStatsAutoLoadStartedRef = useRef(cachedOpenAIStats !== null);
   const meetingSummaryWorkspaceRef = useRef<HTMLDivElement>(null);
   const meetingSummaryPromptPanelRef = useRef<HTMLDivElement>(null);
@@ -316,7 +317,11 @@ export function SettingsPage({
   }
 
   async function loadOpenAIStats(refresh: "month" | "totals" | null = null) {
-    setOpenAIStatsLoading(true);
+    if (refresh) {
+      setOpenAIStatsRefreshMode(refresh);
+    } else {
+      setOpenAIStatsLoading(true);
+    }
 
     try {
       const response = await apiFetch(`/api/v1/settings/openai-stats${refresh ? `?refresh=${refresh}` : ""}`);
@@ -333,7 +338,11 @@ export function SettingsPage({
     } catch (error) {
       setOpenAIStatsError(error instanceof Error ? error.message : "OpenAI stats load failed");
     } finally {
-      setOpenAIStatsLoading(false);
+      if (refresh) {
+        setOpenAIStatsRefreshMode(null);
+      } else {
+        setOpenAIStatsLoading(false);
+      }
     }
   }
 
@@ -1326,6 +1335,7 @@ export function SettingsPage({
           openAIStats={openAIStats}
           openAIStatsError={openAIStatsError}
           openAIStatsLoading={openAIStatsLoading}
+          openAIStatsRefreshMode={openAIStatsRefreshMode}
           settingsReadOnly={settingsReadOnly}
           saving={saving}
           saveStatus={saveStatus}
