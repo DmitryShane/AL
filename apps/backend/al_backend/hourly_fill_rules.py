@@ -17,6 +17,7 @@ INTERNAL_OVERTIME_FILL_SECONDS = "_visualOvertimeSeconds"
 INTERNAL_OVERTIME_START_SECOND = "_overtimeStartSecond"
 INTERNAL_MISSED_START_SECONDS = "_visualMissedStartSeconds"
 INTERNAL_MISSED_END_SECONDS = "_visualMissedEndSeconds"
+VISUAL_ACTIVE_NOISE_SECONDS = 10
 
 
 def seconds_from_microseconds(value: Any) -> int:
@@ -63,7 +64,7 @@ def public_hourly_activity(source: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 def public_hour(item: dict[str, Any]) -> dict[str, Any]:
     hour = int(item.get("hour", 0))
-    fill_segments = normalized_fill_segments(item)
+    fill_segments = _collapse_visual_active_noise(normalized_fill_segments(item))
     visible_totals = _totals_from_segments(fill_segments)
     totals = {
         "activeSeconds": visible_totals["active"],
@@ -74,6 +75,18 @@ def public_hour(item: dict[str, Any]) -> dict[str, Any]:
         "missedSeconds": visible_totals["missed"],
     }
     return {"hour": hour, "totals": totals, "fillSegments": fill_segments}
+
+
+def _collapse_visual_active_noise(fill_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    collapsed = []
+
+    for segment in fill_segments:
+        if segment.get("kind") == "active" and int(segment.get("endSecond", 0)) - int(segment.get("startSecond", 0)) <= VISUAL_ACTIVE_NOISE_SECONDS:
+            collapsed.append({**segment, "kind": "idle"})
+        else:
+            collapsed.append(segment)
+
+    return normalize_hour_fill(collapsed, apply_stack_rules=False)
 
 
 def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
@@ -449,6 +462,58 @@ def apply_overtime_start_boundaries(
         apply_overtime_start_boundary(hourly_author.get("hourlyActivity", []), overtime_started_at, time_zone_id)
 
 
+def apply_visual_missed_end_fallbacks(
+    hourly_by_author: dict[str, dict[str, Any]],
+    sessions: list[dict[str, Any]],
+    *,
+    time_zone_id_for_author: Any,
+    is_date_in_scope: Any,
+    is_vacation_day: Any,
+) -> None:
+    for session in sessions:
+        raw_author = str(session.get("rawAuthor") or "Unknown User")
+        day_date = str(session.get("date") or "")
+        time_zone_id = time_zone_id_for_author(raw_author, session.get("timeZoneId"))
+
+        if not day_date or not is_date_in_scope(day_date, raw_author, time_zone_id):
+            continue
+
+        if is_vacation_day(raw_author, day_date):
+            continue
+
+        offline_at = _coerce_datetime(session.get("lastOfflineAt"))
+        hourly_author = hourly_by_author.get(raw_author)
+
+        if not offline_at or not hourly_author:
+            continue
+
+        hourly_activity = hourly_author.get("hourlyActivity", [])
+
+        if any(int(hour.get(INTERNAL_MISSED_END_SECONDS, 0)) > 0 for hour in hourly_activity):
+            continue
+
+        local_offline_at = _to_local_datetime(offline_at, time_zone_id)
+        offline_hour_index = local_offline_at.hour
+
+        if offline_hour_index < 0 or offline_hour_index >= len(hourly_activity):
+            continue
+
+        if visual_hour_available_seconds(hourly_activity[offline_hour_index]) > 0:
+            continue
+
+        fallback_hour_index = offline_hour_index + 1
+
+        if fallback_hour_index >= len(hourly_activity):
+            continue
+
+        fallback_hour = hourly_activity[fallback_hour_index]
+
+        if visual_hour_occupied_seconds(fallback_hour) > 0 or int(fallback_hour.get("missedSeconds", 0)) > 0:
+            continue
+
+        add_visual_missed_seconds(hourly_activity, fallback_hour_index, 3600, INTERNAL_MISSED_END_SECONDS)
+
+
 def transfer_summary_idle_to_auto_break(hourly_activity: list[dict[str, Any]], remaining_seconds: int) -> int:
     if remaining_seconds <= 0:
         return 0
@@ -634,6 +699,13 @@ def add_visual_missed_end(
         )
         missed_seconds = visual_hour_available_seconds(target_hour)
         target_hour_index = int(target_hour.get("hour", local_end.hour))
+        if missed_seconds <= 0:
+            fallback_hour_index = target_hour_index + 1
+            if fallback_hour_index < len(hourly_activity):
+                fallback_hour = hourly_activity[fallback_hour_index]
+                if visual_hour_occupied_seconds(fallback_hour) <= 0 and int(fallback_hour.get("missedSeconds", 0)) <= 0:
+                    target_hour_index = fallback_hour_index
+                    missed_seconds = 3600
     else:
         hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
         missed_seconds = max(0, int((hour_end - local_end).total_seconds()))

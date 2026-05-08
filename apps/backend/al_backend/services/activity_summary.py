@@ -8,6 +8,7 @@ from ..hourly_fill_rules import (
     apply_visual_overtime_hour_gaps,
     apply_plugin_hour_idle_gaps,
     apply_workday_idle_fill,
+    apply_visual_missed_end_fallbacks,
     apply_overtime_start_boundaries,
     apply_breaks_to_hourly_activity,
     apply_meetings_to_hourly_activity,
@@ -1178,6 +1179,26 @@ class ActivitySummaryService(MongoComposableMixin):
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_start=False)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         apply_overtime_start_boundaries(
+            hourly_by_author,
+            list(self.db.day_sessions.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0})),
+            time_zone_id_for_author=lambda raw_author, session_time_zone_id: _author_time_zone_id(
+                raw_author,
+                profiles,
+                session_time_zone_id,
+            ),
+            is_date_in_scope=lambda day_date, raw_author, time_zone_id: _date_in_summary_scope(
+                day_date,
+                raw_author,
+                profiles,
+                time_zone_id,
+                now,
+                start_date,
+                end_date,
+                date_mode,
+            ),
+            is_vacation_day=lambda raw_author, day_date: composed(self).is_vacation_day(raw_author, day_date),
+        )
+        apply_visual_missed_end_fallbacks(
             hourly_by_author,
             list(self.db.day_sessions.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0})),
             time_zone_id_for_author=lambda raw_author, session_time_zone_id: _author_time_zone_id(

@@ -537,6 +537,63 @@ def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_repo
     assert _hour_metric(hourly_by_hour[19], "idleSeconds") == 465
     assert _missed_end_seconds(hourly_by_hour[19]) == 3600 - 465
 
+def test_activity_summary_visual_missed_end_uses_one_next_empty_hour_when_offline_hour_is_full():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Denis Ostrovskiy", "displayName": "Denis Ostrovskiy", "timeZoneId": "Europe/Kyiv"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "date": "2026-05-07",
+            "startedAt": dt.datetime(2026, 5, 7, 8, 23, 3, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 5, 7, 17, 18, 36, tzinfo=dt.UTC),
+            "timeZoneId": "Europe/Kyiv",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Denis Ostrovskiy",
+            "date": "2026-05-07",
+            "recordedAt": "2026-05-07T20:18:46+03:00",
+            "receivedAt": dt.datetime(2026, 5, 7, 17, 18, 47, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 54,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 10,
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[20]["activeSeconds"] = 146
+    hourly_activity[20]["activeMicroseconds"] = 146 * 1_000_000
+    hourly_activity[20]["idleSeconds"] = 1016
+    hourly_activity[20]["idleMicroseconds"] = 1016 * 1_000_000
+    hourly_activity[20]["overtimeActiveSeconds"] = 2438
+    hourly_activity[20]["overtimeActiveMicroseconds"] = 2438 * 1_000_000
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Denis Ostrovskiy",
+            "projectId": "unity",
+            "date": "2026-05-07",
+            "activeSeconds": 146,
+            "idleSeconds": 1016,
+            "overtimeActiveSeconds": 2438,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-07", end_date="2026-05-07")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Denis Ostrovskiy")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Denis Ostrovskiy")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert _missed_end_seconds(hourly_by_hour[20]) == 0
+    assert _hour_metric(hourly_by_hour[21], "missedSeconds") == 3600
+    assert _missed_end_seconds(hourly_by_hour[21]) == 3600
+    assert _hour_metric(hourly_by_hour[22], "missedSeconds") == 0
+    assert _hour_metric(author, "activeSeconds") == 146
+    assert _hour_metric(author, "idleSeconds") == 1016
+
 def test_activity_summary_does_not_mark_visual_end_missed_before_offline():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
@@ -2441,3 +2498,26 @@ def test_workday_idle_fill_preserves_existing_missed_and_active_segments():
     assert _hour_metric(public[9], "idleSeconds") == 1800
     assert _hour_metric(public[9], "activeSeconds") == 1200
     assert _hour_segments(public[9], "missed") == [{"startSecond": 3000, "endSecond": 3600}]
+
+def test_public_hourly_collapses_tiny_active_noise_to_idle_visually_only():
+    hourly = empty_hourly_activity()
+    hourly[11]["activeSeconds"] = 5
+    hourly[11]["activeMicroseconds"] = 5_000_000
+    hourly[11]["idleSeconds"] = 2212
+    hourly[11]["idleMicroseconds"] = 2_212_000_000
+    hourly[11]["telegramToFirstActivityIdleSeconds"] = 1978
+    hourly[11]["fillSegments"] = [
+        {"kind": "missed", "startSecond": 0, "endSecond": 1383},
+        {"kind": "idle", "startSecond": 1383, "endSecond": 3361},
+        {"kind": "active", "startSecond": 3361, "endSecond": 3366},
+        {"kind": "idle", "startSecond": 3366, "endSecond": 3600},
+    ]
+    hourly[11]["missedSeconds"] = 1383
+    hourly[11]["_visualMissedStartSeconds"] = 1383
+
+    public = public_hourly_activity(hourly)
+
+    assert hourly[11]["activeSeconds"] == 5
+    assert _hour_metric(public[11], "activeSeconds") == 0
+    assert _hour_metric(public[11], "idleSeconds") == 2217
+    assert _hour_segments(public[11], "idle") == [{"startSecond": 3361, "endSecond": 3600}]
