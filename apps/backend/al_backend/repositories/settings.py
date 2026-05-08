@@ -35,6 +35,8 @@ OPENAI_STATS_USAGE_ENDPOINTS = ("completions", "audio_transcriptions")
 OPENAI_STATS_HISTORY_START = dt.datetime(2020, 1, 1, tzinfo=dt.UTC)
 OPENAI_STATS_ACCUMULATOR_KIND = "openai_stats_accumulator_v1"
 OPENAI_STATS_RESPONSE_CACHE_KIND = "openai_stats_response_cache_v1"
+OPENAI_STATS_SYNC_STALE_SECONDS = 3600
+OPENAI_STATS_MONTH_REFRESH_SECONDS = 6 * 3600
 
 
 def _server_stats_category(key: str, path: Path) -> dict[str, Any]:
@@ -193,8 +195,59 @@ def _fetch_openai_stats(api_key: str, now: dt.datetime, accumulator: dict[str, A
         "lastIncrementalSyncAt": _coerce_datetime(next_accumulator.get("lastIncrementalSyncAt")).isoformat()
         if _coerce_datetime(next_accumulator.get("lastIncrementalSyncAt"))
         else None,
+        "lastMonthRefreshAt": _coerce_datetime(next_accumulator.get("lastMonthRefreshAt")).isoformat()
+        if _coerce_datetime(next_accumulator.get("lastMonthRefreshAt"))
+        else None,
+        "syncStatus": str(next_accumulator.get("syncStatus") or "ready"),
     }
     return {"stats": stats, "accumulator": next_accumulator}
+
+
+def _fetch_openai_month_only_stats(api_key: str, now: dt.datetime, accumulator: dict[str, Any]) -> dict[str, Any]:
+    start = dt.datetime(now.year, now.month, 1, tzinfo=dt.UTC)
+    start_time = int(start.timestamp())
+    end_time = int(now.timestamp())
+    month_spend, month_currency = _fetch_openai_spend(api_key, start_time, end_time, 31)
+    previous = dict(accumulator)
+    through = _coerce_datetime(previous.get("totalsCalculatedThrough"))
+    total_spend = float(previous.get("totalSpend") or 0)
+    total_tokens = int(previous.get("totalTokens") or 0)
+    total_requests = int(previous.get("totalRequests") or 0)
+
+    if through and through < now:
+        spend_delta, currency = _fetch_openai_spend(api_key, int(through.timestamp()), end_time, 31)
+        total_spend += spend_delta
+
+        for endpoint in OPENAI_STATS_USAGE_ENDPOINTS:
+            usage = _fetch_openai_usage(api_key, endpoint, int(through.timestamp()), end_time)
+            total_tokens += usage["tokens"]
+            total_requests += usage["requests"]
+
+        previous["totalsCalculatedThrough"] = now
+        previous["lastIncrementalSyncAt"] = now
+        previous["currency"] = str(currency or previous.get("currency") or month_currency or "usd").lower()
+
+    previous.update(
+        {
+            "kind": OPENAI_STATS_ACCUMULATOR_KIND,
+            "totalSpend": round(total_spend, 6),
+            "totalTokens": total_tokens,
+            "totalRequests": total_requests,
+            "monthSpend": round(month_spend, 6),
+            "periodStart": start,
+            "periodEnd": now,
+            "generatedAt": now,
+            "lastMonthRefreshAt": now,
+            "syncStatus": "ready",
+            "syncUpdatedAt": now,
+            "currency": str(previous.get("currency") or month_currency or "usd").lower(),
+        }
+    )
+
+    stats = _openai_stats_from_accumulator(previous)
+    stats["cached"] = False
+    stats["syncStatus"] = "ready"
+    return {"stats": stats, "accumulator": previous}
 
 
 def _refresh_openai_accumulator(
@@ -253,6 +306,7 @@ def _refresh_openai_accumulator(
         "bootstrapStartedAt": bootstrap_started_at,
         "bootstrapCompletedAt": _coerce_datetime(previous.get("bootstrapCompletedAt")) or now,
         "lastIncrementalSyncAt": now,
+        "lastMonthRefreshAt": now,
         "monthSpend": round(month_spend, 6),
         "periodStart": dt.datetime(now.year, now.month, 1, tzinfo=dt.UTC),
         "periodEnd": now,
@@ -361,6 +415,7 @@ def _openai_stats_from_accumulator(accumulator: dict[str, Any]) -> dict[str, Any
     period_end = _coerce_datetime(accumulator.get("periodEnd"))
     totals_calculated_through = _coerce_datetime(accumulator.get("totalsCalculatedThrough"))
     last_incremental_sync_at = _coerce_datetime(accumulator.get("lastIncrementalSyncAt"))
+    last_month_refresh_at = _coerce_datetime(accumulator.get("lastMonthRefreshAt"))
 
     return {
         "configured": True,
@@ -375,20 +430,54 @@ def _openai_stats_from_accumulator(accumulator: dict[str, Any]) -> dict[str, Any
         "totalRequests": int(accumulator.get("totalRequests") or 0),
         "totalsCalculatedThrough": totals_calculated_through.isoformat() if totals_calculated_through else None,
         "lastIncrementalSyncAt": last_incremental_sync_at.isoformat() if last_incremental_sync_at else None,
+        "lastMonthRefreshAt": last_month_refresh_at.isoformat() if last_month_refresh_at else None,
+        "syncStatus": str(accumulator.get("syncStatus") or "ready"),
     }
 
 
+def _empty_openai_stats(now: dt.datetime, *, sync_status: str = "totalsMissing") -> dict[str, Any]:
+    start = dt.datetime(now.year, now.month, 1, tzinfo=dt.UTC)
+    return {
+        "configured": True,
+        "cached": True,
+        "generatedAt": now.isoformat(),
+        "periodStart": start.isoformat(),
+        "periodEnd": now.isoformat(),
+        "totalSpend": 0,
+        "monthSpend": 0,
+        "currency": "USD",
+        "totalTokens": 0,
+        "totalRequests": 0,
+        "syncStatus": sync_status,
+    }
+
+
+def _openai_stats_sync_in_progress(accumulator: dict[str, Any] | None, now: dt.datetime) -> bool:
+    if not accumulator:
+        return False
+
+    if accumulator.get("syncStatus") not in {"syncingTotals", "syncingMonth"}:
+        return False
+
+    sync_started_at = _coerce_datetime(accumulator.get("syncStartedAt") or accumulator.get("bootstrapStartedAt"))
+    if not sync_started_at:
+        return False
+
+    return (now - sync_started_at).total_seconds() < OPENAI_STATS_SYNC_STALE_SECONDS
+
+
 class SettingsRepository(MongoComposableMixin):
-    def get_openai_stats(self, refresh: bool = False) -> dict[str, Any]:
+    def get_openai_stats(self, refresh: str | bool | None = None, background_tasks: Any | None = None) -> dict[str, Any]:
         if not getattr(composed(self), "openai_usage_api_key", ""):
             return {"configured": False, "error": "AL_OPENAI_USAGE_API_KEY is not configured"}
 
+        refresh_mode = self._normalize_openai_stats_refresh_mode(refresh)
         cached = self.db.system_settings.find_one({"kind": OPENAI_STATS_RESPONSE_CACHE_KIND}, {"_id": 0}) or {}
         cached_at = _coerce_datetime(cached.get("cachedAt"))
         now = dt.datetime.now(dt.UTC)
 
         if (
-            not refresh
+            refresh_mode is None
             and cached_at
             and (now - cached_at).total_seconds() < OPENAI_STATS_CACHE_TTL_SECONDS
             and cached.get("stats")
@@ -398,6 +487,24 @@ class SettingsRepository(MongoComposableMixin):
             return stats
 
         accumulator = self.db.system_settings.find_one({"kind": OPENAI_STATS_ACCUMULATOR_KIND}, {"_id": 0}) or None
+        accumulator_ready = bool(accumulator and accumulator.get("bootstrapCompletedAt"))
+
+        if refresh_mode == "totals":
+            return self._queue_openai_stats_totals_sync(accumulator, cached.get("stats"), now, background_tasks)
+
+        if not accumulator_ready:
+            stats = dict(cached.get("stats") or _empty_openai_stats(now))
+            stats["cached"] = True
+            stats["syncStatus"] = "totalsMissing"
+            return stats
+
+        if refresh_mode is None and self._openai_month_refresh_due(accumulator, now) and background_tasks is not None:
+            stats = self._queue_openai_stats_month_sync(accumulator, cached.get("stats"), now, background_tasks)
+            self._store_openai_stats_cache(stats, now)
+            return stats
+
+        if refresh_mode == "month":
+            return self._refresh_openai_stats_month(accumulator, now)
 
         try:
             result = _fetch_openai_stats(
@@ -420,12 +527,164 @@ class SettingsRepository(MongoComposableMixin):
             {"$set": next_accumulator},
             upsert=True,
         )
+        self._store_openai_stats_cache(stats, now)
+        return stats
+
+    def _normalize_openai_stats_refresh_mode(self, refresh: str | bool | None) -> str | None:
+        if refresh is True:
+            return "month"
+
+        if refresh is False or refresh is None or refresh == "":
+            return None
+
+        value = str(refresh).strip().lower()
+        if value == "true":
+            return "month"
+
+        if value in {"month", "totals"}:
+            return value
+
+        return None
+
+    def _openai_month_refresh_due(self, accumulator: dict[str, Any], now: dt.datetime) -> bool:
+        last_month_refresh_at = _coerce_datetime(accumulator.get("lastMonthRefreshAt"))
+        if not last_month_refresh_at:
+            return True
+
+        return (now - last_month_refresh_at).total_seconds() >= OPENAI_STATS_MONTH_REFRESH_SECONDS
+
+    def _queue_openai_stats_totals_sync(
+        self,
+        accumulator: dict[str, Any] | None,
+        cached_stats: dict[str, Any] | None,
+        now: dt.datetime,
+        background_tasks: Any | None,
+    ) -> dict[str, Any]:
+        if _openai_stats_sync_in_progress(accumulator, now):
+            fallback_stats = _openai_stats_from_accumulator(accumulator) if accumulator else _empty_openai_stats(now)
+            stats = dict(cached_stats or fallback_stats)
+            stats["cached"] = True
+            stats["syncStatus"] = "syncingTotals"
+            return stats
+
+        sync_doc = {
+            "kind": OPENAI_STATS_ACCUMULATOR_KIND,
+            "syncStatus": "syncingTotals",
+            "syncStartedAt": now,
+            "syncUpdatedAt": now,
+            "bootstrapStartedAt": now,
+        }
         self.db.system_settings.update_one(
-            {"kind": OPENAI_STATS_RESPONSE_CACHE_KIND},
-            {"$set": {"kind": OPENAI_STATS_RESPONSE_CACHE_KIND, "cachedAt": now, "stats": stats}},
+            {"kind": OPENAI_STATS_ACCUMULATOR_KIND},
+            {"$set": sync_doc},
             upsert=True,
         )
+        if background_tasks is not None:
+            background_tasks.add_task(self._run_openai_stats_totals_sync)
+
+        stats = dict(cached_stats or _empty_openai_stats(now))
+        stats["cached"] = True
+        stats["syncStatus"] = "syncingTotals"
         return stats
+
+    def _queue_openai_stats_month_sync(
+        self,
+        accumulator: dict[str, Any],
+        cached_stats: dict[str, Any] | None,
+        now: dt.datetime,
+        background_tasks: Any,
+    ) -> dict[str, Any]:
+        if _openai_stats_sync_in_progress(accumulator, now):
+            stats = dict(cached_stats or _openai_stats_from_accumulator(accumulator))
+            stats["cached"] = True
+            return stats
+
+        self.db.system_settings.update_one(
+            {"kind": OPENAI_STATS_ACCUMULATOR_KIND},
+            {"$set": {"syncStatus": "syncingMonth", "syncStartedAt": now, "syncUpdatedAt": now}},
+            upsert=True,
+        )
+        background_tasks.add_task(self._run_openai_stats_month_sync)
+        stats = dict(cached_stats or _openai_stats_from_accumulator(accumulator))
+        stats["cached"] = True
+        stats["syncStatus"] = "syncingMonth"
+        return stats
+
+    def _refresh_openai_stats_month(self, accumulator: dict[str, Any], now: dt.datetime) -> dict[str, Any]:
+        try:
+            result = _fetch_openai_month_only_stats(composed(self).openai_usage_api_key, now, accumulator)
+        except RuntimeError as exc:
+            stats = _openai_stats_from_accumulator(accumulator)
+            stats["cached"] = True
+            stats["error"] = str(exc)
+            return stats
+
+        stats = result["stats"]
+        next_accumulator = result["accumulator"]
+        self.db.system_settings.update_one(
+            {"kind": OPENAI_STATS_ACCUMULATOR_KIND},
+            {"$set": next_accumulator, "$unset": {"lastError": ""}},
+            upsert=True,
+        )
+        self._store_openai_stats_cache(stats, now)
+        return stats
+
+    def _run_openai_stats_month_sync(self) -> None:
+        if not getattr(composed(self), "openai_usage_api_key", ""):
+            return
+
+        now = dt.datetime.now(dt.UTC)
+        accumulator = self.db.system_settings.find_one({"kind": OPENAI_STATS_ACCUMULATOR_KIND}, {"_id": 0}) or None
+        if not accumulator or not accumulator.get("bootstrapCompletedAt"):
+            return
+
+        self._refresh_openai_stats_month(accumulator, now)
+
+    def _run_openai_stats_totals_sync(self) -> None:
+        if not getattr(composed(self), "openai_usage_api_key", ""):
+            return
+
+        now = dt.datetime.now(dt.UTC)
+        accumulator: dict[str, Any] | None = None
+
+        try:
+            result = _fetch_openai_stats(composed(self).openai_usage_api_key, now, accumulator)
+        except RuntimeError as exc:
+            self.db.system_settings.update_one(
+                {"kind": OPENAI_STATS_ACCUMULATOR_KIND},
+                {
+                    "$set": {
+                        "kind": OPENAI_STATS_ACCUMULATOR_KIND,
+                        "syncStatus": "error",
+                        "syncUpdatedAt": dt.datetime.now(dt.UTC),
+                        "lastError": str(exc),
+                    }
+                },
+                upsert=True,
+            )
+            return
+
+        stats = result["stats"]
+        stats["syncStatus"] = "ready"
+        next_accumulator = result["accumulator"]
+        next_accumulator["syncStatus"] = "ready"
+        next_accumulator["syncUpdatedAt"] = dt.datetime.now(dt.UTC)
+        next_accumulator["lastMonthRefreshAt"] = next_accumulator.get("lastMonthRefreshAt") or now
+        next_accumulator.pop("lastError", None)
+
+        self.db.system_settings.update_one(
+            {"kind": OPENAI_STATS_ACCUMULATOR_KIND},
+            {"$set": next_accumulator, "$unset": {"lastError": ""}},
+            upsert=True,
+        )
+        self._store_openai_stats_cache(stats, dt.datetime.now(dt.UTC))
+
+    def _store_openai_stats_cache(self, stats: dict[str, Any], cached_at: dt.datetime) -> None:
+        self.db.system_settings.update_one(
+            {"kind": OPENAI_STATS_RESPONSE_CACHE_KIND},
+            {"$set": {"kind": OPENAI_STATS_RESPONSE_CACHE_KIND, "cachedAt": cached_at, "stats": stats}},
+            upsert=True,
+        )
 
     def get_interval_for_author(self, author: str) -> int:
         global_setting = self.db.interval_settings.find_one({"kind": "global"})

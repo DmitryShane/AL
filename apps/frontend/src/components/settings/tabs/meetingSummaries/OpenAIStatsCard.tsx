@@ -6,9 +6,10 @@ type OpenAIStatsCardProps = {
   openAIStatsError: string;
   openAIStatsLoading: boolean;
   onRefresh: () => void;
+  onRefreshTotals: () => void;
 };
 
-export function OpenAIStatsCard({ openAIStats, openAIStatsError, openAIStatsLoading, onRefresh }: OpenAIStatsCardProps) {
+export function OpenAIStatsCard({ openAIStats, openAIStatsError, openAIStatsLoading, onRefresh, onRefreshTotals }: OpenAIStatsCardProps) {
   return (
     <div className="panel meeting-summary-openai-panel">
       <div className="meeting-summary-panel-header">
@@ -18,9 +19,14 @@ export function OpenAIStatsCard({ openAIStats, openAIStatsError, openAIStatsLoad
             OpenAI Platform
           </a>
         </div>
-        <button className="primary-outline-button" onClick={onRefresh} disabled={openAIStatsLoading}>
-          {openAIStatsLoading ? "Loading..." : "Refresh"}
-        </button>
+        <div className="openai-stats-actions">
+          <button className="primary-outline-button" onClick={onRefresh} disabled={openAIStatsLoading}>
+            {openAIStatsLoading ? "Loading..." : "Refresh"}
+          </button>
+          <button className="primary-outline-button" onClick={onRefreshTotals} disabled={openAIStatsLoading}>
+            Refresh totals
+          </button>
+        </div>
       </div>
       {openAIStatsError ? (
         <p className="empty">{openAIStatsError}</p>
@@ -44,6 +50,8 @@ export function OpenAIStatsCard({ openAIStats, openAIStatsError, openAIStatsLoad
           </div>
           <p>
             Organization totals, current month spend
+            {openAIStats.syncStatus === "syncingMonth" ? ", syncing current month" : ""}
+            {openAIStats.syncStatus === "syncingTotals" ? ", syncing totals" : ""}
             {openAIStats.cached ? ", cached" : ""}
             {openAIStats.generatedAt ? `, updated ${formatTimestamp(openAIStats.generatedAt)}` : ""}
           </p>

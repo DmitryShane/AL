@@ -229,6 +229,8 @@ export type OpenAIStats = {
   totalRequests?: number;
   totalsCalculatedThrough?: string | null;
   lastIncrementalSyncAt?: string | null;
+  lastMonthRefreshAt?: string | null;
+  syncStatus?: "syncing" | "ready" | "error" | string;
   error?: string;
 };
 

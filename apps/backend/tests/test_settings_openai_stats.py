@@ -4,7 +4,7 @@ import al_backend.repositories.settings as settings_repo
 from tests.fakes import fake_repository
 
 
-def test_openai_stats_bootstraps_organization_totals(monkeypatch) -> None:
+def test_openai_stats_totals_sync_bootstraps_organization_totals(monkeypatch) -> None:
     repo = fake_repository()
     repo.openai_usage_api_key = "usage-key"
     calls: list[tuple[str, int, int]] = []
@@ -29,8 +29,15 @@ def test_openai_stats_bootstraps_organization_totals(monkeypatch) -> None:
     monkeypatch.setattr(settings_repo, "_fetch_openai_spend", fake_spend)
     monkeypatch.setattr(settings_repo, "_fetch_openai_usage", fake_usage)
 
-    stats = repo.get_openai_stats(refresh=True)
+    monkeypatch.setattr(
+        settings_repo.dt,
+        "datetime",
+        fixed_datetime_class(dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC)),
+    )
 
+    repo._run_openai_stats_totals_sync()
+
+    stats = repo.db.system_settings.find_one({"kind": settings_repo.OPENAI_STATS_RESPONSE_CACHE_KIND})["stats"]
     assert stats["totalSpend"] == 98.76
     assert stats["monthSpend"] == 12.34
     assert stats["totalTokens"] == 1050
@@ -40,7 +47,7 @@ def test_openai_stats_bootstraps_organization_totals(monkeypatch) -> None:
     assert repo.db.system_settings.find_one({"kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND})["totalSpend"] == 98.76
 
 
-def test_openai_stats_refresh_uses_incremental_watermark(monkeypatch) -> None:
+def test_openai_stats_month_refresh_uses_incremental_watermark(monkeypatch) -> None:
     repo = fake_repository()
     repo.openai_usage_api_key = "usage-key"
     previous_through = dt.datetime(2026, 5, 8, 10, 0, tzinfo=dt.UTC)
@@ -78,7 +85,7 @@ def test_openai_stats_refresh_uses_incremental_watermark(monkeypatch) -> None:
     monkeypatch.setattr(settings_repo, "_fetch_openai_spend", fake_spend)
     monkeypatch.setattr(settings_repo, "_fetch_openai_usage", fake_usage)
 
-    stats = repo.get_openai_stats(refresh=True)
+    stats = repo.get_openai_stats(refresh="month")
 
     assert stats["totalSpend"] == 21.5
     assert stats["monthSpend"] == 5.0
@@ -121,10 +128,21 @@ def test_openai_stats_refresh_bypasses_response_cache(monkeypatch) -> None:
             "accumulator": {"kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND, "totalSpend": 2},
         }
 
-    monkeypatch.setattr(settings_repo, "_fetch_openai_stats", fake_fetch)
+    monkeypatch.setattr(settings_repo, "_fetch_openai_month_only_stats", fake_fetch)
 
     cached = repo.get_openai_stats()
-    refreshed = repo.get_openai_stats(refresh=True)
+    repo.db.system_settings.insert_one(
+        {
+            "kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND,
+            "totalSpend": 1,
+            "totalTokens": 1,
+            "totalRequests": 1,
+            "currency": "usd",
+            "totalsCalculatedThrough": now.isoformat(),
+            "bootstrapCompletedAt": now.isoformat(),
+        }
+    )
+    refreshed = repo.get_openai_stats(refresh="month")
 
     assert cached["totalSpend"] == 1
     assert cached["cached"] is True
@@ -146,10 +164,11 @@ def test_openai_stats_incremental_error_returns_stored_totals(monkeypatch) -> No
             "generatedAt": dt.datetime(2026, 5, 8, 10, 0, tzinfo=dt.UTC).isoformat(),
             "periodStart": dt.datetime(2026, 5, 1, tzinfo=dt.UTC).isoformat(),
             "periodEnd": dt.datetime(2026, 5, 8, 10, 0, tzinfo=dt.UTC).isoformat(),
+            "bootstrapCompletedAt": dt.datetime(2026, 5, 1, tzinfo=dt.UTC).isoformat(),
         }
     )
 
-    monkeypatch.setattr(settings_repo, "_fetch_openai_stats", lambda *_args: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(settings_repo, "_fetch_openai_month_only_stats", lambda *_args: (_ for _ in ()).throw(RuntimeError("boom")))
 
     stats = repo.get_openai_stats(refresh=True)
 
@@ -159,6 +178,149 @@ def test_openai_stats_incremental_error_returns_stored_totals(monkeypatch) -> No
     assert stats["totalTokens"] == 2000
     assert stats["totalRequests"] == 20
     assert stats["error"] == "boom"
+
+
+def test_openai_stats_month_refresh_without_accumulator_does_not_bootstrap(monkeypatch) -> None:
+    repo = fake_repository()
+    repo.openai_usage_api_key = "usage-key"
+    now = dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC)
+    monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
+    monkeypatch.setattr(
+        settings_repo,
+        "_fetch_openai_stats",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("bootstrap must not run in request")),
+    )
+    background_tasks = FakeBackgroundTasks()
+
+    stats = repo.get_openai_stats(refresh="month", background_tasks=background_tasks)
+
+    assert stats["syncStatus"] == "totalsMissing"
+    assert stats["cached"] is True
+    assert stats["totalSpend"] == 0
+    assert len(background_tasks.tasks) == 0
+    assert repo.db.system_settings.find_one({"kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND}) is None
+
+
+def test_openai_stats_totals_refresh_queues_background_sync(monkeypatch) -> None:
+    repo = fake_repository()
+    repo.openai_usage_api_key = "usage-key"
+    now = dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC)
+    monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
+    background_tasks = FakeBackgroundTasks()
+
+    stats = repo.get_openai_stats(refresh="totals", background_tasks=background_tasks)
+
+    assert stats["syncStatus"] == "syncingTotals"
+    assert stats["cached"] is True
+    assert len(background_tasks.tasks) == 1
+    accumulator = repo.db.system_settings.find_one({"kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND})
+    assert accumulator["syncStatus"] == "syncingTotals"
+    assert accumulator["syncStartedAt"] == now
+
+
+def test_openai_stats_totals_refresh_does_not_queue_duplicate_sync(monkeypatch) -> None:
+    repo = fake_repository()
+    repo.openai_usage_api_key = "usage-key"
+    now = dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC)
+    monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
+    repo.db.system_settings.insert_one(
+        {
+            "kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND,
+            "syncStatus": "syncingTotals",
+            "syncStartedAt": now.isoformat(),
+        }
+    )
+    background_tasks = FakeBackgroundTasks()
+
+    stats = repo.get_openai_stats(refresh="totals", background_tasks=background_tasks)
+
+    assert stats["syncStatus"] == "syncingTotals"
+    assert len(background_tasks.tasks) == 0
+
+
+def test_openai_stats_background_totals_sync_updates_accumulator_and_cache(monkeypatch) -> None:
+    repo = fake_repository()
+    repo.openai_usage_api_key = "usage-key"
+    now = dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC)
+    monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
+
+    def fake_fetch(_api_key: str, fetch_now: dt.datetime, _accumulator: dict | None) -> dict:
+        return {
+            "stats": {
+                "configured": True,
+                "cached": False,
+                "generatedAt": fetch_now.isoformat(),
+                "periodStart": dt.datetime(2026, 5, 1, tzinfo=dt.UTC).isoformat(),
+                "periodEnd": fetch_now.isoformat(),
+                "totalSpend": 42,
+                "monthSpend": 7,
+                "currency": "USD",
+                "totalTokens": 4000,
+                "totalRequests": 40,
+            },
+            "accumulator": {
+                "kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND,
+                "totalSpend": 42,
+                "monthSpend": 7,
+                "currency": "usd",
+                "totalTokens": 4000,
+                "totalRequests": 40,
+                "totalsCalculatedThrough": fetch_now,
+                "bootstrapStartedAt": fetch_now,
+                "bootstrapCompletedAt": fetch_now,
+                "lastIncrementalSyncAt": fetch_now,
+            },
+        }
+
+    monkeypatch.setattr(settings_repo, "_fetch_openai_stats", fake_fetch)
+
+    repo._run_openai_stats_totals_sync()
+
+    accumulator = repo.db.system_settings.find_one({"kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND})
+    cache = repo.db.system_settings.find_one({"kind": settings_repo.OPENAI_STATS_RESPONSE_CACHE_KIND})
+    assert accumulator["syncStatus"] == "ready"
+    assert accumulator["totalSpend"] == 42
+    assert cache["stats"]["syncStatus"] == "ready"
+    assert cache["stats"]["totalTokens"] == 4000
+
+
+def test_openai_stats_get_queues_lazy_month_refresh_when_due(monkeypatch) -> None:
+    repo = fake_repository()
+    repo.openai_usage_api_key = "usage-key"
+    now = dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC)
+    stale_month = now - dt.timedelta(hours=7)
+    monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
+    repo.db.system_settings.insert_one(
+        {
+            "kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND,
+            "totalSpend": 20.0,
+            "monthSpend": 4.0,
+            "totalTokens": 2000,
+            "totalRequests": 20,
+            "currency": "usd",
+            "generatedAt": stale_month.isoformat(),
+            "periodStart": dt.datetime(2026, 5, 1, tzinfo=dt.UTC).isoformat(),
+            "periodEnd": stale_month.isoformat(),
+            "totalsCalculatedThrough": stale_month.isoformat(),
+            "lastMonthRefreshAt": stale_month.isoformat(),
+            "bootstrapCompletedAt": stale_month.isoformat(),
+        }
+    )
+    background_tasks = FakeBackgroundTasks()
+
+    stats = repo.get_openai_stats(background_tasks=background_tasks)
+
+    assert stats["syncStatus"] == "syncingMonth"
+    assert stats["cached"] is True
+    assert len(background_tasks.tasks) == 1
+
+
+class FakeBackgroundTasks:
+    def __init__(self):
+        self.tasks = []
+
+    def add_task(self, func, *args, **kwargs):
+        self.tasks.append((func, args, kwargs))
 
 
 def fixed_datetime_class(fixed_now: dt.datetime):

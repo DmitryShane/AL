@@ -315,11 +315,11 @@ export function SettingsPage({
     localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, tab);
   }
 
-  async function loadOpenAIStats(refresh = false) {
+  async function loadOpenAIStats(refresh: "month" | "totals" | null = null) {
     setOpenAIStatsLoading(true);
 
     try {
-      const response = await apiFetch(`/api/v1/settings/openai-stats${refresh ? "?refresh=true" : ""}`);
+      const response = await apiFetch(`/api/v1/settings/openai-stats${refresh ? `?refresh=${refresh}` : ""}`);
 
       if (!response.ok) {
         throw new Error(await apiErrorDetail(response, "OpenAI stats load failed"));
@@ -1343,7 +1343,8 @@ export function SettingsPage({
           onSaveMeetingSummarySettings={() => void saveMeetingSummarySettings()}
           onSaveMeetingSummaryPrompt={() => void saveMeetingSummaryPrompt()}
           onSaveMeetingSummaryTelegramTemplate={() => void saveMeetingSummaryTelegramTemplate()}
-          onRefreshOpenAIStats={() => void loadOpenAIStats(true)}
+          onRefreshOpenAIStats={() => void loadOpenAIStats("month")}
+          onRefreshOpenAIStatsTotals={() => void loadOpenAIStats("totals")}
         />
       ) : (
         <SiteUsersPanel currentUser={currentUser} authorProfiles={profiles} authorProfileDrafts={drafts} />

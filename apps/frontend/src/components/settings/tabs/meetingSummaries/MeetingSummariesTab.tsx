@@ -42,6 +42,7 @@ type MeetingSummariesTabProps = {
   onSaveMeetingSummaryPrompt: () => void;
   onSaveMeetingSummaryTelegramTemplate: () => void;
   onRefreshOpenAIStats: () => void;
+  onRefreshOpenAIStatsTotals: () => void;
 };
 
 export function MeetingSummariesTab({
@@ -78,7 +79,8 @@ export function MeetingSummariesTab({
   onSaveMeetingSummarySettings,
   onSaveMeetingSummaryPrompt,
   onSaveMeetingSummaryTelegramTemplate,
-  onRefreshOpenAIStats
+  onRefreshOpenAIStats,
+  onRefreshOpenAIStatsTotals
 }: MeetingSummariesTabProps) {
   return (
     <>
@@ -166,6 +168,7 @@ export function MeetingSummariesTab({
           openAIStatsError={openAIStatsError}
           openAIStatsLoading={openAIStatsLoading}
           onRefresh={onRefreshOpenAIStats}
+          onRefreshTotals={onRefreshOpenAIStatsTotals}
         />
         <div className="meeting-summary-row">
           <RecentMeetingSummaryActivityCard meetingActivityItems={meetingActivityItems} meetingRecordingsError={meetingRecordingsError} period="today" />

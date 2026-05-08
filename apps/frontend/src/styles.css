@@ -3178,6 +3178,13 @@ p {
   text-decoration: underline;
 }
 
+.openai-stats-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .openai-stats-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
