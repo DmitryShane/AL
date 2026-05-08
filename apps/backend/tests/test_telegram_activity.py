@@ -1239,6 +1239,52 @@ def test_live_telegram_summary_includes_open_session_outside_selected_date_range
     assert authors["Igor Mats"]["telegramDaySeconds"] == 10 * 60
     assert totals["telegramDaySeconds"] == 10 * 60
 
+def test_closed_telegram_day_does_not_receive_live_delta_from_other_day_session():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Denis Ostrovskiy", "displayName": "Denis Ostrovskiy", "timeZoneId": "Europe/Kyiv"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "telegram",
+            "author": "Denis Ostrovskiy",
+            "date": "2026-05-07",
+            "daySeconds": 32133,
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": [],
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "date": "2026-05-07",
+            "startedAt": dt.datetime(2026, 5, 7, 8, 23, 3, tzinfo=dt.UTC),
+            "lastOnlineAt": dt.datetime(2026, 5, 7, 11, 50, 41, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 5, 7, 17, 18, 36, tzinfo=dt.UTC),
+            "daySeconds": 32133,
+            "timeZoneId": "Europe/Kyiv",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "date": "2026-05-08",
+            "startedAt": dt.datetime(2026, 5, 8, 8, 0, tzinfo=dt.UTC),
+            "daySeconds": 0,
+            "timeZoneId": "Europe/Kyiv",
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-05-07",
+        end_date="2026-05-07",
+        now=dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC),
+    )
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Denis Ostrovskiy")
+
+    assert author["telegramDaySeconds"] == 32133
+    assert summary["totals"]["telegramDaySeconds"] == 32133
+
 def test_break_event_flow_records_day_and_break():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "telegramUsername": "dmitry_shane"})
@@ -1388,4 +1434,3 @@ def test_live_telegram_summary_adds_open_day_and_break():
     assert totals["breakSeconds"] == 1800
     assert authors["Dmitry Shane"]["telegramDaySeconds"] == 3600
     assert authors["Dmitry Shane"]["breakSeconds"] == 1800
-

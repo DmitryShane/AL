@@ -226,6 +226,98 @@ def test_activity_summary_adds_plugin_active_outside_meeting_to_meeting_active()
     assert author["meetingSeconds"] == 30 * 60
 
 
+def test_activity_summary_meeting_active_is_not_limited_by_plugin_day_cap():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[9]["activeSeconds"] = 32_000
+    hourly_activity[9]["activeMicroseconds"] = 32_000 * 1_000_000
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Future Artist",
+            "projectId": "future",
+            "date": "2026-04-28",
+            "activeSeconds": 32_000,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32_400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 4, 28, 12, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 28, 12, 30, tzinfo=dt.UTC),
+            "date": "2026-04-28",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 30 * 60,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+    assert author["activeSeconds"] == 32_000 + 30 * 60
+    assert author["pluginDaySeconds"] == 32_400
+    assert author["meetingSeconds"] == 30 * 60
+
+
+def test_activity_summary_discord_daily_item_does_not_hide_plugin_meeting_overlap():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[17]["activeSeconds"] = 10 * 60
+    hourly_activity[17]["activeMicroseconds"] = 10 * 60 * 1_000_000
+    hourly_activity[17]["fillSegments"] = [{"kind": "active", "startSecond": 10 * 60, "endSecond": 20 * 60}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "discord",
+            "author": "Future Artist",
+            "projectId": "",
+            "date": "2026-04-28",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32_400,
+            "lastRecordedAt": "2026-04-28T16:00:00+00:00",
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Future Artist",
+            "projectId": "future",
+            "date": "2026-04-28",
+            "activeSeconds": 10 * 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32_400,
+            "lastRecordedAt": "2026-04-28T18:00:00+00:00",
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 4, 28, 17, 30, tzinfo=dt.UTC),
+            "date": "2026-04-28",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 30 * 60,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+    hour_17 = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 17)
+
+    assert author["activeSeconds"] == 30 * 60
+    assert author["pluginDaySeconds"] == 30 * 60
+    assert author["meetingSeconds"] == 30 * 60
+    assert hour_17["totals"]["activeSeconds"] == 0
+    assert hour_17["totals"]["meetingSeconds"] == 30 * 60
+
+
 def test_activity_summary_uses_meeting_as_first_activity_after_telegram_online():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(

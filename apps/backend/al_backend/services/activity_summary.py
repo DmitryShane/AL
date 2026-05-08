@@ -717,6 +717,7 @@ class ActivitySummaryService(MongoComposableMixin):
         meeting_plugin_overlap_by_author_date: dict[tuple[str, str], int] = {}
         break_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         meeting_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
+        meeting_overlap_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         summary_dates_by_author: dict[str, set[str]] = {}
         profiles = composed(self)._profiles_by_raw_author()
         now = now or dt.datetime.now(dt.UTC)
@@ -779,17 +780,31 @@ class ActivitySummaryService(MongoComposableMixin):
                 + int(hour.get("overtimeActiveSeconds", 0))
                 for hour in hourly_activity
             )
-            hourly_activity = apply_meetings_to_hourly_activity(
-                hourly_activity,
-                meeting_buckets.get(author_date_key, []),
-                meeting_consumed_by_author_date_hour.setdefault(author_date_key, empty_hourly_activity()),
+            should_count_meeting_overlap = item.get("source") not in {"telegram", "discord", "status"} and item.get("reportType") not in {
+                "telegram",
+                "meeting",
+                "status",
+            }
+            meeting_overlap_activity = (
+                apply_meetings_to_hourly_activity(
+                    hourly_activity,
+                    meeting_buckets.get(author_date_key, []),
+                    meeting_overlap_consumed_by_author_date_hour.setdefault(author_date_key, empty_hourly_activity()),
+                )
+                if should_count_meeting_overlap
+                else hourly_activity
             )
-            post_meeting_active_seconds = sum(int(hour.get("activeSeconds", 0)) for hour in hourly_activity)
+            post_meeting_active_seconds = sum(int(hour.get("activeSeconds", 0)) for hour in meeting_overlap_activity)
             post_meeting_plugin_seconds = sum(
                 int(hour.get("activeSeconds", 0))
                 + int(hour.get("idleSeconds", 0))
                 + int(hour.get("overtimeActiveSeconds", 0))
-                for hour in hourly_activity
+                for hour in meeting_overlap_activity
+            )
+            hourly_activity = apply_meetings_to_hourly_activity(
+                hourly_activity,
+                meeting_buckets.get(author_date_key, []),
+                meeting_consumed_by_author_date_hour.setdefault(author_date_key, empty_hourly_activity()),
             )
             meeting_active_overlap_by_author_date[author_date_key] = meeting_active_overlap_by_author_date.get(
                 author_date_key, 0
@@ -1061,7 +1076,7 @@ class ActivitySummaryService(MongoComposableMixin):
             normal_consumed = normal_consumed_by_author_date.get(author_date_key, 0)
             normal_available = max(0, work_window_seconds - normal_consumed)
             effective_meeting_plugin_addition = min(meeting_plugin_addition, normal_available)
-            effective_meeting_active_addition = min(meeting_active_addition, effective_meeting_plugin_addition)
+            effective_meeting_active_addition = meeting_active_addition
             normal_consumed_by_author_date[author_date_key] = normal_consumed + effective_meeting_plugin_addition
 
             author_row["pluginDaySeconds"] += effective_meeting_plugin_addition

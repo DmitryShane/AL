@@ -323,7 +323,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
 
             ended_at = _coerce_datetime(session.get("lastOfflineAt"))
 
-            if ended_at and not _date_in_summary_scope(day_date, raw_author, profiles, None, now, start_date, end_date, date_mode):
+            if not _date_in_summary_scope(day_date, raw_author, profiles, session.get("timeZoneId"), now, start_date, end_date, date_mode):
                 continue
 
             live_day_seconds = int(session.get("daySeconds", 0))
