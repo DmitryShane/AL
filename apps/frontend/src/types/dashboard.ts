@@ -151,6 +151,7 @@ export type SavedPrefab = {
 export type ActivityMixSourceGroup = {
   source: string;
   totalCount: number;
+  activeSeconds?: number;
   activityMix: ActivityCount[];
 };
 

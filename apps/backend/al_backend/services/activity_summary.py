@@ -946,8 +946,10 @@ class ActivitySummaryService(MongoComposableMixin):
                     "overtimeActivityCounts": [],
                     "overtimeSavedPrefabs": [],
                     "_activityCountsBySource": {},
+                    "_activeSecondsBySource": {},
                     "_savedPrefabsBySource": {},
                     "_overtimeActivityCountsBySource": {},
+                    "_overtimeActiveSecondsBySource": {},
                     "_overtimeSavedPrefabsBySource": {},
                 }
                 authors_by_raw[raw_author] = author_row
@@ -1000,6 +1002,9 @@ class ActivitySummaryService(MongoComposableMixin):
                     "type",
                     "count",
                 )
+                author_row["_overtimeActiveSecondsBySource"][source_key] = (
+                    int(author_row["_overtimeActiveSecondsBySource"].get(source_key, 0)) + effective_active_seconds
+                )
                 author_row["_overtimeSavedPrefabsBySource"][source_key] = _merge_count_list(
                     author_row["_overtimeSavedPrefabsBySource"].get(source_key, []),
                     saved_prefab_items,
@@ -1010,6 +1015,9 @@ class ActivitySummaryService(MongoComposableMixin):
                 author_row["_activityCountsBySource"][source_key] = _merge_count_list(
                     author_row["_activityCountsBySource"].get(source_key, []), item.get("activityCounts", []), "type", "count"
                 )
+                author_row["_activeSecondsBySource"][source_key] = (
+                    int(author_row["_activeSecondsBySource"].get(source_key, 0)) + effective_active_seconds
+                )
                 author_row["_savedPrefabsBySource"][source_key] = _merge_count_list(
                     author_row["_savedPrefabsBySource"].get(source_key, []), saved_prefab_items, "path", "saveCount"
                 )
@@ -1018,6 +1026,9 @@ class ActivitySummaryService(MongoComposableMixin):
                 item.get("overtimeActivityCounts", []),
                 "type",
                 "count",
+            )
+            author_row["_overtimeActiveSecondsBySource"][source_key] = (
+                int(author_row["_overtimeActiveSecondsBySource"].get(source_key, 0)) + int(item.get("overtimeActiveSeconds", 0))
             )
             author_row["_overtimeSavedPrefabsBySource"][source_key] = _merge_count_list(
                 author_row["_overtimeSavedPrefabsBySource"].get(source_key, []),
@@ -1982,13 +1993,15 @@ class ActivitySummaryService(MongoComposableMixin):
 def _with_source_breakdowns(author: dict[str, Any]) -> dict[str, Any]:
     item = dict(author)
     activity_counts_by_source = item.pop("_activityCountsBySource", {})
+    active_seconds_by_source = item.pop("_activeSecondsBySource", {})
     saved_prefabs_by_source = item.pop("_savedPrefabsBySource", {})
     overtime_activity_counts_by_source = item.pop("_overtimeActivityCountsBySource", {})
+    overtime_active_seconds_by_source = item.pop("_overtimeActiveSecondsBySource", {})
     overtime_saved_prefabs_by_source = item.pop("_overtimeSavedPrefabsBySource", {})
 
-    item["activityMixBySource"] = _activity_mix_source_groups(activity_counts_by_source)
+    item["activityMixBySource"] = _activity_mix_source_groups(activity_counts_by_source, active_seconds_by_source)
     item["savedPrefabsBySource"] = _saved_prefab_source_groups(saved_prefabs_by_source)
-    item["overtimeActivityMixBySource"] = _activity_mix_source_groups(overtime_activity_counts_by_source)
+    item["overtimeActivityMixBySource"] = _activity_mix_source_groups(overtime_activity_counts_by_source, overtime_active_seconds_by_source)
     item["overtimeSavedPrefabsBySource"] = _saved_prefab_source_groups(overtime_saved_prefabs_by_source)
     return item
 
@@ -2005,7 +2018,10 @@ def _is_live_date_match(
     return live_date_in_scope(value, raw_author, profiles, fallback_time_zone_id, now, start_date, end_date)
 
 
-def _activity_mix_source_groups(items_by_source: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def _activity_mix_source_groups(
+    items_by_source: dict[str, list[dict[str, Any]]],
+    active_seconds_by_source: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
     groups = []
 
     for source, items in items_by_source.items():
@@ -2018,6 +2034,7 @@ def _activity_mix_source_groups(items_by_source: dict[str, list[dict[str, Any]]]
             {
                 "source": source,
                 "totalCount": sum(int(item.get("count", 0)) for item in items),
+                "activeSeconds": int((active_seconds_by_source or {}).get(source, 0)),
                 "activityMix": activity_mix,
             }
         )

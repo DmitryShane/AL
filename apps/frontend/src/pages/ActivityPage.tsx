@@ -11,7 +11,7 @@ import { DateRangePicker } from "../components/layout/DateRangePicker";
 import { apiFetch } from "../api/client";
 import { PAGE_SCROLL_STORAGE_PREFIX, REPORTS_PAGE_STORAGE_KEY } from "../constants/dashboard";
 import type { ActivitySummary, AuthorHourlyActivity, AuthorRow, DateRange, Report, ReportsPage, ReportsPageCache, SavedPrefab } from "../types/dashboard";
-import { formatSource } from "../utils/format";
+import { formatDuration, formatSource } from "../utils/format";
 import { activityColor, compareAuthorCardStatus, formatActivityType, loadSavedReportsPage, paletteColor, savedFileLabel } from "./pageHelpers";
 
 const ACTIVITY_HOURLY_CACHE_PREFIX = "AL.Dashboard.ActivityHourly.";
@@ -69,7 +69,7 @@ export function ActivityPage({
   const activityMixGroups = (author?.activityMixBySource ?? []).map((group) => ({
     source: group.source,
     label: formatSource(group.source),
-    totalDisplayValue: String(group.totalCount),
+    totalDisplayValue: formatDuration(group.activeSeconds ?? 0),
     items: group.activityMix.map((item) => activityMixPanelItem(item.type, item.count, item.percent, group.source))
   }));
   const savedPrefabGroups = (author?.savedPrefabsBySource ?? []).map((group) => ({
@@ -578,4 +578,3 @@ function saveCachedReportsPage(key: string, page: ReportsPage) {
     // Ignore storage failures; live API data is still shown.
   }
 }
-

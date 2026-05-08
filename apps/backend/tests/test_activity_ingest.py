@@ -1339,11 +1339,13 @@ def test_activity_summary_groups_author_breakdowns_by_source():
         {
             "source": "cur",
             "totalCount": 5,
+            "activeSeconds": 120,
             "activityMix": [{"type": "focus", "count": 4, "percent": 80}, {"type": "file_saved", "count": 1, "percent": 20}],
         },
         {
             "source": "ual",
             "totalCount": 3,
+            "activeSeconds": 90,
             "activityMix": [{"type": "play_mode", "count": 3, "percent": 100}],
         },
     ]
@@ -1363,11 +1365,13 @@ def test_activity_summary_groups_author_breakdowns_by_source():
         {
             "source": "cur",
             "totalCount": 2,
+            "activeSeconds": 0,
             "activityMix": [{"type": "focus", "count": 2, "percent": 100}],
         },
         {
             "source": "ual",
             "totalCount": 1,
+            "activeSeconds": 0,
             "activityMix": [{"type": "scene_changed", "count": 1, "percent": 100}],
         },
     ]
