@@ -25,6 +25,18 @@ def _event_clock_local(value: dt.datetime | None, time_zone_id: str) -> str:
     return localized.strftime("%H:%M")
 
 
+def _is_current_or_previous_author_date(day_date: str, now: dt.datetime, profile: dict[str, Any]) -> bool:
+    time_zone_id = _valid_time_zone_id(profile.get("timeZoneId")) or "UTC"
+
+    try:
+        zone = ZoneInfo(time_zone_id)
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
+
+    local_date = now.astimezone(zone).date()
+    return day_date in {local_date.isoformat(), (local_date - dt.timedelta(days=1)).isoformat()}
+
+
 class TelegramActivityService(MongoComposableMixin):
     def _supersede_open_duplicate_afk_prompts(self, telegram_username: str, break_started_at: dt.datetime | None) -> None:
         if not break_started_at:
@@ -360,6 +372,9 @@ class TelegramActivityService(MongoComposableMixin):
             if not raw_author or not telegram_username or not day_date or not started_at:
                 continue
 
+            if not _is_current_or_previous_author_date(day_date, now, profiles.get(raw_author, {})):
+                continue
+
             elapsed_seconds = max(0, int((now - started_at).total_seconds()))
 
             if elapsed_seconds < TELEGRAM_DAY_REMINDER_SECONDS:
@@ -650,6 +665,22 @@ class TelegramActivityService(MongoComposableMixin):
             anchor = _coerce_datetime(doc.get("firstReportReceivedAt"))
 
             if not raw_author or not day_date or not anchor:
+                continue
+
+            profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0, "timeZoneId": 1}) or {}
+
+            if not _is_current_or_previous_author_date(day_date, now, profile):
+                self.db.telegram_online_prompts.update_one(
+                    {"reminderId": doc.get("reminderId")},
+                    {
+                        "$set": {
+                            "status": "closed",
+                            "closedAt": now,
+                            "closeAction": "stale_date",
+                            "updatedAt": now,
+                        }
+                    },
+                )
                 continue
 
             delay_seconds = composed(self).get_telegram_online_prompt_delay_seconds()

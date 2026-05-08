@@ -106,8 +106,9 @@ def handle_update(config: BotConfig, update: dict[str, Any]) -> None:
     text = message.get("text") or ""
     chat_type = str(chat.get("type") or "")
     username = telegram_username(message.get("from") or {})
+    first_word = (text.strip().lower().split(maxsplit=1) or [""])[0]
 
-    if text.strip().lower().split(maxsplit=1)[0] == "/start" and chat_type == "private" and username and chat_id:
+    if first_word == "/start" and chat_type == "private" and username and chat_id:
         result = save_private_chat(config.backend_url, config.bot_secret, username, int(chat_id))
         LOGGER.info("Saved private Telegram chat for @%s: %s", username, result)
         send_plain_message(config.token, int(chat_id), "Done. I can send meeting summaries here.")

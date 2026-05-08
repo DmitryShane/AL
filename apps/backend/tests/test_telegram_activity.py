@@ -43,6 +43,7 @@ from al_backend.telegram_bot import (
     meeting_summary_chat_id,
     format_meeting_recording_notification_message,
     format_meeting_summary_message,
+    handle_update,
     send_break_activity_prompt_message,
     send_duplicate_afk_prompt_message,
     send_online_prompt_message,
@@ -98,6 +99,34 @@ def test_telegram_bot_update_polling_includes_callbacks(monkeypatch):
     assert get_updates("token", None) == []
     assert captured["method"] == "getUpdates"
     assert "callback_query" in captured["params"]["allowed_updates"]
+
+def test_telegram_bot_ignores_empty_messages_without_crashing(monkeypatch):
+    calls = []
+    monkeypatch.setattr("al_backend.telegram_bot.submit_break_event", lambda *args, **kwargs: calls.append(args))
+
+    config = BotConfig(token="token", backend_url="http://backend", allowed_chat_id=123, bot_secret="secret")
+
+    handle_update(
+        config,
+        {
+            "message": {
+                "chat": {"id": 123, "type": "group"},
+                "from": {"username": "future_artist"},
+                "text": "   ",
+            }
+        },
+    )
+    handle_update(
+        config,
+        {
+            "message": {
+                "chat": {"id": 123, "type": "group"},
+                "from": {"username": "future_artist"},
+            }
+        },
+    )
+
+    assert calls == []
 
 def test_telegram_bot_reminder_message_mentions_author_and_has_buttons(monkeypatch):
     captured = {}
@@ -864,6 +893,35 @@ def test_telegram_online_prompt_superseded_when_day_session_exists_at_claim():
     doc = repo.db.telegram_online_prompts.items[0]
     assert doc["status"] == "closed"
     assert doc["closeAction"] == "superseded_day_session"
+
+def test_telegram_online_prompt_claim_closes_stale_dates():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+
+    assert repo.claim_due_telegram_online_prompts(dt.datetime(2026, 5, 2, 8, 20, tzinfo=dt.UTC)) == []
+
+    doc = repo.db.telegram_online_prompts.items[0]
+    assert doc["status"] == "closed"
+    assert doc["closeAction"] == "stale_date"
+
+def test_telegram_day_reminder_not_created_for_stale_day_session():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "A",
+            "telegramUsername": "ta",
+            "date": "2026-04-30",
+            "startedAt": dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    reminders = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 5, 2, 20, 0, tzinfo=dt.UTC))
+
+    assert reminders == []
+    assert repo.db.telegram_day_reminders.items == []
 
 def test_telegram_online_prompt_dismiss_closes_without_online_event():
     repo = fake_repository()

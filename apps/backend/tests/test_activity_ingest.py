@@ -1030,6 +1030,88 @@ def test_rebuild_restores_raw_event_batches_as_single_report_rows():
     assert rebuilt_rows[0]["idleDeltaSeconds"] == original_rows[0]["idleDeltaSeconds"]
     assert rebuilt_rows[0]["lastRecordedAt"] == original_rows[0]["lastRecordedAt"]
 
+def test_full_rebuild_does_not_schedule_telegram_online_prompts_from_snapshots():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
+    repo.db.activity_snapshots.insert_one(
+        {
+            "source": "ual",
+            "pluginVersion": "1",
+            "author": "Future Artist",
+            "authorEmail": "future@example.com",
+            "projectId": "unity",
+            "sessionId": "session",
+            "deviceId": "device",
+            "date": "2026-05-02",
+            "recordedAt": "2026-05-02T08:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 8, 0, tzinfo=dt.UTC),
+            "lastRecordedAt": "2026-05-02T08:00:00+00:00",
+            "lastReceivedAt": dt.datetime(2026, 5, 2, 8, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "timeZoneDisplayName": "UTC",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "breakSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "activityCounts": [{"type": "focus", "count": 1}],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    repo.rebuild_aggregates_if_needed(force=True)
+
+    assert repo.db.report_rows.items
+    assert repo.db.telegram_online_prompts.items == []
+
+def test_scoped_rebuild_does_not_schedule_telegram_prompts_from_snapshots():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
+    repo.db.break_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "telegramUsername": "future_artist",
+            "date": "2026-05-02",
+            "startedAt": dt.datetime(2026, 5, 2, 8, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.activity_snapshots.insert_one(
+        {
+            "source": "ual",
+            "pluginVersion": "1",
+            "author": "Future Artist",
+            "authorEmail": "future@example.com",
+            "projectId": "unity",
+            "sessionId": "session",
+            "deviceId": "device",
+            "date": "2026-05-02",
+            "recordedAt": "2026-05-02T09:05:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 9, 5, tzinfo=dt.UTC),
+            "lastRecordedAt": "2026-05-02T09:05:00+00:00",
+            "lastReceivedAt": dt.datetime(2026, 5, 2, 9, 5, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "timeZoneDisplayName": "UTC",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "breakSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "activityCounts": [{"type": "focus", "count": 1}],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    repo.rebuild_aggregates_for_dates("2026-05-02", dates=["2026-05-02"], authors=["Future Artist"])
+
+    assert repo.db.report_rows.items
+    assert repo.db.telegram_online_prompts.items == []
+    assert repo.db.telegram_break_activity_prompts.items == []
+
 def test_cross_midnight_raw_event_batch_splits_report_rows_by_local_date():
     repo = fake_repository()
     set_idle_threshold(repo, 60)

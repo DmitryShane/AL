@@ -167,6 +167,9 @@ class AuthorStatusEventsService(MongoComposableMixin):
         if callable(materialize_predicate) and not materialize_predicate(event_date, raw_author):
             return
 
+        if not self._should_materialize_status_report_row(raw_author, event_date, event_type, transition_at, str(event.get("reason") or "")):
+            return
+
         self.db.report_rows.delete_many(
             {
                 "source": "status",
@@ -200,3 +203,66 @@ class AuthorStatusEventsService(MongoComposableMixin):
                 **_empty_event_deltas(),
             }
         )
+
+    def _should_materialize_status_report_row(
+        self,
+        raw_author: str,
+        event_date: str,
+        event_type: str,
+        transition_at: dt.datetime,
+        reason: str,
+    ) -> bool:
+        if reason not in {"reports_stopped", "reports_resumed"}:
+            return True
+
+        if not self._author_uses_telegram_workday(raw_author):
+            return True
+
+        if event_type == "offline":
+            return self._has_open_telegram_workday_at(raw_author, event_date, transition_at)
+
+        if event_type != "online":
+            return True
+
+        for event in (
+            self.db.status_events.find(
+                {
+                    "rawAuthor": raw_author,
+                    "date": event_date,
+                    "statusEventType": "offline",
+                    "reason": "reports_stopped",
+                },
+                {"_id": 0, "transitionAt": 1},
+            )
+            .sort([("transitionAt", -1)])
+        ):
+            stopped_at = _coerce_datetime(event.get("transitionAt"))
+
+            if stopped_at and stopped_at <= transition_at:
+                return self._has_open_telegram_workday_at(raw_author, event_date, stopped_at)
+
+        return False
+
+    def _has_open_telegram_workday_at(self, raw_author: str, event_date: str, transition_at: dt.datetime) -> bool:
+        session = self.db.day_sessions.find_one(
+            {"rawAuthor": raw_author, "date": event_date},
+            {"_id": 0, "startedAt": 1, "lastOfflineAt": 1},
+        )
+
+        if not session:
+            return False
+
+        started_at = _coerce_datetime(session.get("startedAt"))
+        last_offline_at = _coerce_datetime(session.get("lastOfflineAt"))
+
+        if not started_at or transition_at < started_at:
+            return False
+
+        if last_offline_at and last_offline_at <= transition_at:
+            return False
+
+        return True
+
+    def _author_uses_telegram_workday(self, raw_author: str) -> bool:
+        profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0, "telegramUsername": 1}) or {}
+        return bool(str(profile.get("telegramUsername") or "").strip())

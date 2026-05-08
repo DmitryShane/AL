@@ -1329,6 +1329,14 @@ def test_reports_stopped_gap_heartbeats_count_idle_through_normal_delta_path():
 
 def test_status_events_rematerialize_report_rows_after_rebuild():
     repo = fake_repository()
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "telegramUsername": "future_artist",
+            "date": "2026-04-29",
+            "startedAt": dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+        }
+    )
     repo.record_status_event(
         "Future Artist",
         "offline",
@@ -1342,6 +1350,44 @@ def test_status_events_rematerialize_report_rows_after_rebuild():
 
     assert len(page["reports"]) == 1
     assert page["reports"][0]["statusEventType"] == "offline"
+
+def test_reports_stopped_status_event_without_open_workday_does_not_rematerialize_report_row():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
+    repo.db.status_events.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-04-29",
+            "statusEventType": "offline",
+            "transitionAt": dt.datetime(2026, 4, 29, 9, 2, 1, tzinfo=dt.UTC),
+            "receivedAt": dt.datetime(2026, 4, 29, 9, 2, 1, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "reason": "reports_stopped",
+        }
+    )
+
+    repo._materialize_status_report_rows()
+
+    assert repo.db.report_rows.count_documents({"source": "status", "author": "Future Artist"}) == 0
+
+def test_reports_resumed_without_valid_reports_stopped_does_not_rematerialize_report_row():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
+    repo.db.status_events.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-04-29",
+            "statusEventType": "online",
+            "transitionAt": dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC),
+            "receivedAt": dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "reason": "reports_resumed",
+        }
+    )
+
+    repo._materialize_status_report_rows()
+
+    assert repo.db.report_rows.count_documents({"source": "status", "author": "Future Artist"}) == 0
 
 def test_reports_stopped_closed_interval_does_not_hide_plugin_report_rows():
     repo = fake_repository()

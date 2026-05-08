@@ -37,6 +37,9 @@ def _metadata_bool(value: Any) -> bool:
 
 
 class ActivityAggregationService(MongoComposableMixin):
+    def _notifications_suppressed_for_rebuild(self) -> bool:
+        return bool(getattr(self, "_suppress_rebuild_notification_side_effects", False))
+
     def rebuild_aggregates_if_needed(
         self,
         force: bool = False,
@@ -67,25 +70,30 @@ class ActivityAggregationService(MongoComposableMixin):
             composed(self).invalidate_activity_summary_cache(target_dates)
             return
 
+        previous_suppression = getattr(self, "_suppress_rebuild_notification_side_effects", False)
+        self._suppress_rebuild_notification_side_effects = True
         self._daily_consumed_microseconds_cache = {}
-        self._report_rebuild_progress(progress_callback, "Clearing derived data", 0, 1)
-        self.db.report_rows.delete_many({})
-        self.db.daily_author_activity.delete_many({})
-        self.db.aggregate_session_state.delete_many({})
-        self.db.aggregate_day_state.delete_many({})
-        self._report_rebuild_progress(progress_callback, "Clearing derived data", 1, 1)
-        self._rebuild_aggregates_from_sources(progress_callback=progress_callback)
-        self._report_rebuild_progress(progress_callback, "Capturing day state", 0, 1)
-        self._persist_aggregate_day_state(sorted(self.db.daily_author_activity.distinct("date")), set())
-        self._report_rebuild_progress(progress_callback, "Capturing day state", 1, 1)
+        try:
+            self._report_rebuild_progress(progress_callback, "Clearing derived data", 0, 1)
+            self.db.report_rows.delete_many({})
+            self.db.daily_author_activity.delete_many({})
+            self.db.aggregate_session_state.delete_many({})
+            self.db.aggregate_day_state.delete_many({})
+            self._report_rebuild_progress(progress_callback, "Clearing derived data", 1, 1)
+            self._rebuild_aggregates_from_sources(progress_callback=progress_callback)
+            self._report_rebuild_progress(progress_callback, "Capturing day state", 0, 1)
+            self._persist_aggregate_day_state(sorted(self.db.daily_author_activity.distinct("date")), set())
+            self._report_rebuild_progress(progress_callback, "Capturing day state", 1, 1)
 
-        self.db.aggregate_metadata.update_one(
-            {"kind": "activity"},
-            {"$set": {"kind": "activity", "version": composed(self).aggregates_version, "rebuiltAt": dt.datetime.now(dt.UTC)}},
-            upsert=True,
-        )
-        composed(self).invalidate_activity_summary_cache()
-        self._daily_consumed_microseconds_cache = None
+            self.db.aggregate_metadata.update_one(
+                {"kind": "activity"},
+                {"$set": {"kind": "activity", "version": composed(self).aggregates_version, "rebuiltAt": dt.datetime.now(dt.UTC)}},
+                upsert=True,
+            )
+            composed(self).invalidate_activity_summary_cache()
+        finally:
+            self._daily_consumed_microseconds_cache = None
+            self._suppress_rebuild_notification_side_effects = previous_suppression
 
     def _current_author_calendar_dates(self) -> list[str]:
         now = dt.datetime.now(dt.UTC)
@@ -133,8 +141,10 @@ class ActivityAggregationService(MongoComposableMixin):
         self._report_rebuild_progress(progress_callback, "Clearing scoped derived data", 1, 1)
         previous_dates = getattr(self, "_aggregate_rebuild_target_dates", None)
         previous_authors = getattr(self, "_aggregate_rebuild_target_authors", None)
+        previous_suppression = getattr(self, "_suppress_rebuild_notification_side_effects", False)
         self._aggregate_rebuild_target_dates = set(target_dates)
         self._aggregate_rebuild_target_authors = set(target_authors)
+        self._suppress_rebuild_notification_side_effects = True
         self._daily_consumed_microseconds_cache = {}
 
         try:
@@ -142,6 +152,7 @@ class ActivityAggregationService(MongoComposableMixin):
         finally:
             self._aggregate_rebuild_target_dates = previous_dates
             self._aggregate_rebuild_target_authors = previous_authors
+            self._suppress_rebuild_notification_side_effects = previous_suppression
             self._daily_consumed_microseconds_cache = None
 
         self._report_rebuild_progress(progress_callback, "Capturing day state", 0, 1)
@@ -621,7 +632,8 @@ class ActivityAggregationService(MongoComposableMixin):
             str(snapshot.get("author") or "Unknown User"),
             str(snapshot.get("date") or ""),
         )
-        if materialize and _has_active_or_overtime_delta(deltas) and not suppress_vacation_prompt:
+        suppress_rebuild_notifications = self._notifications_suppressed_for_rebuild()
+        if materialize and not suppress_rebuild_notifications and _has_active_or_overtime_delta(deltas) and not suppress_vacation_prompt:
             composed(self)._schedule_telegram_break_activity_prompt_if_needed(
                 str(snapshot.get("author") or "Unknown User"),
                 str(snapshot.get("date") or ""),
@@ -629,7 +641,7 @@ class ActivityAggregationService(MongoComposableMixin):
                 report_time,
             )
 
-        if materialize and _has_time_delta(deltas) and not suppress_vacation_prompt:
+        if materialize and not suppress_rebuild_notifications and _has_time_delta(deltas) and not suppress_vacation_prompt:
             composed(self)._schedule_telegram_online_prompt_if_needed(
                 str(snapshot.get("author") or "Unknown User"),
                 str(snapshot.get("date") or ""),
