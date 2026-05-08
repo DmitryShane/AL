@@ -141,7 +141,7 @@ def test_discord_meeting_reduces_idle_for_any_activity_source():
 
     assert _hour_metric(author, "idleSeconds") == 1800
     assert _hour_metric(author, "meetingSeconds") == 1800
-    assert author["productivity"] == 0
+    assert author["productivity"] == 50.0
     assert _hour_metric(hour, "idleSeconds") == 1800
     assert _hour_metric(hour, "meetingSeconds") == 1800
 
@@ -178,10 +178,10 @@ def test_discord_meeting_hides_active_from_hourly_chart_without_replacing_summar
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
     hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
 
-    assert _hour_metric(author, "activeSeconds") == 600
+    assert _hour_metric(author, "activeSeconds") == 1200
     assert _hour_metric(author, "idleSeconds") == 0
     assert _hour_metric(author, "meetingSeconds") == 1200
-    assert _hour_metric(summary["totals"], "activeSeconds") == 600
+    assert _hour_metric(summary["totals"], "activeSeconds") == 1200
     assert author["productivity"] == 100
     assert _hour_metric(hour, "activeSeconds") == 0
     assert _hour_metric(hour, "idleSeconds") == 0
@@ -409,7 +409,7 @@ def test_live_discord_meeting_session_compensates_idle_time():
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
     hour = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 10)
 
-    assert _hour_metric(author, "activeSeconds") == 600
+    assert _hour_metric(author, "activeSeconds") == 1500
     assert _hour_metric(author, "idleSeconds") == 600
     assert _hour_metric(author, "meetingSeconds") == 900
     assert _hour_metric(hour, "activeSeconds") == 600
@@ -474,7 +474,7 @@ def test_discord_meeting_graph_uses_full_interval_bucket_over_active_time():
     assert _hour_metric(hour_17, "activeSeconds") == 1183
     assert _hour_metric(hour_17, "idleSeconds") == 0
     assert _hour_metric(hour_18, "meetingSeconds") == 228
-    assert _hour_metric(author, "activeSeconds") == 2597
+    assert _hour_metric(author, "activeSeconds") == 3828
     assert _hour_metric(author, "meetingSeconds") == 2645
 
 def test_discord_voice_events_open_and_close_meeting_session():

@@ -188,6 +188,45 @@ def test_activity_summary_counts_meeting_as_active_without_plugin_overlap_double
     assert hour_12["totals"]["meetingSeconds"] == 30 * 60
 
 
+def test_activity_summary_closed_meeting_interval_replaces_live_meeting_rows():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "timeZoneId": "UTC"})
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[8]["meetingSeconds"] = 20 * 60
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "discord",
+            "reportType": "meeting",
+            "author": "Igor Mats",
+            "projectId": "discord",
+            "date": "2026-05-08",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "startedAt": dt.datetime(2026, 5, 8, 8, 16, 19, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 8, 8, 43, 32, tzinfo=dt.UTC),
+            "date": "2026-05-08",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 27 * 60 + 13,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-08", end_date="2026-05-08")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Igor Mats")
+    hour_8 = next(item for item in summary["hourlyActivityByAuthor"][0]["hourlyActivity"] if item["hour"] == 8)
+
+    assert author["meetingSeconds"] == 27 * 60 + 13
+    assert author["activeSeconds"] == 27 * 60 + 13
+    assert author["pluginDaySeconds"] == 27 * 60 + 13
+    assert hour_8["totals"]["meetingSeconds"] == 27 * 60 + 13
+
+
 def test_activity_summary_adds_plugin_active_outside_meeting_to_meeting_active():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})

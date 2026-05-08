@@ -83,20 +83,6 @@ class ActivityLiveSummaryService(MongoComposableMixin):
         max_end = _date_start(dates[-1]) + dt.timedelta(days=2)
         buckets = {key: empty_hourly_activity() for key in author_dates}
 
-        for item in daily_items:
-            key = (str(item.get("author") or "Unknown User"), str(item.get("date") or ""))
-            target = buckets.get(key)
-
-            if not target:
-                continue
-
-            for hour in item.get("hourlyActivity") or []:
-                hour_index = int(hour.get("hour", 0))
-                meeting_seconds = int(hour.get("meetingSeconds", 0))
-
-                if meeting_seconds > 0 and 0 <= hour_index < len(target):
-                    target[hour_index]["meetingSeconds"] = int(target[hour_index].get("meetingSeconds", 0)) + meeting_seconds
-
         interval_query = {
             "rawAuthor": {"$in": authors},
             "startedAt": {"$lt": max_end},
@@ -111,6 +97,24 @@ class ActivityLiveSummaryService(MongoComposableMixin):
                 _coerce_datetime(interval.get("endedAt")),
                 _author_time_zone_id(interval.get("rawAuthor"), profiles, interval.get("timeZoneId")),
             )
+
+        for item in daily_items:
+            key = (str(item.get("author") or "Unknown User"), str(item.get("date") or ""))
+            target = buckets.get(key)
+
+            if not target:
+                continue
+
+            for hour in item.get("hourlyActivity") or []:
+                hour_index = int(hour.get("hour", 0))
+                meeting_seconds = int(hour.get("meetingSeconds", 0))
+
+                if meeting_seconds > 0 and 0 <= hour_index < len(target):
+                    existing_meeting_seconds = int(target[hour_index].get("meetingSeconds", 0))
+                    target[hour_index]["meetingSeconds"] = existing_meeting_seconds + max(
+                        0,
+                        meeting_seconds - existing_meeting_seconds,
+                    )
 
         return buckets
 
