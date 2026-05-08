@@ -3216,6 +3216,39 @@ p {
   margin: 0;
 }
 
+.openai-stats-progress {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 6px;
+}
+
+.openai-stats-progress-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #526173;
+  font-size: 12px;
+}
+
+.openai-stats-progress-label strong {
+  font-size: 12px;
+}
+
+.openai-stats-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.openai-stats-progress-track > div {
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 180ms ease;
+}
+
 .meeting-summary-prompt-panel {
   display: grid;
   gap: 12px;

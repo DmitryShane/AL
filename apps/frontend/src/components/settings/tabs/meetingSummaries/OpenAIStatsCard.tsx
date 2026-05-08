@@ -19,6 +19,10 @@ export function OpenAIStatsCard({
   onRefreshTotals
 }: OpenAIStatsCardProps) {
   const controlsDisabled = openAIStatsLoading || openAIStatsRefreshMode !== null;
+  const syncProgressTotal = openAIStats?.syncProgressTotal ?? 0;
+  const syncProgressCurrent = openAIStats?.syncProgressCurrent ?? 0;
+  const syncProgressPercent = syncProgressTotal > 0 ? Math.min(100, Math.round((syncProgressCurrent / syncProgressTotal) * 100)) : 0;
+  const isSyncing = openAIStats?.syncStatus === "syncingTotals" || openAIStats?.syncStatus === "syncingMonth";
 
   return (
     <div className="panel meeting-summary-openai-panel">
@@ -63,8 +67,19 @@ export function OpenAIStatsCard({
             {openAIStats.syncStatus === "syncingMonth" ? ", syncing current month" : ""}
             {openAIStats.syncStatus === "syncingTotals" ? ", syncing totals" : ""}
             {openAIStats.cached ? ", cached" : ""}
-            {openAIStats.generatedAt ? `, updated ${formatTimestamp(openAIStats.generatedAt)}` : ""}
+            {openAIStats.lastRefreshedAt ? `, updated ${formatTimestamp(openAIStats.lastRefreshedAt)}` : ""}
           </p>
+          {isSyncing ? (
+            <div className="openai-stats-progress">
+              <div className="openai-stats-progress-label">
+                <span>{openAIStats.syncProgressLabel || (openAIStats.syncStatus === "syncingMonth" ? "Syncing current month" : "Syncing totals")}</span>
+                {syncProgressTotal > 0 ? <strong>{syncProgressPercent}%</strong> : null}
+              </div>
+              <div className="openai-stats-progress-track">
+                <div style={{ width: `${syncProgressPercent}%` }} />
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : (
         <p className="empty">OpenAI stats have not loaded yet.</p>

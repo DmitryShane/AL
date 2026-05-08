@@ -7,6 +7,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 from ..activity_math import *
@@ -38,6 +39,7 @@ OPENAI_STATS_RESPONSE_CACHE_KIND = "openai_stats_response_cache_v1"
 OPENAI_STATS_LEGACY_CACHE_KIND = "openai_stats_cache"
 OPENAI_STATS_SYNC_STALE_SECONDS = 3600
 OPENAI_STATS_MONTH_REFRESH_SECONDS = 6 * 3600
+OPENAI_STATS_MAX_DAILY_BUCKETS = 31
 
 
 def _server_stats_category(key: str, path: Path) -> dict[str, Any]:
@@ -172,12 +174,20 @@ def _unknown_server_stats_service(key: str, label: str, unit: str) -> dict[str, 
     }
 
 
-def _fetch_openai_stats(api_key: str, now: dt.datetime, accumulator: dict[str, Any] | None) -> dict[str, Any]:
+ProgressCallback = Callable[[int, int, str], None]
+
+
+def _fetch_openai_stats(
+    api_key: str,
+    now: dt.datetime,
+    accumulator: dict[str, Any] | None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
     start = dt.datetime(now.year, now.month, 1, tzinfo=dt.UTC)
     start_time = int(start.timestamp())
     end_time = int(now.timestamp())
-    month_spend, month_currency = _fetch_openai_spend(api_key, start_time, end_time, 31)
-    next_accumulator = _refresh_openai_accumulator(api_key, now, accumulator, month_spend, month_currency)
+    month_spend, month_currency = _fetch_openai_spend(api_key, start_time, end_time)
+    next_accumulator = _refresh_openai_accumulator(api_key, now, accumulator, month_spend, month_currency, progress_callback)
 
     stats = {
         "configured": True,
@@ -199,6 +209,9 @@ def _fetch_openai_stats(api_key: str, now: dt.datetime, accumulator: dict[str, A
         "lastMonthRefreshAt": _coerce_datetime(next_accumulator.get("lastMonthRefreshAt")).isoformat()
         if _coerce_datetime(next_accumulator.get("lastMonthRefreshAt"))
         else None,
+        "lastRefreshedAt": _coerce_datetime(next_accumulator.get("lastRefreshedAt")).isoformat()
+        if _coerce_datetime(next_accumulator.get("lastRefreshedAt"))
+        else None,
         "syncStatus": str(next_accumulator.get("syncStatus") or "ready"),
     }
     return {"stats": stats, "accumulator": next_accumulator}
@@ -208,7 +221,7 @@ def _fetch_openai_month_only_stats(api_key: str, now: dt.datetime, accumulator: 
     start = dt.datetime(now.year, now.month, 1, tzinfo=dt.UTC)
     start_time = int(start.timestamp())
     end_time = int(now.timestamp())
-    month_spend, month_currency = _fetch_openai_spend(api_key, start_time, end_time, 31)
+    month_spend, month_currency = _fetch_openai_spend(api_key, start_time, end_time)
     previous = dict(accumulator)
     through = _coerce_datetime(previous.get("totalsCalculatedThrough"))
     total_spend = float(previous.get("totalSpend") or 0)
@@ -216,13 +229,14 @@ def _fetch_openai_month_only_stats(api_key: str, now: dt.datetime, accumulator: 
     total_requests = int(previous.get("totalRequests") or 0)
 
     if through and through < now:
-        spend_delta, currency = _fetch_openai_spend(api_key, int(through.timestamp()), end_time, 31)
+        spend_delta, currency = _fetch_openai_spend(api_key, int(through.timestamp()), end_time)
         total_spend += spend_delta
 
         for endpoint in OPENAI_STATS_USAGE_ENDPOINTS:
-            usage = _fetch_openai_usage(api_key, endpoint, int(through.timestamp()), end_time)
-            total_tokens += usage["tokens"]
-            total_requests += usage["requests"]
+            for chunk_start, chunk_end in _openai_daily_chunks(through, now):
+                usage = _fetch_openai_usage(api_key, endpoint, int(chunk_start.timestamp()), int(chunk_end.timestamp()))
+                total_tokens += usage["tokens"]
+                total_requests += usage["requests"]
 
         previous["totalsCalculatedThrough"] = now
         previous["lastIncrementalSyncAt"] = now
@@ -239,6 +253,7 @@ def _fetch_openai_month_only_stats(api_key: str, now: dt.datetime, accumulator: 
             "periodEnd": now,
             "generatedAt": now,
             "lastMonthRefreshAt": now,
+            "lastRefreshedAt": now,
             "syncStatus": "ready",
             "syncUpdatedAt": now,
             "currency": str(previous.get("currency") or month_currency or "usd").lower(),
@@ -257,6 +272,7 @@ def _refresh_openai_accumulator(
     accumulator: dict[str, Any] | None,
     month_spend: float,
     month_currency: str,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     previous = accumulator or {}
     through = _coerce_datetime(previous.get("totalsCalculatedThrough"))
@@ -286,16 +302,36 @@ def _refresh_openai_accumulator(
             "currency": str(previous.get("currency") or month_currency or "usd").lower(),
         }
 
-    range_start_time = int(range_start.timestamp())
     end_time = int(now.timestamp())
-    spend_delta, currency = _fetch_openai_spend(api_key, range_start_time, end_time, 180)
+    chunks = _openai_daily_chunks(range_start, now)
+    total_steps = 1 + (len(chunks) * len(OPENAI_STATS_USAGE_ENDPOINTS))
+    current_step = 0
+
+    if progress_callback:
+        progress_callback(current_step, total_steps, "Syncing costs")
+
+    spend_delta, currency = _fetch_openai_spend(api_key, int(range_start.timestamp()), end_time)
+    current_step += 1
+
+    if progress_callback:
+        progress_callback(current_step, total_steps, "Synced costs")
+
     tokens_delta = 0
     requests_delta = 0
 
     for endpoint in OPENAI_STATS_USAGE_ENDPOINTS:
-        usage = _fetch_openai_usage(api_key, endpoint, range_start_time, end_time)
-        tokens_delta += usage["tokens"]
-        requests_delta += usage["requests"]
+        for index, (chunk_start, chunk_end) in enumerate(chunks, start=1):
+            label = f"Syncing usage {endpoint} {index}/{len(chunks)}"
+            if progress_callback:
+                progress_callback(current_step, total_steps, label)
+
+            usage = _fetch_openai_usage(api_key, endpoint, int(chunk_start.timestamp()), int(chunk_end.timestamp()))
+            tokens_delta += usage["tokens"]
+            requests_delta += usage["requests"]
+            current_step += 1
+
+            if progress_callback:
+                progress_callback(current_step, total_steps, label)
 
     return {
         "kind": OPENAI_STATS_ACCUMULATOR_KIND,
@@ -308,6 +344,7 @@ def _refresh_openai_accumulator(
         "bootstrapCompletedAt": _coerce_datetime(previous.get("bootstrapCompletedAt")) or now,
         "lastIncrementalSyncAt": now,
         "lastMonthRefreshAt": now,
+        "lastRefreshedAt": now,
         "monthSpend": round(month_spend, 6),
         "periodStart": dt.datetime(now.year, now.month, 1, tzinfo=dt.UTC),
         "periodEnd": now,
@@ -315,17 +352,12 @@ def _refresh_openai_accumulator(
     }
 
 
-def _fetch_openai_spend(
-    api_key: str,
-    start_time: int,
-    end_time: int,
-    limit: int,
-) -> tuple[float, str]:
+def _fetch_openai_spend(api_key: str, start_time: int, end_time: int) -> tuple[float, str]:
     params: dict[str, int | str | list[str]] = {
         "start_time": start_time,
         "end_time": end_time,
         "bucket_width": "1d",
-        "limit": limit,
+        "limit": OPENAI_STATS_MAX_DAILY_BUCKETS,
     }
 
     spend = 0.0
@@ -333,7 +365,7 @@ def _fetch_openai_spend(
     page: str | None = None
 
     while True:
-        params["limit"] = limit
+        params["limit"] = OPENAI_STATS_MAX_DAILY_BUCKETS
 
         if page:
             params["page"] = page
@@ -364,7 +396,7 @@ def _fetch_openai_usage(api_key: str, endpoint: str, start_time: int, end_time: 
         "start_time": start_time,
         "end_time": end_time,
         "bucket_width": "1d",
-        "limit": 180,
+        "limit": OPENAI_STATS_MAX_DAILY_BUCKETS,
     }
 
     tokens = 0
@@ -396,6 +428,22 @@ def _fetch_openai_usage(api_key: str, endpoint: str, start_time: int, end_time: 
     return {"tokens": tokens, "requests": requests}
 
 
+def _openai_daily_chunks(start: dt.datetime, end: dt.datetime) -> list[tuple[dt.datetime, dt.datetime]]:
+    if start >= end:
+        return []
+
+    chunks: list[tuple[dt.datetime, dt.datetime]] = []
+    cursor = start
+    max_delta = dt.timedelta(days=OPENAI_STATS_MAX_DAILY_BUCKETS)
+
+    while cursor < end:
+        chunk_end = min(cursor + max_delta, end)
+        chunks.append((cursor, chunk_end))
+        cursor = chunk_end
+
+    return chunks
+
+
 def _openai_get(api_key: str, path: str, params: dict[str, int | str | list[str]]) -> dict[str, Any]:
     url = f"https://api.openai.com{path}?{urllib.parse.urlencode(params, doseq=True)}"
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
@@ -417,6 +465,7 @@ def _openai_stats_from_accumulator(accumulator: dict[str, Any]) -> dict[str, Any
     totals_calculated_through = _coerce_datetime(accumulator.get("totalsCalculatedThrough"))
     last_incremental_sync_at = _coerce_datetime(accumulator.get("lastIncrementalSyncAt"))
     last_month_refresh_at = _coerce_datetime(accumulator.get("lastMonthRefreshAt"))
+    last_refreshed_at = _coerce_datetime(accumulator.get("lastRefreshedAt"))
 
     return {
         "configured": True,
@@ -432,6 +481,10 @@ def _openai_stats_from_accumulator(accumulator: dict[str, Any]) -> dict[str, Any
         "totalsCalculatedThrough": totals_calculated_through.isoformat() if totals_calculated_through else None,
         "lastIncrementalSyncAt": last_incremental_sync_at.isoformat() if last_incremental_sync_at else None,
         "lastMonthRefreshAt": last_month_refresh_at.isoformat() if last_month_refresh_at else None,
+        "lastRefreshedAt": last_refreshed_at.isoformat() if last_refreshed_at else None,
+        "syncProgressCurrent": int(accumulator.get("syncProgressCurrent") or 0),
+        "syncProgressTotal": int(accumulator.get("syncProgressTotal") or 0),
+        "syncProgressLabel": str(accumulator.get("syncProgressLabel") or ""),
         "syncStatus": str(accumulator.get("syncStatus") or "ready"),
     }
 
@@ -450,6 +503,9 @@ def _empty_openai_stats(now: dt.datetime, *, sync_status: str = "totalsMissing")
         "totalTokens": 0,
         "totalRequests": 0,
         "syncStatus": sync_status,
+        "syncProgressCurrent": 0,
+        "syncProgressTotal": 0,
+        "syncProgressLabel": "",
     }
 
 
@@ -590,6 +646,9 @@ class SettingsRepository(MongoComposableMixin):
             "syncStatus": "syncingTotals",
             "syncStartedAt": now,
             "syncUpdatedAt": now,
+            "syncProgressCurrent": 0,
+            "syncProgressTotal": 1,
+            "syncProgressLabel": "Starting totals sync",
             "bootstrapStartedAt": now,
         }
         self.db.system_settings.update_one(
@@ -603,6 +662,9 @@ class SettingsRepository(MongoComposableMixin):
         stats = dict(cached_stats or _empty_openai_stats(now))
         stats["cached"] = True
         stats["syncStatus"] = "syncingTotals"
+        stats["syncProgressCurrent"] = 0
+        stats["syncProgressTotal"] = 1
+        stats["syncProgressLabel"] = "Starting totals sync"
         return stats
 
     def _queue_openai_stats_month_sync(
@@ -619,13 +681,25 @@ class SettingsRepository(MongoComposableMixin):
 
         self.db.system_settings.update_one(
             {"kind": OPENAI_STATS_ACCUMULATOR_KIND},
-            {"$set": {"syncStatus": "syncingMonth", "syncStartedAt": now, "syncUpdatedAt": now}},
+            {
+                "$set": {
+                    "syncStatus": "syncingMonth",
+                    "syncStartedAt": now,
+                    "syncUpdatedAt": now,
+                    "syncProgressCurrent": 0,
+                    "syncProgressTotal": 1,
+                    "syncProgressLabel": "Syncing current month",
+                }
+            },
             upsert=True,
         )
         background_tasks.add_task(self._run_openai_stats_month_sync)
         stats = dict(cached_stats or _openai_stats_from_accumulator(accumulator))
         stats["cached"] = True
         stats["syncStatus"] = "syncingMonth"
+        stats["syncProgressCurrent"] = 0
+        stats["syncProgressTotal"] = 1
+        stats["syncProgressLabel"] = "Syncing current month"
         return stats
 
     def _refresh_openai_stats_month(self, accumulator: dict[str, Any], now: dt.datetime) -> dict[str, Any]:
@@ -665,8 +739,24 @@ class SettingsRepository(MongoComposableMixin):
         now = dt.datetime.now(dt.UTC)
         accumulator: dict[str, Any] | None = None
 
+        def progress(current: int, total: int, label: str) -> None:
+            self.db.system_settings.update_one(
+                {"kind": OPENAI_STATS_ACCUMULATOR_KIND},
+                {
+                    "$set": {
+                        "kind": OPENAI_STATS_ACCUMULATOR_KIND,
+                        "syncStatus": "syncingTotals",
+                        "syncUpdatedAt": dt.datetime.now(dt.UTC),
+                        "syncProgressCurrent": current,
+                        "syncProgressTotal": total,
+                        "syncProgressLabel": label,
+                    }
+                },
+                upsert=True,
+            )
+
         try:
-            result = _fetch_openai_stats(composed(self).openai_usage_api_key, now, accumulator)
+            result = _fetch_openai_stats(composed(self).openai_usage_api_key, now, accumulator, progress_callback=progress)
         except RuntimeError as exc:
             self.db.system_settings.update_one(
                 {"kind": OPENAI_STATS_ACCUMULATOR_KIND},
@@ -675,6 +765,7 @@ class SettingsRepository(MongoComposableMixin):
                         "kind": OPENAI_STATS_ACCUMULATOR_KIND,
                         "syncStatus": "error",
                         "syncUpdatedAt": dt.datetime.now(dt.UTC),
+                        "syncProgressLabel": "Totals sync failed",
                         "lastError": str(exc),
                     }
                 },
@@ -687,8 +778,14 @@ class SettingsRepository(MongoComposableMixin):
         next_accumulator = result["accumulator"]
         next_accumulator["syncStatus"] = "ready"
         next_accumulator["syncUpdatedAt"] = dt.datetime.now(dt.UTC)
+        next_accumulator["syncProgressCurrent"] = next_accumulator.get("syncProgressTotal") or 1
+        next_accumulator["syncProgressTotal"] = next_accumulator.get("syncProgressTotal") or 1
+        next_accumulator["syncProgressLabel"] = "Totals sync complete"
         next_accumulator["lastMonthRefreshAt"] = next_accumulator.get("lastMonthRefreshAt") or now
+        next_accumulator["lastRefreshedAt"] = now
         next_accumulator.pop("lastError", None)
+        stats = _openai_stats_from_accumulator(next_accumulator)
+        stats["cached"] = False
 
         self.db.system_settings.update_one(
             {"kind": OPENAI_STATS_ACCUMULATOR_KIND},

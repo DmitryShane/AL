@@ -12,7 +12,7 @@ def test_openai_stats_totals_sync_bootstraps_organization_totals(monkeypatch) ->
     now = dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC)
     monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
 
-    def fake_spend(api_key: str, start_time: int, end_time: int, limit: int) -> tuple[float, str]:
+    def fake_spend(api_key: str, start_time: int, end_time: int) -> tuple[float, str]:
         assert api_key == "usage-key"
         calls.append(("spend", start_time, end_time))
         if start_time == int(dt.datetime(2026, 5, 1, tzinfo=dt.UTC).timestamp()):
@@ -23,7 +23,6 @@ def test_openai_stats_totals_sync_bootstraps_organization_totals(monkeypatch) ->
     def fake_usage(api_key: str, endpoint: str, start_time: int, end_time: int) -> dict[str, int]:
         assert api_key == "usage-key"
         calls.append((endpoint, start_time, end_time))
-        assert start_time == int(settings_repo.OPENAI_STATS_HISTORY_START.timestamp())
         return {"tokens": 1000 if endpoint == "completions" else 50, "requests": 10 if endpoint == "completions" else 2}
 
     monkeypatch.setattr(settings_repo, "_fetch_openai_spend", fake_spend)
@@ -40,8 +39,9 @@ def test_openai_stats_totals_sync_bootstraps_organization_totals(monkeypatch) ->
     stats = repo.db.system_settings.find_one({"kind": settings_repo.OPENAI_STATS_RESPONSE_CACHE_KIND})["stats"]
     assert stats["totalSpend"] == 98.76
     assert stats["monthSpend"] == 12.34
-    assert stats["totalTokens"] == 1050
-    assert stats["totalRequests"] == 12
+    expected_chunk_count = len(settings_repo._openai_daily_chunks(settings_repo.OPENAI_STATS_HISTORY_START, now))
+    assert stats["totalTokens"] == expected_chunk_count * 1050
+    assert stats["totalRequests"] == expected_chunk_count * 12
     assert "projectId" not in stats
     assert any(call[0] == "completions" for call in calls)
     assert repo.db.system_settings.find_one({"kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND})["totalSpend"] == 98.76
@@ -69,7 +69,7 @@ def test_openai_stats_month_refresh_uses_incremental_watermark(monkeypatch) -> N
     spend_ranges: list[tuple[int, int]] = []
     usage_ranges: list[tuple[str, int, int]] = []
 
-    def fake_spend(_api_key: str, start_time: int, end_time: int, _limit: int) -> tuple[float, str]:
+    def fake_spend(_api_key: str, start_time: int, end_time: int) -> tuple[float, str]:
         spend_ranges.append((start_time, end_time))
         month_start = int(dt.datetime(2026, 5, 1, tzinfo=dt.UTC).timestamp())
         if start_time == month_start:
@@ -93,6 +93,32 @@ def test_openai_stats_month_refresh_uses_incremental_watermark(monkeypatch) -> N
     assert stats["totalRequests"] == 22
     assert (int(previous_through.timestamp()), int(now.timestamp())) in spend_ranges
     assert {item[0] for item in usage_ranges} == {"completions", "audio_transcriptions"}
+
+
+def test_openai_stats_historical_usage_is_chunked_to_31_days(monkeypatch) -> None:
+    repo = fake_repository()
+    repo.openai_usage_api_key = "usage-key"
+    now = dt.datetime(2026, 3, 5, 12, 0, tzinfo=dt.UTC)
+    start = dt.datetime(2026, 1, 1, 12, 0, tzinfo=dt.UTC)
+    monkeypatch.setattr(settings_repo, "OPENAI_STATS_HISTORY_START", start)
+    monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
+    usage_ranges: list[tuple[str, int, int]] = []
+
+    monkeypatch.setattr(settings_repo, "_fetch_openai_spend", lambda *_args: (1.0, "usd"))
+
+    def fake_usage(_api_key: str, endpoint: str, start_time: int, end_time: int) -> dict[str, int]:
+        usage_ranges.append((endpoint, start_time, end_time))
+        assert end_time - start_time <= 31 * 24 * 3600
+        return {"tokens": 1, "requests": 1}
+
+    monkeypatch.setattr(settings_repo, "_fetch_openai_usage", fake_usage)
+
+    repo._run_openai_stats_totals_sync()
+
+    completions_ranges = [item for item in usage_ranges if item[0] == "completions"]
+    transcriptions_ranges = [item for item in usage_ranges if item[0] == "audio_transcriptions"]
+    assert len(completions_ranges) == 3
+    assert len(transcriptions_ranges) == 3
 
 
 def test_openai_stats_refresh_bypasses_response_cache(monkeypatch) -> None:
@@ -272,7 +298,7 @@ def test_openai_stats_background_totals_sync_updates_accumulator_and_cache(monke
     now = dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC)
     monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
 
-    def fake_fetch(_api_key: str, fetch_now: dt.datetime, _accumulator: dict | None) -> dict:
+    def fake_fetch(_api_key: str, fetch_now: dt.datetime, _accumulator: dict | None, progress_callback=None) -> dict:
         return {
             "stats": {
                 "configured": True,

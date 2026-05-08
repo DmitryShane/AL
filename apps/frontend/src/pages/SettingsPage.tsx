@@ -311,6 +311,22 @@ export function SettingsPage({
     void loadOpenAIStats();
   }, [settingsTab]);
 
+  useEffect(() => {
+    if (settingsTab !== "meetingSummaries") {
+      return;
+    }
+
+    if (openAIStats?.syncStatus !== "syncingTotals" && openAIStats?.syncStatus !== "syncingMonth") {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadOpenAIStats();
+    }, 5000);
+
+    return () => window.clearTimeout(timer);
+  }, [openAIStats?.syncStatus, openAIStats?.syncProgressCurrent, settingsTab]);
+
   function setSettingsTab(tab: SettingsTab) {
     setSettingsTabState(tab);
     localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, tab);

@@ -230,6 +230,10 @@ export type OpenAIStats = {
   totalsCalculatedThrough?: string | null;
   lastIncrementalSyncAt?: string | null;
   lastMonthRefreshAt?: string | null;
+  lastRefreshedAt?: string | null;
+  syncProgressCurrent?: number;
+  syncProgressTotal?: number;
+  syncProgressLabel?: string;
   syncStatus?: "syncing" | "ready" | "error" | string;
   error?: string;
 };
