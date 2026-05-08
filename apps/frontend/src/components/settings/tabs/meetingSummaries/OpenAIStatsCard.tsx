@@ -43,8 +43,7 @@ export function OpenAIStatsCard({ openAIStats, openAIStatsError, openAIStatsLoad
             <strong>{formatCompactNumber(openAIStats.totalRequests ?? 0)}</strong>
           </div>
           <p>
-            Current month
-            {openAIStats.projectId ? ", organization Mempic, project ALManager" : ""}
+            Organization totals, current month spend
             {openAIStats.cached ? ", cached" : ""}
             {openAIStats.generatedAt ? `, updated ${formatTimestamp(openAIStats.generatedAt)}` : ""}
           </p>

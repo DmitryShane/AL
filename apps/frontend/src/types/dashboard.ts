@@ -222,12 +222,13 @@ export type OpenAIStats = {
   generatedAt?: string;
   periodStart?: string;
   periodEnd?: string;
-  projectId?: string | null;
   totalSpend?: number;
   monthSpend?: number;
   currency?: string;
   totalTokens?: number;
   totalRequests?: number;
+  totalsCalculatedThrough?: string | null;
+  lastIncrementalSyncAt?: string | null;
   error?: string;
 };
 

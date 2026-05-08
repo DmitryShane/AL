@@ -315,11 +315,11 @@ export function SettingsPage({
     localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, tab);
   }
 
-  async function loadOpenAIStats() {
+  async function loadOpenAIStats(refresh = false) {
     setOpenAIStatsLoading(true);
 
     try {
-      const response = await apiFetch("/api/v1/settings/openai-stats");
+      const response = await apiFetch(`/api/v1/settings/openai-stats${refresh ? "?refresh=true" : ""}`);
 
       if (!response.ok) {
         throw new Error(await apiErrorDetail(response, "OpenAI stats load failed"));
@@ -1343,7 +1343,7 @@ export function SettingsPage({
           onSaveMeetingSummarySettings={() => void saveMeetingSummarySettings()}
           onSaveMeetingSummaryPrompt={() => void saveMeetingSummaryPrompt()}
           onSaveMeetingSummaryTelegramTemplate={() => void saveMeetingSummaryTelegramTemplate()}
-          onRefreshOpenAIStats={() => void loadOpenAIStats()}
+          onRefreshOpenAIStats={() => void loadOpenAIStats(true)}
         />
       ) : (
         <SiteUsersPanel currentUser={currentUser} authorProfiles={profiles} authorProfileDrafts={drafts} />

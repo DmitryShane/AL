@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from ..api_security import require_discord_bot_secret, require_permission, require_server_stats_permission
 from ..container import BackendServices
@@ -29,10 +29,11 @@ def server_reboot(
 
 @router.get("/api/v1/settings/openai-stats")
 def openai_stats(
+    refresh: bool = Query(False),
     _: dict = Depends(require_permission("manageSettings")),
     service: BackendServices = Depends(get_settings_service),
 ) -> dict:
-    return service.get_openai_stats()
+    return service.get_openai_stats(refresh=refresh)
 
 
 @router.put("/api/v1/settings/avatars")

@@ -32,7 +32,9 @@ SERVER_STATS_SERVICES = (
 )
 OPENAI_STATS_CACHE_TTL_SECONDS = 300
 OPENAI_STATS_USAGE_ENDPOINTS = ("completions", "audio_transcriptions")
-OPENAI_STATS_TOTAL_SPEND_START = dt.datetime(2025, 1, 1, tzinfo=dt.UTC)
+OPENAI_STATS_HISTORY_START = dt.datetime(2020, 1, 1, tzinfo=dt.UTC)
+OPENAI_STATS_ACCUMULATOR_KIND = "openai_stats_accumulator_v1"
+OPENAI_STATS_RESPONSE_CACHE_KIND = "openai_stats_response_cache_v1"
 
 
 def _server_stats_category(key: str, path: Path) -> dict[str, Any]:
@@ -167,51 +169,99 @@ def _unknown_server_stats_service(key: str, label: str, unit: str) -> dict[str, 
     }
 
 
-def _fetch_openai_stats(api_key: str, project_id: str, now: dt.datetime) -> dict[str, Any]:
+def _fetch_openai_stats(api_key: str, now: dt.datetime, accumulator: dict[str, Any] | None) -> dict[str, Any]:
     start = dt.datetime(now.year, now.month, 1, tzinfo=dt.UTC)
     start_time = int(start.timestamp())
     end_time = int(now.timestamp())
-    spend, currency = _fetch_openai_month_spend(api_key, project_id, start_time, end_time)
-    total_spend, total_currency = spend, currency
-    try:
-        total_spend, total_currency = _fetch_openai_total_spend(api_key, project_id, end_time)
-    except RuntimeError:
-        pass
-    total_tokens = 0
-    total_requests = 0
+    month_spend, month_currency = _fetch_openai_spend(api_key, start_time, end_time, 31)
+    next_accumulator = _refresh_openai_accumulator(api_key, now, accumulator, month_spend, month_currency)
 
-    for endpoint in OPENAI_STATS_USAGE_ENDPOINTS:
-        usage = _fetch_openai_usage(api_key, endpoint, project_id, start_time, end_time)
-        total_tokens += usage["tokens"]
-        total_requests += usage["requests"]
-
-    return {
+    stats = {
         "configured": True,
         "cached": False,
         "generatedAt": now.isoformat(),
         "periodStart": start.isoformat(),
         "periodEnd": now.isoformat(),
-        "projectId": project_id or None,
-        "totalSpend": round(total_spend, 6),
-        "monthSpend": round(spend, 6),
-        "currency": (currency or total_currency).upper(),
-        "totalTokens": total_tokens,
-        "totalRequests": total_requests,
+        "totalSpend": round(float(next_accumulator.get("totalSpend") or 0), 6),
+        "monthSpend": round(month_spend, 6),
+        "currency": str(next_accumulator.get("currency") or month_currency or "usd").upper(),
+        "totalTokens": int(next_accumulator.get("totalTokens") or 0),
+        "totalRequests": int(next_accumulator.get("totalRequests") or 0),
+        "totalsCalculatedThrough": _coerce_datetime(next_accumulator.get("totalsCalculatedThrough")).isoformat()
+        if _coerce_datetime(next_accumulator.get("totalsCalculatedThrough"))
+        else None,
+        "lastIncrementalSyncAt": _coerce_datetime(next_accumulator.get("lastIncrementalSyncAt")).isoformat()
+        if _coerce_datetime(next_accumulator.get("lastIncrementalSyncAt"))
+        else None,
     }
+    return {"stats": stats, "accumulator": next_accumulator}
 
 
-def _fetch_openai_month_spend(api_key: str, project_id: str, start_time: int, end_time: int) -> tuple[float, str]:
-    return _fetch_openai_spend(api_key, project_id, start_time, end_time, 31)
+def _refresh_openai_accumulator(
+    api_key: str,
+    now: dt.datetime,
+    accumulator: dict[str, Any] | None,
+    month_spend: float,
+    month_currency: str,
+) -> dict[str, Any]:
+    previous = accumulator or {}
+    through = _coerce_datetime(previous.get("totalsCalculatedThrough"))
+    bootstrap_complete = bool(previous.get("bootstrapCompletedAt"))
 
+    if not through or not bootstrap_complete:
+        range_start = OPENAI_STATS_HISTORY_START
+        bootstrap_started_at = now
+        previous_spend = 0.0
+        previous_tokens = 0
+        previous_requests = 0
+    else:
+        range_start = through
+        bootstrap_started_at = _coerce_datetime(previous.get("bootstrapStartedAt")) or now
+        previous_spend = float(previous.get("totalSpend") or 0)
+        previous_tokens = int(previous.get("totalTokens") or 0)
+        previous_requests = int(previous.get("totalRequests") or 0)
 
-def _fetch_openai_total_spend(api_key: str, project_id: str, end_time: int) -> tuple[float, str]:
-    openai_api_start_time = int(OPENAI_STATS_TOTAL_SPEND_START.timestamp())
-    return _fetch_openai_spend(api_key, project_id, openai_api_start_time, end_time, 180)
+    if range_start >= now:
+        return {
+            **previous,
+            "kind": OPENAI_STATS_ACCUMULATOR_KIND,
+            "monthSpend": round(month_spend, 6),
+            "periodStart": dt.datetime(now.year, now.month, 1, tzinfo=dt.UTC),
+            "periodEnd": now,
+            "generatedAt": now,
+            "currency": str(previous.get("currency") or month_currency or "usd").lower(),
+        }
+
+    range_start_time = int(range_start.timestamp())
+    end_time = int(now.timestamp())
+    spend_delta, currency = _fetch_openai_spend(api_key, range_start_time, end_time, 180)
+    tokens_delta = 0
+    requests_delta = 0
+
+    for endpoint in OPENAI_STATS_USAGE_ENDPOINTS:
+        usage = _fetch_openai_usage(api_key, endpoint, range_start_time, end_time)
+        tokens_delta += usage["tokens"]
+        requests_delta += usage["requests"]
+
+    return {
+        "kind": OPENAI_STATS_ACCUMULATOR_KIND,
+        "totalSpend": round(previous_spend + spend_delta, 6),
+        "totalTokens": previous_tokens + tokens_delta,
+        "totalRequests": previous_requests + requests_delta,
+        "currency": str(currency or previous.get("currency") or month_currency or "usd").lower(),
+        "totalsCalculatedThrough": now,
+        "bootstrapStartedAt": bootstrap_started_at,
+        "bootstrapCompletedAt": _coerce_datetime(previous.get("bootstrapCompletedAt")) or now,
+        "lastIncrementalSyncAt": now,
+        "monthSpend": round(month_spend, 6),
+        "periodStart": dt.datetime(now.year, now.month, 1, tzinfo=dt.UTC),
+        "periodEnd": now,
+        "generatedAt": now,
+    }
 
 
 def _fetch_openai_spend(
     api_key: str,
-    project_id: str,
     start_time: int,
     end_time: int,
     limit: int,
@@ -221,7 +271,6 @@ def _fetch_openai_spend(
         "end_time": end_time,
         "bucket_width": "1d",
         "limit": limit,
-        "group_by": ["project_id"],
     }
 
     spend = 0.0
@@ -244,9 +293,6 @@ def _fetch_openai_spend(
 
         for bucket in payload.get("data", []):
             for result in bucket.get("results", bucket.get("result", [])):
-                if project_id and result.get("project_id") != project_id:
-                    continue
-
                 amount = result.get("amount") or {}
                 spend += float(amount.get("value") or 0)
                 currency = amount.get("currency") or currency
@@ -258,31 +304,39 @@ def _fetch_openai_spend(
     return spend, currency
 
 
-def _fetch_openai_usage(api_key: str, endpoint: str, project_id: str, start_time: int, end_time: int) -> dict[str, int]:
+def _fetch_openai_usage(api_key: str, endpoint: str, start_time: int, end_time: int) -> dict[str, int]:
     params: dict[str, int | str | list[str]] = {
         "start_time": start_time,
         "end_time": end_time,
         "bucket_width": "1d",
-        "limit": 31,
-        "group_by": ["project_id"],
+        "limit": 180,
     }
 
-    payload = _openai_get(
-        api_key,
-        f"/v1/organization/usage/{endpoint}",
-        params,
-    )
     tokens = 0
     requests = 0
+    page: str | None = None
 
-    for bucket in payload.get("data", []):
-        for result in bucket.get("results", bucket.get("result", [])):
-            if project_id and result.get("project_id") != project_id:
-                continue
+    while True:
+        if page:
+            params["page"] = page
+        elif "page" in params:
+            del params["page"]
 
-            tokens += int(result.get("input_tokens") or 0)
-            tokens += int(result.get("output_tokens") or 0)
-            requests += int(result.get("num_model_requests") or 0)
+        payload = _openai_get(
+            api_key,
+            f"/v1/organization/usage/{endpoint}",
+            params,
+        )
+
+        for bucket in payload.get("data", []):
+            for result in bucket.get("results", bucket.get("result", [])):
+                tokens += int(result.get("input_tokens") or 0)
+                tokens += int(result.get("output_tokens") or 0)
+                requests += int(result.get("num_model_requests") or 0)
+
+        page = payload.get("next_page")
+        if not page:
+            break
 
     return {"tokens": tokens, "requests": requests}
 
@@ -301,32 +355,74 @@ def _openai_get(api_key: str, path: str, params: dict[str, int | str | list[str]
         raise RuntimeError(f"OpenAI stats request failed: {exc}") from exc
 
 
+def _openai_stats_from_accumulator(accumulator: dict[str, Any]) -> dict[str, Any]:
+    generated_at = _coerce_datetime(accumulator.get("generatedAt"))
+    period_start = _coerce_datetime(accumulator.get("periodStart"))
+    period_end = _coerce_datetime(accumulator.get("periodEnd"))
+    totals_calculated_through = _coerce_datetime(accumulator.get("totalsCalculatedThrough"))
+    last_incremental_sync_at = _coerce_datetime(accumulator.get("lastIncrementalSyncAt"))
+
+    return {
+        "configured": True,
+        "cached": True,
+        "generatedAt": generated_at.isoformat() if generated_at else None,
+        "periodStart": period_start.isoformat() if period_start else None,
+        "periodEnd": period_end.isoformat() if period_end else None,
+        "totalSpend": round(float(accumulator.get("totalSpend") or 0), 6),
+        "monthSpend": round(float(accumulator.get("monthSpend") or 0), 6),
+        "currency": str(accumulator.get("currency") or "usd").upper(),
+        "totalTokens": int(accumulator.get("totalTokens") or 0),
+        "totalRequests": int(accumulator.get("totalRequests") or 0),
+        "totalsCalculatedThrough": totals_calculated_through.isoformat() if totals_calculated_through else None,
+        "lastIncrementalSyncAt": last_incremental_sync_at.isoformat() if last_incremental_sync_at else None,
+    }
+
+
 class SettingsRepository(MongoComposableMixin):
-    def get_openai_stats(self) -> dict[str, Any]:
+    def get_openai_stats(self, refresh: bool = False) -> dict[str, Any]:
         if not getattr(composed(self), "openai_usage_api_key", ""):
             return {"configured": False, "error": "AL_OPENAI_USAGE_API_KEY is not configured"}
 
-        cached = self.db.system_settings.find_one({"kind": "openai_stats_cache"}, {"_id": 0}) or {}
+        cached = self.db.system_settings.find_one({"kind": OPENAI_STATS_RESPONSE_CACHE_KIND}, {"_id": 0}) or {}
         cached_at = _coerce_datetime(cached.get("cachedAt"))
         now = dt.datetime.now(dt.UTC)
 
-        if cached_at and (now - cached_at).total_seconds() < OPENAI_STATS_CACHE_TTL_SECONDS and cached.get("stats"):
+        if (
+            not refresh
+            and cached_at
+            and (now - cached_at).total_seconds() < OPENAI_STATS_CACHE_TTL_SECONDS
+            and cached.get("stats")
+        ):
             stats = dict(cached["stats"])
             stats["cached"] = True
             return stats
 
+        accumulator = self.db.system_settings.find_one({"kind": OPENAI_STATS_ACCUMULATOR_KIND}, {"_id": 0}) or None
+
         try:
-            stats = _fetch_openai_stats(
+            result = _fetch_openai_stats(
                 composed(self).openai_usage_api_key,
-                getattr(composed(self), "openai_usage_project_id", ""),
                 now,
+                accumulator,
             )
         except RuntimeError as exc:
+            if accumulator:
+                stats = _openai_stats_from_accumulator(accumulator)
+                stats["cached"] = True
+                stats["error"] = str(exc)
+                return stats
             return {"configured": True, "error": str(exc)}
 
+        stats = result["stats"]
+        next_accumulator = result["accumulator"]
         self.db.system_settings.update_one(
-            {"kind": "openai_stats_cache"},
-            {"$set": {"kind": "openai_stats_cache", "cachedAt": now, "stats": stats}},
+            {"kind": OPENAI_STATS_ACCUMULATOR_KIND},
+            {"$set": next_accumulator},
+            upsert=True,
+        )
+        self.db.system_settings.update_one(
+            {"kind": OPENAI_STATS_RESPONSE_CACHE_KIND},
+            {"$set": {"kind": OPENAI_STATS_RESPONSE_CACHE_KIND, "cachedAt": now, "stats": stats}},
             upsert=True,
         )
         return stats
@@ -730,5 +826,3 @@ class SettingsRepository(MongoComposableMixin):
                 settings.get("meetingSummaryTelegramTemplate") or DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE
             ),
         }
-
-
