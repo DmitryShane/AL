@@ -116,8 +116,11 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
         generated.extend(active_segments)
     else:
         _append_available_seconds(generated, "active", time_seconds(hour, "activeSeconds", "activeMicroseconds"))
+    overtime_start_second = hour.get(INTERNAL_OVERTIME_START_SECOND)
     overtime_segments = _segments_for_kind(hour, "overtime")
-    if overtime_segments:
+    if _clamp_second(overtime_start_second) is not None:
+        generated.extend(_stacked_segments("overtime", time_seconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds"), int(overtime_start_second)))
+    elif overtime_segments:
         generated.extend(overtime_segments)
     else:
         _append_available_seconds(generated, "overtime", time_seconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds"))
@@ -132,7 +135,6 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
         hidden_generic_idle_seconds,
     )
     _append_available_seconds(generated, "idle", generic_idle_seconds)
-    overtime_start_second = hour.get(INTERNAL_OVERTIME_START_SECOND)
     return normalize_hour_fill(generated, post_activity_start_second=overtime_start_second)
 
 
@@ -373,6 +375,44 @@ def add_idle_seconds_to_hour(hour: dict[str, Any], seconds: int) -> None:
     _append_available_seconds(hour.setdefault("fillSegments", []), "idle", seconds)
 
 
+def _trim_idle_after_second(hour: dict[str, Any], boundary_second: int) -> int:
+    boundary_second = max(0, min(3600, int(boundary_second)))
+    trimmed_segments = []
+    removed_seconds = 0
+
+    for segment in _sanitize_fill_segments(hour.get("fillSegments", [])):
+        if segment["kind"] != "idle":
+            trimmed_segments.append(segment)
+            continue
+
+        start_second = int(segment["startSecond"])
+        end_second = int(segment["endSecond"])
+
+        if end_second <= boundary_second:
+            trimmed_segments.append(segment)
+            continue
+
+        if start_second < boundary_second:
+            trimmed_segments.append({**segment, "endSecond": boundary_second})
+            removed_seconds += end_second - boundary_second
+        else:
+            removed_seconds += end_second - start_second
+
+    if removed_seconds <= 0:
+        hour["fillSegments"] = trimmed_segments
+        return 0
+
+    idle_microseconds = max(
+        0,
+        time_microseconds(hour, "idleSeconds", "idleMicroseconds") - (removed_seconds * MICROSECONDS_PER_SECOND),
+    )
+    hour["idleMicroseconds"] = idle_microseconds
+    hour["idleSeconds"] = seconds_from_microseconds(idle_microseconds)
+    hour["fillSegments"] = trimmed_segments
+    _clamp_synthetic_idle_counters(hour)
+    return removed_seconds
+
+
 def normalize_fill_segments_in_hour(hour: dict[str, Any]) -> None:
     afk_segments = _segments_for_kind(hour, "afk")
     auto_afk_segments = _segments_for_kind(hour, "auto-afk")
@@ -412,6 +452,7 @@ def apply_overtime_start_boundary(hourly_activity: list[dict[str, Any]], overtim
 
     current_boundary = _clamp_second(hour.get(INTERNAL_OVERTIME_START_SECOND))
     hour[INTERNAL_OVERTIME_START_SECOND] = start_second if current_boundary is None else min(current_boundary, start_second)
+    _trim_idle_after_second(hour, start_second)
 
     visible_totals = _totals_from_segments(normalized_fill_segments({**hour, INTERNAL_OVERTIME_START_SECOND: None}))
     pre_overtime_seconds = (
@@ -422,13 +463,21 @@ def apply_overtime_start_boundary(hourly_activity: list[dict[str, Any]], overtim
     )
     missing_pre_overtime_seconds = max(0, start_second - pre_overtime_seconds)
 
-    if missing_pre_overtime_seconds <= 0:
-        return
+    if missing_pre_overtime_seconds > 0:
+        add_idle_seconds_to_hour(hour, missing_pre_overtime_seconds)
+        hour["overtimeBoundaryIdleSeconds"] = int(hour.get("overtimeBoundaryIdleSeconds", 0)) + missing_pre_overtime_seconds
+        visual_overtime_seconds = int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0))
+        hour[INTERNAL_OVERTIME_FILL_SECONDS] = max(0, visual_overtime_seconds - missing_pre_overtime_seconds)
 
-    add_idle_seconds_to_hour(hour, missing_pre_overtime_seconds)
-    hour["overtimeBoundaryIdleSeconds"] = int(hour.get("overtimeBoundaryIdleSeconds", 0)) + missing_pre_overtime_seconds
-    visual_overtime_seconds = int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0))
-    hour[INTERNAL_OVERTIME_FILL_SECONDS] = max(0, visual_overtime_seconds - missing_pre_overtime_seconds)
+    post_boundary_seconds = 3600 - start_second
+    visible_overtime_seconds = (
+        time_seconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds")
+        + int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0))
+    )
+    missing_post_overtime_seconds = max(0, post_boundary_seconds - visible_overtime_seconds)
+
+    if missing_post_overtime_seconds > 0:
+        hour[INTERNAL_OVERTIME_FILL_SECONDS] = int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)) + missing_post_overtime_seconds
 
 
 def apply_overtime_start_boundaries(

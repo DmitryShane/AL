@@ -69,7 +69,7 @@ export function ActivityPage({
   const activityMixGroups = (author?.activityMixBySource ?? []).map((group) => ({
     source: group.source,
     label: formatSource(group.source),
-    totalDisplayValue: formatDuration(group.activeSeconds ?? 0),
+    totalDisplayValue: formatCompactSourceDuration(group.activeSeconds ?? 0),
     items: group.activityMix.map((item) => activityMixPanelItem(item.type, item.count, item.percent, group.source))
   }));
   const savedPrefabGroups = (author?.savedPrefabsBySource ?? []).map((group) => ({
@@ -503,6 +503,18 @@ export function ActivityPage({
     </section>
     </>
   );
+}
+
+function formatCompactSourceDuration(seconds: number) {
+  const totalMinutes = Math.max(0, Math.round(seconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours <= 0) {
+    return `${minutes}m`;
+  }
+
+  return `${hours}h ${String(minutes).padStart(2, "0")}m`;
 }
 
 function activityMixPanelItem(type: string, count: number, percent: number, source?: string): BreakdownPanelItem {

@@ -29,10 +29,12 @@ from al_backend.hourly_fill_rules import (
     add_break_interval_to_buckets,
     add_meeting_interval_to_buckets,
     add_visual_missed_seconds,
+    apply_overtime_start_boundary,
     apply_workday_idle_fill,
     apply_breaks_to_hourly_activity,
     empty_hourly_activity,
     hourly_activity_has_workday_signal,
+    public_hour,
     public_hourly_activity,
     transfer_summary_idle_to_auto_break,
 )
@@ -441,13 +443,30 @@ def test_activity_summary_uses_offline_only_as_visual_missed_end_trigger():
 
 def test_activity_summary_visual_missed_end_fills_last_report_hour_to_sixty_minutes():
     repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "timeZoneId": "America/Vancouver"})
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "telegramUsername": "igormats",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
     repo.db.day_sessions.insert_one(
         {
             "rawAuthor": "Igor Mats",
             "date": "2026-05-01",
             "startedAt": dt.datetime(2026, 5, 1, 15, 0, tzinfo=dt.UTC),
             "lastOfflineAt": dt.datetime(2026, 5, 1, 22, 30, tzinfo=dt.UTC),
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.break_events.insert_one(
+        {
+            "telegramUsername": "igormats",
+            "rawAuthor": "Igor Mats",
+            "eventType": "offline",
+            "timestamp": dt.datetime(2026, 5, 9, 1, 17, 33, tzinfo=dt.UTC),
+            "date": "2026-05-08",
             "timeZoneId": "America/Vancouver",
         }
     )
@@ -536,12 +555,115 @@ def test_activity_summary_visual_missed_end_does_not_override_real_overtime_segm
             "hourlyActivity": hourly_activity,
         }
     )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "date": "2026-05-08",
+            "recordedAt": "2026-05-08T18:34:29-07:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 1, 34, 29, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 87,
+        }
+    )
 
     summary = repo.activity_summary(start_date="2026-05-08", end_date="2026-05-08")
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Igor Mats")
     hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
 
     assert _hour_metric(hourly_by_hour[23], "overtimeActiveSeconds") == overtime_seconds
+
+def test_overtime_boundary_hour_shows_idle_only_before_overtime_start():
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[18]["idleSeconds"] = 809
+    hourly_activity[18]["idleMicroseconds"] = 809_000_000
+    hourly_activity[18]["overtimeActiveSeconds"] = 868
+    hourly_activity[18]["overtimeActiveMicroseconds"] = 868_000_000
+    hourly_activity[18]["fillSegments"] = [
+        {"kind": "idle", "startSecond": 0, "endSecond": 809},
+        {"kind": "overtime", "startSecond": 1412, "endSecond": 1799},
+        {"kind": "overtime", "startSecond": 2578, "endSecond": 2827},
+        {"kind": "overtime", "startSecond": 2827, "endSecond": 2887},
+        {"kind": "overtime", "startSecond": 2942, "endSecond": 3002},
+        {"kind": "overtime", "startSecond": 3488, "endSecond": 3600},
+    ]
+
+    apply_overtime_start_boundary(
+        hourly_activity,
+        dt.datetime(2026, 5, 9, 1, 17, 33, tzinfo=dt.UTC),
+        "America/Vancouver",
+    )
+    hour_18 = public_hour(hourly_activity[18])
+
+    assert _hour_metric(hour_18, "idleSeconds") == 17 * 60 + 33
+    assert all(segment["endSecond"] <= 17 * 60 + 33 for segment in _hour_segments(hour_18, "idle"))
+    assert _hour_segments(hour_18, "overtime")[0]["startSecond"] == 17 * 60 + 33
+    assert _hour_segments(hour_18, "overtime-fill")[-1]["endSecond"] == 3600
+
+def test_overtime_heartbeat_idle_after_boundary_is_ignored():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "telegramUsername": "igormats",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "date": "2026-05-08",
+            "startedAt": dt.datetime(2026, 5, 8, 15, 16, 19, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 5, 9, 1, 17, 33, tzinfo=dt.UTC),
+            "reminderAction": "overtime",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.break_events.insert_one(
+        {
+            "telegramUsername": "igormats",
+            "rawAuthor": "Igor Mats",
+            "eventType": "offline",
+            "timestamp": dt.datetime(2026, 5, 9, 1, 17, 33, tzinfo=dt.UTC),
+            "date": "2026-05-08",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "projectId": "unity-bike-rush-2",
+            "sessionId": "vsc-session",
+            "date": "2026-05-08",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-09T01:20:00Z",
+            "occurredAtLocal": "2026-05-08T18:20:00-07:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 1, 20, tzinfo=dt.UTC),
+        }
+    )
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "projectId": "unity-bike-rush-2",
+            "sessionId": "vsc-session",
+            "date": "2026-05-08",
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-05-09T01:40:00Z",
+            "occurredAtLocal": "2026-05-08T18:40:00-07:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 1, 40, tzinfo=dt.UTC),
+        }
+    )
+
+    assert deltas["idleDeltaSeconds"] == 0
+    assert deltas["overtimeActiveDeltaSeconds"] == 0
+    report_rows = list(repo.db.report_rows.find({"author": "Igor Mats", "source": "vsc"}))
+    assert all(row.get("idleDeltaSeconds", 0) == 0 for row in report_rows)
+    assert all(row.get("overtimeActiveDeltaSeconds", 0) == 0 for row in report_rows)
 
 def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_report_hour_is_full():
     repo = fake_repository()

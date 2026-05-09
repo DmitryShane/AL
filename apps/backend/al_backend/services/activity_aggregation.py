@@ -820,7 +820,7 @@ class ActivityAggregationService(MongoComposableMixin):
         is_activity = raw_is_activity and (source_is_focused is not False or event_type == "focus")
         consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
         overtime_window = self._overtime_window_for_event(event)
-        count_idle_as_overtime = self._is_telegram_overtime_window_for_event(event)
+        count_idle_as_overtime = False
         idle_threshold_seconds = composed(self).get_idle_threshold_for_author(
             str(event.get("author") or "Unknown User"),
             current_source,
