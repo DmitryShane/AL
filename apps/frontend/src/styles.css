@@ -4029,11 +4029,29 @@ p {
   background: rgb(236 242 249 / 98%);
 }
 
-.alias-row span {
+.alias-row > span {
+  display: grid;
+  gap: 3px;
   min-width: 0;
   overflow: hidden;
   color: #405064;
   font-size: 13px;
+  text-overflow: ellipsis;
+}
+
+.alias-row > span > small {
+  min-width: 0;
+  overflow: hidden;
+  color: #718093;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alias-row-title {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

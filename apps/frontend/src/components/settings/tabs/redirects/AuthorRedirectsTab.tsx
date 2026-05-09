@@ -4,6 +4,9 @@ import { settingsSaveButtonClassName } from "../../../../pages/pageHelpers";
 type AuthorAlias = {
   sourceRawAuthor: string;
   targetRawAuthor: string;
+  sourceDeviceId?: string;
+  sourceDeviceIdHash?: string;
+  sourceDeviceSource?: string;
 };
 
 type AuthorRedirectsTabProps = {
@@ -80,9 +83,13 @@ export function AuthorRedirectsTab({
             aliases.map((alias) => {
               const target = profiles.find((profile) => profile.rawAuthor === alias.targetRawAuthor);
               const deleteKey = `alias-delete:${alias.sourceRawAuthor}`;
+              const deviceId = (alias.sourceDeviceId || alias.sourceDeviceIdHash || "").trim();
               return (
                 <div className="alias-row" key={alias.sourceRawAuthor}>
-                  <span><strong>{alias.sourceRawAuthor}</strong> redirects to <strong>{target?.displayName || alias.targetRawAuthor}</strong></span>
+                  <span>
+                    <span className="alias-row-title"><strong>{alias.sourceRawAuthor}</strong> redirects to <strong>{target?.displayName || alias.targetRawAuthor}</strong></span>
+                    {deviceId ? <small title={deviceId}>Device ID: {deviceId}</small> : null}
+                  </span>
                   <button
                     className={`${settingsSaveButtonClassName(saveStatus[deleteKey], true)} danger-button`}
                     onClick={() => onDeleteAuthorAlias(alias.sourceRawAuthor)}

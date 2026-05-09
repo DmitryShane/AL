@@ -879,7 +879,40 @@ class SettingsRepository(MongoComposableMixin):
         return sorted(keys)
 
     def author_aliases(self) -> list[dict[str, Any]]:
-        return list(self.db.author_aliases.find({}, {"_id": 0}).sort("sourceRawAuthor", ASCENDING))
+        aliases = list(self.db.author_aliases.find({}, {"_id": 0}).sort("sourceRawAuthor", ASCENDING))
+
+        for alias in aliases:
+            source = str(alias.get("sourceRawAuthor") or "")
+            device_identity = self.db.device_report_identities.find_one(
+                {"rawAuthor": source},
+                {"_id": 0, "source": 1, "deviceIdHash": 1},
+            )
+
+            if not device_identity:
+                continue
+
+            device_source = str(device_identity.get("source") or "")
+            latest_device_batch = self.db.raw_event_batches.find_one(
+                {"author": source, "source": device_source},
+                {"_id": 0, "deviceId": 1},
+                sort=[("receivedAt", DESCENDING)],
+            )
+            latest_device_event = self.db.raw_activity_events.find_one(
+                {"author": source, "source": device_source},
+                {"_id": 0, "deviceId": 1},
+                sort=[("receivedAt", DESCENDING)],
+            )
+            device_id = str(
+                (latest_device_batch or {}).get("deviceId")
+                or (latest_device_event or {}).get("deviceId")
+                or ""
+            )
+
+            alias["sourceDeviceSource"] = device_source
+            alias["sourceDeviceId"] = device_id
+            alias["sourceDeviceIdHash"] = str(device_identity.get("deviceIdHash") or "")
+
+        return aliases
 
     def upsert_author_alias(self, source_raw_author: str, target_raw_author: str) -> dict[str, Any]:
         source = _normalize_author(source_raw_author)

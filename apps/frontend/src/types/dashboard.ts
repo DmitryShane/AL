@@ -113,6 +113,9 @@ export type ActivitySummary = {
 export type AuthorAlias = {
   sourceRawAuthor: string;
   targetRawAuthor: string;
+  sourceDeviceId?: string;
+  sourceDeviceIdHash?: string;
+  sourceDeviceSource?: string;
 };
 
 export type AuthorProfile = {
