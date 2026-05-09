@@ -149,7 +149,7 @@ def normalize_hour_fill(
 
     priority = {
         kind: index
-        for index, kind in enumerate(("idle", "active", "overtime-fill", "overtime", "telegram-idle", "afk", "auto-afk", "meeting", "missed"))
+        for index, kind in enumerate(("missed", "idle", "active", "overtime-fill", "overtime", "telegram-idle", "afk", "auto-afk", "meeting"))
     }
     timeline: list[str | None] = [None] * 3600
 

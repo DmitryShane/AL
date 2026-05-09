@@ -488,6 +488,61 @@ def test_activity_summary_visual_missed_end_fills_last_report_hour_to_sixty_minu
     assert _overtime_fill_seconds(hourly_by_hour[14]) == 0
     assert _missed_end_seconds(hourly_by_hour[14]) == 3600 - (21 * 60 + 31)
 
+def test_activity_summary_visual_missed_end_does_not_override_real_overtime_segments():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "timeZoneId": "America/Vancouver"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "date": "2026-05-08",
+            "startedAt": dt.datetime(2026, 5, 8, 15, 16, 19, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 5, 9, 1, 17, 33, tzinfo=dt.UTC),
+            "reminderAction": "overtime",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "date": "2026-05-08",
+            "recordedAt": "2026-05-08T23:59:18.717-07:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 7, 4, 32, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 3,
+        }
+    )
+    overtime_segments = [
+        {"kind": "overtime", "startSecond": 684, "endSecond": 1658},
+        {"kind": "overtime", "startSecond": 1819, "endSecond": 2739},
+        {"kind": "overtime", "startSecond": 3540, "endSecond": 3543},
+    ]
+    overtime_seconds = sum(segment["endSecond"] - segment["startSecond"] for segment in overtime_segments)
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[23]["overtimeActiveSeconds"] = overtime_seconds
+    hourly_activity[23]["overtimeActiveMicroseconds"] = overtime_seconds * 1_000_000
+    hourly_activity[23]["fillSegments"].extend(overtime_segments)
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "projectId": "unity-bike-rush-2",
+            "date": "2026-05-08",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": overtime_seconds,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-08", end_date="2026-05-08")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Igor Mats")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert _hour_metric(hourly_by_hour[23], "overtimeActiveSeconds") == overtime_seconds
+
 def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_report_hour_is_full():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Евгений Доценко", "displayName": "Evgeniy Dotsenko", "timeZoneId": "Europe/Sofia"})
@@ -807,6 +862,48 @@ def test_plugin_hour_gap_after_telegram_to_first_activity_extends_active_fill():
     assert _hour_segments(public_hourly[12], "telegram-idle") == [{"startSecond": 0, "endSecond": 860}]
     assert _hour_segments(public_hourly[12], "active") == [{"startSecond": 860, "endSecond": 3600}]
     assert _hour_segments(public_hourly[12], "idle") == []
+
+def test_public_hourly_missed_does_not_override_overtime_segments():
+    hourly_activity = empty_hourly_activity()
+    overtime_segments = [
+        {"kind": "overtime", "startSecond": 684, "endSecond": 1658},
+        {"kind": "overtime", "startSecond": 1819, "endSecond": 2739},
+        {"kind": "overtime", "startSecond": 3540, "endSecond": 3543},
+    ]
+    overtime_seconds = sum(segment["endSecond"] - segment["startSecond"] for segment in overtime_segments)
+    hourly_activity[23]["overtimeActiveSeconds"] = overtime_seconds
+    hourly_activity[23]["overtimeActiveMicroseconds"] = overtime_seconds * 1_000_000
+    hourly_activity[23]["fillSegments"].extend(overtime_segments)
+    add_visual_missed_seconds(hourly_activity, 23, 3600 - overtime_seconds, INTERNAL_MISSED_END_SECONDS)
+
+    public = public_hourly_activity(hourly_activity)
+
+    assert _hour_metric(public[23], "overtimeActiveSeconds") == overtime_seconds
+    assert _hour_metric(public[23], "missedSeconds") == 3600 - overtime_seconds
+
+def test_public_hourly_missed_still_fills_empty_tail_after_activity():
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[18]["activeSeconds"] = 1200
+    hourly_activity[18]["activeMicroseconds"] = 1_200_000_000
+    hourly_activity[18]["fillSegments"].append({"kind": "active", "startSecond": 0, "endSecond": 1200})
+    add_visual_missed_seconds(hourly_activity, 18, 600, INTERNAL_MISSED_END_SECONDS)
+
+    public = public_hourly_activity(hourly_activity)
+
+    assert _hour_metric(public[18], "activeSeconds") == 1200
+    assert _hour_segments(public[18], "missed") == [{"startSecond": 1200, "endSecond": 3600}]
+
+def test_public_hourly_missed_still_fills_empty_start_before_activity():
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[9]["activeSeconds"] = 900
+    hourly_activity[9]["activeMicroseconds"] = 900_000_000
+    hourly_activity[9]["fillSegments"].append({"kind": "active", "startSecond": 600, "endSecond": 1500})
+    add_visual_missed_seconds(hourly_activity, 9, 600, "_visualMissedStartSeconds")
+
+    public = public_hourly_activity(hourly_activity)
+
+    assert _hour_segments(public[9], "missed") == [{"startSecond": 0, "endSecond": 600}]
+    assert _hour_segments(public[9], "active") == [{"startSecond": 600, "endSecond": 1500}]
 
 def test_plugin_hour_gap_after_telegram_to_first_activity_keeps_real_idle_visible():
     hourly_activity = empty_hourly_activity()
