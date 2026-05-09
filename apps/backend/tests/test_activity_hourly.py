@@ -665,6 +665,202 @@ def test_overtime_heartbeat_idle_after_boundary_is_ignored():
     assert all(row.get("idleDeltaSeconds", 0) == 0 for row in report_rows)
     assert all(row.get("overtimeActiveDeltaSeconds", 0) == 0 for row in report_rows)
 
+def test_night_overtime_active_counts_on_same_calendar_day():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Night Worker", "displayName": "Night Worker", "timeZoneId": "UTC"})
+    base_event = {
+        "source": "vsc",
+        "author": "Night Worker",
+        "projectId": "night-project",
+        "sessionId": "night-session",
+        "date": "2026-05-09",
+        "timeZoneId": "UTC",
+        "receivedAt": dt.datetime(2026, 5, 9, 3, 0, tzinfo=dt.UTC),
+    }
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-09T03:00:00Z",
+            "occurredAtLocal": "2026-05-09T03:00:00+00:00",
+        }
+    )
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "file_saved",
+            "occurredAtUtc": "2026-05-09T03:02:00Z",
+            "occurredAtLocal": "2026-05-09T03:02:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 3, 2, tzinfo=dt.UTC),
+            "metadata": {"path": "Assets/Night.cs", "name": "Night.cs"},
+        }
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Night Worker", "date": "2026-05-09", "source": "vsc"})
+    hour_3 = public_hour(daily["hourlyActivity"][3])
+
+    assert deltas["activeDeltaSeconds"] == 0
+    assert deltas["overtimeActiveDeltaSeconds"] == 120
+    assert deltas["overtimeActivityCountDeltas"] == [{"type": "file_saved", "count": 1}]
+    assert deltas["overtimeSavedPrefabDeltas"] == [{"path": "Assets/Night.cs", "name": "Night.cs", "saveCount": 1}]
+    assert hour_3["totals"]["overtimeSeconds"] == 120
+    assert hour_3["totals"]["idleSeconds"] == 0
+
+def test_night_overtime_heartbeat_idle_is_ignored():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Night Worker", "displayName": "Night Worker", "timeZoneId": "UTC"})
+    base_event = {
+        "source": "vsc",
+        "author": "Night Worker",
+        "projectId": "night-project",
+        "sessionId": "night-session",
+        "date": "2026-05-09",
+        "timeZoneId": "UTC",
+    }
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-09T03:00:00Z",
+            "occurredAtLocal": "2026-05-09T03:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 3, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-05-09T03:10:00Z",
+            "occurredAtLocal": "2026-05-09T03:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 3, 10, tzinfo=dt.UTC),
+        }
+    )
+
+    assert deltas["idleDeltaSeconds"] == 0
+    assert deltas["overtimeActiveDeltaSeconds"] == 0
+    assert list(repo.db.report_rows.find({"author": "Night Worker", "date": "2026-05-09"})) == []
+
+def test_night_overtime_interval_splits_at_seven_am():
+    repo = fake_repository()
+    set_idle_threshold(repo, 3600)
+    repo.db.author_profiles.insert_one({"rawAuthor": "Night Worker", "displayName": "Night Worker", "timeZoneId": "UTC"})
+    base_event = {
+        "source": "vsc",
+        "author": "Night Worker",
+        "projectId": "night-project",
+        "sessionId": "night-session",
+        "date": "2026-05-09",
+        "timeZoneId": "UTC",
+    }
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-09T06:50:00Z",
+            "occurredAtLocal": "2026-05-09T06:50:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 6, 50, tzinfo=dt.UTC),
+        }
+    )
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-09T07:10:00Z",
+            "occurredAtLocal": "2026-05-09T07:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 7, 10, tzinfo=dt.UTC),
+        }
+    )
+
+    assert deltas["overtimeActiveDeltaSeconds"] == 10 * 60
+    assert deltas["activeDeltaSeconds"] == 10 * 60
+
+def test_morning_work_after_night_overtime_is_normal_activity():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Night Worker", "displayName": "Night Worker", "timeZoneId": "UTC"})
+    base_event = {
+        "source": "vsc",
+        "author": "Night Worker",
+        "projectId": "night-project",
+        "sessionId": "morning-session",
+        "date": "2026-05-09",
+        "timeZoneId": "UTC",
+    }
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-09T10:00:00Z",
+            "occurredAtLocal": "2026-05-09T10:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 10, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-09T10:02:00Z",
+            "occurredAtLocal": "2026-05-09T10:02:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 10, 2, tzinfo=dt.UTC),
+        }
+    )
+
+    assert deltas["activeDeltaSeconds"] == 120
+    assert deltas["overtimeActiveDeltaSeconds"] == 0
+
+def test_night_overtime_summary_does_not_add_synthetic_idle_or_missed():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Night Worker", "displayName": "Night Worker", "timeZoneId": "UTC"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Night Worker",
+            "date": "2026-05-09",
+            "startedAt": dt.datetime(2026, 5, 9, 0, 0, 22, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 5, 9, 1, 30, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[0]["overtimeActiveSeconds"] = 120
+    hourly_activity[0]["overtimeActiveMicroseconds"] = 120_000_000
+    hourly_activity[0]["fillSegments"] = [{"kind": "overtime", "startSecond": 2590, "endSecond": 2710}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Night Worker",
+            "projectId": "night-project",
+            "date": "2026-05-09",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 120,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "vsc",
+            "author": "Night Worker",
+            "date": "2026-05-09",
+            "recordedAt": "2026-05-09T00:45:10+00:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 0, 45, 10, tzinfo=dt.UTC),
+            "overtimeActiveDeltaSeconds": 120,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-09", end_date="2026-05-09")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Night Worker")
+    hour_0 = next(hour for hour in hourly_author["hourlyActivity"] if hour["hour"] == 0)
+
+    assert hour_0["totals"]["overtimeSeconds"] == 120
+    assert hour_0["totals"]["idleSeconds"] == 0
+    assert hour_0["totals"]["missedSeconds"] == 3480
+    assert _hour_segments(hour_0, "overtime-fill") == []
+    assert _missed_end_seconds(hour_0) == 3480
+
 def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_report_hour_is_full():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Евгений Доценко", "displayName": "Evgeniy Dotsenko", "timeZoneId": "Europe/Sofia"})

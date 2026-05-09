@@ -7,6 +7,7 @@ from ..hourly_fill_rules import empty_hourly_activity
 from ..hourly_fill_rules import merge_hourly_activity
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+from ..overtime_rules import OvertimeRuleContext, overtime_window_for_event, overtime_window_for_interval
 
 
 DEVICE_EDITOR_ACTIVITY_AUTHOR = "Evgeniy Dotsenko"
@@ -37,6 +38,19 @@ def _metadata_bool(value: Any) -> bool:
 
 
 class ActivityAggregationService(MongoComposableMixin):
+    def _overtime_rule_context(self) -> OvertimeRuleContext:
+        return OvertimeRuleContext(
+            vacation_overtime_window_for_event=lambda event: composed(self).vacation_overtime_window_for_event(event),
+            is_author_offline_after_latest_telegram_state=self._is_author_offline_after_latest_telegram_state,
+            day_session_for_author_date=self._day_session_for_overtime_rules,
+        )
+
+    def _day_session_for_overtime_rules(self, raw_author: str, day_date: str) -> dict[str, Any] | None:
+        return self.db.day_sessions.find_one(
+            {"rawAuthor": raw_author, "date": day_date},
+            {"_id": 0, "lastOfflineAt": 1, "timeZoneId": 1, "reminderAction": 1},
+        )
+
     def _notifications_suppressed_for_rebuild(self) -> bool:
         return bool(getattr(self, "_suppress_rebuild_notification_side_effects", False))
 
@@ -849,6 +863,7 @@ class ActivityAggregationService(MongoComposableMixin):
                 or _valid_time_zone_id(event.get("timeZoneId"))
                 or "UTC"
             )
+            interval_overtime_window = self._overtime_window_for_interval(event, status_offline_at, status_online_at)
             status_idle_deltas = _interval_deltas(
                 status_offline_at,
                 status_online_at,
@@ -856,7 +871,7 @@ class ActivityAggregationService(MongoComposableMixin):
                 _to_local_datetime(status_online_at, status_time_zone_id),
                 False,
                 consumed_normal_microseconds,
-                overtime_window,
+                interval_overtime_window,
             )
             _merge_batch_deltas(deltas, status_idle_deltas)
             last_accounting_at = status_online_at
@@ -902,6 +917,7 @@ class ActivityAggregationService(MongoComposableMixin):
                         interval_end_local_at = accounting_start_local_at + (interval_end_at - accounting_start_at)
                         interval_is_active = interval_end_at > accounting_start_at
 
+                    interval_overtime_window = self._overtime_window_for_interval(event, accounting_start_at, interval_end_at)
                     interval_deltas = _interval_deltas(
                         accounting_start_at,
                         interval_end_at,
@@ -909,7 +925,7 @@ class ActivityAggregationService(MongoComposableMixin):
                         interval_end_local_at,
                         interval_is_active,
                         consumed_normal_microseconds,
-                        overtime_window,
+                        interval_overtime_window,
                     )
                     _merge_batch_deltas(deltas, interval_deltas)
 
@@ -989,6 +1005,7 @@ class ActivityAggregationService(MongoComposableMixin):
                     )
                     interval_is_active = interval_end_at > last_accounting_at
 
+                interval_overtime_window = self._overtime_window_for_interval(event, last_accounting_at, interval_end_at)
                 interval_deltas = _interval_deltas(
                     last_accounting_at,
                     interval_end_at,
@@ -996,7 +1013,7 @@ class ActivityAggregationService(MongoComposableMixin):
                     interval_end_local_at,
                     interval_is_active,
                     consumed_normal_microseconds,
-                    overtime_window,
+                    interval_overtime_window,
                 )
                 _merge_batch_deltas(deltas, interval_deltas)
                 last_accounting_at = heartbeat_end
@@ -1162,63 +1179,15 @@ class ActivityAggregationService(MongoComposableMixin):
         return consumed_microseconds
 
     def _overtime_window_for_event(self, event: dict[str, Any]) -> tuple[dt.datetime, dt.datetime] | None:
-        raw_author = str(event.get("author") or "Unknown User")
-        day_date = str(event.get("date") or "")
-        event_time = _coerce_datetime(event.get("occurredAtUtc")) or _coerce_datetime(event.get("occurredAt"))
+        return overtime_window_for_event(event, self._overtime_rule_context())
 
-        if not raw_author or not day_date or not event_time:
-            return None
-
-        vacation_window = composed(self).vacation_overtime_window_for_event(event)
-
-        if vacation_window:
-            return vacation_window
-
-        if not self._is_author_offline_after_latest_telegram_state(raw_author, day_date, event_time):
-            return None
-
-        day_session = self.db.day_sessions.find_one(
-            {"rawAuthor": raw_author, "date": day_date},
-            {"_id": 0, "lastOfflineAt": 1, "timeZoneId": 1},
-        )
-        overtime_started_at = _coerce_datetime((day_session or {}).get("lastOfflineAt"))
-
-        if not overtime_started_at:
-            return None
-
-        time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or _valid_time_zone_id((day_session or {}).get("timeZoneId")) or "UTC"
-
-        try:
-            day = dt.date.fromisoformat(day_date)
-            day_end_local = dt.datetime.combine(day + dt.timedelta(days=1), dt.time.min, ZoneInfo(time_zone_id))
-        except ValueError:
-            return None
-
-        day_end_at = day_end_local.astimezone(dt.UTC)
-
-        if event_time < overtime_started_at or event_time >= day_end_at:
-            return None
-
-        return overtime_started_at, day_end_at
-
-    def _is_telegram_overtime_window_for_event(self, event: dict[str, Any]) -> bool:
-        raw_author = str(event.get("author") or "Unknown User")
-        day_date = str(event.get("date") or "")
-        event_time = _coerce_datetime(event.get("occurredAtUtc")) or _coerce_datetime(event.get("occurredAt"))
-
-        if not raw_author or not day_date or not event_time:
-            return False
-
-        day_session = self.db.day_sessions.find_one(
-            {"rawAuthor": raw_author, "date": day_date},
-            {"_id": 0, "lastOfflineAt": 1, "reminderAction": 1},
-        )
-
-        if str((day_session or {}).get("reminderAction") or "") != "overtime":
-            return False
-
-        overtime_started_at = _coerce_datetime((day_session or {}).get("lastOfflineAt"))
-        return bool(overtime_started_at and event_time >= overtime_started_at)
+    def _overtime_window_for_interval(
+        self,
+        event: dict[str, Any],
+        start: dt.datetime,
+        end: dt.datetime,
+    ) -> tuple[dt.datetime, dt.datetime] | None:
+        return overtime_window_for_interval(event, start, end, self._overtime_rule_context())
 
     def _status_interval_context_for_event(
         self,

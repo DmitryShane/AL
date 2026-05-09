@@ -6,6 +6,8 @@ from ..hourly_fill_rules import (
     apply_offline_idle_gaps,
     apply_visual_missed_hours,
     apply_visual_overtime_hour_gaps,
+    apply_night_overtime_hour_fills,
+    apply_night_overtime_missed_end,
     apply_plugin_hour_idle_gaps,
     apply_workday_idle_fill,
     apply_visual_missed_end_fallbacks,
@@ -1204,6 +1206,13 @@ class ActivitySummaryService(MongoComposableMixin):
         )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_start=False)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
+        latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+        apply_night_overtime_missed_end(
+            hourly_by_author,
+            latest_report_by_author_date,
+            time_zone_id_for_author=lambda raw_author, report_time_zone_id: _author_time_zone_id(raw_author, profiles, report_time_zone_id),
+        )
+        apply_night_overtime_hour_fills(hourly_by_author)
         apply_overtime_start_boundaries(
             hourly_by_author,
             list(self.db.day_sessions.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0})),

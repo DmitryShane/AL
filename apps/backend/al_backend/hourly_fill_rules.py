@@ -4,6 +4,7 @@ import datetime as dt
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .overtime_rules import NIGHT_OVERTIME_END_HOUR, NIGHT_OVERTIME_START_HOUR
 
 MICROSECONDS_PER_SECOND = 1_000_000
 FILL_KINDS = ("active", "overtime", "overtime-fill", "afk", "auto-afk", "meeting", "telegram-idle", "idle", "missed")
@@ -18,6 +19,10 @@ INTERNAL_OVERTIME_START_SECOND = "_overtimeStartSecond"
 INTERNAL_MISSED_START_SECONDS = "_visualMissedStartSeconds"
 INTERNAL_MISSED_END_SECONDS = "_visualMissedEndSeconds"
 VISUAL_ACTIVE_NOISE_SECONDS = 10
+
+
+def is_night_overtime_hour(hour_index: int) -> bool:
+    return NIGHT_OVERTIME_START_HOUR <= int(hour_index) < NIGHT_OVERTIME_END_HOUR
 
 
 def seconds_from_microseconds(value: Any) -> int:
@@ -241,10 +246,11 @@ def _apply_stack_layers(timeline: list[str | None], *, post_activity_start_secon
     for kind in POST_ACTIVITY_STACK_KINDS:
         _fill_empty_timeline_slots(timeline, kind, post_activity_stack_seconds.get(kind, 0), post_activity_indexes)
 
+    _fill_empty_timeline_slots(timeline, "missed", missed_end_seconds, range(3599, -1, -1))
+
     for kind in TOP_STACK_KINDS:
         _fill_empty_timeline_slots(timeline, kind, top_stack_seconds.get(kind, 0), range(3599, -1, -1))
 
-    _fill_empty_timeline_slots(timeline, "missed", missed_end_seconds, range(3599, -1, -1))
     if missed_end_seconds > 0:
         _fill_missed_hour_tail(timeline)
 
@@ -511,6 +517,60 @@ def apply_overtime_start_boundaries(
         apply_overtime_start_boundary(hourly_author.get("hourlyActivity", []), overtime_started_at, time_zone_id)
 
 
+def apply_night_overtime_hour_fills(hourly_by_author: dict[str, dict[str, Any]]) -> None:
+    for hourly_author in hourly_by_author.values():
+        for hour in hourly_author.get("hourlyActivity", []):
+            hour_index = int(hour.get("hour", 0))
+
+            if not is_night_overtime_hour(hour_index):
+                continue
+
+            if time_seconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds") <= 0:
+                continue
+
+            if int(hour.get(INTERNAL_MISSED_END_SECONDS, 0)) > 0:
+                continue
+
+            fill_visual_overtime_hour(hour, preserve_visual_missed=True)
+
+
+def apply_night_overtime_missed_end(
+    hourly_by_author: dict[str, dict[str, Any]],
+    latest_report_by_author_date: dict[tuple[str, str], dt.datetime],
+    *,
+    time_zone_id_for_author: Any,
+) -> None:
+    for (raw_author, _day_date), latest_report_at in latest_report_by_author_date.items():
+        time_zone_id = time_zone_id_for_author(raw_author, None)
+        local_latest_report_at = _to_local_datetime(latest_report_at, time_zone_id)
+
+        if not is_night_overtime_hour(local_latest_report_at.hour):
+            continue
+
+        hourly_author = hourly_by_author.get(raw_author)
+
+        if not hourly_author:
+            continue
+
+        hourly_activity = hourly_author.get("hourlyActivity", [])
+        hour_index = local_latest_report_at.hour
+
+        if hour_index < 0 or hour_index >= len(hourly_activity):
+            continue
+
+        hour = hourly_activity[hour_index]
+
+        if time_seconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds") <= 0:
+            continue
+
+        if int(hour.get(INTERNAL_MISSED_END_SECONDS, 0)) > 0:
+            continue
+
+        hour_end = local_latest_report_at.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+        missed_seconds = max(0, int((hour_end - local_latest_report_at).total_seconds()))
+        add_visual_missed_seconds(hourly_activity, hour_index, missed_seconds, INTERNAL_MISSED_END_SECONDS)
+
+
 def apply_visual_missed_end_fallbacks(
     hourly_by_author: dict[str, dict[str, Any]],
     sessions: list[dict[str, Any]],
@@ -553,6 +613,9 @@ def apply_visual_missed_end_fallbacks(
         fallback_hour_index = offline_hour_index + 1
 
         if fallback_hour_index >= len(hourly_activity):
+            continue
+
+        if is_night_overtime_hour(fallback_hour_index):
             continue
 
         fallback_hour = hourly_activity[fallback_hour_index]
@@ -722,6 +785,10 @@ def add_visual_missed_start(
         return
 
     local_start = _to_local_datetime(started_at, time_zone_id)
+
+    if is_night_overtime_hour(local_start.hour):
+        return
+
     hour_start = local_start.replace(minute=0, second=0, microsecond=0)
     missed_seconds = max(0, int((local_start - hour_start).total_seconds()))
     add_visual_missed_seconds(hourly_activity, local_start.hour, missed_seconds, INTERNAL_MISSED_START_SECONDS)
@@ -748,6 +815,9 @@ def add_visual_missed_end(
         )
         missed_seconds = visual_hour_available_seconds(target_hour)
         target_hour_index = int(target_hour.get("hour", local_end.hour))
+        if is_night_overtime_hour(target_hour_index):
+            hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+            missed_seconds = max(0, int((hour_end - local_end).total_seconds())) if target_hour_index == local_end.hour else 3600
         if missed_seconds <= 0:
             fallback_hour_index = target_hour_index + 1
             if fallback_hour_index < len(hourly_activity):
@@ -875,6 +945,9 @@ def apply_plugin_hour_idle_gaps(
             continue
 
         for hour_index in range(first_accounted_hour, min(local_latest_report_at.hour, len(hourly_activity))):
+            if is_night_overtime_hour(hour_index):
+                continue
+
             hour = hourly_activity[hour_index]
             accounted_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
             gap_seconds = max(0, 3600 - min(3600, accounted_seconds))
@@ -932,6 +1005,11 @@ def apply_offline_idle_gaps(
         hourly_activity = empty_hourly_activity()
         add_idle_interval_to_buckets(hourly_activity, latest_report_at, idle_end, time_zone_id)
         for hour in hourly_activity:
+            if is_night_overtime_hour(int(hour.get("hour", 0))):
+                hour["idleSeconds"] = 0
+                hour["idleMicroseconds"] = 0
+                hour["fillSegments"] = [segment for segment in _sanitize_fill_segments(hour.get("fillSegments", [])) if segment["kind"] != "idle"]
+
             idle_gap_seconds = int(hour.get("idleSeconds", 0))
             if idle_gap_seconds > 0:
                 hour["offlineIdleGapSeconds"] = idle_gap_seconds
@@ -952,6 +1030,9 @@ def apply_workday_idle_fill(
     added_seconds = 0
 
     for hour_index, start_second, end_second, _seconds in split_interval_by_hour(started_at, ended_at, time_zone_id):
+        if is_night_overtime_hour(hour_index):
+            continue
+
         hour = target_by_hour.get(hour_index)
 
         if not hour:
@@ -1439,9 +1520,12 @@ def fill_normal_to_overtime_transition_hours(hourly_activity: list[dict[str, Any
         fill_visual_overtime_hour(hour)
 
 
-def fill_visual_overtime_hour(hour: dict[str, Any], replace_visual_idle: bool = False) -> None:
+def fill_visual_overtime_hour(hour: dict[str, Any], replace_visual_idle: bool = False, preserve_visual_missed: bool = False) -> None:
     visual_idle_seconds = max(0, int(hour.get("idleSeconds", 0))) if replace_visual_idle else 0
     overtime_seconds = visual_hour_available_seconds(hour) + visual_idle_seconds
+
+    if preserve_visual_missed:
+        overtime_seconds = max(0, overtime_seconds - int(hour.get("missedSeconds", 0)))
 
     if overtime_seconds <= 0:
         return
@@ -1452,7 +1536,9 @@ def fill_visual_overtime_hour(hour: dict[str, Any], replace_visual_idle: bool = 
 
     hour[INTERNAL_OVERTIME_FILL_SECONDS] = int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)) + overtime_seconds
     _append_available_seconds(hour.setdefault("fillSegments", []), "overtime-fill", overtime_seconds)
-    remove_visual_missed_seconds(hour, overtime_seconds)
+
+    if not preserve_visual_missed:
+        remove_visual_missed_seconds(hour, overtime_seconds)
 
 
 def segments_after_consumed_seconds(source: Any, consumed_seconds: int, target_seconds: int) -> list[dict[str, Any]]:
