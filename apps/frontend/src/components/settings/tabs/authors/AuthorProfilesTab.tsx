@@ -273,7 +273,7 @@ export function AuthorProfilesTab({
     const draft = drafts[profile.rawAuthor] ?? profile;
     const profileDirty = isProfileDirty(profile);
     const deleteProfileKey = `delete-profile:${profile.rawAuthor}`;
-    const profileSubline = profile.deviceId?.trim() || profile.authorEmail || "-";
+    const profileSubline = profile.authorEmail || "-";
     return (
       <div className="profile-row" key={profile.rawAuthor}>
         <span className="profile-author-cell profile-author-cell--with-avatar" title={profileSubline || profile.rawAuthor}>

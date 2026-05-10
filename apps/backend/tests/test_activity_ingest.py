@@ -693,6 +693,17 @@ def test_author_profiles_exclude_device_only_profiles():
 
     assert all(item["rawAuthor"] != "Device1" for item in repo.author_profiles())
 
+
+def test_author_profiles_exclude_stale_device_named_rows_without_identity():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Device7", "displayName": "Device7"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
+
+    raw_authors = {item["rawAuthor"] for item in repo.author_profiles()}
+
+    assert "Device7" not in raw_authors
+    assert "Dmitry Shane" in raw_authors
+
 def test_device_source_uses_device_idle_threshold():
     repo = fake_repository()
     repo.db.interval_settings.insert_one(

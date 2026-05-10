@@ -10,6 +10,11 @@ from ..mongo_composable import MongoComposableMixin
 _BULK_ACTIVITY_PRESET_DAY_SPAN = {"1d": 0, "2d": 1, "3d": 2, "week": 6, "month": 29}
 
 
+def _is_device_profile_raw_author(value: str) -> bool:
+    normalized = str(value or "").strip()
+    return normalized.startswith("Device") and normalized[6:].isdigit()
+
+
 def utc_inclusive_range_for_bulk_activity_preset(preset: str) -> tuple[str, str]:
     today = dt.datetime.now(dt.UTC).date()
     days_back = _BULK_ACTIVITY_PRESET_DAY_SPAN[preset]
@@ -49,15 +54,10 @@ class AuthorRepository(MongoComposableMixin):
         }
         profiles = composed(self)._profiles_by_raw_author()
         profiles_by_normalized_key = {_normalize_author(k): v for k, v in profiles.items() if k}
-        device_identities = {
-            str(item.get("rawAuthor") or ""): item
-            for item in self.db.device_report_identities.find({}, {"_id": 0, "rawAuthor": 1, "deviceIdHash": 1})
-            if item.get("rawAuthor")
-        }
         result = []
 
         for raw_author in known_authors:
-            if raw_author in raw_devices:
+            if raw_author in raw_devices or _is_device_profile_raw_author(raw_author):
                 continue
 
             profile = profiles.get(raw_author)
@@ -68,27 +68,6 @@ class AuthorRepository(MongoComposableMixin):
                 {"_id": 0, "authorEmail": 1, "timeZoneId": 1, "timeZoneDisplayName": 1},
                 sort=[("lastReceivedAt", DESCENDING)],
             )
-            device_identity = device_identities.get(raw_author)
-            device_id = ""
-
-            if device_identity:
-                latest_device_batch = self.db.raw_event_batches.find_one(
-                    {"author": raw_author, "source": "dev"},
-                    {"_id": 0, "deviceId": 1},
-                    sort=[("receivedAt", DESCENDING)],
-                )
-                latest_device_event = self.db.raw_activity_events.find_one(
-                    {"author": raw_author, "source": "dev"},
-                    {"_id": 0, "deviceId": 1},
-                    sort=[("receivedAt", DESCENDING)],
-                )
-                device_id = str(
-                    (latest_device_batch or {}).get("deviceId")
-                    or (latest_device_event or {}).get("deviceId")
-                    or device_identity.get("deviceIdHash")
-                    or ""
-                )
-
             gh_ui = _github_username_ui_default(raw_author, profile)
             gh_fetch = _github_username_for_avatar_fetch(raw_author, profile)
             result.append(
@@ -110,7 +89,6 @@ class AuthorRepository(MongoComposableMixin):
                     or (author_activity or {}).get("timeZoneDisplayName", ""),
                     "githubUsername": gh_ui,
                     "avatarUrl": _cached_author_avatar_api_url(raw_author, gh_fetch, profile if isinstance(profile, dict) else None),
-                    "deviceId": device_id,
                 }
             )
 
@@ -622,4 +600,3 @@ class AuthorRepository(MongoComposableMixin):
 
         composed(self).invalidate_activity_summary_cache()
         return {"ok": True, "author": normalized_author, "deleted": counts}
-
