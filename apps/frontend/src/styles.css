@@ -3008,6 +3008,19 @@ p {
   width: auto;
 }
 
+.settings-row .interval-settings-helper {
+  align-self: end;
+  max-width: 360px;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
 .meeting-summary-settings-row {
   flex-wrap: nowrap;
   align-items: end;

@@ -82,6 +82,9 @@ export function GeneralSettingsTab({
           <button className={settingsSaveButtonClassName(saveStatus.interval)} onClick={onSaveInterval} disabled={settingsReadOnly || saving === "interval" || !isIntervalSettingsDirty}>
             {settingsSaveButtonLabel("interval", saving, saveStatus)}
           </button>
+          <p className="interval-settings-helper">
+            Minimums: global interval 30 sec, idle threshold 30 sec, device idle threshold 10 sec.
+          </p>
         </div>
       </div>
       <ServerStatsPanel />
