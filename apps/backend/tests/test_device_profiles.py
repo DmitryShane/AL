@@ -23,6 +23,9 @@ def test_device_profiles_list_includes_latest_identity_metadata():
             "projectId": "Bike Rush 2",
             "pluginVersion": "0.1.0",
             "receivedAt": dt.datetime(2026, 5, 4, 10, 0, tzinfo=dt.UTC),
+            "sentAt": "2026-05-04T12:58:00.0000000Z",
+            "timeZoneId": "Europe/Kyiv",
+            "timeZoneDisplayName": "EEST",
             "metadata": {
                 "deviceAdvertisingId": "idfa-1",
                 "platform": "IPhonePlayer",
@@ -40,6 +43,9 @@ def test_device_profiles_list_includes_latest_identity_metadata():
     assert profile["idfa"] == "idfa-1"
     assert profile["gaid"] == ""
     assert profile["trackingAuthorizationStatus"] == "denied"
+    assert profile["timeZoneId"] == "Europe/Kyiv"
+    assert profile["timeZoneDisplayName"] == "EEST"
+    assert profile["deviceLastSeenAt"] == "2026-05-04T12:58:00.0000000Z"
 
 
 def test_device_profiles_empty_database_returns_empty_list():
@@ -92,6 +98,12 @@ def test_device_profiles_prefer_identity_latest_metadata():
             "lastProjectId": "Bike Rush 2",
             "lastPluginVersion": "0.1.0",
             "lastSeenAt": dt.datetime(2026, 5, 4, 10, 0, tzinfo=dt.UTC),
+            "firstSeenDeviceSentAt": "2026-05-04T09:55:00.0000000Z",
+            "firstSeenTimeZoneId": "America/Vancouver",
+            "firstSeenTimeZoneDisplayName": "PDT",
+            "lastDeviceSentAt": "2026-05-04T10:55:00.0000000Z",
+            "lastTimeZoneId": "America/Vancouver",
+            "lastTimeZoneDisplayName": "PDT",
             "lastMetadata": {
                 "deviceAdvertisingId": "gaid-1",
                 "platform": "Android",
@@ -106,6 +118,12 @@ def test_device_profiles_prefer_identity_latest_metadata():
     assert profile["pluginVersion"] == "0.1.0"
     assert profile["gaid"] == "gaid-1"
     assert profile["trackingAuthorizationStatus"] == "authorized"
+    assert profile["createdTimeZoneId"] == "America/Vancouver"
+    assert profile["createdTimeZoneDisplayName"] == "PDT"
+    assert profile["timeZoneId"] == "America/Vancouver"
+    assert profile["timeZoneDisplayName"] == "PDT"
+    assert profile["deviceCreatedAt"] == "2026-05-04T09:55:00.0000000Z"
+    assert profile["deviceLastSeenAt"] == "2026-05-04T10:55:00.0000000Z"
 
 
 def test_device_profiles_mark_editor_runtime():

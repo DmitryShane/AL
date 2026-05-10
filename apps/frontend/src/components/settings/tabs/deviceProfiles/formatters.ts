@@ -4,7 +4,7 @@ export function formatDeviceTracking(profile: DeviceProfile) {
   return profile.trackingAuthorizationStatus || "-";
 }
 
-export function formatDeviceDateTime(value?: string) {
+export function formatDeviceDateTime(value?: string, timeZoneId?: string) {
   if (!value) {
     return "-";
   }
@@ -15,11 +15,27 @@ export function formatDeviceDateTime(value?: string) {
     return value;
   }
 
-  return date.toLocaleString(undefined, {
+  const options: Intl.DateTimeFormatOptions = {
     year: "numeric",
     month: "short",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit"
-  });
+  };
+
+  if (timeZoneId) {
+    options.timeZone = timeZoneId;
+  }
+
+  try {
+    return date.toLocaleString(undefined, options);
+  } catch {
+    return date.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  }
 }

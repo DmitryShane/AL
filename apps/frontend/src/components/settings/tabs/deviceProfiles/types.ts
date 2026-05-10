@@ -9,8 +9,14 @@ export type DeviceProfile = {
   projectId?: string;
   pluginVersion?: string;
   trackingAuthorizationStatus?: string;
+  timeZoneId?: string;
+  timeZoneDisplayName?: string;
+  createdTimeZoneId?: string;
+  createdTimeZoneDisplayName?: string;
   createdAt?: string;
   lastSeenAt?: string;
+  deviceCreatedAt?: string;
+  deviceLastSeenAt?: string;
 };
 
 export type DeviceProfileAuthorOption = {

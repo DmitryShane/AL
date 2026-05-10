@@ -19,17 +19,31 @@ class DeviceProfileRepository(MongoComposableMixin):
                 query,
                 {"_id": 0},
                 sort=[("receivedAt", DESCENDING)],
-            )
+            ) or {}
             latest_event = self.db.raw_activity_events.find_one(
                 query,
                 {"_id": 0},
                 sort=[("receivedAt", DESCENDING)],
-            )
+            ) or {}
             latest = latest_batch or latest_event or {}
             latest_event_metadata = latest_event.get("metadata") if isinstance((latest_event or {}).get("metadata"), dict) else {}
             latest_batch_metadata = latest_batch.get("metadata") if isinstance((latest_batch or {}).get("metadata"), dict) else {}
             identity_metadata = identity.get("lastMetadata") if isinstance(identity.get("lastMetadata"), dict) else {}
             latest_metadata = identity_metadata or latest_event_metadata or latest_batch_metadata
+            time_zone_id = str(
+                identity.get("lastTimeZoneId")
+                or latest_event.get("timeZoneId")
+                or latest_batch.get("timeZoneId")
+                or ""
+            ).strip()
+            time_zone_display_name = str(
+                identity.get("lastTimeZoneDisplayName")
+                or latest_event.get("timeZoneDisplayName")
+                or latest_batch.get("timeZoneDisplayName")
+                or ""
+            ).strip()
+            first_time_zone_id = str(identity.get("firstSeenTimeZoneId") or time_zone_id).strip()
+            first_time_zone_display_name = str(identity.get("firstSeenTimeZoneDisplayName") or time_zone_display_name).strip()
             alias = self.db.author_aliases.find_one({"sourceRawAuthor": raw_author}, {"_id": 0, "targetRawAuthor": 1}) or {}
             linked_author = str(alias.get("targetRawAuthor") or "")
             linked_profile = self.db.author_profiles.find_one({"rawAuthor": linked_author}, {"_id": 0}) if linked_author else None
@@ -55,8 +69,14 @@ class DeviceProfileRepository(MongoComposableMixin):
                     "projectId": str(identity.get("lastProjectId") or latest.get("projectId") or ""),
                     "pluginVersion": str(identity.get("lastPluginVersion") or latest.get("pluginVersion") or ""),
                     "trackingAuthorizationStatus": str(latest_metadata.get("trackingAuthorizationStatus") or ""),
+                    "timeZoneId": time_zone_id,
+                    "timeZoneDisplayName": time_zone_display_name,
+                    "createdTimeZoneId": first_time_zone_id,
+                    "createdTimeZoneDisplayName": first_time_zone_display_name,
                     "createdAt": identity.get("createdAt"),
                     "lastSeenAt": identity.get("lastSeenAt") or latest.get("receivedAt") or latest.get("recordedAt") or latest.get("occurredAtUtc") or latest.get("sentAt"),
+                    "deviceCreatedAt": identity.get("firstSeenDeviceSentAt") or identity.get("createdAt"),
+                    "deviceLastSeenAt": identity.get("lastDeviceSentAt") or latest.get("sentAt") or identity.get("lastSeenAt") or latest.get("receivedAt") or latest.get("recordedAt") or latest.get("occurredAtUtc"),
                 }
             )
 

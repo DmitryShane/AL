@@ -62,9 +62,6 @@ class ReportIngestService(MongoComposableMixin):
         if source == "dev" and self.is_unknown_device_author(payload.get("author")):
             payload["author"] = self.resolve_device_report_author(source, resolved_device_id)
 
-        if source == "dev":
-            self.touch_device_report_identity(source, resolved_device_id, payload, plugin_version, now)
-
         original_author = _normalize_author(payload.get("author") or "Unknown User")
         payload["author"] = composed(self).resolve_author_alias(original_author)
         normalized_time_zone = _author_configured_time_zone_id(payload["author"]) or _valid_time_zone_id(payload.get("timeZoneId"))
@@ -72,6 +69,9 @@ class ReportIngestService(MongoComposableMixin):
         if normalized_time_zone:
             payload["timeZoneId"] = normalized_time_zone
             payload["timeZoneDisplayName"] = str(payload.get("timeZoneDisplayName") or "").strip() or normalized_time_zone
+
+        if source == "dev":
+            self.touch_device_report_identity(source, resolved_device_id, payload, plugin_version, now)
 
         if not self._is_unassigned_device_report_author(source, payload.get("author")):
             composed(self).update_author_time_zone(str(payload.get("author") or "Unknown User"), payload.get("timeZoneId"), payload.get("timeZoneDisplayName"))
@@ -150,6 +150,15 @@ class ReportIngestService(MongoComposableMixin):
             return
 
         metadata = self._latest_device_event_metadata(payload)
+        device_sent_at = str(payload.get("sentAt") or "").strip()
+        time_zone_id = str(payload.get("timeZoneId") or "").strip()
+        time_zone_display_name = str(payload.get("timeZoneDisplayName") or "").strip()
+        first_touch_fields = {
+            "firstSeenDeviceSentAt": device_sent_at,
+            "firstSeenTimeZoneId": time_zone_id,
+            "firstSeenTimeZoneDisplayName": time_zone_display_name,
+        }
+        first_touch_fields = {key: value for key, value in first_touch_fields.items() if value}
         self.db.device_report_identities.update_one(
             {"source": source, "deviceIdHash": _device_report_id_hash(normalized_device_id)},
             {
@@ -158,10 +167,22 @@ class ReportIngestService(MongoComposableMixin):
                     "lastProjectId": str(payload.get("projectId") or ""),
                     "lastPluginVersion": plugin_version,
                     "lastSeenAt": received_at,
+                    "lastDeviceSentAt": device_sent_at,
+                    "lastTimeZoneId": time_zone_id,
+                    "lastTimeZoneDisplayName": time_zone_display_name,
                     "lastMetadata": metadata,
                 }
             },
         )
+        if first_touch_fields:
+            self.db.device_report_identities.update_one(
+                {
+                    "source": source,
+                    "deviceIdHash": _device_report_id_hash(normalized_device_id),
+                    "firstSeenDeviceSentAt": {"$exists": False},
+                },
+                {"$set": first_touch_fields},
+            )
 
     def _latest_device_event_metadata(self, payload: dict[str, Any]) -> dict[str, Any]:
         events = payload.get("events")
@@ -299,6 +320,8 @@ class ReportIngestService(MongoComposableMixin):
             "deviceId": resolved_device_id,
             "receivedAt": received_at,
             "sentAt": payload.get("sentAt"),
+            "timeZoneId": payload.get("timeZoneId"),
+            "timeZoneDisplayName": payload.get("timeZoneDisplayName"),
             "eventCount": len(payload.get("events") or []),
             "reportType": report_type,
         }

@@ -78,9 +78,11 @@ export function DeviceProfilesTable({
                 <span className="profile-readonly-cell" title={profile.trackingAuthorizationStatus || ""}>
                   {formatDeviceTracking(profile)}
                 </span>
-                <span className="profile-readonly-cell" title={profile.createdAt || ""}>{formatDeviceDateTime(profile.createdAt)}</span>
-                <span className="profile-readonly-cell" title={profile.lastSeenAt || ""}>
-                  {formatDeviceDateTime(profile.lastSeenAt)}
+                <span className="profile-readonly-cell" title={deviceCreatedDateTimeTitle(profile)}>
+                  {formatDeviceDateTime(profile.deviceCreatedAt ?? profile.createdAt, profile.createdTimeZoneId ?? profile.timeZoneId)}
+                </span>
+                <span className="profile-readonly-cell" title={deviceLastSeenDateTimeTitle(profile)}>
+                  {formatDeviceDateTime(profile.deviceLastSeenAt ?? profile.lastSeenAt, profile.timeZoneId)}
                 </span>
                 <div className="profile-actions">
                   <button
@@ -107,4 +109,16 @@ export function DeviceProfilesTable({
       </div>
     </div>
   );
+}
+
+function deviceCreatedDateTimeTitle(profile: DeviceProfile) {
+  const value = profile.deviceCreatedAt ?? profile.createdAt;
+  const timeZone = profile.createdTimeZoneDisplayName || profile.createdTimeZoneId || profile.timeZoneDisplayName || profile.timeZoneId || "";
+  return [value || "", timeZone].filter(Boolean).join(" - ");
+}
+
+function deviceLastSeenDateTimeTitle(profile: DeviceProfile) {
+  const value = profile.deviceLastSeenAt ?? profile.lastSeenAt;
+  const timeZone = profile.timeZoneDisplayName || profile.timeZoneId || "";
+  return [value || "", timeZone].filter(Boolean).join(" - ");
 }
