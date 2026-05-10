@@ -121,6 +121,24 @@ def test_openai_stats_historical_usage_is_chunked_to_31_days(monkeypatch) -> Non
     assert len(transcriptions_ranges) == 3
 
 
+def test_openai_stats_skips_empty_openai_api_ranges(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_openai_get(*_args, **_kwargs):
+        calls.append("openai")
+        raise AssertionError("empty ranges must not call OpenAI")
+
+    monkeypatch.setattr(settings_repo, "_openai_get", fake_openai_get)
+
+    spend, currency = settings_repo._fetch_openai_spend("usage-key", 100, 100)
+    usage = settings_repo._fetch_openai_usage("usage-key", "completions", 101, 100)
+
+    assert spend == 0
+    assert currency == "usd"
+    assert usage == {"tokens": 0, "requests": 0}
+    assert calls == []
+
+
 def test_openai_stats_refresh_bypasses_response_cache(monkeypatch) -> None:
     repo = fake_repository()
     repo.openai_usage_api_key = "usage-key"

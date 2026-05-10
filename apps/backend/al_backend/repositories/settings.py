@@ -353,6 +353,9 @@ def _refresh_openai_accumulator(
 
 
 def _fetch_openai_spend(api_key: str, start_time: int, end_time: int) -> tuple[float, str]:
+    if end_time <= start_time:
+        return 0.0, "usd"
+
     params: dict[str, int | str | list[str]] = {
         "start_time": start_time,
         "end_time": end_time,
@@ -392,6 +395,9 @@ def _fetch_openai_spend(api_key: str, start_time: int, end_time: int) -> tuple[f
 
 
 def _fetch_openai_usage(api_key: str, endpoint: str, start_time: int, end_time: int) -> dict[str, int]:
+    if end_time <= start_time:
+        return {"tokens": 0, "requests": 0}
+
     params: dict[str, int | str | list[str]] = {
         "start_time": start_time,
         "end_time": end_time,
