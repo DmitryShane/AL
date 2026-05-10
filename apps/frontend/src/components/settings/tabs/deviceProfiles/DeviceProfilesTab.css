@@ -1,5 +1,22 @@
 .profile-table--device-profiles {
-  --device-profile-columns: 92px 190px 96px 190px 190px 150px 72px 130px 150px 150px 176px;
+  --device-profile-columns: 92px 190px 96px minmax(190px, 1fr) minmax(190px, 1fr) minmax(150px, 0.8fr) 72px 130px 150px 150px 176px;
+}
+
+.device-profiles-panel-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.device-profiles-panel-head .settings-caption {
+  margin-bottom: 0;
+}
+
+.device-profiles-panel-head > button {
+  flex: 0 0 auto;
+  margin-top: 0;
+  white-space: nowrap;
 }
 
 .profile-table--device-profiles > .profile-table-head,
@@ -38,23 +55,8 @@
   min-width: 0;
 }
 
-.device-profile-save-button,
-.device-profile-delete-button {
-  min-height: 34px;
-  padding-left: 12px;
-  padding-right: 12px;
-  white-space: nowrap;
-}
-
-.device-profile-actions {
-  align-items: center;
-  display: grid;
+.profile-table--device-profiles > .profile-row > .profile-actions {
+  display: flex;
+  justify-content: flex-end;
   gap: 8px;
-  grid-template-columns: 78px 82px;
-  min-width: 0;
-}
-
-.device-profile-save-button,
-.device-profile-delete-button {
-  width: 100%;
 }

@@ -314,6 +314,14 @@ def delete_device_profile(
     return result
 
 
+@router.delete("/api/v1/authors/device-profiles")
+def delete_all_device_profiles(
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    return service.delete_all_device_profiles()
+
+
 @router.put("/api/v1/authors/aliases")
 def upsert_author_alias(
     alias: AuthorAliasIn,

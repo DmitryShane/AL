@@ -188,3 +188,27 @@ def test_delete_device_profile_removes_identity_alias_and_duplicate_profile_only
     assert repo.db.author_profiles.find_one({"rawAuthor": "Device1"}) is None
     assert repo.db.author_profiles.find_one({"rawAuthor": "Dmitry Shane"}) is not None
     assert repo.db.raw_activity_events.find_one({"eventId": "event-1"}) is not None
+
+
+def test_delete_all_device_profiles_removes_identities_aliases_and_duplicates_only():
+    repo = fake_repository()
+    for raw_device in ["Device1", "Device2"]:
+        repo.db.device_report_identities.insert_one(
+            {"source": "dev", "deviceIdHash": f"hash-{raw_device}", "rawAuthor": raw_device}
+        )
+        repo.db.author_profiles.insert_one({"rawAuthor": raw_device, "displayName": raw_device})
+        repo.db.author_aliases.insert_one({"sourceRawAuthor": raw_device, "targetRawAuthor": "Dmitry Shane"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
+    repo.db.raw_activity_events.insert_one({"source": "dev", "author": "Device1", "eventId": "event-1"})
+
+    result = repo.delete_all_device_profiles()
+
+    assert result["ok"] is True
+    assert result["rawDeviceCount"] == 2
+    assert repo.db.device_report_identities.count_documents({}) == 0
+    assert repo.db.author_aliases.find_one({"sourceRawAuthor": "Device1"}) is None
+    assert repo.db.author_aliases.find_one({"sourceRawAuthor": "Device2"}) is None
+    assert repo.db.author_profiles.find_one({"rawAuthor": "Device1"}) is None
+    assert repo.db.author_profiles.find_one({"rawAuthor": "Device2"}) is None
+    assert repo.db.author_profiles.find_one({"rawAuthor": "Dmitry Shane"}) is not None
+    assert repo.db.raw_activity_events.find_one({"eventId": "event-1"}) is not None

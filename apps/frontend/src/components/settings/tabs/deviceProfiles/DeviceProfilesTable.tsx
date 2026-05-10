@@ -82,9 +82,9 @@ export function DeviceProfilesTable({
                 <span className="profile-readonly-cell" title={profile.lastSeenAt || ""}>
                   {formatDeviceDateTime(profile.lastSeenAt)}
                 </span>
-                <div className="device-profile-actions">
+                <div className="profile-actions">
                   <button
-                    className="primary-outline-button device-profile-save-button"
+                    className="primary-outline-button"
                     type="button"
                     disabled={!changed || !draftValue || saving || deleting}
                     onClick={() => onSaveLinkedAuthor(profile.rawDevice)}
@@ -92,7 +92,7 @@ export function DeviceProfilesTable({
                     {saving ? "Saving..." : "Save"}
                   </button>
                   <button
-                    className="primary-button danger-solid-button device-profile-delete-button"
+                    className="primary-button danger-solid-button delete-all-data-solid-button"
                     type="button"
                     disabled={saving || deleting}
                     onClick={() => onDeleteProfile(profile)}

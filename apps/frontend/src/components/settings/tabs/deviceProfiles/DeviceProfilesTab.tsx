@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { deleteDeviceProfile, loadDeviceProfileAuthorOptions, loadDeviceProfiles, saveDeviceProfileAlias } from "./api";
+import { deleteAllDeviceProfiles, deleteDeviceProfile, loadDeviceProfileAuthorOptions, loadDeviceProfiles, saveDeviceProfileAlias } from "./api";
 import { DeviceProfileDeleteModal } from "./DeviceProfileDeleteModal";
+import { DeviceProfilesBulkDeleteModal } from "./DeviceProfilesBulkDeleteModal";
 import { DeviceProfilesTable } from "./DeviceProfilesTable";
 import type { DeviceProfile, DeviceProfileAuthorOption } from "./types";
 import "./DeviceProfilesTab.css";
@@ -18,6 +19,9 @@ export function DeviceProfilesTab() {
   const [aliasDrafts, setAliasDrafts] = useState<Record<string, string>>({});
   const [deleteTarget, setDeleteTarget] = useState<DeviceProfile | null>(null);
   const [deleteFailedRawDevice, setDeleteFailedRawDevice] = useState("");
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteFailed, setBulkDeleteFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,12 +120,44 @@ export function DeviceProfilesTab() {
     }
   }
 
+  async function handleDeleteAllDeviceProfiles() {
+    setBulkDeleting(true);
+    setBulkDeleteFailed(false);
+    setError("");
+
+    try {
+      await deleteAllDeviceProfiles();
+      await reloadDeviceProfiles();
+      setBulkDeleteOpen(false);
+    } catch (deleteError) {
+      setBulkDeleteFailed(true);
+      setError(deleteError instanceof Error ? deleteError.message : "Could not delete device profiles.");
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
   return (
     <div className="panel">
-      <h2>Device Profiles</h2>
-      <p className="settings-caption">
-        Device identities created from Activity Logger device reports. Runtime distinguishes mobile devices from editor or desktop reports.
-      </p>
+      <div className="device-profiles-panel-head">
+        <div>
+          <h2>Device Profiles</h2>
+          <p className="settings-caption">
+            Device identities created from Activity Logger device reports. Runtime distinguishes mobile devices from editor or desktop reports.
+          </p>
+        </div>
+        <button
+          className="primary-button danger-solid-button delete-all-data-solid-button"
+          type="button"
+          disabled={loading || bulkDeleting || deviceProfiles.length === 0}
+          onClick={() => {
+            setBulkDeleteFailed(false);
+            setBulkDeleteOpen(true);
+          }}
+        >
+          {bulkDeleting ? "Deleting..." : "Delete all devices"}
+        </button>
+      </div>
       {error ? <p className="settings-error">{error}</p> : null}
       <DeviceProfilesTable
         deviceProfiles={deviceProfiles}
@@ -141,6 +177,15 @@ export function DeviceProfilesTab() {
           deleteError={deleteFailedRawDevice === deleteTarget.rawDevice}
           onCancel={() => setDeleteTarget(null)}
           onDelete={() => void handleDeleteDeviceProfile()}
+        />
+      ) : null}
+      {bulkDeleteOpen ? (
+        <DeviceProfilesBulkDeleteModal
+          deviceCount={deviceProfiles.length}
+          saving={bulkDeleting}
+          deleteError={bulkDeleteFailed}
+          onCancel={() => setBulkDeleteOpen(false)}
+          onDelete={() => void handleDeleteAllDeviceProfiles()}
         />
       ) : null}
     </div>

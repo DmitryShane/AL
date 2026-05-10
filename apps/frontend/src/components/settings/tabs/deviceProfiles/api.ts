@@ -51,6 +51,16 @@ export async function deleteDeviceProfile(rawDevice: string): Promise<void> {
   }
 }
 
+export async function deleteAllDeviceProfiles(): Promise<void> {
+  const response = await apiFetch("/api/v1/authors/device-profiles", {
+    method: "DELETE"
+  });
+
+  if (!response.ok) {
+    throw new Error(await apiErrorDetail(response, "Device profiles delete failed"));
+  }
+}
+
 async function apiErrorDetail(response: Response, fallback: string): Promise<string> {
   try {
     const payload = await response.json() as { detail?: unknown };
