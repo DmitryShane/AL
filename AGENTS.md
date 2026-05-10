@@ -22,6 +22,14 @@ Treat `com.al.ual` as the active plugin source for Unity and Blender work.
 
 When creating new Activity Logger plugins, keep them minimal and purpose-built for logging only. Do not create README files, standalone documentation, extra settings pages, sample apps, or other nonessential scaffolding unless the user explicitly asks for them.
 
+The Device Activity Logger plugin source lives in:
+
+```text
+/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual/device_al
+```
+
+After any behavior or end-user change under `device_al`, bump the Device Activity Logger plugin version in `device_al/DeviceAL.cs` (`PluginVersion`) only. Do **not** bump `com.al.ual/package.json` for Device Activity Logger changes, and do **not** update the Unity project `Packages/manifest.json` tag unless the owner explicitly asks to publish/update the root Unity package tag. The root `com.al.ual` package version and the Device Activity Logger runtime `PluginVersion` are separate version tracks.
+
 The Blender add-on source lives in:
 
 ```text
