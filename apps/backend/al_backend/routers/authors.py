@@ -12,7 +12,7 @@ from ..author_avatar_cache import ensure_author_avatar_cached
 from ..repositories.authors import utc_inclusive_range_for_bulk_activity_preset
 from ..container import BackendServices
 from ..dependencies import get_author_service
-from ..models import AuthorAliasIn, AuthorProfileIn, BulkAuthorsActivityDeleteIn, FullActivityRebuildIn
+from ..models import AuthorAliasIn, AuthorProfileIn, BulkAuthorsActivityDeleteIn, DeviceProfileAliasIn, FullActivityRebuildIn
 
 
 router = APIRouter()
@@ -253,12 +253,65 @@ def upsert_author_profile(
     )
 
 
+@router.get("/api/v1/authors/profiles")
+def author_profiles(
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    return {"profiles": service.author_profiles()}
+
+
 @router.get("/api/v1/authors/aliases")
 def author_aliases(
     _: dict = Depends(require_permission("manageSettings")),
     service: BackendServices = Depends(get_author_service),
 ) -> dict:
     return {"aliases": service.author_aliases()}
+
+
+@router.get("/api/v1/authors/device-profiles")
+def device_profiles(
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    return {"deviceProfiles": service.device_profiles()}
+
+
+@router.post("/api/v1/authors/device-profiles/migrate-author-profiles")
+def migrate_device_author_profiles(
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    return service.migrate_device_author_profiles()
+
+
+@router.put("/api/v1/authors/device-profiles/{raw_device}/alias")
+def upsert_device_profile_alias(
+    raw_device: str,
+    alias: DeviceProfileAliasIn,
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    result = service.upsert_device_profile_alias(raw_device, alias.target_raw_author)
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Device alias save failed"))
+
+    return result
+
+
+@router.delete("/api/v1/authors/device-profiles/{raw_device}")
+def delete_device_profile(
+    raw_device: str,
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    result = service.delete_device_profile(raw_device)
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Device profile delete failed"))
+
+    return result
 
 
 @router.put("/api/v1/authors/aliases")

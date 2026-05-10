@@ -13,6 +13,8 @@ import {
 import { SiteUsersPanel } from "../components/settings/SettingsComponents";
 import { AuthorProfilesTab } from "../components/settings/tabs/authors/AuthorProfilesTab";
 import { AutoBreakTab } from "../components/settings/tabs/autoBreak/AutoBreakTab";
+import { SETTINGS_TABS } from "../components/settings/settingsTabs";
+import { DeviceProfilesTab } from "../components/settings/tabs/deviceProfiles/DeviceProfilesTab";
 import { DiscordSettingsTab } from "../components/settings/tabs/discord/DiscordSettingsTab";
 import { GeneralSettingsTab } from "../components/settings/tabs/general/GeneralSettingsTab";
 import { MeetingSummariesTab } from "../components/settings/tabs/meetingSummaries/MeetingSummariesTab";
@@ -1215,14 +1217,11 @@ export function SettingsPage({
   return (
     <section className="page-section settings-layout">
       <div className="settings-tabs">
-        <button className={settingsTab === "general" ? "active" : ""} onClick={() => setSettingsTab("general")}>General</button>
-        <button className={settingsTab === "authors" ? "active" : ""} onClick={() => setSettingsTab("authors")}>Author Profiles</button>
-        <button className={settingsTab === "autoBreak" ? "active" : ""} onClick={() => setSettingsTab("autoBreak")}>Auto Break</button>
-        <button className={settingsTab === "redirects" ? "active" : ""} onClick={() => setSettingsTab("redirects")}>Author Redirects</button>
-        <button className={settingsTab === "discord" ? "active" : ""} onClick={() => setSettingsTab("discord")}>Discord</button>
-        <button className={settingsTab === "telegram" ? "active" : ""} onClick={() => setSettingsTab("telegram")}>Telegram</button>
-        <button className={settingsTab === "meetingSummaries" ? "active" : ""} onClick={() => setSettingsTab("meetingSummaries")}>Meeting Summaries</button>
-        <button className={settingsTab === "users" ? "active" : ""} onClick={() => setSettingsTab("users")}>Site Users</button>
+        {SETTINGS_TABS.map((tab) => (
+          <button key={tab.key} className={settingsTab === tab.key ? "active" : ""} onClick={() => setSettingsTab(tab.key)}>
+            {tab.label}
+          </button>
+        ))}
       </div>
       {settingsTab === "general" ? (
         <GeneralSettingsTab
@@ -1252,6 +1251,8 @@ export function SettingsPage({
           onDraftChange={(rawAuthor, draft) => setDrafts((items) => ({ ...items, [rawAuthor]: draft }))}
           onSaveProfile={(rawAuthor) => void saveProfile(rawAuthor)}
         />
+      ) : settingsTab === "deviceProfiles" ? (
+        <DeviceProfilesTab />
       ) : settingsTab === "redirects" ? (
         <AuthorRedirectsTab
           profiles={profiles}

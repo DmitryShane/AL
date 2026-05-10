@@ -676,7 +676,7 @@ def test_device_report_uses_fallback_id_when_advertising_id_is_zero():
     assert raw_event["author"] == "Device1"
     assert repo.db.device_report_identities.items[0]["rawAuthor"] == "Device1"
 
-def test_device_profile_includes_latest_device_id():
+def test_author_profiles_exclude_device_only_profiles():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
     repo.db.device_report_identities.insert_one(
@@ -691,9 +691,7 @@ def test_device_profile_includes_latest_device_id():
         }
     )
 
-    profile = next(item for item in repo.author_profiles() if item["rawAuthor"] == "Device1")
-
-    assert profile["deviceId"] == "keychain-device-id"
+    assert all(item["rawAuthor"] != "Device1" for item in repo.author_profiles())
 
 def test_device_source_uses_device_idle_threshold():
     repo = fake_repository()

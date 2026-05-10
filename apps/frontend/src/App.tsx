@@ -21,14 +21,13 @@ import {
   PAGE_STORAGE_KEY,
   REFRESH_INTERVAL_MS,
   REPORTS_PAGE_STORAGE_KEY,
-  SESSION_USER_PREVIEW_STORAGE_KEY,
-  SETTINGS_TAB_STORAGE_KEY
+  SESSION_USER_PREVIEW_STORAGE_KEY
 } from "./constants/dashboard";
 import "./styles.css";
 
 import { AuthorAvatar } from "./components/AuthorAvatar";
 import { formatSiteRole, formatSiteUserSidebarLabel } from "./pages/pageHelpers";
-import type { ActivitySummary, AuthorRow, DateRange, Health, Page, SettingsTab, SiteUser, SiteUserRole, Summary } from "./types/dashboard";
+import type { ActivitySummary, AuthorRow, DateRange, Health, Page, SiteUser, SiteUserRole, Summary } from "./types/dashboard";
 
 const emptyActivitySummary: ActivitySummary = {
   totals: {
@@ -816,25 +815,6 @@ function loadSavedPage(): Page {
   }
 
   return "authors";
-}
-
-function loadSavedSettingsTab(): SettingsTab {
-  const savedTab = localStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
-
-  if (
-    savedTab === "general" ||
-    savedTab === "authors" ||
-    savedTab === "autoBreak" ||
-    savedTab === "redirects" ||
-    savedTab === "discord" ||
-    savedTab === "telegram" ||
-    savedTab === "meetingSummaries" ||
-    savedTab === "users"
-  ) {
-    return savedTab;
-  }
-
-  return "general";
 }
 
 function loadSavedReportsPage() {

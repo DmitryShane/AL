@@ -62,6 +62,9 @@ class ReportIngestService(MongoComposableMixin):
         if source == "dev" and self.is_unknown_device_author(payload.get("author")):
             payload["author"] = self.resolve_device_report_author(source, resolved_device_id)
 
+        if source == "dev":
+            self.touch_device_report_identity(source, resolved_device_id, payload, plugin_version, now)
+
         original_author = _normalize_author(payload.get("author") or "Unknown User")
         payload["author"] = composed(self).resolve_author_alias(original_author)
         normalized_time_zone = _author_configured_time_zone_id(payload["author"]) or _valid_time_zone_id(payload.get("timeZoneId"))
@@ -70,7 +73,8 @@ class ReportIngestService(MongoComposableMixin):
             payload["timeZoneId"] = normalized_time_zone
             payload["timeZoneDisplayName"] = str(payload.get("timeZoneDisplayName") or "").strip() or normalized_time_zone
 
-        composed(self).update_author_time_zone(str(payload.get("author") or "Unknown User"), payload.get("timeZoneId"), payload.get("timeZoneDisplayName"))
+        if not self._is_unassigned_device_report_author(source, payload.get("author")):
+            composed(self).update_author_time_zone(str(payload.get("author") or "Unknown User"), payload.get("timeZoneId"), payload.get("timeZoneDisplayName"))
         report_type = self.consume_expected_report_type(payload.get("author"))
         raw_result = self.db.raw_reports.insert_one(
             {
@@ -97,7 +101,7 @@ class ReportIngestService(MongoComposableMixin):
                 challenge_id=challenge_id,
                 device_id=resolved_device_id,
             )
-            if meaningful_for_stale:
+            if meaningful_for_stale and not self._is_unassigned_device_report_author(source, author_for_stale_touch):
                 composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
             composed(self).invalidate_activity_summary_cache()
             return str(raw_result.inserted_id)
@@ -116,9 +120,73 @@ class ReportIngestService(MongoComposableMixin):
         )
         self.db.activity_snapshots.insert_one(snapshot)
         composed(self)._apply_snapshot_to_aggregates(snapshot)
-        composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
+        if not self._is_unassigned_device_report_author(source, author_for_stale_touch):
+            composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
         composed(self).invalidate_activity_summary_cache()
         return str(raw_result.inserted_id)
+
+    def _is_unassigned_device_report_author(self, source: str, author: Any) -> bool:
+        if source != "dev":
+            return False
+
+        normalized = _normalize_author(author)
+
+        if not normalized:
+            return False
+
+        return bool(self.db.device_report_identities.find_one({"source": source, "rawAuthor": normalized}, {"_id": 1}))
+
+    def touch_device_report_identity(
+        self,
+        source: str,
+        device_id: str,
+        payload: dict[str, Any],
+        plugin_version: str,
+        received_at: dt.datetime,
+    ) -> None:
+        normalized_device_id = str(device_id or "").strip()
+
+        if not _is_valid_device_id(normalized_device_id):
+            return
+
+        metadata = self._latest_device_event_metadata(payload)
+        self.db.device_report_identities.update_one(
+            {"source": source, "deviceIdHash": _device_report_id_hash(normalized_device_id)},
+            {
+                "$set": {
+                    "lastDeviceId": normalized_device_id,
+                    "lastProjectId": str(payload.get("projectId") or ""),
+                    "lastPluginVersion": plugin_version,
+                    "lastSeenAt": received_at,
+                    "lastMetadata": metadata,
+                }
+            },
+        )
+
+    def _latest_device_event_metadata(self, payload: dict[str, Any]) -> dict[str, Any]:
+        events = payload.get("events")
+
+        if not isinstance(events, list):
+            return {}
+
+        latest_event = None
+
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+
+            if latest_event is None:
+                latest_event = event
+                continue
+
+            current_time = str(event.get("occurredAtUtc") or event.get("occurredAtLocal") or "")
+            latest_time = str(latest_event.get("occurredAtUtc") or latest_event.get("occurredAtLocal") or "")
+
+            if current_time >= latest_time:
+                latest_event = event
+
+        metadata = (latest_event or {}).get("metadata")
+        return metadata if isinstance(metadata, dict) else {}
 
     def is_unknown_device_author(self, value: Any) -> bool:
         return is_unknown_device_author(value)
@@ -344,5 +412,3 @@ class ReportIngestService(MongoComposableMixin):
             )
 
         return rows
-
-

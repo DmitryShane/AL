@@ -1,0 +1,60 @@
+.profile-table--device-profiles {
+  --device-profile-columns: 92px 190px 96px 190px 190px 150px 72px 130px 150px 150px 176px;
+}
+
+.profile-table--device-profiles > .profile-table-head,
+.profile-table--device-profiles > .profile-row {
+  grid-template-columns: var(--device-profile-columns);
+  min-width: 1754px;
+}
+
+.profile-table-empty {
+  margin: 0;
+  min-width: 100%;
+  padding: 22px 14px;
+  color: #718093;
+  font-size: 13px;
+}
+
+.profile-device-raw-cell {
+  min-width: 0;
+  width: 92px;
+}
+
+.profile-device-raw-cell strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-profile-author-cell {
+  align-items: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.device-profile-author-cell select {
+  min-width: 0;
+}
+
+.device-profile-save-button,
+.device-profile-delete-button {
+  min-height: 34px;
+  padding-left: 12px;
+  padding-right: 12px;
+  white-space: nowrap;
+}
+
+.device-profile-actions {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 78px 82px;
+  min-width: 0;
+}
+
+.device-profile-save-button,
+.device-profile-delete-button {
+  width: 100%;
+}

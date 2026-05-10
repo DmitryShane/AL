@@ -1,5 +1,5 @@
 export type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings";
-export type SettingsTab = "general" | "authors" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingSummaries" | "users";
+export type SettingsTab = "general" | "authors" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingSummaries" | "users";
 
 export type Health = {
   ok: boolean;

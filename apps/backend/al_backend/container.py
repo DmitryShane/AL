@@ -3,6 +3,7 @@ from __future__ import annotations
 from .repositories.auth import AuthRepository
 from .repositories.settings import SettingsRepository
 from .repositories.authors import AuthorRepository
+from .repositories.device_profiles import DeviceProfileRepository
 from .services.author_avatar_service import AuthorAvatarService
 from .services.author_timezone_rebucket import AuthorTimezoneRebucketService
 from .services.report_challenges import ReportChallengeService
@@ -34,6 +35,7 @@ class BackendServices(
     ReportChallengeService,
     ReportSecurityService,
     AuthorRepository,
+    DeviceProfileRepository,
     ReportIngestService,
     ReportListingService,
     EditorActivityPurgeService,

@@ -123,6 +123,10 @@ class AuthorAliasIn(ApiModel):
     target_raw_author: str = Field(alias="targetRawAuthor", min_length=1)
 
 
+class DeviceProfileAliasIn(ApiModel):
+    target_raw_author: str = Field(alias="targetRawAuthor", min_length=1)
+
+
 class CalendarMarkIn(ApiModel):
     authors: list[str] = Field(min_length=1)
     dates: list[str] = Field(min_length=1)

@@ -42,6 +42,11 @@ class AuthorRepository(MongoComposableMixin):
 
     def author_profiles(self) -> list[dict[str, Any]]:
         known_authors = self.list_authors()
+        raw_devices = {
+            str(item.get("rawAuthor") or "")
+            for item in self.db.device_report_identities.find({}, {"_id": 0, "rawAuthor": 1})
+            if item.get("rawAuthor")
+        }
         profiles = composed(self)._profiles_by_raw_author()
         profiles_by_normalized_key = {_normalize_author(k): v for k, v in profiles.items() if k}
         device_identities = {
@@ -52,6 +57,9 @@ class AuthorRepository(MongoComposableMixin):
         result = []
 
         for raw_author in known_authors:
+            if raw_author in raw_devices:
+                continue
+
             profile = profiles.get(raw_author)
             if profile is None:
                 profile = profiles_by_normalized_key.get(_normalize_author(raw_author), {})
@@ -614,5 +622,4 @@ class AuthorRepository(MongoComposableMixin):
 
         composed(self).invalidate_activity_summary_cache()
         return {"ok": True, "author": normalized_author, "deleted": counts}
-
 
