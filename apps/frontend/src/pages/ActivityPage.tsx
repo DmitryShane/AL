@@ -118,6 +118,7 @@ export function ActivityPage({
   const [reportHourFilter, setReportHourFilter] = useState("");
   const reportsPageCacheRef = useRef<ReportsPageCache>({});
   const reportsResetKeyRef = useRef<string | null>(null);
+  const reportsFreshnessKey = `${author?.lastReceivedAt ?? ""}:${author?.lastRecordedAt ?? ""}`;
   const reportsResetKey = useMemo(() => JSON.stringify({
     author: author?.rawAuthor ?? "",
     startDate: dateRange.startDate,
@@ -125,8 +126,9 @@ export function ActivityPage({
     dateMode: dateRange.preset === "live" ? "authorLocalToday" : "",
     source: reportSourceFilter,
     hour: reportHourFilter,
-    limit: reportsPageSize
-  }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportHourFilter, reportsPageSize]);
+    limit: reportsPageSize,
+    freshness: reportsFreshnessKey
+  }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportHourFilter, reportsPageSize, reportsFreshnessKey]);
   const reportsCacheKey = useMemo(() => JSON.stringify({
     author: author?.rawAuthor ?? "",
     startDate: dateRange.startDate,
@@ -135,8 +137,9 @@ export function ActivityPage({
     source: reportSourceFilter,
     hour: reportHourFilter,
     limit: reportsPageSize,
-    page: reportsPage
-  }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportHourFilter, reportsPageSize, reportsPage]);
+    page: reportsPage,
+    freshness: reportsFreshnessKey
+  }), [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, reportSourceFilter, reportHourFilter, reportsPageSize, reportsPage, reportsFreshnessKey]);
   useLayoutEffect(() => {
     let settleAttempts = 0;
     let pendingFrame: number | null = null;
