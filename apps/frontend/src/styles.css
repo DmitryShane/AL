@@ -1797,7 +1797,7 @@ p {
 
 .overtime-breakdown-panel {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, auto);
   column-gap: 12px;
   row-gap: 8px;
 }
@@ -1813,8 +1813,17 @@ p {
 }
 
 .mini-breakdown-list {
+  display: grid;
+  grid-template-rows: auto minmax(0, auto);
   min-width: 0;
   padding-top: 0;
+}
+
+.overtime-breakdown-panel .breakdown-scroll-list {
+  --breakdown-scroll-visible-rows: 10;
+  --breakdown-scroll-row-block: calc(8px + 1.15 * 12px + 1px);
+  --breakdown-scroll-row-gap: 2px;
+  overflow-y: auto;
 }
 
 .mini-breakdown-list + .mini-breakdown-list {

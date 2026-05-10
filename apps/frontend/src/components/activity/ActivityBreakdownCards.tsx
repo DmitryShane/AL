@@ -27,7 +27,7 @@ export function ActivityBreakdownCards({ author }: ActivityBreakdownCardsProps) 
   const overtimeActivityMixGroups = (author.overtimeActivityMixBySource ?? []).map((group) => ({
     source: group.source,
     label: formatSource(group.source),
-    totalDisplayValue: String(group.totalCount),
+    totalDisplayValue: formatCompactSourceDuration(group.activeSeconds ?? 0),
     items: group.activityMix.map((item) => activityMixPanelItem(item.type, item.count, item.percent, group.source))
   }));
   const overtimeSavedPrefabGroups = (author.overtimeSavedPrefabsBySource ?? []).map((group) => ({
