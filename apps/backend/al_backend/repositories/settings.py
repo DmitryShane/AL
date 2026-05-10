@@ -228,7 +228,7 @@ def _fetch_openai_month_only_stats(api_key: str, now: dt.datetime, accumulator: 
     total_tokens = int(previous.get("totalTokens") or 0)
     total_requests = int(previous.get("totalRequests") or 0)
 
-    if through and through < now:
+    if through and through < now and through.astimezone(dt.UTC).date() < now.astimezone(dt.UTC).date():
         spend_delta, currency = _fetch_openai_spend(api_key, int(through.timestamp()), end_time)
         total_spend += spend_delta
 
@@ -291,7 +291,7 @@ def _refresh_openai_accumulator(
         previous_tokens = int(previous.get("totalTokens") or 0)
         previous_requests = int(previous.get("totalRequests") or 0)
 
-    if range_start >= now:
+    if range_start >= now or range_start.astimezone(dt.UTC).date() >= now.astimezone(dt.UTC).date():
         return {
             **previous,
             "kind": OPENAI_STATS_ACCUMULATOR_KIND,
@@ -353,7 +353,7 @@ def _refresh_openai_accumulator(
 
 
 def _fetch_openai_spend(api_key: str, start_time: int, end_time: int) -> tuple[float, str]:
-    if end_time <= start_time:
+    if _openai_daily_bucket_range_is_empty(start_time, end_time):
         return 0.0, "usd"
 
     params: dict[str, int | str | list[str]] = {
@@ -395,7 +395,7 @@ def _fetch_openai_spend(api_key: str, start_time: int, end_time: int) -> tuple[f
 
 
 def _fetch_openai_usage(api_key: str, endpoint: str, start_time: int, end_time: int) -> dict[str, int]:
-    if end_time <= start_time:
+    if _openai_daily_bucket_range_is_empty(start_time, end_time):
         return {"tokens": 0, "requests": 0}
 
     params: dict[str, int | str | list[str]] = {
@@ -435,7 +435,7 @@ def _fetch_openai_usage(api_key: str, endpoint: str, start_time: int, end_time: 
 
 
 def _openai_daily_chunks(start: dt.datetime, end: dt.datetime) -> list[tuple[dt.datetime, dt.datetime]]:
-    if start >= end:
+    if start >= end or start.astimezone(dt.UTC).date() >= end.astimezone(dt.UTC).date():
         return []
 
     chunks: list[tuple[dt.datetime, dt.datetime]] = []
@@ -448,6 +448,15 @@ def _openai_daily_chunks(start: dt.datetime, end: dt.datetime) -> list[tuple[dt.
         cursor = chunk_end
 
     return chunks
+
+
+def _openai_daily_bucket_range_is_empty(start_time: int, end_time: int) -> bool:
+    if end_time <= start_time:
+        return True
+
+    start = dt.datetime.fromtimestamp(start_time, dt.UTC)
+    end = dt.datetime.fromtimestamp(end_time, dt.UTC)
+    return start.date() >= end.date()
 
 
 def _openai_get(api_key: str, path: str, params: dict[str, int | str | list[str]]) -> dict[str, Any]:

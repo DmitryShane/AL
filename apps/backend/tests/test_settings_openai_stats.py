@@ -9,7 +9,7 @@ def test_openai_stats_totals_sync_bootstraps_organization_totals(monkeypatch) ->
     repo.openai_usage_api_key = "usage-key"
     calls: list[tuple[str, int, int]] = []
 
-    now = dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC)
+    now = dt.datetime(2026, 5, 9, 12, 0, tzinfo=dt.UTC)
     monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
 
     def fake_spend(api_key: str, start_time: int, end_time: int) -> tuple[float, str]:
@@ -64,7 +64,7 @@ def test_openai_stats_month_refresh_uses_incremental_watermark(monkeypatch) -> N
         }
     )
 
-    now = dt.datetime(2026, 5, 8, 12, 0, tzinfo=dt.UTC)
+    now = dt.datetime(2026, 5, 9, 12, 0, tzinfo=dt.UTC)
     monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
     spend_ranges: list[tuple[int, int]] = []
     usage_ranges: list[tuple[str, int, int]] = []
@@ -136,6 +136,74 @@ def test_openai_stats_skips_empty_openai_api_ranges(monkeypatch) -> None:
     assert spend == 0
     assert currency == "usd"
     assert usage == {"tokens": 0, "requests": 0}
+    assert calls == []
+
+
+def test_openai_stats_skips_same_utc_day_daily_bucket_ranges(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_openai_get(*_args, **_kwargs):
+        calls.append("openai")
+        raise AssertionError("same-day daily bucket ranges must not call OpenAI")
+
+    monkeypatch.setattr(settings_repo, "_openai_get", fake_openai_get)
+    start = int(dt.datetime(2026, 5, 10, 21, 57, tzinfo=dt.UTC).timestamp())
+    end = int(dt.datetime(2026, 5, 10, 23, 49, tzinfo=dt.UTC).timestamp())
+
+    spend, currency = settings_repo._fetch_openai_spend("usage-key", start, end)
+    usage = settings_repo._fetch_openai_usage("usage-key", "completions", start, end)
+
+    assert spend == 0
+    assert currency == "usd"
+    assert usage == {"tokens": 0, "requests": 0}
+    assert settings_repo._openai_daily_chunks(
+        dt.datetime(2026, 5, 10, 21, 57, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 10, 23, 49, tzinfo=dt.UTC),
+    ) == []
+    assert calls == []
+
+
+def test_openai_stats_same_day_incremental_refresh_does_not_advance_totals(monkeypatch) -> None:
+    repo = fake_repository()
+    repo.openai_usage_api_key = "usage-key"
+    previous_through = dt.datetime(2026, 5, 10, 21, 57, tzinfo=dt.UTC)
+    now = dt.datetime(2026, 5, 10, 23, 49, tzinfo=dt.UTC)
+    monkeypatch.setattr(settings_repo.dt, "datetime", fixed_datetime_class(now))
+    repo.db.system_settings.insert_one(
+        {
+            "kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND,
+            "totalSpend": 3.0,
+            "totalTokens": 2000,
+            "totalRequests": 20,
+            "currency": "usd",
+            "totalsCalculatedThrough": previous_through.isoformat(),
+            "bootstrapStartedAt": dt.datetime(2026, 5, 1, tzinfo=dt.UTC).isoformat(),
+            "bootstrapCompletedAt": dt.datetime(2026, 5, 1, tzinfo=dt.UTC).isoformat(),
+        }
+    )
+    calls: list[str] = []
+
+    def fake_spend(_api_key: str, start_time: int, _end_time: int) -> tuple[float, str]:
+        if start_time == int(dt.datetime(2026, 5, 1, tzinfo=dt.UTC).timestamp()):
+            return 1.0, "usd"
+
+        calls.append("incremental-spend")
+        return 1.0, "usd"
+
+    def fake_usage(*_args, **_kwargs) -> dict[str, int]:
+        calls.append("usage")
+        return {"tokens": 100, "requests": 1}
+
+    monkeypatch.setattr(settings_repo, "_fetch_openai_spend", fake_spend)
+    monkeypatch.setattr(settings_repo, "_fetch_openai_usage", fake_usage)
+
+    stats = repo.get_openai_stats(refresh="month")
+    accumulator = repo.db.system_settings.find_one({"kind": settings_repo.OPENAI_STATS_ACCUMULATOR_KIND})
+
+    assert stats["totalSpend"] == 3.0
+    assert stats["monthSpend"] == 1.0
+    assert stats["totalTokens"] == 2000
+    assert accumulator["totalsCalculatedThrough"] == previous_through.isoformat()
     assert calls == []
 
 
