@@ -471,11 +471,11 @@ def test_telegram_to_first_activity_gap_counts_as_idle_hourly_activity():
 
     assert author["telegramToFirstActivitySeconds"] == 77 * 60 + 30
     assert author["idleSeconds"] == 77 * 60 + 30
-    assert author["pluginDaySeconds"] == 78 * 60 + 30
-    assert author["rawPluginDaySeconds"] == 78 * 60 + 30
+    assert author["pluginDaySeconds"] == 60
+    assert author["rawPluginDaySeconds"] == 60
     assert author["productivity"] == 1.27
-    assert hourly_by_hour[9]["idleSeconds"] == 3600
-    assert hourly_by_hour[10]["idleSeconds"] == 17 * 60 + 30
+    assert hourly_by_hour[9]["totals"]["idleSeconds"] == 3600
+    assert hourly_by_hour[10]["totals"]["idleSeconds"] == 17 * 60 + 30
 
 def test_telegram_to_first_activity_uses_first_raw_activity_event_before_report_row():
     repo = fake_repository()

@@ -2,17 +2,16 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { AuthorsTable } from "../components/AuthorsTable";
 import { HourlyActivityChart } from "../components/HourlyActivityChart";
+import { ActivityBreakdownCards } from "../components/activity/ActivityBreakdownCards";
 import { ActivityCard } from "../components/activity/ActivityCard";
 import { ActivityAuthorMiniCard } from "../components/activity/ActivityAuthorMiniCard";
 import { ActivityMetricsGrid } from "../components/activity/ActivityMetricsGrid";
-import { BreakdownPanel, OvertimeBreakdownPanel, type BreakdownPanelItem } from "../components/activity/BreakdownPanels";
 import { ReportsTable } from "../components/activity/ReportsTable";
 import { DateRangePicker } from "../components/layout/DateRangePicker";
 import { apiFetch } from "../api/client";
 import { PAGE_SCROLL_STORAGE_PREFIX, REPORTS_PAGE_STORAGE_KEY } from "../constants/dashboard";
-import type { ActivitySummary, AuthorHourlyActivity, AuthorRow, DateRange, Report, ReportsPage, ReportsPageCache, SavedPrefab } from "../types/dashboard";
-import { formatDuration, formatSource } from "../utils/format";
-import { activityColor, compareAuthorCardStatus, formatActivityType, loadSavedReportsPage, paletteColor, savedFileLabel } from "./pageHelpers";
+import type { ActivitySummary, AuthorHourlyActivity, AuthorRow, DateRange, Report, ReportsPage, ReportsPageCache } from "../types/dashboard";
+import { compareAuthorCardStatus, loadSavedReportsPage } from "./pageHelpers";
 
 const ACTIVITY_HOURLY_CACHE_PREFIX = "AL.Dashboard.ActivityHourly.";
 const ACTIVITY_REPORTS_CACHE_PREFIX = "AL.Dashboard.ActivityReports.v2.";
@@ -58,38 +57,6 @@ export function ActivityPage({
 
     return [{ author: author.displayName, rawAuthor: author.rawAuthor, status: author.status, hourlyActivity: [] }];
   }, [author, hourlyRows, summary.hourlyActivityByAuthor]);
-  const activityMix = author?.activityMix ?? [];
-  const savedPrefabs = author?.savedPrefabs ?? [];
-  const overtimeActivityMix = author?.overtimeActivityMix ?? [];
-  const overtimeSavedPrefabs = author?.overtimeSavedPrefabs ?? [];
-  const activityMixItems = activityMix.map((item) => activityMixPanelItem(item.type, item.count, item.percent));
-  const savedPrefabItems = savedPrefabs.map((prefab, index) => savedPrefabPanelItem(prefab, index));
-  const overtimeActivityMixItems = overtimeActivityMix.map((item) => activityMixPanelItem(item.type, item.count, item.percent));
-  const overtimeSavedPrefabItems = overtimeSavedPrefabs.map((prefab, index) => savedPrefabPanelItem(prefab, index));
-  const activityMixGroups = (author?.activityMixBySource ?? []).map((group) => ({
-    source: group.source,
-    label: formatSource(group.source),
-    totalDisplayValue: formatCompactSourceDuration(group.activeSeconds ?? 0),
-    items: group.activityMix.map((item) => activityMixPanelItem(item.type, item.count, item.percent, group.source))
-  }));
-  const savedPrefabGroups = (author?.savedPrefabsBySource ?? []).map((group) => ({
-    source: group.source,
-    label: formatSource(group.source),
-    totalDisplayValue: String(group.totalSaveCount),
-    items: group.savedPrefabs.map((prefab, index) => savedPrefabPanelItem(prefab, index, group.source))
-  }));
-  const overtimeActivityMixGroups = (author?.overtimeActivityMixBySource ?? []).map((group) => ({
-    source: group.source,
-    label: formatSource(group.source),
-    totalDisplayValue: String(group.totalCount),
-    items: group.activityMix.map((item) => activityMixPanelItem(item.type, item.count, item.percent, group.source))
-  }));
-  const overtimeSavedPrefabGroups = (author?.overtimeSavedPrefabsBySource ?? []).map((group) => ({
-    source: group.source,
-    label: formatSource(group.source),
-    totalDisplayValue: String(group.totalSaveCount),
-    items: group.savedPrefabs.map((prefab, index) => savedPrefabPanelItem(prefab, index, group.source))
-  }));
   const cardAuthors = useMemo(
     () => [...summary.authors].sort((left, right) => compareAuthorCardStatus(left, right, dateRange)),
     [summary.authors, dateRange]
@@ -463,25 +430,7 @@ export function ActivityPage({
 
             <div className="dashboard-insights-row">
               <HourlyActivityChart authors={authorHourly} />
-              <BreakdownPanel
-                key={`${author.rawAuthor}-activity-mix`}
-                title="Activity Mix"
-                items={activityMixItems}
-                groups={activityMixGroups}
-              />
-              <BreakdownPanel
-                key={`${author.rawAuthor}-saved-files`}
-                title="Saved Files"
-                items={savedPrefabItems}
-                groups={savedPrefabGroups}
-              />
-              <OvertimeBreakdownPanel
-                key={`${author.rawAuthor}-overtime`}
-                activityItems={overtimeActivityMixItems}
-                savedItems={overtimeSavedPrefabItems}
-                activityGroups={overtimeActivityMixGroups}
-                savedGroups={overtimeSavedPrefabGroups}
-              />
+              <ActivityBreakdownCards author={author} />
             </div>
 
             <ReportsTable
@@ -506,40 +455,6 @@ export function ActivityPage({
     </section>
     </>
   );
-}
-
-function formatCompactSourceDuration(seconds: number) {
-  const totalMinutes = Math.max(0, Math.round(seconds / 60));
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-
-  if (hours <= 0) {
-    return `${minutes}m`;
-  }
-
-  return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-}
-
-function activityMixPanelItem(type: string, count: number, percent: number, source?: string): BreakdownPanelItem {
-  const itemId = source ? `${source}:${type}` : type;
-
-  return {
-    id: itemId,
-    label: formatActivityType(type),
-    value: percent,
-    displayValue: `${percent}%`,
-    color: activityColor(type || String(count))
-  };
-}
-
-function savedPrefabPanelItem(prefab: SavedPrefab, index: number, source?: string): BreakdownPanelItem {
-  return {
-    id: source ? `${source}:${prefab.path || prefab.name}-${index}` : prefab.path || `${prefab.name}-${index}`,
-    label: savedFileLabel(prefab),
-    value: prefab.saveCount,
-    displayValue: String(prefab.saveCount),
-    color: paletteColor(index)
-  };
 }
 
 function activityCacheKey(prefix: string, key: string) {
