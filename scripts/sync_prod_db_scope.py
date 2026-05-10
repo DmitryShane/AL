@@ -143,12 +143,31 @@ def _remote_batch_ids(remote: str, dates: list[str]) -> list[str]:
     return [str(value) for value in json.loads(output)]
 
 
+def _remote_authors(remote: str, dates: list[str]) -> list[str]:
+    query = json.dumps({"date": {"$in": dates}}, separators=(",", ":"))
+    script = (
+        f"JSON.stringify(db.getSiblingDB({json.dumps(REMOTE_DB)}).raw_activity_events"
+        f".distinct('author', {query}).filter(Boolean))"
+    )
+    output = _run_capture(["ssh", remote, f"mongosh {shlex.quote(REMOTE_MONGO_URI)} --quiet --eval {shlex.quote(script)}"])
+
+    if not output:
+        return []
+
+    return [str(value) for value in json.loads(output)]
+
+
 def _scoped_sync(remote: str, work_dir: Path, dates: list[str], rebuild: bool) -> None:
     archive_dir = work_dir / "archives"
     archive_dir.mkdir(parents=True, exist_ok=True)
 
     for collection in DATE_SCOPED_COLLECTIONS:
         _dump_restore_collection(remote, archive_dir, collection, {"date": {"$in": dates}})
+
+    authors = _remote_authors(remote, dates)
+
+    if authors:
+        _dump_restore_collection(remote, archive_dir, "device_report_identities", {"rawAuthor": {"$in": authors}})
 
     batch_ids = _remote_batch_ids(remote, dates)
 
