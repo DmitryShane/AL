@@ -117,7 +117,7 @@ class DeviceProfileRepository(MongoComposableMixin):
         composed(self).rebuild_aggregates_for_author_dates([normalized])
         return {"ok": True, "deleted": counts}
 
-    def delete_all_device_profiles(self) -> dict[str, Any]:
+    def delete_all_device_profiles(self, rebuild: bool = True) -> dict[str, Any]:
         raw_devices = [
             str(item.get("rawAuthor") or "")
             for item in self.db.device_report_identities.find({}, {"_id": 0, "rawAuthor": 1})
@@ -133,6 +133,7 @@ class DeviceProfileRepository(MongoComposableMixin):
                     "authorAliases": 0,
                     "authorProfiles": 0,
                 },
+                "rawDevices": [],
             }
 
         counts = {
@@ -140,8 +141,9 @@ class DeviceProfileRepository(MongoComposableMixin):
             "authorAliases": self.db.author_aliases.delete_many({"sourceRawAuthor": {"$in": raw_devices}}).deleted_count,
             "authorProfiles": self.db.author_profiles.delete_many({"rawAuthor": {"$in": raw_devices}}).deleted_count,
         }
-        composed(self).rebuild_aggregates_for_author_dates(raw_devices)
-        return {"ok": True, "rawDeviceCount": len(raw_devices), "deleted": counts}
+        if rebuild:
+            composed(self).rebuild_aggregates_for_author_dates(raw_devices)
+        return {"ok": True, "rawDeviceCount": len(raw_devices), "rawDevices": raw_devices, "deleted": counts}
 
 
 def _natural_device_key(value: str) -> tuple[str, int, str]:

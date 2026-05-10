@@ -314,12 +314,26 @@ def delete_device_profile(
     return result
 
 
+def _rebuild_device_profile_delete_aggregates(service: BackendServices, raw_devices: list[str]) -> None:
+    service.rebuild_aggregates_for_author_dates(raw_devices)
+
+
 @router.delete("/api/v1/authors/device-profiles")
 def delete_all_device_profiles(
+    background_tasks: BackgroundTasks,
     _: dict = Depends(require_permission("manageSettings")),
     service: BackendServices = Depends(get_author_service),
 ) -> dict:
-    return service.delete_all_device_profiles()
+    result = service.delete_all_device_profiles(rebuild=False)
+    raw_devices = result.get("rawDevices")
+
+    if isinstance(raw_devices, list) and raw_devices:
+        background_tasks.add_task(_rebuild_device_profile_delete_aggregates, service, raw_devices)
+        result["rebuildQueued"] = True
+    else:
+        result["rebuildQueued"] = False
+
+    return result
 
 
 @router.put("/api/v1/authors/aliases")

@@ -205,6 +205,7 @@ def test_delete_all_device_profiles_removes_identities_aliases_and_duplicates_on
 
     assert result["ok"] is True
     assert result["rawDeviceCount"] == 2
+    assert result["rawDevices"] == ["Device1", "Device2"]
     assert repo.db.device_report_identities.count_documents({}) == 0
     assert repo.db.author_aliases.find_one({"sourceRawAuthor": "Device1"}) is None
     assert repo.db.author_aliases.find_one({"sourceRawAuthor": "Device2"}) is None
