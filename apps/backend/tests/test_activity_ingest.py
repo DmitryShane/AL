@@ -599,6 +599,7 @@ def test_device_editor_activity_is_raw_only_for_other_authors():
 def test_device_summary_uses_application_name_as_saved_item():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
+    repo.db.device_report_identities.insert_one({"source": "dev", "deviceIdHash": "hash-1", "rawAuthor": "Device1"})
     repo.db.daily_author_activity.insert_one(
         {
             "source": "dev",
@@ -743,6 +744,7 @@ def test_device_source_uses_device_idle_threshold():
 def test_author_local_today_includes_explicit_ui_date_for_device_local_timezone():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
+    repo.db.device_report_identities.insert_one({"source": "dev", "deviceIdHash": "hash-1", "rawAuthor": "Device1"})
     repo.db.daily_author_activity.insert_one(
         {
             "source": "dev",
@@ -770,6 +772,27 @@ def test_author_local_today_includes_explicit_ui_date_for_device_local_timezone(
 
     assert author["activeSeconds"] == 120
     assert author["rawPluginDaySeconds"] == 180
+
+
+def test_activity_summary_hides_deleted_device_profile_authors():
+    repo = fake_repository()
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "dev",
+            "author": "Device12",
+            "projectId": "Bike Rush 2",
+            "date": "2026-05-10",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+    repo.db.raw_activity_events.insert_one({"source": "dev", "author": "Device12", "date": "2026-05-10"})
+
+    summary = repo.activity_summary(start_date="2026-05-10", end_date="2026-05-10")
+
+    assert "Device12" not in {author["rawAuthor"] for author in summary["authors"]}
+    assert "Device12" not in {author["rawAuthor"] for author in summary["hourlyActivityByAuthor"]}
 
 def test_heartbeat_idle_does_not_account_entire_delivery_gap_when_huge():
     repo = fake_repository()

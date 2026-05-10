@@ -26,6 +26,11 @@ from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
 
+def _is_device_profile_raw_author(value: str) -> bool:
+    normalized = str(value or "").strip()
+    return normalized.startswith("Device") and normalized[6:].isdigit()
+
+
 class ActivitySummaryService(MongoComposableMixin):
     SUMMARY_CACHE_TTL_SECONDS = 5
     REPORTS_PAGE_SCAN_MULTIPLIER = 5
@@ -693,6 +698,7 @@ class ActivitySummaryService(MongoComposableMixin):
         include_breakdowns: bool = True,
     ) -> dict[str, Any]:
         composed(self).materialize_live_meeting_reports(now)
+        hidden_device_authors = self._hidden_device_authors()
         totals = {
             "daySeconds": 0,
             "telegramDaySeconds": 0,
@@ -752,6 +758,9 @@ class ActivitySummaryService(MongoComposableMixin):
 
         for item in daily_items:
             raw_author = item.get("author") or "Unknown User"
+            if raw_author in hidden_device_authors:
+                continue
+
             item_date = item.get("date") or ""
             author_date_key = (raw_author, item_date)
             if item_date:
@@ -1142,6 +1151,9 @@ class ActivitySummaryService(MongoComposableMixin):
                 totals["rawPluginDaySeconds"] = max(0, int(totals.get("rawPluginDaySeconds", 0)) - applied_reduction)
 
         for raw_author in composed(self).list_authors():
+            if raw_author in hidden_device_authors:
+                continue
+
             composed(self)._ensure_summary_author(authors_by_raw, raw_author, profiles)
 
         for raw_author, author_row in authors_by_raw.items():
@@ -1155,6 +1167,10 @@ class ActivitySummaryService(MongoComposableMixin):
                 "timeZoneDisplayName": profiles.get(raw_author, {}).get("timeZoneDisplayName"),
                 "hourlyActivity": empty_hourly_activity(),
             }
+
+        for raw_author in hidden_device_authors:
+            authors_by_raw.pop(raw_author, None)
+            hourly_by_author.pop(raw_author, None)
 
         self._apply_vacation_summary_overrides(
             authors_by_raw,
@@ -1338,6 +1354,25 @@ class ActivitySummaryService(MongoComposableMixin):
             "authorAliases": composed(self).author_aliases() if include_profiles else [],
             "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]) if include_hourly else [],
         }
+
+    def _hidden_device_authors(self) -> set[str]:
+        device_authors = {
+            str(author or "")
+            for collection_name in ("daily_author_activity", "raw_activity_events", "activity_snapshots", "report_rows")
+            for author in getattr(self.db, collection_name).distinct("author")
+            if _is_device_profile_raw_author(str(author or ""))
+        }
+        active_device_authors = {
+            str(item.get("rawAuthor") or "")
+            for item in self.db.device_report_identities.find({}, {"_id": 0, "rawAuthor": 1})
+            if item.get("rawAuthor")
+        }
+        alias_device_authors = {
+            str(item.get("sourceRawAuthor") or "")
+            for item in self.db.author_aliases.find({}, {"_id": 0, "sourceRawAuthor": 1})
+            if _is_device_profile_raw_author(str(item.get("sourceRawAuthor") or ""))
+        }
+        return device_authors - active_device_authors - alias_device_authors
 
     def _apply_summary_auto_breaks(
         self,
