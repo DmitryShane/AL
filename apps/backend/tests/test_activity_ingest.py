@@ -63,13 +63,13 @@ def test_interval_settings_include_independent_idle_threshold():
     result = repo.upsert_interval_settings(
         default_send_interval_seconds=120,
         idle_threshold_seconds=450,
-        device_idle_threshold_seconds=60,
+        device_idle_threshold_seconds=10,
         plugin_ingest_enabled=None,
     )
 
     assert result["defaultSendIntervalSeconds"] == 120
     assert result["idleThresholdSeconds"] == 450
-    assert result["deviceIdleThresholdSeconds"] == 60
+    assert result["deviceIdleThresholdSeconds"] == 10
     assert result["pluginIngestEnabled"] is True
 
 def test_interval_settings_include_global_plugin_ingest_toggle():

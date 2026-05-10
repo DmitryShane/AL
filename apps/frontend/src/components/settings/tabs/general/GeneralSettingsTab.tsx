@@ -50,7 +50,7 @@ export function GeneralSettingsTab({
           </label>
           <label>
             Device idle threshold, sec
-            <input value={deviceIdleThreshold} onChange={(event) => onDeviceIdleThresholdChange(event.target.value)} type="number" min="30" disabled={settingsReadOnly} />
+            <input value={deviceIdleThreshold} onChange={(event) => onDeviceIdleThresholdChange(event.target.value)} type="number" min="10" disabled={settingsReadOnly} />
           </label>
           <div className="plugin-ingest-field">
             <span id="plugin-ingest-heading" className="plugin-ingest-field-heading">
