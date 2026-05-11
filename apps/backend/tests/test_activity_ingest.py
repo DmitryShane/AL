@@ -636,10 +636,10 @@ def test_device_android_payload_is_stored_as_android_device_source():
     assert repo.db.raw_event_batches.items[-1]["source"] == "dev-android"
     assert repo.db.daily_author_activity.find_one({"author": "Device1", "source": "dev-android"}) is not None
 
-def test_device_editor_activity_counts_for_evgeniy_dotsenko_alias():
+def test_device_legacy_editor_metadata_stays_dev_source():
     repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Evgeniy Dotsenko", "displayName": "Evgeniy Dotsenko"})
-    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device1", "targetRawAuthor": "Evgeniy Dotsenko"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
+    legacy_editor_metadata = {"is" + "Editor": True, "is" + "EditorPlayMode": True}
 
     repo.save_report(
         source="dev",
@@ -660,7 +660,7 @@ def test_device_editor_activity_counts_for_evgeniy_dotsenko_alias():
                     "occurredAtUtc": "2026-05-04T10:00:00Z",
                     "occurredAtLocal": "2026-05-04T10:00:00+00:00",
                     "date": "2026-05-04",
-                    "metadata": {"isEditor": True, "isEditorPlayMode": True},
+                    "metadata": legacy_editor_metadata,
                 },
                 {
                     "eventId": "editor-hold-1",
@@ -668,67 +668,21 @@ def test_device_editor_activity_counts_for_evgeniy_dotsenko_alias():
                     "occurredAtUtc": "2026-05-04T10:00:05Z",
                     "occurredAtLocal": "2026-05-04T10:00:05+00:00",
                     "date": "2026-05-04",
-                    "metadata": {"isEditor": True, "isEditorPlayMode": True, "holdDurationSeconds": 5},
+                    "metadata": {**legacy_editor_metadata, "holdDurationSeconds": 5},
                 },
             ],
         },
     )
 
-    raw_events = list(repo.db.raw_activity_events.find({"author": "Evgeniy Dotsenko"}))
+    raw_events = list(repo.db.raw_activity_events.find({"author": "Device1"}))
     assert len(raw_events) == 2
-    assert {event["source"] for event in raw_events} == {"dev-editor"}
-    daily = repo.db.daily_author_activity.find_one(
-        {"author": "Evgeniy Dotsenko", "date": "2026-05-04", "source": "dev-editor"}
-    )
+    assert {event["source"] for event in raw_events} == {"dev"}
+    daily = repo.db.daily_author_activity.find_one({"author": "Device1", "date": "2026-05-04", "source": "dev"})
     assert daily is not None
     assert daily["activeSeconds"] == 5
     assert daily["idleSeconds"] == 0
     assert {item["type"]: item["count"] for item in daily["activityCounts"]} == {"click": 1, "hold": 1}
-    assert repo.db.report_rows.count_documents({"author": "Evgeniy Dotsenko", "source": "dev-editor"}) == 1
-
-def test_device_editor_activity_is_raw_only_for_other_authors():
-    repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Other Author", "displayName": "Other Author"})
-    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device2", "targetRawAuthor": "Other Author"})
-
-    repo.save_report(
-        source="dev",
-        plugin_version="0.1.0",
-        encrypted_packet="packet",
-        challenge_id="challenge",
-        device_id="editor-device-2",
-        payload={
-            "source": "dev",
-            "author": "Device2",
-            "projectId": "Bike Rush 2",
-            "sessionId": "editor-session",
-            "deviceId": "editor-device-2",
-            "events": [
-                {
-                    "eventId": "editor-click-2",
-                    "eventType": "click",
-                    "occurredAtUtc": "2026-05-04T10:00:00Z",
-                    "occurredAtLocal": "2026-05-04T10:00:00+00:00",
-                    "date": "2026-05-04",
-                    "metadata": {"isEditor": True, "isEditorPlayMode": True},
-                },
-                {
-                    "eventId": "editor-hold-2",
-                    "eventType": "hold",
-                    "occurredAtUtc": "2026-05-04T10:00:05Z",
-                    "occurredAtLocal": "2026-05-04T10:00:05+00:00",
-                    "date": "2026-05-04",
-                    "metadata": {"isEditor": True, "isEditorPlayMode": True, "holdDurationSeconds": 5},
-                },
-            ],
-        },
-    )
-
-    raw_events = list(repo.db.raw_activity_events.find({"author": "Other Author"}))
-    assert len(raw_events) == 2
-    assert {event["source"] for event in raw_events} == {"dev-editor"}
-    assert repo.db.daily_author_activity.find_one({"author": "Other Author", "source": "dev-editor"}) is None
-    assert repo.db.report_rows.count_documents({"author": "Other Author", "source": "dev-editor"}) == 0
+    assert repo.db.report_rows.count_documents({"author": "Device1", "source": "dev"}) == 1
 
 def test_device_summary_uses_application_name_as_saved_item():
     repo = fake_repository()
@@ -2192,7 +2146,6 @@ def test_device_interval_is_independent_from_global_plugin_interval():
     assert repo.get_interval_for_author("Dmitry Shane") == 300
     assert repo.get_interval_for_author("Dmitry Shane", source="dev") == 1
     assert repo.get_interval_for_author("Dmitry Shane", source="dev-android") == 1
-    assert repo.get_interval_for_author("Dmitry Shane", source="dev-editor") == 1
     assert repo.get_interval_settings()["deviceSendIntervalSeconds"] == 1
 
 def test_heartbeat_idle_threshold_can_be_lower_than_plugin_interval():

@@ -10,33 +10,6 @@ from ..mongo_composable import MongoComposableMixin
 from ..overtime_rules import OvertimeRuleContext, overtime_window_for_event, overtime_window_for_interval
 
 
-DEVICE_EDITOR_ACTIVITY_AUTHOR = "Evgeniy Dotsenko"
-
-
-def _is_suppressed_device_editor_event(event: dict[str, Any]) -> bool:
-    if not is_device_source(event.get("source")):
-        return False
-
-    metadata = event.get("metadata") or {}
-    if not isinstance(metadata, dict):
-        return False
-
-    if not (_metadata_bool(metadata.get("isEditor")) or _metadata_bool(metadata.get("isEditorPlayMode"))):
-        return False
-
-    return _normalize_author(event.get("author")) != DEVICE_EDITOR_ACTIVITY_AUTHOR
-
-
-def _metadata_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-
-    return bool(value)
-
-
 def _float_or_none(value: Any) -> float | None:
     try:
         return float(value)
@@ -849,8 +822,6 @@ class ActivityAggregationService(MongoComposableMixin):
         source_is_focused = state.get("isFocused")
         current_source = str(event.get("source") or "")
         current_scope = _raw_event_activity_scope(event)
-        if _is_suppressed_device_editor_event(event):
-            return _empty_event_deltas()
 
         author_first_activity_at = _coerce_datetime(author_state.get("firstActivityAt"))
         author_last_activity_at = _coerce_datetime(author_state.get("lastActivityAt"))

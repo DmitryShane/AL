@@ -43,7 +43,7 @@ SELECT_HEAVY_THRESHOLD_PERCENT = 90
 SELECT_HEAVY_MIN_EVENTS = 20
 AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS = 300
 REPORT_CHALLENGE_TTL_SECONDS = 120
-DEVICE_SOURCES = {"dev", "dev-ios", "dev-android", "dev-editor"}
+DEVICE_SOURCES = {"dev", "dev-ios", "dev-android"}
 RAW_ACTIVITY_EVENT_TYPES = {
     "click",
     "hold",
@@ -68,9 +68,6 @@ def is_device_source(source: Any) -> bool:
 def device_source_from_payload(payload: dict[str, Any], fallback: str = "dev") -> str:
     metadata = _latest_payload_event_metadata(payload)
     platform = str(metadata.get("platform") or metadata.get("runtimePlatform") or "").strip().lower()
-
-    if _metadata_bool(metadata.get("isEditor")) or _metadata_bool(metadata.get("isEditorPlayMode")) or "editor" in platform:
-        return "dev-editor"
 
     if "iphone" in platform or "ipad" in platform or "ios" in platform:
         return "dev-ios"
