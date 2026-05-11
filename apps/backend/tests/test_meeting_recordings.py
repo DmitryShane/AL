@@ -585,6 +585,17 @@ def test_recent_meeting_activity_includes_voice_events_recordings_and_day_separa
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
     repo.record_discord_voice_event("123", "future", "join", timestamp="2026-05-04T10:00:00+00:00")
     repo.record_discord_voice_event("123", "future", "leave", timestamp="2026-05-04T10:30:00+00:00")
+    repo.db.meeting_events.insert_one(
+        {
+            "discordUserId": "123",
+            "discordUsername": "future",
+            "rawAuthor": "Future Artist",
+            "eventType": "live",
+            "timestamp": dt.datetime(2026, 5, 4, 10, 15, tzinfo=dt.UTC),
+            "date": "2026-05-04",
+            "meetingSeconds": 600,
+        }
+    )
     repo.db.meeting_recordings.insert_one(
         {
             "recordingId": "recording-1",
@@ -600,6 +611,7 @@ def test_recent_meeting_activity_includes_voice_events_recordings_and_day_separa
     assert [item["date"] for item in items if item["itemType"] == "day_separator"] == ["2026-05-04", "2026-05-03"]
     assert any(item["itemType"] == "voice_event" and item["eventType"] == "join" for item in items)
     assert any(item["itemType"] == "voice_event" and item["eventType"] == "leave" for item in items)
+    assert not any(item["itemType"] == "voice_event" and item["eventType"] == "live" for item in items)
     assert any(item["itemType"] == "recording" and item["recording"]["recordingId"] == "recording-1" for item in items)
 
 def test_meeting_recording_tracks_openai_pipeline_status():

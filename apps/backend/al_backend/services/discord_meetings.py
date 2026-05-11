@@ -1061,6 +1061,9 @@ class DiscordMeetingService(MongoComposableMixin):
             )
 
         for event in self.db.meeting_events.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(limit):
+            if event.get("eventType") == "live":
+                continue
+
             timestamp = _iso(event.get("timestamp"))
             items.append(
                 {
