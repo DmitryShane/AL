@@ -2980,6 +2980,92 @@ def test_workday_idle_fill_preserves_existing_missed_and_active_segments():
     assert _hour_metric(public[9], "activeSeconds") == 1200
     assert _hour_segments(public[9], "missed") == [{"startSecond": 3000, "endSecond": 3600}]
 
+def test_workday_idle_fill_extends_plugin_gap_to_latest_workday_signal():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-11",
+            "startedAt": dt.datetime(2026, 5, 11, 13, 10, tzinfo=dt.UTC),
+            "lastOnlineAt": dt.datetime(2026, 5, 11, 15, 1, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-11",
+            "source": "ual",
+            "recordedAt": "2026-05-11T13:50:15+00:00",
+            "activeDeltaSeconds": 2,
+            "idleDeltaSeconds": 858,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-11",
+            "source": "telegram",
+            "reportType": "telegram",
+            "recordedAt": dt.datetime(2026, 5, 11, 15, 1, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.break_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-11",
+            "startedAt": dt.datetime(2026, 5, 11, 14, 8, 1, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 11, 15, 1, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "breakSeconds": 3179,
+        }
+    )
+    hourly = empty_hourly_activity()
+    hourly[13]["activeSeconds"] = 540
+    hourly[13]["activeMicroseconds"] = 540_000_000
+    hourly[13]["idleSeconds"] = 1542
+    hourly[13]["idleMicroseconds"] = 1_542_000_000
+    hourly[13]["fillSegments"] = [
+        {"kind": "active", "startSecond": 933, "endSecond": 1473},
+        {"kind": "idle", "startSecond": 1473, "endSecond": 3015},
+    ]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-11",
+            "source": "ual",
+            "activeSeconds": 540,
+            "activeMicroseconds": 540_000_000,
+            "idleSeconds": 1542,
+            "idleMicroseconds": 1_542_000_000,
+            "hourlyActivity": hourly,
+            "lastRecordedAt": "2026-05-11T13:50:15+00:00",
+            "lastReceivedAt": dt.datetime(2026, 5, 11, 13, 50, 15, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-05-11",
+        end_date="2026-05-11",
+        now=dt.datetime(2026, 5, 11, 15, 5, tzinfo=dt.UTC),
+    )
+    hourly_summary = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")[
+        "hourlyActivity"
+    ]
+
+    assert sum(hourly_summary[13]["totals"].values()) == 3600
+    assert _hour_segments(hourly_summary[14], "idle") == [{"startSecond": 0, "endSecond": 8 * 60 + 1}]
+    assert _hour_segments(hourly_summary[14], "afk") == [{"startSecond": 8 * 60 + 1, "endSecond": 3600}]
+
 def test_public_hourly_collapses_tiny_active_noise_to_idle_visually_only():
     hourly = empty_hourly_activity()
     hourly[11]["activeSeconds"] = 5

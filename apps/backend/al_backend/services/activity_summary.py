@@ -1592,7 +1592,7 @@ class ActivitySummaryService(MongoComposableMixin):
     ) -> None:
         session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
         sessions = list(self.db.day_sessions.find(session_query, {"_id": 0}))
-        latest_signal_by_author_date = self._latest_activity_signal_times_by_author_date(
+        latest_signal_by_author_date = self._latest_workday_signal_times_by_author_date(
             start_date,
             end_date,
             date_mode,
@@ -1766,6 +1766,69 @@ class ActivitySummaryService(MongoComposableMixin):
                 continue
 
             if report.get("source") != "discord" and report.get("reportType") != "meeting" and self._is_empty_plugin_report_without_signal(report):
+                continue
+
+            raw_author = str(report.get("author") or "Unknown User")
+            report_date = str(report.get("date") or "")
+
+            if not report_date:
+                continue
+
+            occurred_at = (
+                _coerce_datetime(report.get("recordedAt"))
+                or _coerce_datetime(report.get("lastRecordedAt"))
+                or _coerce_datetime(report.get("receivedAt"))
+                or _coerce_datetime(report.get("lastReceivedAt"))
+            )
+
+            if not occurred_at:
+                continue
+
+            key = (raw_author, report_date)
+            current = latest_by_key.get(key)
+
+            if not current or occurred_at > current:
+                latest_by_key[key] = occurred_at
+
+        return latest_by_key
+
+    def _latest_workday_signal_times_by_author_date(
+        self,
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        profiles: dict[str, dict[str, Any]],
+        now: dt.datetime,
+    ) -> dict[tuple[str, str], dt.datetime]:
+        latest_by_key: dict[tuple[str, str], dt.datetime] = {}
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        for report in self.db.report_rows.find(
+            query,
+            {
+                "_id": 0,
+                "author": 1,
+                "date": 1,
+                "source": 1,
+                "reportType": 1,
+                "recordedAt": 1,
+                "lastRecordedAt": 1,
+                "receivedAt": 1,
+                "lastReceivedAt": 1,
+                "activeDeltaSeconds": 1,
+                "idleDeltaSeconds": 1,
+                "overtimeActiveDeltaSeconds": 1,
+                "activityCountDeltas": 1,
+                "savedPrefabDeltas": 1,
+                "overtimeActivityCountDeltas": 1,
+                "overtimeSavedPrefabDeltas": 1,
+            },
+        ):
+            if report.get("source") not in {"telegram", "status", "discord"} and report.get("reportType") not in {
+                "telegram",
+                "status",
+                "meeting",
+            } and self._is_empty_plugin_report_without_signal(report):
                 continue
 
             raw_author = str(report.get("author") or "Unknown User")
