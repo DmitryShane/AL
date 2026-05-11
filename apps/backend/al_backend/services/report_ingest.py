@@ -21,6 +21,16 @@ def _is_valid_device_id(value: Any) -> bool:
     return bool(normalized) and normalized != "00000000-0000-0000-0000-000000000000"
 
 
+def _metadata_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    return bool(value)
+
+
 def _device_fallback_id_from_payload(payload: dict[str, Any]) -> str:
     for event in payload.get("events") or []:
         if not isinstance(event, dict):
@@ -39,6 +49,24 @@ def _device_fallback_id_from_payload(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _is_legacy_device_editor_payload(payload: dict[str, Any]) -> bool:
+    for event in payload.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+
+        metadata = event.get("metadata") or {}
+
+        if not isinstance(metadata, dict):
+            continue
+
+        platform = str(metadata.get("platform") or metadata.get("runtimePlatform") or "").strip().lower()
+
+        if _metadata_bool(metadata.get("isEditor")) or _metadata_bool(metadata.get("isEditorPlayMode")) or "editor" in platform:
+            return True
+
+    return False
+
+
 class ReportIngestService(MongoComposableMixin):
     def save_report(
         self,
@@ -52,6 +80,10 @@ class ReportIngestService(MongoComposableMixin):
         now = dt.datetime.now(dt.UTC)
         payload = dict(payload)
         effective_source = device_source_from_payload(payload, source) if source == "dev" else source
+
+        if source == "dev" and _is_legacy_device_editor_payload(payload):
+            return ""
+
         resolved_device_id = str(device_id or payload.get("deviceId") or "")
 
         if is_device_source(effective_source) and not _is_valid_device_id(resolved_device_id):

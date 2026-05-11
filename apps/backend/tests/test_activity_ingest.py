@@ -636,12 +636,12 @@ def test_device_android_payload_is_stored_as_android_device_source():
     assert repo.db.raw_event_batches.items[-1]["source"] == "dev-android"
     assert repo.db.daily_author_activity.find_one({"author": "Device1", "source": "dev-android"}) is not None
 
-def test_device_legacy_editor_metadata_stays_dev_source():
+def test_device_legacy_editor_metadata_is_ignored():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
     legacy_editor_metadata = {"is" + "Editor": True, "is" + "EditorPlayMode": True}
 
-    repo.save_report(
+    report_id = repo.save_report(
         source="dev",
         plugin_version="0.1.0",
         encrypted_packet="packet",
@@ -674,15 +674,13 @@ def test_device_legacy_editor_metadata_stays_dev_source():
         },
     )
 
-    raw_events = list(repo.db.raw_activity_events.find({"author": "Device1"}))
-    assert len(raw_events) == 2
-    assert {event["source"] for event in raw_events} == {"dev"}
-    daily = repo.db.daily_author_activity.find_one({"author": "Device1", "date": "2026-05-04", "source": "dev"})
-    assert daily is not None
-    assert daily["activeSeconds"] == 5
-    assert daily["idleSeconds"] == 0
-    assert {item["type"]: item["count"] for item in daily["activityCounts"]} == {"click": 1, "hold": 1}
-    assert repo.db.report_rows.count_documents({"author": "Device1", "source": "dev"}) == 1
+    assert report_id == ""
+    assert repo.db.raw_reports.items == []
+    assert repo.db.raw_activity_events.items == []
+    assert repo.db.raw_event_batches.items == []
+    assert repo.db.daily_author_activity.items == []
+    assert repo.db.report_rows.items == []
+    assert repo.db.device_report_identities.items == []
 
 def test_device_summary_uses_application_name_as_saved_item():
     repo = fake_repository()
