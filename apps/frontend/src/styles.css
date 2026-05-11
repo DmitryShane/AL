@@ -1713,6 +1713,7 @@ p {
 
 .breakdown-source-group {
   display: grid;
+  align-self: start;
   gap: 2px;
 }
 
@@ -1759,6 +1760,8 @@ p {
   overflow-x: hidden;
   overflow-y: auto;
   min-height: 0;
+  align-content: start;
+  align-items: start;
   overscroll-behavior: contain;
   padding-right: 10px;
 }
