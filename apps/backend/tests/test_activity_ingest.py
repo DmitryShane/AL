@@ -506,6 +506,56 @@ def test_device_hold_counts_as_activity_during_long_press():
     assert daily["idleSeconds"] == 0
     assert {item["type"]: item["count"] for item in daily["activityCounts"]} == {"click": 1, "hold": 3}
 
+def test_device_hold_duration_counts_each_held_second_even_when_reports_exceed_threshold():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one(
+        {"kind": "global", "idleThresholdSeconds": 300, "deviceIdleThresholdSeconds": 5}
+    )
+    repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
+
+    base_event = {
+        "source": "dev",
+        "author": "Device1",
+        "projectId": "Bike Rush 2",
+        "deviceId": "advertising-id-1",
+        "date": "2026-05-04",
+        "timeZoneId": "UTC",
+    }
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "click",
+            "occurredAtUtc": "2026-05-04T02:00:01Z",
+            "occurredAtLocal": "2026-05-04T02:00:01+00:00",
+            "receivedAt": dt.datetime(2026, 5, 4, 2, 0, 1, tzinfo=dt.UTC),
+        }
+    )
+    hold_deltas = []
+
+    for offset, duration in ((6, 5.01), (11, 10.02), (16, 15.03)):
+        hold_deltas.append(
+            repo._apply_raw_event_to_aggregates(
+                {
+                    **base_event,
+                    "eventType": "hold",
+                    "occurredAtUtc": f"2026-05-04T02:00:{offset:02d}Z",
+                    "occurredAtLocal": f"2026-05-04T02:00:{offset:02d}+00:00",
+                    "receivedAt": dt.datetime(2026, 5, 4, 2, 0, offset, tzinfo=dt.UTC),
+                    "metadata": {
+                        "holdDurationSeconds": duration,
+                        "firstHoldAtUtc": "2026-05-04T02:00:01Z",
+                        "touchCount": 1,
+                    },
+                }
+            )
+        )
+
+    assert [item["overtimeActiveDeltaSeconds"] for item in hold_deltas] == [5, 5, 5]
+    daily = repo.db.daily_author_activity.find_one({"author": "Device1", "date": "2026-05-04", "source": "dev"})
+    assert daily is not None
+    assert daily["overtimeActiveSeconds"] == 15
+    assert daily["idleSeconds"] == 0
+
 def test_device_editor_activity_counts_for_evgeniy_dotsenko_alias():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Evgeniy Dotsenko", "displayName": "Evgeniy Dotsenko"})
@@ -1502,6 +1552,40 @@ def test_activity_summary_groups_author_breakdowns_by_source():
             "totalSaveCount": 1,
             "savedPrefabs": [{"path": "cursor:OT", "name": "OT", "projectId": "AL", "saveCount": 1}],
         },
+    ]
+
+def test_activity_summary_puts_overtime_only_device_activity_in_overtime_saved_files():
+    repo = fake_repository()
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "dev",
+            "projectId": "Bike Rush 2",
+            "author": "Dmitry Shane",
+            "date": "2026-05-11",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 45,
+            "activityCounts": [],
+            "overtimeActivityCounts": [{"type": "hold", "count": 10}, {"type": "click", "count": 4}],
+            "savedPrefabs": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-11", end_date="2026-05-11")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry Shane")
+
+    assert author["savedPrefabs"] == []
+    assert author["overtimeSavedPrefabs"] == [
+        {"path": "device:bike rush 2", "name": "Bike Rush 2", "projectId": "Bike Rush 2", "saveCount": 14}
+    ]
+    assert author["overtimeSavedPrefabsBySource"] == [
+        {
+            "source": "dev",
+            "totalSaveCount": 14,
+            "savedPrefabs": [{"path": "device:bike rush 2", "name": "Bike Rush 2", "projectId": "Bike Rush 2", "saveCount": 14}],
+        }
     ]
 
 def test_author_day_consumption_spans_plugin_sources():

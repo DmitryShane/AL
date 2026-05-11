@@ -147,22 +147,14 @@ def _merge_batch_deltas(target: dict[str, Any], source: dict[str, Any]) -> None:
 def _saved_prefabs_for_summary_item(item: dict[str, Any]) -> list[dict[str, Any]]:
     saved_prefabs = [dict(prefab) for prefab in item.get("savedPrefabs", [])]
 
+    if _device_activity_is_overtime_only(item):
+        return saved_prefabs
+
     if item.get("source") == "dev":
-        app_name = _device_activity_app_name(item)
+        device_prefab = _device_activity_prefab_item(item, item.get("activityCounts", []))
 
-        if app_name:
-            device_path = f"device:{app_name.lower()}"
-
-            if not any(prefab.get("path") == device_path for prefab in saved_prefabs):
-                activity_count = sum(int(count.get("count", 0)) for count in item.get("activityCounts", []))
-                saved_prefabs.append(
-                    {
-                        "path": device_path,
-                        "name": app_name,
-                        "projectId": str(item.get("projectId") or ""),
-                        "saveCount": max(1, activity_count),
-                    }
-                )
+        if device_prefab and not any(prefab.get("path") == device_prefab["path"] for prefab in saved_prefabs):
+            saved_prefabs.append(device_prefab)
 
         return saved_prefabs
 
@@ -190,6 +182,48 @@ def _saved_prefabs_for_summary_item(item: dict[str, Any]) -> list[dict[str, Any]
         }
     )
     return saved_prefabs
+
+
+def _overtime_saved_prefabs_for_summary_item(item: dict[str, Any]) -> list[dict[str, Any]]:
+    saved_prefabs = [dict(prefab) for prefab in item.get("overtimeSavedPrefabs", [])]
+
+    if item.get("source") != "dev":
+        return saved_prefabs
+
+    device_prefab = _device_activity_prefab_item(item, item.get("overtimeActivityCounts", []))
+
+    if device_prefab and not any(prefab.get("path") == device_prefab["path"] for prefab in saved_prefabs):
+        saved_prefabs.append(device_prefab)
+
+    return saved_prefabs
+
+
+def _device_activity_prefab_item(item: dict[str, Any], counts: Any) -> dict[str, Any] | None:
+    app_name = _device_activity_app_name(item)
+
+    if not app_name:
+        return None
+
+    activity_count = sum(int(count.get("count", 0)) for count in counts or [])
+
+    if activity_count <= 0:
+        return None
+
+    return {
+        "path": f"device:{app_name.lower()}",
+        "name": app_name,
+        "projectId": str(item.get("projectId") or ""),
+        "saveCount": max(1, activity_count),
+    }
+
+
+def _device_activity_is_overtime_only(item: dict[str, Any]) -> bool:
+    if item.get("source") != "dev":
+        return False
+
+    normal_count = sum(int(count.get("count", 0)) for count in item.get("activityCounts", []))
+    overtime_count = sum(int(count.get("count", 0)) for count in item.get("overtimeActivityCounts", []))
+    return normal_count <= 0 and overtime_count > 0
 
 
 def _device_activity_app_name(item: dict[str, Any]) -> str:
@@ -1731,6 +1765,7 @@ __all__: tuple[str, ...] = (
     "_report_table_sort_key",
     "_saved_prefab_delta",
     "_saved_prefabs_for_summary_item",
+    "_overtime_saved_prefabs_for_summary_item",
     "_seconds_from_microseconds",
     "_session_key",
     "_should_track_plugin_staleness",

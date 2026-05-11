@@ -37,6 +37,29 @@ def _metadata_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _hold_duration_seconds_for_state(event: dict[str, Any]) -> float | None:
+    if str(event.get("source") or "") != "dev" or str(event.get("eventType") or "") != "hold":
+        return None
+
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    return _float_or_none(metadata.get("holdDurationSeconds"))
+
+
+def _hold_started_at_for_state(event: dict[str, Any]) -> str | None:
+    if str(event.get("source") or "") != "dev" or str(event.get("eventType") or "") != "hold":
+        return None
+
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    return str(metadata.get("firstHoldAtUtc") or "") or None
+
+
 class ActivityAggregationService(MongoComposableMixin):
     def _overtime_rule_context(self) -> OvertimeRuleContext:
         return OvertimeRuleContext(
@@ -845,6 +868,7 @@ class ActivityAggregationService(MongoComposableMixin):
         status_online_at = status_context.get("onlineAt") if status_context else None
         is_inside_status_offline = bool(status_context and status_context.get("insideOffline"))
         status_idle_accounted_until = _coerce_datetime(author_state.get("statusIdleAccountedUntil"))
+        skip_activity_interval_accounting = False
 
         if event_type == "focus":
             source_is_focused = True
@@ -885,13 +909,30 @@ class ActivityAggregationService(MongoComposableMixin):
         if is_inside_status_offline:
             is_activity = False
 
+        if is_activity and event_type == "hold":
+            hold_deltas = self._device_hold_duration_deltas(
+                event,
+                author_state,
+                consumed_normal_microseconds,
+                overtime_window,
+            )
+
+            if _has_time_delta(hold_deltas):
+                _merge_batch_deltas(deltas, hold_deltas)
+                skip_activity_interval_accounting = True
+
         if is_activity:
             if not first_activity_at:
                 first_activity_at = occurred_at
                 last_accounting_at = occurred_at
                 last_accounting_local_at = occurred_local_at
                 last_accounting_source = current_source
-            elif last_activity_at and last_accounting_at and occurred_at > last_activity_at:
+            elif (
+                not skip_activity_interval_accounting
+                and last_activity_at
+                and last_accounting_at
+                and occurred_at > last_activity_at
+            ):
                 accounting_start_at = last_accounting_at
                 accounting_start_local_at = last_accounting_local_at or last_accounting_at
 
@@ -1102,6 +1143,8 @@ class ActivityAggregationService(MongoComposableMixin):
                         "lastAccountingLocalAt": last_accounting_local_at.isoformat() if last_accounting_local_at else None,
                         "lastActivitySource": last_activity_source or None,
                         "lastAccountingSource": last_accounting_source or None,
+                        "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
+                        "lastHoldStartedAt": _hold_started_at_for_state(event),
                         "isFocused": source_is_focused,
                     },
                     "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
@@ -1123,6 +1166,8 @@ class ActivityAggregationService(MongoComposableMixin):
                         "lastAccountingLocalAt": author_last_accounting_local_at.isoformat() if author_last_accounting_local_at else None,
                         "lastActivityScope": author_last_activity_scope or None,
                         "lastAccountingScope": author_last_accounting_scope or None,
+                        "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
+                        "lastHoldStartedAt": _hold_started_at_for_state(event),
                         "statusIdleAccountedUntil": status_idle_accounted_until.isoformat() if status_idle_accounted_until else None,
                     },
                     "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
@@ -1146,6 +1191,59 @@ class ActivityAggregationService(MongoComposableMixin):
             return returned_deltas
 
         return _empty_event_deltas() if suppress_deltas else deltas
+
+    def _device_hold_duration_deltas(
+        self,
+        event: dict[str, Any],
+        author_state: dict[str, Any],
+        consumed_normal_microseconds: int,
+        overtime_window: tuple[dt.datetime, dt.datetime] | None,
+    ) -> dict[str, Any]:
+        deltas = _empty_event_deltas()
+
+        if str(event.get("source") or "") != "dev":
+            return deltas
+
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        hold_duration_seconds = _float_or_none(metadata.get("holdDurationSeconds"))
+
+        if hold_duration_seconds is None or hold_duration_seconds <= 0:
+            return deltas
+
+        previous_duration_seconds = _float_or_none(author_state.get("lastHoldDurationSeconds"))
+        previous_hold_started_at = str(author_state.get("lastHoldStartedAt") or "")
+        current_hold_started_at = str(metadata.get("firstHoldAtUtc") or "")
+
+        if current_hold_started_at and current_hold_started_at != previous_hold_started_at:
+            previous_duration_seconds = 0.0
+
+        duration_delta_seconds = hold_duration_seconds - max(0.0, previous_duration_seconds or 0.0)
+
+        if duration_delta_seconds <= 0:
+            return deltas
+
+        occurred_at = _coerce_datetime(event.get("occurredAtUtc") or event.get("occurredAt"))
+        occurred_local_at = _parse_local_datetime(event.get("occurredAtLocal"))
+
+        if not occurred_at:
+            return deltas
+
+        duration_delta = dt.timedelta(seconds=duration_delta_seconds)
+        interval_start_at = occurred_at - duration_delta
+        interval_start_local_at = (occurred_local_at or occurred_at) - duration_delta
+        interval_end_local_at = occurred_local_at or occurred_at
+        hold_overtime_window = overtime_window or self._overtime_window_for_interval(event, interval_start_at, occurred_at)
+        hold_deltas = _interval_deltas(
+            interval_start_at,
+            occurred_at,
+            interval_start_local_at,
+            interval_end_local_at,
+            True,
+            consumed_normal_microseconds,
+            hold_overtime_window,
+        )
+        _merge_batch_deltas(deltas, hold_deltas)
+        return deltas
 
     def _normal_microseconds_consumed_for_event(self, event: dict[str, Any]) -> int:
         work_window_microseconds = DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND

@@ -1780,6 +1780,7 @@ p {
   --breakdown-scroll-visible-rows: 10;
   --breakdown-scroll-row-block: calc(20px + 1.2em + 1px);
   --breakdown-scroll-row-gap: 8px;
+  padding-right: 0;
   max-height: calc(
     var(--breakdown-scroll-visible-rows) * var(--breakdown-scroll-row-block) +
       (var(--breakdown-scroll-visible-rows) - 1) * var(--breakdown-scroll-row-gap)

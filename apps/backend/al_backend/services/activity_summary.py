@@ -892,7 +892,7 @@ class ActivitySummaryService(MongoComposableMixin):
                     overtime_activity_counts[activity_type] = overtime_activity_counts.get(activity_type, 0) + int(count.get("count", 0))
 
             saved_prefab_items = _saved_prefabs_for_summary_item(item)
-            overtime_saved_prefab_items = item.get("overtimeSavedPrefabs", [])
+            overtime_saved_prefab_items = _overtime_saved_prefabs_for_summary_item(item)
 
             for prefab in saved_prefab_items:
                 path = prefab.get("path")
