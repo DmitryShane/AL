@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import al_backend.discord_bot as discord_bot_module
+import al_backend.services.report_listing as report_listing_module
 from al_backend.app import PUBLIC_API_PATHS
 from al_backend.discord_author_mappings import apply_discord_author_mappings
 from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSession, UserPcmTrack, cleanup_old_retained_recordings, retain_recording_recovery_files
@@ -51,6 +52,17 @@ from al_backend.telegram_bot import (
     telegram_username,
 )
 from tests.fakes import fake_repository, set_idle_threshold
+
+
+def fixed_datetime_class(fixed_now: dt.datetime):
+    class FixedDateTime(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed_now.replace(tzinfo=None)
+            return fixed_now.astimezone(tz)
+
+    return FixedDateTime
 
 
 def test_author_profile_stores_plugin_ingest_resume_timestamp_when_plugin_re_enabled():
@@ -189,6 +201,107 @@ def test_reports_page_includes_alias_source_rows_for_selected_author():
     assert page["reports"][0]["displayName"] == "Dmitry Shane"
     assert page["reports"][0]["team"] == "Core"
     assert page["reports"][0]["timeZoneId"] == "Europe/Sofia"
+
+def test_reports_page_filters_alias_rows_by_canonical_author_live_date(monkeypatch):
+    repo = fake_repository()
+    monkeypatch.setattr(
+        report_listing_module.dt,
+        "datetime",
+        fixed_datetime_class(dt.datetime(2026, 5, 11, 22, 39, tzinfo=dt.UTC)),
+    )
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry",
+            "displayName": "Dmitriy Zhdamarov",
+            "timeZoneId": "Europe/Madrid",
+            "timeZoneDisplayName": "CET",
+        }
+    )
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device3", "targetRawAuthor": "Dmitry"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "dev-ios",
+            "author": "Device3",
+            "date": "2026-05-11",
+            "recordedAt": "2026-05-11T16:59:04.8828670+02:00",
+            "receivedAt": dt.datetime(2026, 5, 11, 14, 59, tzinfo=dt.UTC),
+            "timeZoneId": "Local",
+            "activeDeltaSeconds": 60,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "status",
+            "author": "Device3",
+            "date": "2026-05-11",
+            "recordedAt": "2026-05-11T14:23:03.436000+00:00",
+            "receivedAt": dt.datetime(2026, 5, 11, 14, 23, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+            "reportType": "status",
+            "statusEventType": "online",
+        }
+    )
+
+    page = repo.reports_page(
+        start_date="2026-05-12",
+        end_date="2026-05-12",
+        date_mode="authorLocalToday",
+        author="Dmitry",
+    )
+
+    assert page["reports"] == []
+    assert page["total"] == 0
+    assert page["sources"] == []
+
+def test_latest_reports_filters_alias_rows_by_canonical_author_live_date(monkeypatch):
+    repo = fake_repository()
+    monkeypatch.setattr(
+        report_listing_module.dt,
+        "datetime",
+        fixed_datetime_class(dt.datetime(2026, 5, 11, 22, 39, tzinfo=dt.UTC)),
+    )
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry",
+            "displayName": "Dmitriy Zhdamarov",
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device3", "targetRawAuthor": "Dmitry"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "dev-ios",
+            "author": "Device3",
+            "date": "2026-05-11",
+            "recordedAt": "2026-05-11T16:59:04.8828670+02:00",
+            "receivedAt": dt.datetime(2026, 5, 11, 14, 59, tzinfo=dt.UTC),
+            "timeZoneId": "Local",
+            "activeDeltaSeconds": 60,
+        }
+    )
+
+    reports = repo.latest_reports(
+        start_date="2026-05-12",
+        end_date="2026-05-12",
+        date_mode="authorLocalToday",
+        author="Dmitry",
+    )
+
+    assert reports == []
 
 def test_reports_page_enriches_report_timezone_from_author_profile():
     repo = fake_repository()
