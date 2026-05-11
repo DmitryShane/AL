@@ -1,4 +1,4 @@
-import { formatDeviceDateTime, formatDeviceTracking } from "./formatters";
+import { formatBrowserDateTime, formatDeviceDateTime, formatDeviceTracking } from "./formatters";
 import type { DeviceProfile, DeviceProfileAuthorOption } from "./types";
 
 type DeviceProfilesTableProps = {
@@ -55,6 +55,7 @@ export function DeviceProfilesTable({
               <div className="profile-row" key={`${profile.source ?? ""}:${profile.rawDevice}`}>
                 <span className="profile-author-cell profile-device-raw-cell" title={profile.rawDevice}>
                   <strong>{profile.rawDevice || "-"}</strong>
+                  {profile.createdAt ? <small>Linked: {formatBrowserDateTime(profile.createdAt)}</small> : null}
                 </span>
                 <div className="device-profile-author-cell">
                   <select

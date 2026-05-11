@@ -651,7 +651,7 @@ def test_author_date_range_rebuild_includes_alias_raw_events():
     assert rebuilt is not None
     assert rebuilt["activeSeconds"] == 5
 
-def test_author_alias_rebuilds_raw_events_into_target_author():
+def test_author_alias_manual_rebuild_moves_raw_events_to_target_author():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
     repo.db.author_profiles.insert_one({"rawAuthor": "Unknown User", "displayName": "Unknown User"})
@@ -731,10 +731,34 @@ def test_author_alias_rebuilds_raw_events_into_target_author():
     assert result["ok"] is True
     assert "Unknown User" not in authors
     assert "Unknown User" not in profiles
+    assert authors["Dmitry Shane"]["activeSeconds"] == 0
+
+    repo.rebuild_aggregates_for_author_dates(["Unknown User"])
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    authors = {author["rawAuthor"]: author for author in summary["authors"]}
+
     assert authors["Dmitry Shane"]["activeSeconds"] > 0
     assert authors["Dmitry Shane"]["savedPrefabs"] == [
         {"path": "https://www.figma.com/design/abc123/Game-HUD", "name": "Game HUD", "saveCount": 1}
     ]
+
+
+def test_author_alias_update_does_not_rebuild_aggregates():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Unknown User", "displayName": "Unknown User"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
+
+    def fail_rebuild(*_args, **_kwargs):
+        raise AssertionError("author alias save must not rebuild aggregates")
+
+    repo.rebuild_aggregates_for_author_dates = fail_rebuild
+
+    result = repo.upsert_author_alias("Unknown User", "Dmitry Shane")
+
+    assert result["ok"] is True
+    assert repo.db.author_aliases.find_one({"sourceRawAuthor": "Unknown User"})["targetRawAuthor"] == "Dmitry Shane"
+    assert repo.db.author_profiles.find_one({"rawAuthor": "Unknown User"}) is None
+
 
 def test_author_alias_delete_restores_source_author_listing():
     repo = fake_repository()

@@ -978,7 +978,6 @@ class SettingsRepository(MongoComposableMixin):
             upsert=True,
         )
         self.db.author_profiles.delete_many({"rawAuthor": source})
-        composed(self).rebuild_aggregates_for_author_dates([source])
         return {"ok": True, "alias": {"sourceRawAuthor": source, "targetRawAuthor": target}}
 
     def delete_author_alias(self, source_raw_author: str) -> dict[str, Any]:

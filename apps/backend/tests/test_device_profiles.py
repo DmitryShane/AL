@@ -159,6 +159,26 @@ def test_device_profile_alias_update_reuses_author_aliases():
     assert repo.db.author_aliases.find_one({"sourceRawAuthor": "Device1"})["targetRawAuthor"] == "Dmitry Shane"
 
 
+def test_device_profile_alias_update_does_not_rebuild_aggregates():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Device1", "displayName": "Device1"})
+    repo.db.device_report_identities.insert_one(
+        {"source": "dev", "deviceIdHash": "hash-1", "rawAuthor": "Device1"}
+    )
+
+    def fail_rebuild(*_args, **_kwargs):
+        raise AssertionError("device profile alias save must not rebuild aggregates")
+
+    repo.rebuild_aggregates_for_author_dates = fail_rebuild
+
+    result = repo.upsert_device_profile_alias("Device1", "Dmitry Shane")
+
+    assert result["ok"] is True
+    assert repo.db.author_aliases.find_one({"sourceRawAuthor": "Device1"})["targetRawAuthor"] == "Dmitry Shane"
+    assert repo.db.author_profiles.find_one({"rawAuthor": "Device1"}) is None
+
+
 def test_device_profile_alias_rejects_missing_target_author():
     repo = fake_repository()
     repo.db.device_report_identities.insert_one(

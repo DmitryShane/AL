@@ -1,5 +1,6 @@
 import type { AuthorProfile } from "../../../../types/dashboard";
-import { formatTimestamp, settingsSaveButtonClassName } from "../../../../pages/pageHelpers";
+import { settingsSaveButtonClassName } from "../../../../pages/pageHelpers";
+import { formatBrowserDateTime } from "../deviceProfiles/formatters";
 
 type AuthorAlias = {
   sourceRawAuthor: string;
@@ -90,7 +91,7 @@ export function AuthorRedirectsTab({
                 <div className="alias-row" key={alias.sourceRawAuthor}>
                   <span>
                     <span className="alias-row-title"><strong>{alias.sourceRawAuthor}</strong> redirects to <strong>{target?.displayName || alias.targetRawAuthor}</strong></span>
-                    {alias.createdAt ? <small>Created: {formatTimestamp(alias.createdAt)}</small> : null}
+                    {alias.createdAt ? <small>Created: {formatBrowserDateTime(alias.createdAt)}</small> : null}
                     {deviceId ? <small title={deviceId}>Device ID: {deviceId}</small> : null}
                   </span>
                   <button

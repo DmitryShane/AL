@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 
 from ..activity_math import ASCENDING, DESCENDING, _display_name, _normalize_author
@@ -98,7 +99,29 @@ class DeviceProfileRepository(MongoComposableMixin):
         if not self.db.device_report_identities.find_one({"rawAuthor": source}, {"_id": 1}):
             return {"ok": False, "error": "Device profile does not exist"}
 
-        return composed(self).upsert_author_alias(source, target)
+        if source == target:
+            return {"ok": False, "error": "Device and target author must be different"}
+
+        if target not in composed(self).list_authors():
+            return {"ok": False, "error": "Target profile does not exist"}
+
+        now = dt.datetime.now(dt.UTC)
+        self.db.author_aliases.update_one(
+            {"sourceRawAuthor": source},
+            {
+                "$set": {
+                    "sourceRawAuthor": source,
+                    "targetRawAuthor": target,
+                    "updatedAt": now,
+                },
+                "$setOnInsert": {
+                    "createdAt": now,
+                },
+            },
+            upsert=True,
+        )
+        self.db.author_profiles.delete_many({"rawAuthor": source})
+        return {"ok": True, "alias": {"sourceRawAuthor": source, "targetRawAuthor": target}}
 
     def migrate_device_author_profiles(self) -> dict[str, Any]:
         raw_devices = [
