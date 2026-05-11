@@ -43,6 +43,7 @@ SELECT_HEAVY_THRESHOLD_PERCENT = 90
 SELECT_HEAVY_MIN_EVENTS = 20
 AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS = 300
 REPORT_CHALLENGE_TTL_SECONDS = 120
+DEVICE_SOURCES = {"dev", "dev-ios", "dev-android", "dev-editor"}
 RAW_ACTIVITY_EVENT_TYPES = {
     "click",
     "hold",
@@ -58,6 +59,62 @@ RAW_ACTIVITY_EVENT_TYPES = {
     "file_loaded",
     "external",
 }
+
+
+def is_device_source(source: Any) -> bool:
+    return str(source or "").strip().lower() in DEVICE_SOURCES
+
+
+def device_source_from_payload(payload: dict[str, Any], fallback: str = "dev") -> str:
+    metadata = _latest_payload_event_metadata(payload)
+    platform = str(metadata.get("platform") or metadata.get("runtimePlatform") or "").strip().lower()
+
+    if _metadata_bool(metadata.get("isEditor")) or _metadata_bool(metadata.get("isEditorPlayMode")) or "editor" in platform:
+        return "dev-editor"
+
+    if "iphone" in platform or "ipad" in platform or "ios" in platform:
+        return "dev-ios"
+
+    if "android" in platform:
+        return "dev-android"
+
+    return fallback if is_device_source(fallback) else "dev"
+
+
+def _latest_payload_event_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    events = payload.get("events")
+
+    if not isinstance(events, list):
+        return {}
+
+    latest_event = None
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+
+        if latest_event is None:
+            latest_event = event
+            continue
+
+        current_time = str(event.get("occurredAtUtc") or event.get("occurredAtLocal") or "")
+        latest_time = str(latest_event.get("occurredAtUtc") or latest_event.get("occurredAtLocal") or "")
+
+        if current_time >= latest_time:
+            latest_event = event
+
+    metadata = (latest_event or {}).get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _metadata_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    return bool(value)
 NON_ACTIVITY_EVENT_TYPES = {"heartbeat", "blur"}
 DEFAULT_CALENDAR_REASONS = [
     {"id": "vacation", "label": "Vacation"},
@@ -150,7 +207,7 @@ def _saved_prefabs_for_summary_item(item: dict[str, Any]) -> list[dict[str, Any]
     if _device_activity_is_overtime_only(item):
         return saved_prefabs
 
-    if item.get("source") == "dev":
+    if is_device_source(item.get("source")):
         device_prefab = _device_activity_prefab_item(item, item.get("activityCounts", []))
 
         if device_prefab and not any(prefab.get("path") == device_prefab["path"] for prefab in saved_prefabs):
@@ -187,7 +244,7 @@ def _saved_prefabs_for_summary_item(item: dict[str, Any]) -> list[dict[str, Any]
 def _overtime_saved_prefabs_for_summary_item(item: dict[str, Any]) -> list[dict[str, Any]]:
     saved_prefabs = [dict(prefab) for prefab in item.get("overtimeSavedPrefabs", [])]
 
-    if item.get("source") != "dev":
+    if not is_device_source(item.get("source")):
         return saved_prefabs
 
     device_prefab = _device_activity_prefab_item(item, item.get("overtimeActivityCounts", []))
@@ -218,7 +275,7 @@ def _device_activity_prefab_item(item: dict[str, Any], counts: Any) -> dict[str,
 
 
 def _device_activity_is_overtime_only(item: dict[str, Any]) -> bool:
-    if item.get("source") != "dev":
+    if not is_device_source(item.get("source")):
         return False
 
     normal_count = sum(int(count.get("count", 0)) for count in item.get("activityCounts", []))
@@ -1661,6 +1718,7 @@ __all__: tuple[str, ...] = (
     "DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE",
     "DEFAULT_PLUGIN_WORK_WINDOW_SECONDS",
     "DEFAULT_TELEGRAM_ONLINE_PROMPT_DELAY_MINUTES",
+    "DEVICE_SOURCES",
     "DESCENDING",
     "Database",
     "DuplicateKeyError",
@@ -1686,6 +1744,8 @@ __all__: tuple[str, ...] = (
     "WINDOWS_TIME_ZONE_IDS",
     "ZoneInfo",
     "ZoneInfoNotFoundError",
+    "device_source_from_payload",
+    "is_device_source",
     "live_date_in_scope",
     "_activity_count_type",
     "_activity_mix_from_counts",

@@ -425,7 +425,7 @@ def test_device_click_counts_as_activity_and_heartbeat_counts_idle():
 
     click_deltas = repo._apply_raw_event_to_aggregates(
         {
-            "source": "dev",
+            "source": "dev-ios",
             "author": "Device1",
             "projectId": "Bike Rush 2",
             "deviceId": "advertising-id-1",
@@ -439,7 +439,7 @@ def test_device_click_counts_as_activity_and_heartbeat_counts_idle():
 
     idle_deltas = repo._apply_raw_event_to_aggregates(
         {
-            "source": "dev",
+            "source": "dev-ios",
             "author": "Device1",
             "projectId": "Bike Rush 2",
             "deviceId": "advertising-id-1",
@@ -453,7 +453,7 @@ def test_device_click_counts_as_activity_and_heartbeat_counts_idle():
 
     assert click_deltas["activityCountDeltas"] == [{"type": "click", "count": 1}]
     assert idle_deltas["idleDeltaSeconds"] == 600
-    daily = repo.db.daily_author_activity.find_one({"author": "Device1", "date": "2026-05-04", "source": "dev"})
+    daily = repo.db.daily_author_activity.find_one({"author": "Device1", "date": "2026-05-04", "source": "dev-ios"})
     assert daily is not None
     assert daily["idleSeconds"] == 600
 
@@ -556,6 +556,86 @@ def test_device_hold_duration_counts_each_held_second_even_when_reports_exceed_t
     assert daily["overtimeActiveSeconds"] == 15
     assert daily["idleSeconds"] == 0
 
+def test_device_ios_payload_is_stored_as_ios_device_source():
+    repo = fake_repository()
+    repo.save_report(
+        source="dev",
+        plugin_version="0.1.0",
+        encrypted_packet="packet",
+        challenge_id="challenge",
+        device_id="ios-device-1",
+        payload={
+            "source": "dev",
+            "author": "Device1",
+            "projectId": "Bike Rush 2",
+            "sessionId": "ios-session",
+            "deviceId": "ios-device-1",
+            "events": [
+                {
+                    "eventId": "ios-click-1",
+                    "eventType": "click",
+                    "occurredAtUtc": "2026-05-04T10:00:00Z",
+                    "occurredAtLocal": "2026-05-04T10:00:00+00:00",
+                    "date": "2026-05-04",
+                    "metadata": {"platform": "IPhonePlayer"},
+                },
+                {
+                    "eventId": "ios-hold-1",
+                    "eventType": "hold",
+                    "occurredAtUtc": "2026-05-04T10:00:05Z",
+                    "occurredAtLocal": "2026-05-04T10:00:05+00:00",
+                    "date": "2026-05-04",
+                    "metadata": {"platform": "IPhonePlayer", "holdDurationSeconds": 5},
+                },
+            ],
+        },
+    )
+
+    assert repo.db.raw_reports.items[-1]["source"] == "dev-ios"
+    assert repo.db.raw_event_batches.items[-1]["source"] == "dev-ios"
+    assert repo.db.raw_activity_events.items[0]["source"] == "dev-ios"
+    assert repo.db.daily_author_activity.find_one({"author": "Device1", "source": "dev-ios"}) is not None
+    assert repo.db.report_rows.count_documents({"author": "Device1", "source": "dev-ios"}) == 1
+
+def test_device_android_payload_is_stored_as_android_device_source():
+    repo = fake_repository()
+    repo.save_report(
+        source="dev",
+        plugin_version="0.1.0",
+        encrypted_packet="packet",
+        challenge_id="challenge",
+        device_id="android-device-1",
+        payload={
+            "source": "dev",
+            "author": "Device1",
+            "projectId": "Bike Rush 2",
+            "sessionId": "android-session",
+            "deviceId": "android-device-1",
+            "events": [
+                {
+                    "eventId": "android-click-1",
+                    "eventType": "click",
+                    "occurredAtUtc": "2026-05-04T10:00:00Z",
+                    "occurredAtLocal": "2026-05-04T10:00:00+00:00",
+                    "date": "2026-05-04",
+                    "metadata": {"runtimePlatform": "Android"},
+                },
+                {
+                    "eventId": "android-heartbeat-1",
+                    "eventType": "heartbeat",
+                    "occurredAtUtc": "2026-05-04T10:00:10Z",
+                    "occurredAtLocal": "2026-05-04T10:00:10+00:00",
+                    "date": "2026-05-04",
+                    "metadata": {"runtimePlatform": "Android"},
+                },
+            ],
+        },
+    )
+
+    assert repo.db.raw_reports.items[-1]["source"] == "dev-android"
+    assert repo.db.raw_event_batches.items[-1]["source"] == "dev-android"
+    assert repo.db.daily_author_activity.find_one({"author": "Device1", "source": "dev-android"}) is not None
+
 def test_device_editor_activity_counts_for_evgeniy_dotsenko_alias():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Evgeniy Dotsenko", "displayName": "Evgeniy Dotsenko"})
@@ -596,14 +676,15 @@ def test_device_editor_activity_counts_for_evgeniy_dotsenko_alias():
 
     raw_events = list(repo.db.raw_activity_events.find({"author": "Evgeniy Dotsenko"}))
     assert len(raw_events) == 2
+    assert {event["source"] for event in raw_events} == {"dev-editor"}
     daily = repo.db.daily_author_activity.find_one(
-        {"author": "Evgeniy Dotsenko", "date": "2026-05-04", "source": "dev"}
+        {"author": "Evgeniy Dotsenko", "date": "2026-05-04", "source": "dev-editor"}
     )
     assert daily is not None
     assert daily["activeSeconds"] == 5
     assert daily["idleSeconds"] == 0
     assert {item["type"]: item["count"] for item in daily["activityCounts"]} == {"click": 1, "hold": 1}
-    assert repo.db.report_rows.count_documents({"author": "Evgeniy Dotsenko", "source": "dev"}) == 1
+    assert repo.db.report_rows.count_documents({"author": "Evgeniy Dotsenko", "source": "dev-editor"}) == 1
 
 def test_device_editor_activity_is_raw_only_for_other_authors():
     repo = fake_repository()
@@ -645,8 +726,9 @@ def test_device_editor_activity_is_raw_only_for_other_authors():
 
     raw_events = list(repo.db.raw_activity_events.find({"author": "Other Author"}))
     assert len(raw_events) == 2
-    assert repo.db.daily_author_activity.find_one({"author": "Other Author", "source": "dev"}) is None
-    assert repo.db.report_rows.count_documents({"author": "Other Author", "source": "dev"}) == 0
+    assert {event["source"] for event in raw_events} == {"dev-editor"}
+    assert repo.db.daily_author_activity.find_one({"author": "Other Author", "source": "dev-editor"}) is None
+    assert repo.db.report_rows.count_documents({"author": "Other Author", "source": "dev-editor"}) == 0
 
 def test_device_summary_uses_application_name_as_saved_item():
     repo = fake_repository()
@@ -766,7 +848,7 @@ def test_device_source_uses_device_idle_threshold():
 
     repo._apply_raw_event_to_aggregates(
         {
-            "source": "dev",
+            "source": "dev-ios",
             "author": "Device1",
             "projectId": "Bike Rush 2",
             "deviceId": "advertising-id-1",
@@ -779,7 +861,7 @@ def test_device_source_uses_device_idle_threshold():
     )
     deltas = repo._apply_raw_event_to_aggregates(
         {
-            "source": "dev",
+            "source": "dev-ios",
             "author": "Device1",
             "projectId": "Bike Rush 2",
             "deviceId": "advertising-id-1",
@@ -2096,6 +2178,7 @@ def test_heartbeat_idle_threshold_is_independent_from_plugin_interval():
 
     assert repo.get_interval_for_author("Dmitry Shane") == 30
     assert repo.get_interval_for_author("Dmitry Shane", source="dev") == 30
+    assert repo.get_interval_for_author("Dmitry Shane", source="dev-ios") == 30
     assert repo.get_idle_threshold_for_author("Dmitry Shane") == 120
     assert heartbeat_deltas["idleDeltaSeconds"] == 0
     assert heartbeat_deltas["activeDeltaSeconds"] == 0
@@ -2108,6 +2191,8 @@ def test_device_interval_is_independent_from_global_plugin_interval():
 
     assert repo.get_interval_for_author("Dmitry Shane") == 300
     assert repo.get_interval_for_author("Dmitry Shane", source="dev") == 1
+    assert repo.get_interval_for_author("Dmitry Shane", source="dev-android") == 1
+    assert repo.get_interval_for_author("Dmitry Shane", source="dev-editor") == 1
     assert repo.get_interval_settings()["deviceSendIntervalSeconds"] == 1
 
 def test_heartbeat_idle_threshold_can_be_lower_than_plugin_interval():

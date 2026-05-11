@@ -487,6 +487,18 @@ export function formatSource(source?: string) {
     return "Device";
   }
 
+  if (source === "dev-ios") {
+    return "iOS";
+  }
+
+  if (source === "dev-android") {
+    return "Android";
+  }
+
+  if (source === "dev-editor") {
+    return "Editor";
+  }
+
   if (source === "telegram") {
     return "Telegram";
   }
@@ -523,7 +535,7 @@ export function sourceIcon(source?: string) {
     return <CursorIcon />;
   }
 
-  if (source === "dev") {
+  if (source === "dev" || source === "dev-ios" || source === "dev-android" || source === "dev-editor") {
     return <Smartphone size={16} />;
   }
 

@@ -819,7 +819,7 @@ class SettingsRepository(MongoComposableMixin):
     def get_interval_for_author(self, author: str, source: str | None = None) -> int:
         global_setting = self.db.interval_settings.find_one({"kind": "global"})
 
-        if source == "dev" and global_setting and global_setting.get("deviceSendIntervalSeconds"):
+        if is_device_source(source) and global_setting and global_setting.get("deviceSendIntervalSeconds"):
             return int(global_setting["deviceSendIntervalSeconds"])
 
         if global_setting and global_setting.get("sendIntervalSeconds"):
@@ -830,7 +830,7 @@ class SettingsRepository(MongoComposableMixin):
     def get_idle_threshold_for_author(self, author: str, source: str | None = None) -> int:
         global_setting = self.db.interval_settings.find_one({"kind": "global"}) or {}
 
-        if source == "dev" and global_setting.get("deviceIdleThresholdSeconds"):
+        if is_device_source(source) and global_setting.get("deviceIdleThresholdSeconds"):
             return int(global_setting["deviceIdleThresholdSeconds"])
 
         if global_setting.get("idleThresholdSeconds"):

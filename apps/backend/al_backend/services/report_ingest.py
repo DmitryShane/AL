@@ -51,16 +51,17 @@ class ReportIngestService(MongoComposableMixin):
     ) -> str:
         now = dt.datetime.now(dt.UTC)
         payload = dict(payload)
+        effective_source = device_source_from_payload(payload, source) if source == "dev" else source
         resolved_device_id = str(device_id or payload.get("deviceId") or "")
 
-        if source == "dev" and not _is_valid_device_id(resolved_device_id):
+        if is_device_source(effective_source) and not _is_valid_device_id(resolved_device_id):
             resolved_device_id = _device_fallback_id_from_payload(payload)
 
         if resolved_device_id:
             payload["deviceId"] = resolved_device_id
 
-        if source == "dev" and self.is_unknown_device_author(payload.get("author")):
-            payload["author"] = self.resolve_device_report_author(source, resolved_device_id)
+        if is_device_source(effective_source) and self.is_unknown_device_author(payload.get("author")):
+            payload["author"] = self.resolve_device_report_author(effective_source, resolved_device_id)
 
         original_author = _normalize_author(payload.get("author") or "Unknown User")
         payload["author"] = composed(self).resolve_author_alias(original_author)
@@ -70,15 +71,15 @@ class ReportIngestService(MongoComposableMixin):
             payload["timeZoneId"] = normalized_time_zone
             payload["timeZoneDisplayName"] = str(payload.get("timeZoneDisplayName") or "").strip() or normalized_time_zone
 
-        if source == "dev":
-            self.touch_device_report_identity(source, resolved_device_id, payload, plugin_version, now)
+        if is_device_source(effective_source):
+            self.touch_device_report_identity(effective_source, resolved_device_id, payload, plugin_version, now)
 
-        if not self._is_unassigned_device_report_author(source, payload.get("author")):
+        if not self._is_unassigned_device_report_author(effective_source, payload.get("author")):
             composed(self).update_author_time_zone(str(payload.get("author") or "Unknown User"), payload.get("timeZoneId"), payload.get("timeZoneDisplayName"))
         report_type = self.consume_expected_report_type(payload.get("author"))
         raw_result = self.db.raw_reports.insert_one(
             {
-                "source": source,
+                "source": effective_source,
                 "pluginVersion": plugin_version,
                 "challengeId": challenge_id,
                 "deviceId": resolved_device_id,
@@ -92,7 +93,7 @@ class ReportIngestService(MongoComposableMixin):
 
         if isinstance(payload.get("events"), list):
             meaningful_for_stale = self._save_event_batch(
-                source=source,
+                source=effective_source,
                 plugin_version=plugin_version,
                 payload=payload,
                 raw_report_id=raw_result.inserted_id,
@@ -101,7 +102,7 @@ class ReportIngestService(MongoComposableMixin):
                 challenge_id=challenge_id,
                 device_id=resolved_device_id,
             )
-            if meaningful_for_stale and not self._is_unassigned_device_report_author(source, author_for_stale_touch):
+            if meaningful_for_stale and not self._is_unassigned_device_report_author(effective_source, author_for_stale_touch):
                 composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
             composed(self).invalidate_activity_summary_cache()
             return str(raw_result.inserted_id)
@@ -109,7 +110,7 @@ class ReportIngestService(MongoComposableMixin):
         snapshot = dict(payload)
         snapshot.update(
             {
-                "source": source,
+                "source": effective_source,
                 "pluginVersion": plugin_version,
                 "rawReportId": raw_result.inserted_id,
                 "receivedAt": now,
@@ -120,13 +121,13 @@ class ReportIngestService(MongoComposableMixin):
         )
         self.db.activity_snapshots.insert_one(snapshot)
         composed(self)._apply_snapshot_to_aggregates(snapshot)
-        if not self._is_unassigned_device_report_author(source, author_for_stale_touch):
+        if not self._is_unassigned_device_report_author(effective_source, author_for_stale_touch):
             composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
         composed(self).invalidate_activity_summary_cache()
         return str(raw_result.inserted_id)
 
     def _is_unassigned_device_report_author(self, source: str, author: Any) -> bool:
-        if source != "dev":
+        if not is_device_source(source):
             return False
 
         normalized = _normalize_author(author)
@@ -134,7 +135,7 @@ class ReportIngestService(MongoComposableMixin):
         if not normalized:
             return False
 
-        return bool(self.db.device_report_identities.find_one({"source": source, "rawAuthor": normalized}, {"_id": 1}))
+        return bool(self.db.device_report_identities.find_one({"rawAuthor": normalized}, {"_id": 1}))
 
     def touch_device_report_identity(
         self,
@@ -160,9 +161,10 @@ class ReportIngestService(MongoComposableMixin):
         }
         first_touch_fields = {key: value for key, value in first_touch_fields.items() if value}
         self.db.device_report_identities.update_one(
-            {"source": source, "deviceIdHash": _device_report_id_hash(normalized_device_id)},
+            {"deviceIdHash": _device_report_id_hash(normalized_device_id)},
             {
                 "$set": {
+                    "source": source,
                     "lastDeviceId": normalized_device_id,
                     "lastProjectId": str(payload.get("projectId") or ""),
                     "lastPluginVersion": plugin_version,
@@ -177,7 +179,6 @@ class ReportIngestService(MongoComposableMixin):
         if first_touch_fields:
             self.db.device_report_identities.update_one(
                 {
-                    "source": source,
                     "deviceIdHash": _device_report_id_hash(normalized_device_id),
                     "firstSeenDeviceSentAt": {"$exists": False},
                 },
@@ -219,15 +220,15 @@ class ReportIngestService(MongoComposableMixin):
             return "Device"
 
         device_id_hash = _device_report_id_hash(normalized_device_id)
-        existing = self.db.device_report_identities.find_one({"source": source, "deviceIdHash": device_id_hash})
+        existing = self.db.device_report_identities.find_one({"deviceIdHash": device_id_hash})
 
         if existing and existing.get("rawAuthor"):
             return str(existing["rawAuthor"])
 
-        next_number = self.db.device_report_identities.count_documents({"source": source}) + 1
+        next_number = self.db.device_report_identities.count_documents({}) + 1
         raw_author = f"Device{next_number}"
         self.db.device_report_identities.update_one(
-            {"source": source, "deviceIdHash": device_id_hash},
+            {"deviceIdHash": device_id_hash},
             {
                 "$setOnInsert": {
                     "source": source,
@@ -238,7 +239,7 @@ class ReportIngestService(MongoComposableMixin):
             },
             upsert=True,
         )
-        inserted = self.db.device_report_identities.find_one({"source": source, "deviceIdHash": device_id_hash})
+        inserted = self.db.device_report_identities.find_one({"deviceIdHash": device_id_hash})
         return str((inserted or {}).get("rawAuthor") or raw_author)
 
     def _is_heartbeat_only_event_payload(self, payload: dict[str, Any]) -> bool:

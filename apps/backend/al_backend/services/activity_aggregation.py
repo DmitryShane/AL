@@ -14,7 +14,7 @@ DEVICE_EDITOR_ACTIVITY_AUTHOR = "Evgeniy Dotsenko"
 
 
 def _is_suppressed_device_editor_event(event: dict[str, Any]) -> bool:
-    if str(event.get("source") or "") != "dev":
+    if not is_device_source(event.get("source")):
         return False
 
     metadata = event.get("metadata") or {}
@@ -45,7 +45,7 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def _hold_duration_seconds_for_state(event: dict[str, Any]) -> float | None:
-    if str(event.get("source") or "") != "dev" or str(event.get("eventType") or "") != "hold":
+    if not is_device_source(event.get("source")) or str(event.get("eventType") or "") != "hold":
         return None
 
     metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
@@ -53,7 +53,7 @@ def _hold_duration_seconds_for_state(event: dict[str, Any]) -> float | None:
 
 
 def _hold_started_at_for_state(event: dict[str, Any]) -> str | None:
-    if str(event.get("source") or "") != "dev" or str(event.get("eventType") or "") != "hold":
+    if not is_device_source(event.get("source")) or str(event.get("eventType") or "") != "hold":
         return None
 
     metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
@@ -1201,7 +1201,7 @@ class ActivityAggregationService(MongoComposableMixin):
     ) -> dict[str, Any]:
         deltas = _empty_event_deltas()
 
-        if str(event.get("source") or "") != "dev":
+        if not is_device_source(event.get("source")):
             return deltas
 
         metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}

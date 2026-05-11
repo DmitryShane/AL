@@ -44,6 +44,18 @@ export function formatSource(source?: string) {
     return "Device";
   }
 
+  if (source === "dev-ios") {
+    return "iOS";
+  }
+
+  if (source === "dev-android") {
+    return "Android";
+  }
+
+  if (source === "dev-editor") {
+    return "Editor";
+  }
+
   if (source === "telegram") {
     return "Telegram";
   }

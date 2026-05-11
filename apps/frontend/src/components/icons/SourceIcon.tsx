@@ -26,7 +26,7 @@ export function SourceIcon({ source }: SourceIconProps) {
     return <CursorIcon />;
   }
 
-  if (source === "dev") {
+  if (source === "dev" || source === "dev-ios" || source === "dev-android" || source === "dev-editor") {
     return <Smartphone size={16} />;
   }
 

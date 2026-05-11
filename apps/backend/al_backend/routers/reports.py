@@ -15,6 +15,7 @@ from ..models import (
     SummaryResponse,
 )
 from ..protocol import decode_alr1, generate_report_challenge_keys
+from ..activity_math import is_device_source
 
 
 router = APIRouter()
@@ -29,7 +30,7 @@ def plugin_config(
     device_id: str = Query(default="", alias="deviceId"),
     service: BackendServices = Depends(get_report_service),
 ) -> PluginConfig:
-    if source == "dev" and service.is_unknown_device_author(author):
+    if is_device_source(source) and service.is_unknown_device_author(author):
         author = service.resolve_device_report_author(source, device_id)
 
     resolved_author = service.resolve_author_alias(author)
