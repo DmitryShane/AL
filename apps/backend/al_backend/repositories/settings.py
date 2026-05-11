@@ -816,8 +816,11 @@ class SettingsRepository(MongoComposableMixin):
             upsert=True,
         )
 
-    def get_interval_for_author(self, author: str) -> int:
+    def get_interval_for_author(self, author: str, source: str | None = None) -> int:
         global_setting = self.db.interval_settings.find_one({"kind": "global"})
+
+        if source == "dev" and global_setting and global_setting.get("deviceSendIntervalSeconds"):
+            return int(global_setting["deviceSendIntervalSeconds"])
 
         if global_setting and global_setting.get("sendIntervalSeconds"):
             return int(global_setting["sendIntervalSeconds"])
@@ -975,7 +978,7 @@ class SettingsRepository(MongoComposableMixin):
             upsert=True,
         )
         self.db.author_profiles.delete_many({"rawAuthor": source})
-        composed(self).rebuild_aggregates_for_author_dates([source, target])
+        composed(self).rebuild_aggregates_for_author_dates([source])
         return {"ok": True, "alias": {"sourceRawAuthor": source, "targetRawAuthor": target}}
 
     def delete_author_alias(self, source_raw_author: str) -> dict[str, Any]:
@@ -991,9 +994,10 @@ class SettingsRepository(MongoComposableMixin):
     def upsert_interval_settings(
         self,
         default_send_interval_seconds: int | None,
-        idle_threshold_seconds: int | None,
-        device_idle_threshold_seconds: int | None,
-        plugin_ingest_enabled: bool | None,
+        device_send_interval_seconds: int | None = None,
+        idle_threshold_seconds: int | None = None,
+        device_idle_threshold_seconds: int | None = None,
+        plugin_ingest_enabled: bool | None = None,
         telegram_online_prompt_delay_minutes: int | None = None,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
@@ -1002,6 +1006,9 @@ class SettingsRepository(MongoComposableMixin):
 
         if default_send_interval_seconds is not None:
             global_update["sendIntervalSeconds"] = default_send_interval_seconds
+
+        if device_send_interval_seconds is not None:
+            global_update["deviceSendIntervalSeconds"] = device_send_interval_seconds
 
         if idle_threshold_seconds is not None:
             global_update["idleThresholdSeconds"] = idle_threshold_seconds
@@ -1084,6 +1091,12 @@ class SettingsRepository(MongoComposableMixin):
         return {
             "defaultSendIntervalSeconds": int(
                 global_setting.get("sendIntervalSeconds", composed(self).default_send_interval_seconds)
+            ),
+            "deviceSendIntervalSeconds": int(
+                global_setting.get(
+                    "deviceSendIntervalSeconds",
+                    global_setting.get("sendIntervalSeconds", composed(self).default_send_interval_seconds),
+                )
             ),
             "idleThresholdSeconds": int(global_setting.get("idleThresholdSeconds", DEFAULT_IDLE_THRESHOLD_SECONDS)),
             "deviceIdleThresholdSeconds": int(global_setting.get("deviceIdleThresholdSeconds", DEFAULT_IDLE_THRESHOLD_SECONDS)),

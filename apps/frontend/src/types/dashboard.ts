@@ -112,6 +112,8 @@ export type ActivitySummary = {
 export type AuthorAlias = {
   sourceRawAuthor: string;
   targetRawAuthor: string;
+  createdAt?: string;
+  updatedAt?: string;
   sourceDeviceId?: string;
   sourceDeviceIdHash?: string;
   sourceDeviceSource?: string;
@@ -198,6 +200,7 @@ export type Summary = {
   reports: Report[];
   intervalSettings: {
     defaultSendIntervalSeconds: number;
+    deviceSendIntervalSeconds: number;
     idleThresholdSeconds: number;
     deviceIdleThresholdSeconds: number;
     pluginIngestEnabled: boolean;

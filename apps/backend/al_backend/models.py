@@ -49,8 +49,9 @@ class ReportRefreshRequest(ApiModel):
 
 class IntervalSettingsIn(ApiModel):
     default_send_interval_seconds: int | None = Field(default=None, alias="defaultSendIntervalSeconds", ge=30)
+    device_send_interval_seconds: int | None = Field(default=None, alias="deviceSendIntervalSeconds", ge=1)
     idle_threshold_seconds: int | None = Field(default=None, alias="idleThresholdSeconds", ge=30)
-    device_idle_threshold_seconds: int | None = Field(default=None, alias="deviceIdleThresholdSeconds", ge=10)
+    device_idle_threshold_seconds: int | None = Field(default=None, alias="deviceIdleThresholdSeconds", ge=1)
     plugin_ingest_enabled: bool | None = Field(default=None, alias="pluginIngestEnabled")
     telegram_online_prompt_delay_minutes: int | None = Field(
         default=None,

@@ -42,7 +42,7 @@ def plugin_config(
         author=resolved_author,
         projectId=project_id,
         enabled=enabled,
-        sendIntervalSeconds=service.get_interval_for_author(resolved_author),
+        sendIntervalSeconds=service.get_interval_for_author(resolved_author, source=source),
         submitReportNow=submit_report_now,
     )
 

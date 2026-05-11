@@ -62,14 +62,16 @@ def test_interval_settings_include_independent_idle_threshold():
 
     result = repo.upsert_interval_settings(
         default_send_interval_seconds=120,
+        device_send_interval_seconds=5,
         idle_threshold_seconds=450,
-        device_idle_threshold_seconds=10,
+        device_idle_threshold_seconds=1,
         plugin_ingest_enabled=None,
     )
 
     assert result["defaultSendIntervalSeconds"] == 120
+    assert result["deviceSendIntervalSeconds"] == 5
     assert result["idleThresholdSeconds"] == 450
-    assert result["deviceIdleThresholdSeconds"] == 10
+    assert result["deviceIdleThresholdSeconds"] == 1
     assert result["pluginIngestEnabled"] is True
 
 def test_interval_settings_include_global_plugin_ingest_toggle():
@@ -2009,9 +2011,20 @@ def test_heartbeat_idle_threshold_is_independent_from_plugin_interval():
     heartbeat_deltas = repo._apply_raw_event_to_aggregates(heartbeat)
 
     assert repo.get_interval_for_author("Dmitry Shane") == 30
+    assert repo.get_interval_for_author("Dmitry Shane", source="dev") == 30
     assert repo.get_idle_threshold_for_author("Dmitry Shane") == 120
     assert heartbeat_deltas["idleDeltaSeconds"] == 0
     assert heartbeat_deltas["activeDeltaSeconds"] == 0
+
+def test_device_interval_is_independent_from_global_plugin_interval():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one(
+        {"kind": "global", "sendIntervalSeconds": 300, "deviceSendIntervalSeconds": 1}
+    )
+
+    assert repo.get_interval_for_author("Dmitry Shane") == 300
+    assert repo.get_interval_for_author("Dmitry Shane", source="dev") == 1
+    assert repo.get_interval_settings()["deviceSendIntervalSeconds"] == 1
 
 def test_heartbeat_idle_threshold_can_be_lower_than_plugin_interval():
     repo = fake_repository()

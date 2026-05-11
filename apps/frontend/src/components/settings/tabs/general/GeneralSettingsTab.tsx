@@ -5,6 +5,7 @@ import type { Summary } from "../../../../types/dashboard";
 type GeneralSettingsTabProps = {
   intervalSettings: Summary["intervalSettings"] | undefined;
   globalInterval: string;
+  deviceInterval: string;
   idleThreshold: string;
   deviceIdleThreshold: string;
   pluginIngestEnabled: boolean;
@@ -13,6 +14,7 @@ type GeneralSettingsTabProps = {
   saveStatus: Record<string, "saved" | "error" | undefined>;
   isIntervalSettingsDirty: boolean;
   onGlobalIntervalChange: (value: string) => void;
+  onDeviceIntervalChange: (value: string) => void;
   onIdleThresholdChange: (value: string) => void;
   onDeviceIdleThresholdChange: (value: string) => void;
   onPluginIngestEnabledChange: (value: boolean) => void;
@@ -22,6 +24,7 @@ type GeneralSettingsTabProps = {
 export function GeneralSettingsTab({
   intervalSettings,
   globalInterval,
+  deviceInterval,
   idleThreshold,
   deviceIdleThreshold,
   pluginIngestEnabled,
@@ -30,6 +33,7 @@ export function GeneralSettingsTab({
   saveStatus,
   isIntervalSettingsDirty,
   onGlobalIntervalChange,
+  onDeviceIntervalChange,
   onIdleThresholdChange,
   onDeviceIdleThresholdChange,
   onPluginIngestEnabledChange,
@@ -45,12 +49,16 @@ export function GeneralSettingsTab({
             <input value={globalInterval} onChange={(event) => onGlobalIntervalChange(event.target.value)} type="number" min="30" disabled={settingsReadOnly} />
           </label>
           <label>
+            Device interval, sec
+            <input value={deviceInterval} onChange={(event) => onDeviceIntervalChange(event.target.value)} type="number" min="1" disabled={settingsReadOnly} />
+          </label>
+          <label>
             Idle threshold, sec
             <input value={idleThreshold} onChange={(event) => onIdleThresholdChange(event.target.value)} type="number" min="30" disabled={settingsReadOnly} />
           </label>
           <label>
             Device idle threshold, sec
-            <input value={deviceIdleThreshold} onChange={(event) => onDeviceIdleThresholdChange(event.target.value)} type="number" min="10" disabled={settingsReadOnly} />
+            <input value={deviceIdleThreshold} onChange={(event) => onDeviceIdleThresholdChange(event.target.value)} type="number" min="1" disabled={settingsReadOnly} />
           </label>
           <div className="plugin-ingest-field">
             <span id="plugin-ingest-heading" className="plugin-ingest-field-heading">
@@ -83,7 +91,7 @@ export function GeneralSettingsTab({
             {settingsSaveButtonLabel("interval", saving, saveStatus)}
           </button>
           <p className="interval-settings-helper">
-            Minimums: global interval 30 sec, idle threshold 30 sec, device idle threshold 10 sec.
+            Minimums: global interval 30 sec, device interval 1 sec, idle threshold 30 sec, device idle threshold 1 sec.
           </p>
         </div>
       </div>

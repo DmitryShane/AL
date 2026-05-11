@@ -85,6 +85,7 @@ export function SettingsPage({
   const [settingsTab, setSettingsTabState] = useState<SettingsTab>(() => loadSavedSettingsTab());
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
+  const [deviceInterval, setDeviceInterval] = useState(String(intervalSettingsDeviceInterval(summary)));
   const [idleThreshold, setIdleThreshold] = useState(String(intervalSettingsIdleThreshold(summary)));
   const [deviceIdleThreshold, setDeviceIdleThreshold] = useState(String(intervalSettingsDeviceIdleThreshold(summary)));
   const [pluginIngestEnabled, setPluginIngestEnabled] = useState(summary?.intervalSettings.pluginIngestEnabled ?? true);
@@ -176,6 +177,7 @@ export function SettingsPage({
 
     setDrafts(nextDrafts);
     setGlobalInterval(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
+    setDeviceInterval(String(intervalSettingsDeviceInterval(summary)));
     setIdleThreshold(String(intervalSettingsIdleThreshold(summary)));
     setDeviceIdleThreshold(String(intervalSettingsDeviceIdleThreshold(summary)));
     setPluginIngestEnabled(summary?.intervalSettings.pluginIngestEnabled ?? true);
@@ -567,6 +569,7 @@ export function SettingsPage({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           defaultSendIntervalSeconds: Number(globalInterval),
+          deviceSendIntervalSeconds: Number(deviceInterval),
           idleThresholdSeconds: Number(idleThreshold),
           deviceIdleThresholdSeconds: Number(deviceIdleThreshold),
           pluginIngestEnabled
@@ -1202,11 +1205,13 @@ export function SettingsPage({
   }
 
   const savedGlobalInterval = String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300);
+  const savedDeviceInterval = String(intervalSettingsDeviceInterval(summary));
   const savedIdleThreshold = String(intervalSettingsIdleThreshold(summary));
   const savedDeviceIdleThreshold = String(intervalSettingsDeviceIdleThreshold(summary));
   const savedPluginIngestEnabled = summary?.intervalSettings.pluginIngestEnabled ?? true;
   const isIntervalSettingsDirty =
     globalInterval !== savedGlobalInterval ||
+    deviceInterval !== savedDeviceInterval ||
     idleThreshold !== savedIdleThreshold ||
     deviceIdleThreshold !== savedDeviceIdleThreshold ||
     pluginIngestEnabled !== savedPluginIngestEnabled;
@@ -1227,6 +1232,7 @@ export function SettingsPage({
         <GeneralSettingsTab
           intervalSettings={summary?.intervalSettings}
           globalInterval={globalInterval}
+          deviceInterval={deviceInterval}
           idleThreshold={idleThreshold}
           deviceIdleThreshold={deviceIdleThreshold}
           pluginIngestEnabled={pluginIngestEnabled}
@@ -1235,6 +1241,7 @@ export function SettingsPage({
           saveStatus={saveStatus}
           isIntervalSettingsDirty={isIntervalSettingsDirty}
           onGlobalIntervalChange={setGlobalInterval}
+          onDeviceIntervalChange={setDeviceInterval}
           onIdleThresholdChange={setIdleThreshold}
           onDeviceIdleThresholdChange={setDeviceIdleThreshold}
           onPluginIngestEnabledChange={setPluginIngestEnabled}
@@ -1383,6 +1390,11 @@ export function SettingsPage({
 function intervalSettingsIdleThreshold(summary: Summary | null) {
   const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { idleThresholdSeconds?: number }) | undefined;
   return intervalSettings?.idleThresholdSeconds ?? 300;
+}
+
+function intervalSettingsDeviceInterval(summary: Summary | null) {
+  const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { deviceSendIntervalSeconds?: number }) | undefined;
+  return intervalSettings?.deviceSendIntervalSeconds ?? summary?.intervalSettings.defaultSendIntervalSeconds ?? 300;
 }
 
 function intervalSettingsDeviceIdleThreshold(summary: Summary | null) {
