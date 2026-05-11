@@ -20,6 +20,8 @@ When working on Unity or Blender Activity Logger plugin code, edit the linked pa
 
 Treat `com.al.ual` as the active plugin source for Unity and Blender work.
 
+The Unity Activity Logger plugin and Device Activity Logger plugin are separate plugins. Do not treat `device_al` as the Unity editor plugin. The Unity editor plugin source lives in `com.al.ual/Editor` and reports with `source: ual`; the Device Activity Logger source lives in `com.al.ual/device_al` and reports with device sources such as `dev`, `dev-ios`, `dev-android`, or `dev-editor`.
+
 When creating new Activity Logger plugins, keep them minimal and purpose-built for logging only. Do not create README files, standalone documentation, extra settings pages, sample apps, or other nonessential scaffolding unless the user explicitly asks for them.
 
 The Device Activity Logger plugin source lives in:
