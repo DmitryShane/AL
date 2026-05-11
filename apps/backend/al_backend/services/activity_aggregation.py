@@ -157,7 +157,14 @@ class ActivityAggregationService(MongoComposableMixin):
         progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> dict[str, Any]:
         target_dates = self._aggregate_rebuild_dates(start_date, end_date, dates)
-        target_authors = {composed(self).resolve_author_alias(str(author or "Unknown User")) for author in (authors or []) if str(author or "").strip()}
+        target_authors: set[str] = set()
+        for author in authors or []:
+            normalized_author = str(author or "").strip()
+
+            if not normalized_author:
+                continue
+
+            target_authors.update(composed(self).author_alias_keys(normalized_author))
         scoped_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
         raw_author_query = self._aggregate_rebuild_query(target_dates, target_authors, "rawAuthor")
         self._report_rebuild_progress(progress_callback, "Clearing scoped derived data", 0, 1)

@@ -604,6 +604,53 @@ def test_delete_author_data_for_date_range_removes_alias_source_scope_only():
         assert repo.db.raw_event_batches.find_one({"batchId": f"batch-{day}"}) is not None
         assert repo.db.raw_reports.find_one({"_id": f"raw-{day}"}) is not None
 
+def test_author_date_range_rebuild_includes_alias_raw_events():
+    repo = fake_repository()
+    raw_author = "Dmitry Shane"
+    alias_author = "Device1"
+    repo.db.author_profiles.insert_one({"rawAuthor": raw_author, "displayName": raw_author})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": alias_author, "targetRawAuthor": raw_author})
+    repo.db.daily_author_activity.insert_one(
+        {"author": raw_author, "date": "2026-05-11", "source": "dev-ios", "activeSeconds": 999}
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "device-click-1",
+            "source": "dev-ios",
+            "author": alias_author,
+            "projectId": "Bike Rush 2",
+            "deviceId": "device-1",
+            "date": "2026-05-11",
+            "eventType": "click",
+            "occurredAtUtc": dt.datetime(2026, 5, 11, 8, 0, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-05-11T08:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 11, 8, 0, 1, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "device-hold-1",
+            "source": "dev-ios",
+            "author": alias_author,
+            "projectId": "Bike Rush 2",
+            "deviceId": "device-1",
+            "date": "2026-05-11",
+            "eventType": "hold",
+            "occurredAtUtc": dt.datetime(2026, 5, 11, 8, 0, 5, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-05-11T08:00:05+00:00",
+            "receivedAt": dt.datetime(2026, 5, 11, 8, 0, 6, tzinfo=dt.UTC),
+            "metadata": {"holdDurationSeconds": 5},
+        }
+    )
+
+    result = repo.rebuild_aggregates_for_dates("2026-05-11", "2026-05-11", authors=[raw_author])
+
+    assert result["authors"] == ["Device1", "Dmitry Shane"]
+    assert repo.db.daily_author_activity.find_one({"author": alias_author, "date": "2026-05-11"}) is None
+    rebuilt = repo.db.daily_author_activity.find_one({"author": raw_author, "date": "2026-05-11", "source": "dev-ios"})
+    assert rebuilt is not None
+    assert rebuilt["activeSeconds"] == 5
+
 def test_author_alias_rebuilds_raw_events_into_target_author():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
