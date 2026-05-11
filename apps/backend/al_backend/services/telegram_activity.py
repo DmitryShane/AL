@@ -37,6 +37,17 @@ def _is_current_or_previous_author_date(day_date: str, now: dt.datetime, profile
     return day_date in {local_date.isoformat(), (local_date - dt.timedelta(days=1)).isoformat()}
 
 
+def _is_night_overtime_prompt_time(value: dt.datetime, time_zone_id: Any) -> bool:
+    zone_name = _valid_time_zone_id(time_zone_id) or "UTC"
+
+    try:
+        zone = ZoneInfo(zone_name)
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
+
+    return 0 <= value.astimezone(zone).hour < 7
+
+
 class TelegramActivityService(MongoComposableMixin):
     def _supersede_open_duplicate_afk_prompts(self, telegram_username: str, break_started_at: dt.datetime | None) -> None:
         if not break_started_at:
@@ -541,10 +552,16 @@ class TelegramActivityService(MongoComposableMixin):
         ):
             return
 
-        profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0, "telegramUsername": 1}) or {}
+        profile = self.db.author_profiles.find_one(
+            {"rawAuthor": raw_author},
+            {"_id": 0, "telegramUsername": 1, "timeZoneId": 1},
+        ) or {}
         telegram_username = _normalize_telegram_username(profile.get("telegramUsername"))
 
         if not telegram_username:
+            return
+
+        if _is_night_overtime_prompt_time(received_at, profile.get("timeZoneId")):
             return
 
         now = dt.datetime.now(dt.UTC)

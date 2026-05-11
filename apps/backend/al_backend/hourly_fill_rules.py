@@ -566,9 +566,7 @@ def apply_night_overtime_missed_end(
         if int(hour.get(INTERNAL_MISSED_END_SECONDS, 0)) > 0:
             continue
 
-        hour_end = local_latest_report_at.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
-        missed_seconds = max(0, int((hour_end - local_latest_report_at).total_seconds()))
-        add_visual_missed_seconds(hourly_activity, hour_index, missed_seconds, INTERNAL_MISSED_END_SECONDS)
+        fill_visual_overtime_hour(hour)
 
 
 def apply_visual_missed_end_fallbacks(
@@ -829,6 +827,12 @@ def add_visual_missed_end(
         hour_end = local_end.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
         missed_seconds = max(0, int((hour_end - local_end).total_seconds()))
         target_hour_index = local_end.hour
+
+    if is_night_overtime_hour(target_hour_index):
+        target_hour = hourly_activity[target_hour_index]
+        if time_seconds(target_hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds") > 0:
+            fill_visual_overtime_hour(target_hour)
+        return
 
     add_visual_missed_seconds(hourly_activity, target_hour_index, missed_seconds, INTERNAL_MISSED_END_SECONDS)
     trim_visual_idle_overflow(hourly_activity, target_hour_index)

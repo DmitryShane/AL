@@ -811,7 +811,7 @@ def test_morning_work_after_night_overtime_is_normal_activity():
     assert deltas["activeDeltaSeconds"] == 120
     assert deltas["overtimeActiveDeltaSeconds"] == 0
 
-def test_night_overtime_summary_does_not_add_synthetic_idle_or_missed():
+def test_night_overtime_summary_fills_remainder_with_overtime_fill_not_missed():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Night Worker", "displayName": "Night Worker", "timeZoneId": "UTC"})
     repo.db.day_sessions.insert_one(
@@ -855,11 +855,11 @@ def test_night_overtime_summary_does_not_add_synthetic_idle_or_missed():
     hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Night Worker")
     hour_0 = next(hour for hour in hourly_author["hourlyActivity"] if hour["hour"] == 0)
 
-    assert hour_0["totals"]["overtimeSeconds"] == 120
+    assert hour_0["totals"]["overtimeSeconds"] == 3600
     assert hour_0["totals"]["idleSeconds"] == 0
-    assert hour_0["totals"]["missedSeconds"] == 3480
-    assert _hour_segments(hour_0, "overtime-fill") == []
-    assert _missed_end_seconds(hour_0) == 3480
+    assert hour_0["totals"]["missedSeconds"] == 0
+    assert _overtime_fill_seconds(hour_0) == 3480
+    assert _missed_end_seconds(hour_0) == 0
 
 def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_report_hour_is_full():
     repo = fake_repository()

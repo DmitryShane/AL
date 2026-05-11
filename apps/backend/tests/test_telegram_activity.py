@@ -854,6 +854,19 @@ def test_telegram_online_prompt_not_scheduled_when_day_session_exists():
 
     assert repo.db.telegram_online_prompts.items == []
 
+def test_telegram_online_prompt_not_scheduled_during_night_overtime_window():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "Europe/Madrid"})
+
+    repo._schedule_telegram_online_prompt_if_needed(
+        "A",
+        "2026-05-11",
+        "dev",
+        dt.datetime(2026, 5, 11, 0, 15, tzinfo=dt.UTC),
+    )
+
+    assert repo.db.telegram_online_prompts.items == []
+
 def test_telegram_online_prompt_claim_after_delay():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
