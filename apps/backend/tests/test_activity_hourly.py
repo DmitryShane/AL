@@ -1053,10 +1053,10 @@ def test_activity_summary_counts_latest_report_to_offline_gap_as_idle():
     assert _hour_metric(hourly_by_hour[20], "idleSeconds") == 10 * 60
     assert _missed_end_seconds(hourly_by_hour[20]) == 50 * 60
     assert _hour_metric(hourly_by_hour[20], "missedSeconds") == 50 * 60
-    assert _hour_metric(author, "idleSeconds") == 40020
-    assert author["pluginDaySeconds"] == 40020
-    assert _hour_metric(summary["totals"], "idleSeconds") == 40020
-    assert summary["totals"]["pluginDaySeconds"] == 40020
+    assert _hour_metric(author, "idleSeconds") == 40200
+    assert author["pluginDaySeconds"] == 40200
+    assert _hour_metric(summary["totals"], "idleSeconds") == 40200
+    assert summary["totals"]["pluginDaySeconds"] == 40200
 
 def test_activity_summary_counts_unaccounted_latest_report_hour_gap_as_idle():
     repo = fake_repository()
@@ -1107,10 +1107,10 @@ def test_activity_summary_counts_unaccounted_latest_report_hour_gap_as_idle():
 
     assert _hour_metric(hourly_by_hour[20], "idleSeconds") == 10 * 60
     assert _missed_end_seconds(hourly_by_hour[20]) == 50 * 60
-    assert _hour_metric(author, "idleSeconds") == 40020
-    assert author["pluginDaySeconds"] == 40020
-    assert _hour_metric(summary["totals"], "idleSeconds") == 40020
-    assert summary["totals"]["pluginDaySeconds"] == 40020
+    assert _hour_metric(author, "idleSeconds") == 40200
+    assert author["pluginDaySeconds"] == 40200
+    assert _hour_metric(summary["totals"], "idleSeconds") == 40200
+    assert summary["totals"]["pluginDaySeconds"] == 40200
 
 def test_auto_break_does_not_use_telegram_to_first_activity_gap():
     repo = fake_repository()
@@ -1408,6 +1408,73 @@ def test_online_prompt_confirm_before_first_activity_keeps_meeting_after_online(
     assert _hour_segments(hourly[8], "meeting")[0] == {"startSecond": 0, "endSecond": 5 * 60}
 
 
+def test_meeting_to_first_plugin_gap_counts_as_idle_with_auto_break_enabled():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "UTC",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-04-28",
+        }
+    )
+    first_activity_at = dt.datetime(2026, 4, 28, 7, 50, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("Future Artist", "2026-04-28", "ual", first_activity_at)
+    reminder_id = repo.db.telegram_online_prompts.items[0]["reminderId"]
+    repo.db.telegram_online_prompts.items[0]["status"] = "sent"
+    repo.close_telegram_online_prompt(reminder_id, "confirm_online", "2026-04-28T08:01:00Z", "future_artist")
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-04-28",
+            "recordedAt": "2026-04-28T09:27:00Z",
+            "receivedAt": dt.datetime(2026, 4, 28, 9, 27, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 45,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[9]["activeSeconds"] = 45
+    hourly_activity[9]["activeMicroseconds"] = 45 * 1_000_000
+    hourly_activity[9]["fillSegments"] = [{"kind": "active", "startSecond": 27 * 60, "endSecond": 27 * 60 + 45}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "activeSeconds": 45,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    buckets = {("Future Artist", "2026-04-28"): empty_hourly_activity()}
+    add_meeting_interval_to_buckets(
+        buckets,
+        "Future Artist",
+        first_activity_at,
+        dt.datetime(2026, 4, 28, 8, 5, tzinfo=dt.UTC),
+        "UTC",
+    )
+    repo._meeting_buckets_for_daily_items = lambda daily_items, now=None: buckets
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    expected_idle = (60) + (55 * 60) + (27 * 60)
+    assert _hour_metric(author, "idleSeconds") == expected_idle
+    assert _hour_metric(author, "breakSeconds") == 0
+    assert _hour_metric(summary["totals"], "idleSeconds") == expected_idle
+    assert _hour_metric(hourly[8], "idleSeconds") == 55 * 60
+    assert _hour_metric(hourly[9], "idleSeconds") == 27 * 60
+
+
 def test_auto_break_skips_telegram_gap_and_uses_plugin_idle():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
@@ -1687,7 +1754,7 @@ def test_auto_break_adds_full_daily_limit_even_with_real_break():
 
     summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
-    assert _hour_metric(author, "idleSeconds") == 3600
+    assert _hour_metric(author, "idleSeconds") == 5400
     assert _hour_metric(author, "breakSeconds") == 5400
 
 def test_auto_break_uses_one_daily_limit_across_sources():

@@ -1302,6 +1302,7 @@ class ActivitySummaryService(MongoComposableMixin):
             profiles,
             now,
         )
+        self._sync_author_idle_totals_from_hourly(authors_by_raw, hourly_by_author, totals)
         _clear_inactive_author_report_metadata(authors_by_raw.values())
         presence_overrides = self._author_presence_overrides(
             authors_by_raw.keys(),
@@ -1379,6 +1380,36 @@ class ActivitySummaryService(MongoComposableMixin):
             "authorAliases": composed(self).author_aliases() if include_profiles else [],
             "hourlyActivityByAuthor": sorted(hourly_author_rows, key=lambda item: item["author"]) if include_hourly else [],
         }
+
+    def _sync_author_idle_totals_from_hourly(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+    ) -> None:
+        synced_total = 0
+
+        for raw_author, author_row in authors_by_raw.items():
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not hourly_author:
+                synced_total += int(author_row.get("idleSeconds", 0))
+                continue
+
+            idle_seconds = sum(
+                int(hour.get("totals", {}).get("idleSeconds", 0))
+                for hour in public_hourly_activity(hourly_author.get("hourlyActivity", []))
+            )
+            previous_idle_seconds = int(author_row.get("idleSeconds", 0))
+            idle_delta = idle_seconds - previous_idle_seconds
+            author_row["idleSeconds"] = idle_seconds
+            author_row["pluginDaySeconds"] = max(0, int(author_row.get("pluginDaySeconds", 0)) + idle_delta)
+            author_row["rawPluginDaySeconds"] = max(0, int(author_row.get("rawPluginDaySeconds", 0)) + idle_delta)
+            synced_total += idle_seconds
+
+        totals["idleSeconds"] = synced_total
+        totals["pluginDaySeconds"] = sum(int(item.get("pluginDaySeconds", 0)) for item in authors_by_raw.values())
+        totals["rawPluginDaySeconds"] = sum(int(item.get("rawPluginDaySeconds", 0)) for item in authors_by_raw.values())
 
     def _hidden_device_authors(self) -> set[str]:
         device_authors = {
