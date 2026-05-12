@@ -894,7 +894,8 @@ class TelegramActivityService(MongoComposableMixin):
 
             return response
 
-        aligned_at = _parse_timestamp(timestamp)
+        first_report_at = _coerce_datetime(reminder.get("firstReportReceivedAt"))
+        aligned_at = first_report_at - dt.timedelta(minutes=1) if first_report_at else _parse_timestamp(timestamp)
 
         if aligned_at.tzinfo is None:
             aligned_at = aligned_at.replace(tzinfo=dt.UTC)

@@ -1360,6 +1360,54 @@ def test_visual_missed_start_overrides_meeting_before_telegram_online():
     assert _hour_segments(hourly[8], "meeting")[0] == {"startSecond": 65, "endSecond": 300}
 
 
+def test_online_prompt_confirm_before_first_activity_keeps_meeting_after_online():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "UTC",
+        }
+    )
+    first_activity_at = dt.datetime(2026, 4, 28, 7, 50, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("Future Artist", "2026-04-28", "ual", first_activity_at)
+    reminder_id = repo.db.telegram_online_prompts.items[0]["reminderId"]
+    repo.db.telegram_online_prompts.items[0]["status"] = "sent"
+    repo.close_telegram_online_prompt(reminder_id, "confirm_online", "2026-04-28T08:01:00Z", "future_artist")
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+    buckets = {("Future Artist", "2026-04-28"): empty_hourly_activity()}
+    add_meeting_interval_to_buckets(
+        buckets,
+        "Future Artist",
+        first_activity_at,
+        dt.datetime(2026, 4, 28, 8, 5, tzinfo=dt.UTC),
+        "UTC",
+    )
+    repo._meeting_buckets_for_daily_items = lambda daily_items, now=None: buckets
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+    telegram_row = next(row for row in repo.db.report_rows.items if row.get("source") == "telegram")
+
+    assert telegram_row["recordedAt"] == "2026-04-28T07:49:00+00:00"
+    assert _hour_segments(hourly[7], "missed") == [{"startSecond": 0, "endSecond": 49 * 60}]
+    assert _hour_segments(hourly[7], "meeting") == [{"startSecond": 49 * 60, "endSecond": 59 * 60}]
+    assert _hour_segments(hourly[8], "missed") == []
+    assert _hour_segments(hourly[8], "meeting")[0] == {"startSecond": 0, "endSecond": 5 * 60}
+
+
 def test_auto_break_skips_telegram_gap_and_uses_plugin_idle():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
