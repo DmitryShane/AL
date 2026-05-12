@@ -170,6 +170,13 @@ def normalize_hour_fill(
             if current_kind is None or priority[kind] >= priority[current_kind]:
                 timeline[second] = kind
 
+    for segment in sanitized:
+        if segment["kind"] != "missed" or int(segment["startSecond"]) != 0:
+            continue
+
+        for second in range(int(segment["startSecond"]), int(segment["endSecond"])):
+            timeline[second] = "missed"
+
     if apply_stack_rules:
         _apply_stack_layers(timeline, post_activity_start_second=post_activity_start_second)
 

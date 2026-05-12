@@ -1320,6 +1320,46 @@ def test_fractional_meeting_start_does_not_leave_active_sliver_after_missed():
     assert _hour_segments(public_hourly[7], "meeting") == [{"startSecond": 2891, "endSecond": 3600}]
 
 
+def test_visual_missed_start_overrides_meeting_before_telegram_online():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.record_break_event("future_artist", "online", "2026-04-28T08:01:05Z")
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-04-28",
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+    buckets = {("Future Artist", "2026-04-28"): empty_hourly_activity()}
+    add_meeting_interval_to_buckets(
+        buckets,
+        "Future Artist",
+        dt.datetime(2026, 4, 28, 7, 50, tzinfo=dt.UTC),
+        dt.datetime(2026, 4, 28, 8, 5, tzinfo=dt.UTC),
+        "UTC",
+    )
+    repo._meeting_buckets_for_daily_items = lambda daily_items, now=None: buckets
+
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    assert _hour_segments(hourly[8], "missed") == [{"startSecond": 0, "endSecond": 65}]
+    assert _hour_segments(hourly[8], "meeting")[0] == {"startSecond": 65, "endSecond": 300}
+
+
 def test_auto_break_skips_telegram_gap_and_uses_plugin_idle():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
