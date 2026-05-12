@@ -687,6 +687,28 @@ class ActivitySummaryService(MongoComposableMixin):
             or report_row.get("overtimeSavedPrefabDeltas")
         )
 
+    def _daily_item_has_presence_signal(self, item: dict[str, Any]) -> bool:
+        if item.get("source") in {"discord", "telegram", "status"} or item.get("reportType") in {"meeting", "telegram", "status"}:
+            return True
+
+        if any(
+            _time_microseconds(item, seconds_key, micros_key) > 0
+            for seconds_key, micros_key in (
+                ("activeSeconds", "activeMicroseconds"),
+                ("idleSeconds", "idleMicroseconds"),
+                ("breakSeconds", "breakMicroseconds"),
+                ("overtimeActiveSeconds", "overtimeActiveMicroseconds"),
+            )
+        ):
+            return True
+
+        return bool(
+            item.get("activityCounts")
+            or item.get("savedPrefabs")
+            or item.get("overtimeActivityCounts")
+            or item.get("overtimeSavedPrefabs")
+        )
+
     def activity_summary(
         self,
         start_date: str | None = None,
@@ -924,6 +946,7 @@ class ActivitySummaryService(MongoComposableMixin):
             author_row = authors_by_raw.get(raw_author)
 
             if not author_row:
+                has_presence_signal = self._daily_item_has_presence_signal(item)
                 author_row = {
                     "rawAuthor": raw_author,
                     "authorEmail": profile.get("authorEmail") or item.get("authorEmail", ""),
@@ -940,8 +963,8 @@ class ActivitySummaryService(MongoComposableMixin):
                     "pluginVersion": item.get("pluginVersion"),
                     "timeZoneId": profile.get("timeZoneId") or item.get("timeZoneId"),
                     "timeZoneDisplayName": profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName"),
-                    "lastRecordedAt": item.get("lastRecordedAt"),
-                    "lastReceivedAt": item.get("lastReceivedAt"),
+                    "lastRecordedAt": item.get("lastRecordedAt") if has_presence_signal else "",
+                    "lastReceivedAt": item.get("lastReceivedAt") if has_presence_signal else "",
                     "daySeconds": 0,
                     "telegramDaySeconds": 0,
                     "pluginDaySeconds": 0,
@@ -1048,10 +1071,12 @@ class ActivitySummaryService(MongoComposableMixin):
                 "saveCount",
             )
 
-            if str(item.get("lastRecordedAt") or "") > str(author_row.get("lastRecordedAt") or ""):
+            has_presence_signal = self._daily_item_has_presence_signal(item)
+
+            if has_presence_signal and str(item.get("lastRecordedAt") or "") > str(author_row.get("lastRecordedAt") or ""):
                 author_row["lastRecordedAt"] = item.get("lastRecordedAt")
 
-            if item.get("lastReceivedAt") and (
+            if has_presence_signal and item.get("lastReceivedAt") and (
                 not author_row.get("lastReceivedAt") or item.get("lastReceivedAt") > author_row.get("lastReceivedAt")
             ):
                 author_row["lastReceivedAt"] = item.get("lastReceivedAt")
@@ -1954,6 +1979,9 @@ class ActivitySummaryService(MongoComposableMixin):
             raw_author = str(daily.get("author") or "Unknown User")
 
             if raw_author not in authors_by_raw:
+                continue
+
+            if not self._daily_item_has_presence_signal(daily):
                 continue
 
             if date_mode == "authorLocalToday" and not _is_author_local_today(

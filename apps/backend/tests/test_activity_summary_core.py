@@ -147,6 +147,65 @@ def test_activity_summary_exposes_telegram_to_first_activity_time():
     assert author["telegramToFirstActivitySeconds"] == 17 * 60 + 30
 
 
+def test_empty_daily_heartbeat_does_not_keep_not_started_author_online():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "telegramUsername": "igormats",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "dev-ios",
+            "author": "Igor Mats",
+            "projectId": "device",
+            "date": "2026-05-12",
+            "lastRecordedAt": "2026-05-12T00:01:29.0436120-07:00",
+            "lastReceivedAt": dt.datetime(2026, 5, 12, 7, 1, 36, tzinfo=dt.UTC),
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 12,
+            "overtimeActiveMicroseconds": 12_000_000,
+            "activityCounts": [],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Igor Mats",
+            "projectId": "vscode",
+            "date": "2026-05-12",
+            "lastRecordedAt": "2026-05-12T04:19:08.962-07:00",
+            "lastReceivedAt": dt.datetime(2026, 5, 12, 11, 19, 9, tzinfo=dt.UTC),
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "activityCounts": [],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-05-12",
+        end_date="2026-05-12",
+        now=dt.datetime(2026, 5, 12, 11, 19, 49, tzinfo=dt.UTC),
+    )
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Igor Mats")
+
+    assert author["lastReceivedAt"] == "2026-05-12T07:01:36+00:00"
+    assert author["status"] == "stale"
+
+
 def test_activity_summary_counts_meeting_as_active_without_plugin_overlap_double_count():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
