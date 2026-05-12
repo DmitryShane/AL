@@ -1099,10 +1099,10 @@ def test_telegram_online_prompt_confirm_records_online():
     assert repo.db.telegram_online_prompts.items[0]["closeAction"] == "confirm_online"
     telegram_reports = [r for r in repo.db.report_rows.items if r.get("source") == "telegram" and r.get("telegramEventType") == "online"]
     assert len(telegram_reports) == 1
-    assert telegram_reports[0]["recordedAt"] == "2026-04-30T08:00:00+00:00"
-    assert telegram_reports[0]["receivedAt"] == dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    assert telegram_reports[0]["recordedAt"] == "2026-04-30T12:00:00+00:00"
+    assert telegram_reports[0]["receivedAt"] == dt.datetime(2026, 4, 30, 12, 0, tzinfo=dt.UTC)
 
-def test_telegram_online_prompt_confirm_aligns_to_first_plugin_report_and_exempt_from_status_filter():
+def test_telegram_online_prompt_confirm_uses_button_click_time_and_is_exempt_from_status_filter():
     repo = fake_repository()
     day = "2026-04-30"
     t_plugin = dt.datetime(2026, 4, 30, 11, 23, tzinfo=dt.UTC)
@@ -1148,9 +1148,9 @@ def test_telegram_online_prompt_confirm_aligns_to_first_plugin_report_and_exempt
     telegram_reports = [r for r in repo.db.report_rows.items if r.get("source") == "telegram" and r.get("telegramEventType") == "online"]
     assert len(telegram_reports) == 1
     telegram_row = telegram_reports[0]
-    assert telegram_row["recordedAt"] == t_plugin.isoformat()
-    assert telegram_row["receivedAt"] == t_plugin
-    assert telegram_row["lastReceivedAt"] == t_plugin
+    assert telegram_row["recordedAt"] == "2026-04-30T18:00:00+00:00"
+    assert telegram_row["receivedAt"] == dt.datetime(2026, 4, 30, 18, 0, tzinfo=dt.UTC)
+    assert telegram_row["lastReceivedAt"] == dt.datetime(2026, 4, 30, 18, 0, tzinfo=dt.UTC)
     status_rows = [r for r in repo.db.report_rows.items if r.get("source") == "status"]
     intervals = repo._status_intervals_for_reports(status_rows)
     assert repo._is_report_inside_status_interval(telegram_row, intervals) is False
