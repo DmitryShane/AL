@@ -743,7 +743,7 @@ def test_night_overtime_heartbeat_idle_is_ignored():
     assert deltas["overtimeActiveDeltaSeconds"] == 0
     assert list(repo.db.report_rows.find({"author": "Night Worker", "date": "2026-05-09"})) == []
 
-def test_night_overtime_interval_splits_at_seven_am():
+def test_night_overtime_interval_splits_at_six_am():
     repo = fake_repository()
     set_idle_threshold(repo, 3600)
     repo.db.author_profiles.insert_one({"rawAuthor": "Night Worker", "displayName": "Night Worker", "timeZoneId": "UTC"})
@@ -759,9 +759,9 @@ def test_night_overtime_interval_splits_at_seven_am():
         {
             **base_event,
             "eventType": "selection",
-            "occurredAtUtc": "2026-05-09T06:50:00Z",
-            "occurredAtLocal": "2026-05-09T06:50:00+00:00",
-            "receivedAt": dt.datetime(2026, 5, 9, 6, 50, tzinfo=dt.UTC),
+            "occurredAtUtc": "2026-05-09T05:50:00Z",
+            "occurredAtLocal": "2026-05-09T05:50:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 5, 50, tzinfo=dt.UTC),
         }
     )
 
@@ -769,9 +769,9 @@ def test_night_overtime_interval_splits_at_seven_am():
         {
             **base_event,
             "eventType": "selection",
-            "occurredAtUtc": "2026-05-09T07:10:00Z",
-            "occurredAtLocal": "2026-05-09T07:10:00+00:00",
-            "receivedAt": dt.datetime(2026, 5, 9, 7, 10, tzinfo=dt.UTC),
+            "occurredAtUtc": "2026-05-09T06:10:00Z",
+            "occurredAtLocal": "2026-05-09T06:10:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 9, 6, 10, tzinfo=dt.UTC),
         }
     )
 

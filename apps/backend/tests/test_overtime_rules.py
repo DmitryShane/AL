@@ -11,7 +11,7 @@ def _context() -> OvertimeRuleContext:
     )
 
 
-def test_night_overtime_window_matches_local_midnight_to_seven():
+def test_night_overtime_window_matches_local_midnight_to_six():
     event = {
         "author": "Igor Mats",
         "date": "2026-05-09",
@@ -23,17 +23,17 @@ def test_night_overtime_window_matches_local_midnight_to_seven():
 
     assert window == (
         dt.datetime(2026, 5, 9, 7, 0, tzinfo=dt.UTC),
-        dt.datetime(2026, 5, 9, 14, 0, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 9, 13, 0, tzinfo=dt.UTC),
     )
     assert overtime_window_for_event(event, _context()) == window
 
 
-def test_night_overtime_window_excludes_seven_am_local():
+def test_night_overtime_window_excludes_six_am_local():
     event = {
         "author": "Igor Mats",
         "date": "2026-05-09",
         "timeZoneId": "America/Vancouver",
-        "occurredAtUtc": "2026-05-09T14:00:00Z",
+        "occurredAtUtc": "2026-05-09T13:00:00Z",
     }
 
     assert is_night_overtime_window(event) is None
@@ -52,7 +52,7 @@ def test_night_overtime_window_uses_author_timezone_not_utc_hour():
 
     assert window == (
         dt.datetime(2026, 5, 8, 21, 0, tzinfo=dt.UTC),
-        dt.datetime(2026, 5, 9, 4, 0, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 9, 3, 0, tzinfo=dt.UTC),
     )
 
 
@@ -69,5 +69,5 @@ def test_night_overtime_window_uses_local_timestamp_offset_when_timezone_id_is_l
 
     assert window == (
         dt.datetime(2026, 5, 9, 7, 0, tzinfo=dt.UTC),
-        dt.datetime(2026, 5, 9, 14, 0, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 9, 13, 0, tzinfo=dt.UTC),
     )
