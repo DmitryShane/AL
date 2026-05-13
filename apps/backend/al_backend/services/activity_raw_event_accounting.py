@@ -5,7 +5,11 @@ from typing import Any
 from ..activity_math import *
 from ..hourly_fill_rules import empty_hourly_activity, merge_hourly_activity
 from ..backend_composable_host import composed
-from ..overtime_rules import overtime_window_for_event, overtime_window_for_interval
+from ..overtime_rules import (
+    is_night_overtime_window,
+    is_telegram_overtime_window,
+    is_vacation_overtime_window,
+)
 from .activity_status_intervals import status_interval_context_for_event
 
 
@@ -14,6 +18,10 @@ def _float_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _windows_overlap(start: dt.datetime, end: dt.datetime, window_start: dt.datetime, window_end: dt.datetime) -> bool:
+    return max(start, window_start) < min(end, window_end)
 
 
 def _hold_duration_seconds_for_state(event: dict[str, Any]) -> float | None:
@@ -197,7 +205,10 @@ class ActivityRawEventAccountingMixin:
         is_activity = raw_is_activity and (source_is_focused is not False or event_type == "focus")
         consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
         overtime_window = self._overtime_window_for_event(event)
-        count_idle_as_overtime = False
+        overtime_window_kind = self._overtime_window_kind_for_event(event)
+        count_idle_as_overtime = overtime_window_kind == "vacation" or (
+            overtime_window_kind == "telegram" and current_source == "ual"
+        )
         idle_threshold_seconds = composed(self).get_idle_threshold_for_author(
             str(event.get("author") or "Unknown User"),
             current_source,
@@ -299,6 +310,8 @@ class ActivityRawEventAccountingMixin:
                         interval_is_active = interval_end_at > accounting_start_at
 
                     interval_overtime_window = self._overtime_window_for_interval(event, accounting_start_at, interval_end_at)
+                    if self._has_reports_stopped_gap_overlap(event, accounting_start_at, interval_end_at):
+                        interval_overtime_window = None
                     interval_deltas = _interval_deltas(
                         accounting_start_at,
                         interval_end_at,
@@ -344,6 +357,7 @@ class ActivityRawEventAccountingMixin:
             if (occurred_at - last_activity_at).total_seconds() >= idle_threshold_seconds:
                 heartbeat_end = occurred_at
                 heartbeat_local_end = occurred_local_at
+                stale_heartbeat_capped = False
 
                 received_at = _coerce_datetime(event.get("receivedAt"))
                 skew_floor = idle_threshold_seconds * STALE_HEARTBEAT_RECEIVE_SKEW_MULTIPLIER
@@ -366,6 +380,7 @@ class ActivityRawEventAccountingMixin:
                             heartbeat_local_end = (
                                 last_accounting_local_at or last_accounting_at
                             ) + dt.timedelta(seconds=max_accounting_seconds)
+                            stale_heartbeat_capped = True
 
                 interval_seconds = int((heartbeat_end - last_accounting_at).total_seconds())
 
@@ -387,6 +402,12 @@ class ActivityRawEventAccountingMixin:
                     interval_is_active = interval_end_at > last_accounting_at
 
                 interval_overtime_window = self._overtime_window_for_interval(event, last_accounting_at, interval_end_at)
+                if (stale_heartbeat_capped and overtime_window_kind == "night") or self._has_reports_stopped_gap_overlap(
+                    event,
+                    last_accounting_at,
+                    interval_end_at,
+                ):
+                    interval_overtime_window = None
                 interval_deltas = _interval_deltas(
                     last_accounting_at,
                     interval_end_at,
@@ -410,7 +431,10 @@ class ActivityRawEventAccountingMixin:
             activity_type = _activity_count_type(event_type)
             activity_delta_key = "activityCountDeltas"
 
-            if _is_overtime_event_delta(consumed_normal_microseconds, deltas, overtime_window):
+            if _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") > 0 or (
+                overtime_window_kind in {"telegram", "vacation"}
+                and consumed_normal_microseconds >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
+            ):
                 activity_delta_key = "overtimeActivityCountDeltas"
 
             deltas[activity_delta_key].append({"type": activity_type, "count": 1})
@@ -617,7 +641,19 @@ class ActivityRawEventAccountingMixin:
         return consumed_microseconds
 
     def _overtime_window_for_event(self, event: dict[str, Any]) -> tuple[dt.datetime, dt.datetime] | None:
-        return overtime_window_for_event(event, self._overtime_rule_context())
+        context = self._overtime_rule_context()
+
+        vacation_window = is_vacation_overtime_window(event, context)
+
+        if vacation_window:
+            return vacation_window
+
+        night_window = None if self._suppress_night_overtime_after_previous_day_offline(event) else is_night_overtime_window(event)
+
+        if night_window:
+            return night_window
+
+        return is_telegram_overtime_window(event, context)
 
     def _overtime_window_for_interval(
         self,
@@ -625,7 +661,117 @@ class ActivityRawEventAccountingMixin:
         start: dt.datetime,
         end: dt.datetime,
     ) -> tuple[dt.datetime, dt.datetime] | None:
-        return overtime_window_for_interval(event, start, end, self._overtime_rule_context())
+        if end <= start:
+            return None
+
+        event_window = self._overtime_window_for_event(event)
+
+        if event_window and _windows_overlap(start, end, event_window[0], event_window[1]):
+            return event_window
+
+        if self._suppress_night_overtime_after_previous_day_offline(event):
+            return None
+
+        probe = dict(event)
+        probe["occurredAtUtc"] = start
+        interval_start_window = is_night_overtime_window(probe)
+
+        if interval_start_window and _windows_overlap(start, end, interval_start_window[0], interval_start_window[1]):
+            return interval_start_window
+
+        return None
+
+    def _overtime_window_kind_for_event(self, event: dict[str, Any]) -> str | None:
+        context = self._overtime_rule_context()
+
+        if is_vacation_overtime_window(event, context):
+            return "vacation"
+        if not self._suppress_night_overtime_after_previous_day_offline(event) and is_night_overtime_window(event):
+            return "night"
+        if is_telegram_overtime_window(event, context):
+            return "telegram"
+
+        return None
+
+    def _suppress_night_overtime_after_previous_day_offline(self, event: dict[str, Any]) -> bool:
+        occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or _coerce_datetime(event.get("occurredAt"))
+        raw_author = str(event.get("author") or "Unknown User")
+        day_date = str(event.get("date") or "")
+
+        if not occurred_at or not raw_author or not day_date:
+            return False
+
+        latest_event: dict[str, Any] | None = None
+        latest_timestamp: dt.datetime | None = None
+
+        for current in self.db.break_events.find(
+            {
+                "rawAuthor": raw_author,
+                "eventType": {"$in": ["online", "offline"]},
+                "timestamp": {"$lte": occurred_at},
+            },
+            {"_id": 0, "eventType": 1, "timestamp": 1, "date": 1},
+        ):
+            timestamp = _coerce_datetime(current.get("timestamp"))
+
+            if not timestamp:
+                continue
+
+            if latest_timestamp is None or timestamp > latest_timestamp:
+                latest_event = current
+                latest_timestamp = timestamp
+
+        return (
+            bool(latest_event)
+            and str(latest_event.get("eventType") or "") == "offline"
+            and str(latest_event.get("date") or "") != day_date
+        )
+
+    def _has_reports_stopped_gap_overlap(self, event: dict[str, Any], start: dt.datetime, end: dt.datetime) -> bool:
+        if end <= start:
+            return False
+
+        raw_author = str(event.get("author") or "Unknown User")
+        day_date = str(event.get("date") or "")
+
+        if not raw_author or not day_date:
+            return False
+
+        offline_at: dt.datetime | None = None
+
+        for status_event in sorted(
+            self.db.status_events.find(
+                {
+                    "rawAuthor": raw_author,
+                    "date": day_date,
+                    "reason": {"$in": ["reports_stopped", "reports_resumed"]},
+                    "transitionAt": {"$lte": end},
+                },
+                {"_id": 0, "statusEventType": 1, "transitionAt": 1, "reason": 1},
+            ),
+            key=lambda item: _coerce_datetime(item.get("transitionAt")) or dt.datetime.min.replace(tzinfo=dt.UTC),
+        ):
+            transition_at = _coerce_datetime(status_event.get("transitionAt"))
+
+            if not transition_at:
+                continue
+
+            status_type = str(status_event.get("statusEventType") or "")
+            reason = str(status_event.get("reason") or "")
+
+            if status_type == "offline" and reason == "reports_stopped":
+                offline_at = transition_at
+                continue
+
+            if status_type != "online" or reason != "reports_resumed" or not offline_at:
+                continue
+
+            if _windows_overlap(start, end, offline_at, transition_at):
+                return True
+
+            offline_at = None
+
+        return bool(offline_at and end > offline_at)
 
     def _status_interval_context_for_event(
         self,

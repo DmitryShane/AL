@@ -35,11 +35,27 @@ class ActivitySummaryHourlyMixin:
                 synced_total += int(author_row.get("idleSeconds", 0))
                 continue
 
-            idle_seconds = sum(
-                int(hour.get("totals", {}).get("idleSeconds", 0))
-                for hour in public_hourly_activity(hourly_author.get("hourlyActivity", []))
-            )
+            public_hours = public_hourly_activity(hourly_author.get("hourlyActivity", []))
+            source_hours = hourly_author.get("hourlyActivity", [])
+            idle_seconds = 0
+
+            for public_hour, source_hour in zip(public_hours, source_hours, strict=False):
+                public_idle_seconds = int(public_hour.get("totals", {}).get("idleSeconds", 0))
+                visual_idle_seconds = 0
+
+                if int(author_row.get("breakSeconds", 0)) <= 0:
+                    visual_idle_seconds += int(source_hour.get("pluginHourGapIdleSeconds", 0))
+
+                idle_seconds += max(0, public_idle_seconds - visual_idle_seconds)
+
             previous_idle_seconds = int(author_row.get("idleSeconds", 0))
+            if (
+                idle_seconds < previous_idle_seconds
+                and int(author_row.get("meetingSeconds", 0)) > 0
+                and int(author_row.get("telegramToFirstActivitySeconds", 0)) <= 0
+            ):
+                idle_seconds = previous_idle_seconds
+
             idle_delta = idle_seconds - previous_idle_seconds
             author_row["idleSeconds"] = idle_seconds
             author_row["pluginDaySeconds"] = max(0, int(author_row.get("pluginDaySeconds", 0)) + idle_delta)

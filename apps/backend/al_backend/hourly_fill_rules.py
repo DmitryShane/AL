@@ -18,6 +18,7 @@ INTERNAL_OVERTIME_FILL_SECONDS = "_visualOvertimeSeconds"
 INTERNAL_OVERTIME_START_SECOND = "_overtimeStartSecond"
 INTERNAL_MISSED_START_SECONDS = "_visualMissedStartSeconds"
 INTERNAL_MISSED_END_SECONDS = "_visualMissedEndSeconds"
+INTERNAL_HAS_SOURCE_BREAK_OVERLAP = "_hasSourceBreakOverlap"
 VISUAL_ACTIVE_NOISE_SECONDS = 10
 
 
@@ -1346,7 +1347,13 @@ def apply_breaks_to_hourly_activity(
         consumed_break_seconds = max(0, int(consumed_hour.get("breakSeconds", 0)))
         available_break_seconds = max(0, requested_break_seconds - consumed_break_seconds)
         source_break_segments = _segments_for_kind(break_hour, "afk")
-        if consumed_buckets is not None and source_break_segments and not _source_hour_overlaps_break(source_hour, source_break_segments):
+        has_any_source_overlap = break_hour.get(INTERNAL_HAS_SOURCE_BREAK_OVERLAP)
+        if (
+            consumed_buckets is not None
+            and has_any_source_overlap is not False
+            and source_break_segments
+            and not _source_hour_overlaps_break(source_hour, source_break_segments)
+        ):
             break_seconds = 0
         else:
             break_seconds = min(available_break_seconds, 3600)
@@ -1388,6 +1395,36 @@ def apply_breaks_to_hourly_activity(
         hourly_activity.append(result)
 
     return hourly_activity
+
+
+def mark_break_source_overlaps(break_buckets: dict[tuple[str, str], list[dict[str, Any]]], daily_items: list[dict[str, Any]]) -> None:
+    source_hours_by_author_date: dict[tuple[str, str], list[dict[int, dict[str, Any]]]] = {}
+
+    for item in daily_items:
+        raw_author = str(item.get("author") or "Unknown User")
+        item_date = str(item.get("date") or "")
+
+        if not item_date:
+            continue
+
+        source_hours_by_author_date.setdefault((raw_author, item_date), []).append(
+            {int(hour.get("hour", 0)): hour for hour in item.get("hourlyActivity", [])}
+        )
+
+    for author_date_key, author_break_buckets in break_buckets.items():
+        source_hour_maps = source_hours_by_author_date.get(author_date_key, [])
+
+        for break_hour in author_break_buckets:
+            source_break_segments = _segments_for_kind(break_hour, "afk")
+
+            if not source_break_segments:
+                continue
+
+            hour = int(break_hour.get("hour", 0))
+            break_hour[INTERNAL_HAS_SOURCE_BREAK_OVERLAP] = any(
+                _source_hour_overlaps_break(source_hour_map.get(hour, {}), source_break_segments)
+                for source_hour_map in source_hour_maps
+            )
 
 
 def _source_hour_overlaps_break(source_hour: dict[str, Any], break_segments: list[dict[str, Any]]) -> bool:

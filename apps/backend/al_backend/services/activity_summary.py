@@ -17,6 +17,7 @@ from ..hourly_fill_rules import (
     convert_hourly_to_vacation_overtime,
     empty_hourly_activity,
     hourly_activity_has_workday_signal,
+    mark_break_source_overlaps,
     merge_hourly_activity,
     merge_meeting_buckets_into_hourly_author_rows,
     public_hourly_activity,
@@ -120,6 +121,7 @@ class ActivitySummaryService(
                 )
             ]
         break_buckets = composed(self)._break_buckets_for_daily_items(daily_items)
+        mark_break_source_overlaps(break_buckets, daily_items)
         meeting_buckets = composed(self)._meeting_buckets_for_daily_items(daily_items, now)
         telegram_gaps = composed(self)._telegram_gaps_for_daily_items(daily_items)
         telegram_gap_counted: set[tuple[str, str]] = set()
