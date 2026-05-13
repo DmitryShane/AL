@@ -1345,10 +1345,14 @@ def apply_breaks_to_hourly_activity(
         requested_break_seconds = max(0, int(break_hour.get("breakSeconds", 0)))
         consumed_break_seconds = max(0, int(consumed_hour.get("breakSeconds", 0)))
         available_break_seconds = max(0, requested_break_seconds - consumed_break_seconds)
-        break_seconds = min(available_break_seconds, 3600)
+        source_break_segments = _segments_for_kind(break_hour, "afk")
+        if consumed_buckets is not None and source_break_segments and not _source_hour_overlaps_break(source_hour, source_break_segments):
+            break_seconds = 0
+        else:
+            break_seconds = min(available_break_seconds, 3600)
         idle_seconds = min(max(0, raw_idle_seconds - break_seconds), max(0, 3600 - active_seconds - overtime_seconds - break_seconds))
         break_segments = segments_after_consumed_seconds(
-            _segments_for_kind(break_hour, "afk"),
+            source_break_segments,
             consumed_break_seconds,
             break_seconds,
         )
@@ -1384,6 +1388,26 @@ def apply_breaks_to_hourly_activity(
         hourly_activity.append(result)
 
     return hourly_activity
+
+
+def _source_hour_overlaps_break(source_hour: dict[str, Any], break_segments: list[dict[str, Any]]) -> bool:
+    if not break_segments:
+        return True
+
+    source_segments = [
+        segment
+        for segment in _raw_occupied_segments(source_hour)
+        if segment["kind"] in {"active", "idle", "overtime", "overtime-fill", "meeting", "auto-afk"}
+    ]
+
+    for source_segment in source_segments:
+        for break_segment in break_segments:
+            if int(source_segment["startSecond"]) < int(break_segment["endSecond"]) and int(break_segment["startSecond"]) < int(
+                source_segment["endSecond"]
+            ):
+                return True
+
+    return False
 
 
 def apply_meetings_to_hourly_activity(

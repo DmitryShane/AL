@@ -34,6 +34,7 @@ from al_backend.hourly_fill_rules import (
     apply_breaks_to_hourly_activity,
     empty_hourly_activity,
     hourly_activity_has_workday_signal,
+    merge_hourly_activity,
     public_hour,
     public_hourly_activity,
     transfer_summary_idle_to_auto_break,
@@ -2912,6 +2913,32 @@ def test_hourly_break_consumption_prevents_double_counting_across_sources():
     assert _hour_metric(second_hourly[16], "breakSeconds") == 0
     assert _hour_metric(consumed[16], "breakSeconds") == 30 * 60
 
+def test_hourly_break_consumption_skips_sources_without_break_overlap():
+    first_source = empty_hourly_activity()
+    first_source[16]["activeSeconds"] = 2 * 60
+    first_source[16]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 2 * 60}]
+    second_source = empty_hourly_activity()
+    second_source[16]["idleSeconds"] = 40 * 60
+    second_source[16]["fillSegments"] = [{"kind": "idle", "startSecond": 2 * 60, "endSecond": 42 * 60}]
+    breaks = empty_hourly_activity()
+    breaks[16]["breakSeconds"] = 30 * 60
+    breaks[16]["fillSegments"] = [{"kind": "afk", "startSecond": 2 * 60, "endSecond": 32 * 60}]
+    consumed = empty_hourly_activity()
+
+    first_hourly = apply_breaks_to_hourly_activity(first_source, breaks, consumed)
+    second_hourly = apply_breaks_to_hourly_activity(second_source, breaks, consumed)
+    merged = empty_hourly_activity()
+    merge_hourly_activity(merged, first_hourly)
+    merge_hourly_activity(merged, second_hourly)
+    public_hourly = public_hourly_activity(merged)
+
+    assert _hour_metric(first_hourly[16], "breakSeconds") == 0
+    assert _hour_metric(second_hourly[16], "breakSeconds") == 30 * 60
+    assert _hour_segments(public_hourly[16], "afk") == [{"startSecond": 2 * 60, "endSecond": 32 * 60}]
+    for segment in public_hourly[16]["fillSegments"]:
+        if segment["kind"] in {"active", "idle"}:
+            assert segment["endSecond"] <= 2 * 60 or segment["startSecond"] >= 32 * 60
+
 def test_totals_should_use_report_aggregates_not_hourly_buckets():
     source = empty_hourly_activity()
     source[16]["activeSeconds"] = 60
@@ -2962,6 +2989,29 @@ def test_hourly_break_uses_exact_break_on_and_off_positions():
     assert _hour_segments(public_hourly[16], "afk") == [{"startSecond": 0, "endSecond": 40 * 60}]
     assert _hour_metric(public_hourly[15], "activeSeconds") == 40 * 60
     assert _hour_metric(public_hourly[16], "activeSeconds") == 20 * 60
+
+def test_hourly_break_remains_continuous_for_single_source_across_hours():
+    source = empty_hourly_activity()
+    source[14]["idleSeconds"] = 20 * 60
+    source[14]["fillSegments"] = [{"kind": "idle", "startSecond": 40 * 60, "endSecond": 3600}]
+    source[15]["idleSeconds"] = 30 * 60
+    source[15]["fillSegments"] = [{"kind": "idle", "startSecond": 0, "endSecond": 30 * 60}]
+    break_buckets = {("Dmitry", "2026-05-02"): empty_hourly_activity()}
+    add_break_interval_to_buckets(
+        break_buckets,
+        "Dmitry",
+        dt.datetime(2026, 5, 2, 14, 50, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 2, 15, 20, tzinfo=dt.UTC),
+        "UTC",
+    )
+
+    hourly = apply_breaks_to_hourly_activity(source, break_buckets[("Dmitry", "2026-05-02")])
+    public_hourly = public_hourly_activity(hourly)
+
+    assert _hour_segments(public_hourly[14], "afk") == [{"startSecond": 50 * 60, "endSecond": 3600}]
+    assert _hour_segments(public_hourly[15], "afk") == [{"startSecond": 0, "endSecond": 20 * 60}]
+    assert all(segment["endSecond"] <= 50 * 60 for segment in public_hourly[14]["fillSegments"] if segment["kind"] == "idle")
+    assert all(segment["startSecond"] >= 20 * 60 for segment in public_hourly[15]["fillSegments"] if segment["kind"] == "idle")
 
 def test_hourly_break_splits_across_midnight():
     buckets = {
