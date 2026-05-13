@@ -20,6 +20,11 @@ class IndexManager:
         self.db.report_security_events.create_index([("author", ASCENDING), ("createdAt", DESCENDING)])
         self.db.device_report_identities.create_index([("source", ASCENDING), ("deviceIdHash", ASCENDING)], unique=True)
         self.db.device_report_identities.create_index([("source", ASCENDING), ("rawAuthor", ASCENDING)])
+        self.db.device_report_identities.create_index(
+            "rawAuthor",
+            unique=True,
+            partialFilterExpression={"rawAuthor": {"$type": "string"}},
+        )
         self.db.activity_snapshots.create_index([("source", ASCENDING), ("author", ASCENDING), ("date", ASCENDING)])
         self.db.activity_snapshots.create_index([("sessionId", ASCENDING), ("date", ASCENDING), ("recordedAt", DESCENDING)])
         self.db.report_rows.create_index([("receivedAt", DESCENDING)])
