@@ -6,7 +6,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 NIGHT_OVERTIME_START_HOUR = 0
-NIGHT_OVERTIME_END_HOUR = 6
+NIGHT_OVERTIME_END_HOUR = 7
 WINDOWS_TIME_ZONE_IDS = {
     "FLE Standard Time": "Europe/Sofia",
     "FLE Daylight Time": "Europe/Sofia",
