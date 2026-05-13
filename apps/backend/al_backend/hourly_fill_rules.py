@@ -865,12 +865,37 @@ def trim_visual_idle_overflow(hourly_activity: list[dict[str, Any]], hour_index:
 def apply_visual_overtime_hour_gaps(
     hourly_by_author: dict[str, dict[str, Any]],
     reports: list[dict[str, Any]],
+    sessions: list[dict[str, Any]],
     *,
     time_zone_id_for_author: Any,
     is_date_in_scope: Any,
     is_vacation_day: Any,
 ) -> None:
     overtime_reports_by_key: dict[tuple[str, str], list[dt.datetime]] = {}
+    overtime_starts_by_key: dict[tuple[str, str], list[dt.datetime]] = {}
+
+    for session in sessions:
+        if str(session.get("reminderAction") or "") != "overtime":
+            continue
+
+        raw_author = str(session.get("rawAuthor") or "Unknown User")
+        day_date = str(session.get("date") or "")
+        time_zone_id = time_zone_id_for_author(raw_author, session.get("timeZoneId"))
+
+        if not day_date or not is_date_in_scope(day_date, raw_author, time_zone_id):
+            continue
+
+        if is_vacation_day(raw_author, day_date):
+            continue
+
+        overtime_started_at = _coerce_datetime(session.get("lastOfflineAt"))
+
+        if not overtime_started_at:
+            continue
+
+        overtime_starts_by_key.setdefault((raw_author, day_date), []).append(
+            _to_local_datetime(overtime_started_at, time_zone_id)
+        )
 
     for report in reports:
         if report.get("source") in {"telegram", "discord", "status"} or report.get("reportType") in {"telegram", "meeting", "status"}:
@@ -909,10 +934,57 @@ def apply_visual_overtime_hour_gaps(
 
         hourly_activity = hourly_author.get("hourlyActivity", [])
         ordered_reports = sorted(reports_for_author)
+        overtime_starts = sorted(overtime_starts_by_key.get((raw_author, _report_date), []))
 
-        fill_overtime_hours_bracketed_by_reports(hourly_activity, ordered_reports)
-        fill_overtime_hours_between_overtime_buckets(hourly_activity)
+        for report_session in overtime_report_visual_sessions(ordered_reports, overtime_starts):
+            session_reports = report_session["reports"]
+            fill_overtime_hours_bracketed_by_reports(hourly_activity, session_reports)
+            fill_overtime_hours_between_overtime_buckets(
+                hourly_activity,
+                start_hour=report_session["startHour"],
+                end_hour=report_session["endHour"],
+            )
         fill_normal_to_overtime_transition_hours(hourly_activity)
+
+
+def overtime_report_visual_sessions(reports: list[dt.datetime], overtime_starts: list[dt.datetime]) -> list[dict[str, Any]]:
+    sessions: dict[tuple[str, str], dict[str, Any]] = {}
+    ordered_overtime_starts = sorted(overtime_starts)
+
+    for report in sorted(reports):
+        session_key, start_hour, end_hour = overtime_report_visual_session_bounds(report, ordered_overtime_starts)
+        session = sessions.setdefault(session_key, {"reports": [], "startHour": start_hour, "endHour": end_hour})
+        session["reports"].append(report)
+        session["startHour"] = min(int(session["startHour"]), start_hour)
+        session["endHour"] = max(int(session["endHour"]), end_hour)
+
+    return sorted(
+        sessions.values(),
+        key=lambda item: (int(item["startHour"]), item["reports"][0] if item["reports"] else dt.datetime.min),
+    )
+
+
+def overtime_report_visual_session_bounds(
+    report: dt.datetime,
+    overtime_starts: list[dt.datetime],
+) -> tuple[tuple[str, str], int, int]:
+    report_hour = int(report.hour)
+
+    if is_night_overtime_hour(report_hour):
+        return ("night", ""), NIGHT_OVERTIME_START_HOUR, NIGHT_OVERTIME_END_HOUR - 1
+
+    matching_start = None
+    for overtime_start in overtime_starts:
+        if overtime_start <= report:
+            matching_start = overtime_start
+        else:
+            break
+
+    if matching_start is not None:
+        start_hour = min(int(matching_start.hour), max(NIGHT_OVERTIME_END_HOUR, report_hour - 1))
+        return ("post-offline", matching_start.isoformat()), start_hour, report_hour
+
+    return ("normal", ""), max(NIGHT_OVERTIME_END_HOUR, report_hour - 1), report_hour
 
 
 def apply_plugin_hour_idle_gaps(
@@ -1505,10 +1577,17 @@ def fill_overtime_hours_bracketed_by_reports(hourly_activity: list[dict[str, Any
         fill_visual_overtime_hour(hour)
 
 
-def fill_overtime_hours_between_overtime_buckets(hourly_activity: list[dict[str, Any]]) -> None:
+def fill_overtime_hours_between_overtime_buckets(
+    hourly_activity: list[dict[str, Any]],
+    *,
+    start_hour: int | None = None,
+    end_hour: int | None = None,
+) -> None:
     overtime_hour_indexes = [
         index
         for index, hour in enumerate(hourly_activity)
+        if (start_hour is None or index >= start_hour)
+        and (end_hour is None or index <= end_hour)
         if int(hour.get("overtimeActiveSeconds", 0)) > 0
         or time_microseconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds") > 0
     ]

@@ -1942,6 +1942,7 @@ class ActivitySummaryService(MongoComposableMixin):
                     },
                 )
             ),
+            list(self.db.day_sessions.find(query, {"_id": 0})),
             time_zone_id_for_author=lambda raw_author, report_time_zone_id: _author_time_zone_id(raw_author, profiles, report_time_zone_id),
             is_date_in_scope=lambda day_date, raw_author, time_zone_id: _date_in_summary_scope(
                 day_date,
