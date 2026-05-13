@@ -768,7 +768,7 @@ export function matchesAuthorSearch(author: AuthorRow, search: string) {
 }
 
 export function shouldHideInactiveOfflineAuthor(author: AuthorRow, now = new Date()) {
-  if (author.status !== "stale" || !isTelegramSignedOff(author.stalePresence)) {
+  if (author.status !== "stale" || (!isTelegramSignedOff(author.stalePresence) && author.stalePresence !== "device")) {
     return false;
   }
 

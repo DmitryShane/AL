@@ -15,6 +15,7 @@ import { AuthorProfilesTab } from "../components/settings/tabs/authors/AuthorPro
 import { AutoBreakTab } from "../components/settings/tabs/autoBreak/AutoBreakTab";
 import { SETTINGS_TABS } from "../components/settings/settingsTabs";
 import { DeviceProfilesTab } from "../components/settings/tabs/deviceProfiles/DeviceProfilesTab";
+import { PublisherProfilesTab } from "../components/settings/tabs/publisherProfiles/PublisherProfilesTab";
 import { DiscordSettingsTab } from "../components/settings/tabs/discord/DiscordSettingsTab";
 import { GeneralSettingsTab } from "../components/settings/tabs/general/GeneralSettingsTab";
 import { MeetingSummariesTab } from "../components/settings/tabs/meetingSummaries/MeetingSummariesTab";
@@ -78,6 +79,7 @@ export function SettingsPage({
   onSaved: () => void;
 }) {
   const profiles = summary?.activitySummary.profiles ?? [];
+  const personProfiles = profiles.filter((profile) => profile.profileType !== "publisher");
   const aliases = summary?.activitySummary.authorAliases ?? [];
   const canManageSettings = currentUser.role === "admin" || currentUser.role === "editor";
   const settingsReadOnly = !canManageSettings;
@@ -1249,7 +1251,7 @@ export function SettingsPage({
         />
       ) : settingsTab === "autoBreak" ? (
         <AutoBreakTab
-          profiles={profiles}
+          profiles={personProfiles}
           drafts={drafts}
           settingsReadOnly={settingsReadOnly}
           saving={saving}
@@ -1260,9 +1262,11 @@ export function SettingsPage({
         />
       ) : settingsTab === "deviceProfiles" ? (
         <DeviceProfilesTab />
+      ) : settingsTab === "publisherProfiles" ? (
+        <PublisherProfilesTab />
       ) : settingsTab === "redirects" ? (
         <AuthorRedirectsTab
-          profiles={profiles}
+          profiles={personProfiles}
           aliases={aliases}
           aliasSource={aliasSource}
           aliasTarget={aliasTarget}
@@ -1277,7 +1281,7 @@ export function SettingsPage({
         />
       ) : settingsTab === "authors" ? (
         <AuthorProfilesTab
-          profiles={profiles}
+          profiles={personProfiles}
           drafts={drafts}
           newProfile={newProfile}
           avatarRefreshCadence={avatarRefreshCadence}

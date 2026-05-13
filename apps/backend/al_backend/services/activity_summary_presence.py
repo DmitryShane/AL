@@ -21,7 +21,7 @@ class ActivitySummaryPresenceMixin:
         meeting_lookup = self._meeting_lookup_for_reports(report_rows)
 
         for report in report_rows:
-            raw_author = str(report.get("author") or "Unknown User")
+            raw_author = composed(self).resolve_author_alias(str(report.get("author") or "Unknown User"))
 
             if raw_author not in authors_by_raw:
                 continue
@@ -56,7 +56,7 @@ class ActivitySummaryPresenceMixin:
             latest_by_author[raw_author] = {"report": report, "sortAt": report_sort_at}
 
         for daily in self.db.daily_author_activity.find(query, {"_id": 0}):
-            raw_author = str(daily.get("author") or "Unknown User")
+            raw_author = composed(self).resolve_author_alias(str(daily.get("author") or "Unknown User"))
 
             if raw_author not in authors_by_raw:
                 continue

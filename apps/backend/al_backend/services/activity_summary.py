@@ -110,7 +110,8 @@ class ActivitySummaryService(
             daily_items = [
                 item
                 for item in daily_items
-                if live_date_in_scope(
+                if composed(self).publisher_live_date_in_scope(item, profiles, now, start_date, end_date)
+                or live_date_in_scope(
                     item.get("date"),
                     item.get("author") or "Unknown User",
                     profiles,
@@ -127,8 +128,9 @@ class ActivitySummaryService(
         telegram_gap_counted: set[tuple[str, str]] = set()
 
         for item in daily_items:
-            raw_author = item.get("author") or "Unknown User"
-            if raw_author in hidden_device_authors:
+            source_raw_author = item.get("author") or "Unknown User"
+            raw_author = composed(self).resolve_author_alias(source_raw_author)
+            if source_raw_author in hidden_device_authors:
                 continue
 
             item_date = item.get("date") or ""
@@ -140,7 +142,7 @@ class ActivitySummaryService(
             source_hourly_activity = item.get("hourlyActivity", [])
             source_reports = list(
                 self.db.report_rows.find(
-                    {"author": raw_author, "date": item_date, "source": item.get("source")},
+                    {"author": source_raw_author, "date": item_date, "source": item.get("source")},
                     {"_id": 0, "recordedAt": 1, "activeDeltaSeconds": 1, "overtimeActiveDeltaSeconds": 1},
                 ).sort("recordedAt", 1)
             )
@@ -701,19 +703,24 @@ class ActivitySummaryService(
                 track_plugin_staleness = False
 
             send_interval_seconds = composed(self).get_interval_for_author(raw_author)
-            summary_author = _with_author_presence(
-                _with_source_breakdowns(_with_activity_mix(_with_productivity(author))),
-                send_interval_seconds,
-                now,
-                presence_override,
-                track_plugin_staleness,
-            )
-            composed(self)._record_status_transition_for_author(
-                summary_author,
-                send_interval_seconds,
-                now,
-                track_plugin_staleness,
-            )
+            base_author = _with_source_breakdowns(_with_activity_mix(_with_productivity(author)))
+
+            if composed(self).is_publisher_profile(raw_author, profiles):
+                summary_author = composed(self).with_publisher_device_presence(base_author, send_interval_seconds, now)
+            else:
+                summary_author = _with_author_presence(
+                    base_author,
+                    send_interval_seconds,
+                    now,
+                    presence_override,
+                    track_plugin_staleness,
+                )
+                composed(self)._record_status_transition_for_author(
+                    summary_author,
+                    send_interval_seconds,
+                    now,
+                    track_plugin_staleness,
+                )
             author_rows.append(summary_author)
         hourly_author_rows = [
             {**item, "hourlyActivity": public_hourly_activity(item.get("hourlyActivity", []))}

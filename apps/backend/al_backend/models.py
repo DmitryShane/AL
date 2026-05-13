@@ -96,6 +96,7 @@ class AuthorProfileIn(ApiModel):
     raw_author: str = Field(alias="rawAuthor", min_length=1)
     display_name: str | None = Field(default=None, alias="displayName")
     team: str | None = None
+    profile_type: str | None = Field(default=None, alias="profileType")
     telegram_username: str | None = Field(default=None, alias="telegramUsername")
     discord_user_id: str | None = Field(default=None, alias="discordUserId")
     discord_username: str | None = Field(default=None, alias="discordUsername")
@@ -126,6 +127,12 @@ class AuthorAliasIn(ApiModel):
 
 class DeviceProfileAliasIn(ApiModel):
     target_raw_author: str = Field(alias="targetRawAuthor", min_length=1)
+
+
+class PublisherProfileIn(ApiModel):
+    display_name: str = Field(alias="displayName", min_length=1)
+    team: str | None = None
+    author_color: str | None = Field(default=None, alias="authorColor")
 
 
 class CalendarMarkIn(ApiModel):

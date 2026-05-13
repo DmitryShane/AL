@@ -243,6 +243,7 @@ def upsert_author_profile(
         raw_author=profile.raw_author,
         display_name=profile.display_name,
         team=profile.team,
+        profile_type=profile.profile_type,
         telegram_username=profile.telegram_username,
         discord_user_id=profile.discord_user_id,
         discord_username=profile.discord_username,

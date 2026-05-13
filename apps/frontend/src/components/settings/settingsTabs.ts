@@ -3,6 +3,7 @@ import type { SettingsTab } from "../../types/dashboard";
 export const SETTINGS_TABS: { key: SettingsTab; label: string }[] = [
   { key: "general", label: "General" },
   { key: "authors", label: "Author Profiles" },
+  { key: "publisherProfiles", label: "Publisher Profiles" },
   { key: "deviceProfiles", label: "Device Profiles" },
   { key: "autoBreak", label: "Auto Break" },
   { key: "redirects", label: "Author Redirects" },

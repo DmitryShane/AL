@@ -1253,7 +1253,9 @@ def _github_username_for_avatar_fetch(raw_author: str, profile: dict[str, Any] |
 def _cached_author_avatar_api_url(raw_author: Any, github_username: Any, profile: dict[str, Any] | None = None) -> str:
     login = _normalize_github_username(github_username)
 
-    if not login:
+    has_manual_avatar = bool(profile and str(profile.get("avatarSource") or "") == "manual")
+
+    if not login and not has_manual_avatar:
         return ""
 
     author = _normalize_author(raw_author)

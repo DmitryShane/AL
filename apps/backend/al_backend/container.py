@@ -12,6 +12,7 @@ from .services.report_ingest import ReportIngestService
 from .services.report_listing import ReportListingService
 from .services.activity_summary import ActivitySummaryService
 from .services.author_status_events import AuthorStatusEventsService
+from .services.publisher_profiles import PublisherProfileService
 from .services.activity_live_summary import ActivityLiveSummaryService
 from .services.editor_activity_purge import EditorActivityPurgeService
 from .services.calendar_day_overrides import CalendarDayOverrideService
@@ -48,6 +49,7 @@ class BackendServices(
     BreakSessionService,
     TelegramActivityService,
     AuthorStatusEventsService,
+    PublisherProfileService,
     ActivityAggregationService,
 ):
     aggregates_version = 30

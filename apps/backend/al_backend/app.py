@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from .api_security import SESSION_COOKIE_NAME
 from .container import BackendContainer
-from .routers import analytics, auth, authors, calendar, discord, health, reports, settings as settings_router, site_users, telegram
+from .routers import analytics, auth, authors, calendar, discord, health, publisher_profiles, reports, settings as settings_router, site_users, telegram
 from .settings import Settings
 
 
@@ -73,6 +73,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(reports.router)
     app.include_router(settings_router.router)
     app.include_router(authors.router)
+    app.include_router(publisher_profiles.router)
     app.include_router(telegram.router)
     app.include_router(discord.router)
     app.include_router(analytics.router)

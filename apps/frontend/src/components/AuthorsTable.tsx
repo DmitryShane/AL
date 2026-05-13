@@ -25,7 +25,7 @@ export type AuthorsTableRow = {
   authorColor?: string;
   avatarUrl?: string;
   status?: "online" | "stale";
-  stalePresence?: "telegram" | "reports" | "both";
+  stalePresence?: "telegram" | "reports" | "both" | "device";
 };
 
 type AuthorsTableProps = {

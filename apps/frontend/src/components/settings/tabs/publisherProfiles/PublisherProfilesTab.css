@@ -1,0 +1,74 @@
+.publisher-profile-create-card {
+  grid-template-columns:
+    minmax(220px, 1fr)
+    minmax(120px, auto);
+}
+
+.publisher-profile-table {
+  --profile-columns:
+    minmax(260px, 1.2fr)
+    minmax(210px, 0.95fr)
+    minmax(280px, 1.25fr)
+    minmax(220px, 1fr)
+    minmax(130px, 0.55fr);
+}
+
+.publisher-profile-table .profile-table-head,
+.publisher-profile-table .profile-row {
+  min-width: 1120px;
+}
+
+.publisher-profile-avatar-input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  background: #fff;
+  color: #405064;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.publisher-profile-linked-devices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.publisher-profile-device-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 30px;
+  border: 1px solid #dbe4ef;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #334155;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 9px;
+}
+
+.publisher-profile-device-pill:hover:not(:disabled) {
+  border-color: #cbd5e1;
+  background: #eef2f7;
+}
+
+.publisher-profile-device-pill small {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.publisher-profile-device-actions select {
+  width: 100%;
+}
+
+@media (max-width: 900px) {
+  .publisher-profile-create-card {
+    grid-template-columns: 1fr;
+  }
+}

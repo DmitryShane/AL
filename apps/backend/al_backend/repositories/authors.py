@@ -76,6 +76,7 @@ class AuthorRepository(MongoComposableMixin):
                     "authorEmail": profile.get("authorEmail") or (author_activity or {}).get("authorEmail", ""),
                     "displayName": _display_name(raw_author, profile),
                     "team": profile.get("team", ""),
+                    "profileType": profile.get("profileType", "person"),
                     "telegramUsername": profile.get("telegramUsername", ""),
                     "telegramPrivateChatId": profile.get("telegramPrivateChatId"),
                     "discordUserId": profile.get("discordUserId", ""),
@@ -238,6 +239,7 @@ class AuthorRepository(MongoComposableMixin):
         author_color: str | None = None,
         time_zone_id: str | None = None,
         github_username: str | None = None,
+        profile_type: str | None = None,
     ) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
         raw_author = _normalize_author(raw_author)
@@ -268,6 +270,7 @@ class AuthorRepository(MongoComposableMixin):
             "rawAuthor": raw_author,
             "displayName": (display_name or raw_author).strip(),
             "team": (team or "").strip(),
+            "profileType": "publisher" if profile_type == "publisher" else "person",
             "pluginEnabled": plugin_enabled,
             "autoBreakEnabled": auto_break_enabled,
             "authorColor": _valid_color(author_color) or _author_color(raw_author),

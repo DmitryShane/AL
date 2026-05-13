@@ -1,5 +1,5 @@
 export type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings";
-export type SettingsTab = "general" | "authors" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingSummaries" | "users";
+export type SettingsTab = "general" | "authors" | "publisherProfiles" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingSummaries" | "users";
 
 export type Health = {
   ok: boolean;
@@ -68,7 +68,7 @@ export type AuthorRow = {
   overtimeActivityMixBySource?: ActivityMixSourceGroup[];
   overtimeSavedPrefabsBySource?: SavedPrefabsSourceGroup[];
   status?: "online" | "stale";
-  stalePresence?: "telegram" | "reports" | "both";
+  stalePresence?: "telegram" | "reports" | "both" | "device";
   dayOverride?: CalendarDayOverride;
   calendarDayMark?: CalendarDayOverride;
 };
@@ -124,6 +124,7 @@ export type AuthorProfile = {
   authorEmail?: string;
   displayName: string;
   team?: string;
+  profileType?: "person" | "publisher";
   telegramUsername?: string;
   telegramPrivateChatId?: number;
   discordUserId?: string;

@@ -94,6 +94,15 @@ def ensure_author_avatar_cached(
         return None, None
 
     profile = db.author_profiles.find_one({"rawAuthor": normalized}, {"_id": 0}) or {}
+    if str(profile.get("avatarSource") or "") == "manual":
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        path = author_avatar_cache_file_path(cache_dir, normalized)
+
+        if path.is_file():
+            return path, str(profile.get("avatarMimeType") or "").strip() or DEFAULT_AVATAR_MIME
+
+        return None, None
+
     github = _github_username_for_avatar_fetch(normalized, profile)
 
     if not github:
