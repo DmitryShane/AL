@@ -130,7 +130,8 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         _append_available_seconds(generated, "overtime", time_seconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds"))
     _append_available_seconds(generated, "auto-afk", int(hour.get("autoBreakSeconds", 0)))
-    _append_available_seconds(generated, "overtime-fill", int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)))
+    if _clamp_second(overtime_start_second) is None:
+        _append_available_seconds(generated, "overtime-fill", int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)))
     hidden_generic_idle_seconds = _hidden_generic_idle_seconds_after_telegram(hour, _segments_total_seconds(telegram_idle_segments))
     if hidden_generic_idle_seconds > 0:
         _append_available_seconds(generated, "active", hidden_generic_idle_seconds)
@@ -140,6 +141,8 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
         hidden_generic_idle_seconds,
     )
     _append_available_seconds(generated, "idle", generic_idle_seconds)
+    if _clamp_second(overtime_start_second) is not None:
+        _append_available_seconds(generated, "overtime-fill", int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)))
     return normalize_hour_fill(generated, post_activity_start_second=overtime_start_second)
 
 
@@ -481,6 +484,7 @@ def apply_overtime_start_boundary(hourly_activity: list[dict[str, Any]], overtim
         hour["overtimeBoundaryIdleSeconds"] = int(hour.get("overtimeBoundaryIdleSeconds", 0)) + missing_pre_overtime_seconds
         visual_overtime_seconds = int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0))
         hour[INTERNAL_OVERTIME_FILL_SECONDS] = max(0, visual_overtime_seconds - missing_pre_overtime_seconds)
+        remove_visual_missed_seconds(hour, missing_pre_overtime_seconds)
 
     post_boundary_seconds = 3600 - start_second
     visible_overtime_seconds = (
@@ -491,6 +495,7 @@ def apply_overtime_start_boundary(hourly_activity: list[dict[str, Any]], overtim
 
     if missing_post_overtime_seconds > 0:
         hour[INTERNAL_OVERTIME_FILL_SECONDS] = int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)) + missing_post_overtime_seconds
+        remove_visual_missed_seconds(hour, missing_post_overtime_seconds)
 
 
 def apply_overtime_start_boundaries(
@@ -522,6 +527,43 @@ def apply_overtime_start_boundaries(
             continue
 
         apply_overtime_start_boundary(hourly_author.get("hourlyActivity", []), overtime_started_at, time_zone_id)
+
+
+def apply_first_post_offline_overtime_boundaries(
+    hourly_by_author: dict[str, dict[str, Any]],
+    overtime_reports_by_key: dict[tuple[str, str], list[dt.datetime]],
+    overtime_starts_by_key: dict[tuple[str, str], list[dt.datetime]],
+    *,
+    time_zone_id_for_author: Any,
+) -> None:
+    for (raw_author, report_date), starts in overtime_starts_by_key.items():
+        hourly_author = hourly_by_author.get(raw_author)
+        reports = sorted(overtime_reports_by_key.get((raw_author, report_date), []))
+
+        if not hourly_author or not starts or not reports:
+            continue
+
+        ordered_starts = sorted(starts)
+
+        for index, overtime_start in enumerate(ordered_starts):
+            next_start = ordered_starts[index + 1] if index + 1 < len(ordered_starts) else None
+            first_report = next(
+                (
+                    report
+                    for report in reports
+                    if report >= overtime_start and (next_start is None or report < next_start)
+                ),
+                None,
+            )
+
+            if first_report is None:
+                continue
+
+            if first_report.hour == overtime_start.hour or is_night_overtime_hour(first_report.hour):
+                continue
+
+            time_zone_id = time_zone_id_for_author(raw_author, None)
+            apply_overtime_start_boundary(hourly_author.get("hourlyActivity", []), first_report, time_zone_id)
 
 
 def apply_night_overtime_hour_fills(hourly_by_author: dict[str, dict[str, Any]]) -> None:
@@ -925,6 +967,13 @@ def apply_visual_overtime_hour_gaps(
             continue
 
         overtime_reports_by_key.setdefault((raw_author, report_date), []).append(_to_local_datetime(occurred_at, time_zone_id))
+
+    apply_first_post_offline_overtime_boundaries(
+        hourly_by_author,
+        overtime_reports_by_key,
+        overtime_starts_by_key,
+        time_zone_id_for_author=time_zone_id_for_author,
+    )
 
     for (raw_author, _report_date), reports_for_author in overtime_reports_by_key.items():
         hourly_author = hourly_by_author.get(raw_author)

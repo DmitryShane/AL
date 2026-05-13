@@ -861,7 +861,7 @@ def test_night_overtime_summary_fills_remainder_with_overtime_fill_not_missed():
     assert _overtime_fill_seconds(hour_0) == 3480
     assert _missed_end_seconds(hour_0) == 0
 
-def test_night_overtime_does_not_bridge_to_post_telegram_overtime():
+def test_post_telegram_overtime_in_next_hour_uses_first_report_boundary_without_bridging_night_overtime():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
         {
@@ -923,7 +923,10 @@ def test_night_overtime_does_not_bridge_to_post_telegram_overtime():
     assert hourly_by_hour[0]["totals"]["overtimeSeconds"] == 3600
     assert all(_overtime_fill_seconds(hourly_by_hour[hour]) == 0 for hour in range(7, 18))
     assert _hour_metric(hourly_by_hour[18], "overtimeActiveSeconds") == 826
-    assert _missed_end_seconds(hourly_by_hour[18]) == 3600 - 826
+    assert _hour_segments(hourly_by_hour[18], "idle") == [{"startSecond": 0, "endSecond": 9 * 60 + 20}]
+    assert _hour_segments(hourly_by_hour[18], "overtime")[0]["startSecond"] == 9 * 60 + 20
+    assert _hour_segments(hourly_by_hour[18], "overtime-fill")[-1]["endSecond"] == 3600
+    assert _missed_end_seconds(hourly_by_hour[18]) == 0
 
 def test_activity_summary_visual_missed_end_moves_to_next_partial_hour_when_report_hour_is_full():
     repo = fake_repository()
