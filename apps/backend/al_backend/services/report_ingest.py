@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 
 from ..activity_math import *
 from ..backend_composable_host import composed
@@ -14,6 +15,9 @@ def is_unknown_device_author(value: Any) -> bool:
 
 def _device_report_id_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+_DEVICE_AUTHOR_PATTERN = re.compile(r"^Device(\d+)$")
 
 
 def _is_valid_device_id(value: Any) -> bool:
@@ -257,8 +261,7 @@ class ReportIngestService(MongoComposableMixin):
         if existing and existing.get("rawAuthor"):
             return str(existing["rawAuthor"])
 
-        next_number = self.db.device_report_identities.count_documents({}) + 1
-        raw_author = f"Device{next_number}"
+        raw_author = self._next_device_report_author()
         self.db.device_report_identities.update_one(
             {"deviceIdHash": device_id_hash},
             {
@@ -273,6 +276,24 @@ class ReportIngestService(MongoComposableMixin):
         )
         inserted = self.db.device_report_identities.find_one({"deviceIdHash": device_id_hash})
         return str((inserted or {}).get("rawAuthor") or raw_author)
+
+    def _next_device_report_author(self) -> str:
+        highest_number = 0
+
+        for item in self.db.device_report_identities.find({}, {"_id": 0, "rawAuthor": 1}):
+            match = _DEVICE_AUTHOR_PATTERN.match(str(item.get("rawAuthor") or ""))
+
+            if not match:
+                continue
+
+            highest_number = max(highest_number, int(match.group(1)))
+
+        next_number = highest_number + 1
+
+        while self.db.device_report_identities.find_one({"rawAuthor": f"Device{next_number}"}, {"_id": 1}):
+            next_number += 1
+
+        return f"Device{next_number}"
 
     def _is_heartbeat_only_event_payload(self, payload: dict[str, Any]) -> bool:
         events = payload.get("events")

@@ -721,6 +721,26 @@ def test_device_report_author_is_stable_for_same_device_id():
     assert second == "Device1"
     assert third == "Device2"
 
+def test_device_report_author_uses_next_free_device_number():
+    repo = fake_repository()
+    repo.db.device_report_identities.insert_one({"source": "dev", "deviceIdHash": "hash-1", "rawAuthor": "Device1"})
+    repo.db.device_report_identities.insert_one({"source": "dev", "deviceIdHash": "hash-2", "rawAuthor": "Device2"})
+    repo.db.device_report_identities.insert_one({"source": "dev", "deviceIdHash": "hash-7", "rawAuthor": "Device7"})
+    repo.db.device_report_identities.insert_one({"source": "dev", "deviceIdHash": "hash-8", "rawAuthor": "Device8"})
+
+    assert repo.resolve_device_report_author("dev", "advertising-id-new") == "Device9"
+
+def test_new_device_report_author_does_not_reuse_aliased_device_name():
+    repo = fake_repository()
+    repo.db.device_report_identities.insert_one({"source": "dev", "deviceIdHash": "hash-7", "rawAuthor": "Device7"})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device7", "targetRawAuthor": "Igor Mats"})
+
+    raw_author = repo.resolve_device_report_author("dev", "advertising-id-new")
+
+    assert raw_author == "Device8"
+    assert repo.resolve_author_alias(raw_author) == "Device8"
+    assert repo.resolve_author_alias("Device7") == "Igor Mats"
+
 def test_device_report_author_ignores_zero_advertising_id():
     repo = fake_repository()
 
