@@ -26,7 +26,7 @@ import {
 import "./styles.css";
 
 import { AuthorAvatar } from "./components/AuthorAvatar";
-import { formatSiteRole, formatSiteUserSidebarLabel } from "./pages/pageHelpers";
+import { formatSiteRole, formatSiteUserSidebarLabel, shouldHideInactiveOfflineAuthor } from "./pages/pageHelpers";
 import type { ActivitySummary, AuthorRow, DateRange, Health, Page, SiteUser, SiteUserRole, Summary } from "./types/dashboard";
 
 const emptyActivitySummary: ActivitySummary = {
@@ -420,11 +420,21 @@ function App() {
   const canShowCachedDashboard = Boolean(authUser) || (authLoading && hasAuthHint);
   const activitySummary = canShowCachedDashboard ? (summary?.activitySummary ?? emptyActivitySummary) : emptyActivitySummary;
   const activityDisplaySummary = canShowCachedDashboard ? (summary?.activitySummary ?? cachedActivitySummary ?? emptyActivitySummary) : emptyActivitySummary;
+  const visibleActivitySummary = useMemo(
+    () => ({
+      ...activityDisplaySummary,
+      authors: activityDisplaySummary.authors.filter((author) => !shouldHideInactiveOfflineAuthor(author))
+    }),
+    [activityDisplaySummary]
+  );
   const settingsDisplaySummary = canShowCachedDashboard ? (summary ?? cachedSettingsSummary) : null;
   const isVisualLoading = canShowCachedDashboard && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
   const authorsSource = isVisualLoading && !activitySummary.authors.length ? cachedAuthors : activitySummary.authors;
-  const authors = useMemo(() => authorsSource.filter((author) => matchesAuthorSearch(author, search)), [authorsSource, search]);
-  const activeAuthorSource = page === "activity" ? activityDisplaySummary.authors : activitySummary.authors;
+  const authors = useMemo(
+    () => authorsSource.filter((author) => !shouldHideInactiveOfflineAuthor(author) && matchesAuthorSearch(author, search)),
+    [authorsSource, search]
+  );
+  const activeAuthorSource = page === "activity" ? visibleActivitySummary.authors : activitySummary.authors.filter((author) => !shouldHideInactiveOfflineAuthor(author));
   const activeAuthor = activeAuthorSource.some((author) => author.rawAuthor === selectedAuthor)
     ? selectedAuthor
     : activeAuthorSource[0]?.rawAuthor ?? null;
@@ -621,7 +631,7 @@ function App() {
         ) : null}
         {page === "activity" ? (
           <ActivityPage
-            summary={activityDisplaySummary}
+            summary={visibleActivitySummary}
             dateRange={appliedDateRange}
             datePickerValue={dateRange}
             onDatePickerChange={setDateRange}

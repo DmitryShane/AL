@@ -767,6 +767,26 @@ export function matchesAuthorSearch(author: AuthorRow, search: string) {
   );
 }
 
+export function shouldHideInactiveOfflineAuthor(author: AuthorRow, now = new Date()) {
+  if (author.status !== "stale" || !isTelegramSignedOff(author.stalePresence)) {
+    return false;
+  }
+
+  const lastSeenAt = author.lastReceivedAt ?? author.lastRecordedAt;
+
+  if (!lastSeenAt) {
+    return false;
+  }
+
+  const lastSeenMs = new Date(lastSeenAt).getTime();
+
+  if (!Number.isFinite(lastSeenMs)) {
+    return false;
+  }
+
+  return now.getTime() - lastSeenMs > 24 * 60 * 60 * 1000;
+}
+
 export function authorCardClassName(author: AuthorRow, active: boolean) {
   let presenceClass = "is-offline";
 
