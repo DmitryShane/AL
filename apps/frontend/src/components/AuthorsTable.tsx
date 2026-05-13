@@ -158,7 +158,7 @@ function formatOffsetTimestampTime(value: string) {
 
 function formatStatus(author: AuthorsTableRow) {
   if (author.status === "stale") {
-    if (isTelegramSignedOff(author.stalePresence)) {
+    if (isSoftOffline(author.stalePresence)) {
       return "Offline";
     }
 
@@ -170,7 +170,7 @@ function formatStatus(author: AuthorsTableRow) {
 
 function statusBadgeClassName(status?: "online" | "stale", stalePresence?: AuthorsTableRow["stalePresence"]) {
   if (status === "stale") {
-    if (isTelegramSignedOff(stalePresence)) {
+    if (isSoftOffline(stalePresence)) {
       return "status-badge telegram-signed-off";
     }
 
@@ -182,6 +182,10 @@ function statusBadgeClassName(status?: "online" | "stale", stalePresence?: Autho
 
 function isTelegramSignedOff(stalePresence?: AuthorsTableRow["stalePresence"]) {
   return stalePresence === "telegram" || stalePresence === "both";
+}
+
+function isSoftOffline(stalePresence?: AuthorsTableRow["stalePresence"]) {
+  return isTelegramSignedOff(stalePresence) || stalePresence === "device";
 }
 
 function productivityClassName(author: AuthorsTableRow) {

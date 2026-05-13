@@ -793,7 +793,7 @@ export function authorCardClassName(author: AuthorRow, active: boolean) {
   if (author.status === "online") {
     presenceClass = "is-online";
   } else if (author.status === "stale") {
-    presenceClass = isTelegramSignedOff(author.stalePresence) ? "is-telegram-offline" : "is-offline";
+    presenceClass = isSoftOffline(author.stalePresence) ? "is-telegram-offline" : "is-offline";
   }
 
   return `author-card ${active ? "active " : ""}${presenceClass} ${productivityTone(author.productivity)}`.trim();
@@ -805,7 +805,7 @@ export function authorMiniCardClassName(author: AuthorRow, active: boolean) {
   if (author.status === "online") {
     presenceClass = "is-online";
   } else if (author.status === "stale") {
-    presenceClass = isTelegramSignedOff(author.stalePresence) ? "is-telegram-offline" : "is-offline";
+    presenceClass = isSoftOffline(author.stalePresence) ? "is-telegram-offline" : "is-offline";
   }
 
   return `author-mini-card ${active ? "active " : ""}${presenceClass} ${productivityTone(author.productivity)}`.trim();
@@ -815,9 +815,13 @@ export function isTelegramSignedOff(stalePresence?: AuthorRow["stalePresence"]) 
   return stalePresence === "telegram" || stalePresence === "both";
 }
 
+export function isSoftOffline(stalePresence?: AuthorRow["stalePresence"]) {
+  return isTelegramSignedOff(stalePresence) || stalePresence === "device";
+}
+
 export function compareAuthorCardStatus(left: AuthorRow, right: AuthorRow, dateRange: DateRange) {
-  const leftSignedOff = isTelegramSignedOff(left.stalePresence);
-  const rightSignedOff = isTelegramSignedOff(right.stalePresence);
+  const leftSignedOff = isSoftOffline(left.stalePresence);
+  const rightSignedOff = isSoftOffline(right.stalePresence);
 
   if (leftSignedOff !== rightSignedOff) {
     return leftSignedOff ? 1 : -1;
