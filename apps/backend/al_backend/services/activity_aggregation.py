@@ -33,6 +33,18 @@ def _hold_started_at_for_state(event: dict[str, Any]) -> str | None:
     return str(metadata.get("firstHoldAtUtc") or "") or None
 
 
+def _has_presence_delta(deltas: dict[str, Any]) -> bool:
+    if _has_time_delta(deltas):
+        return True
+
+    return bool(
+        deltas.get("activityCountDeltas")
+        or deltas.get("savedPrefabDeltas")
+        or deltas.get("overtimeActivityCountDeltas")
+        or deltas.get("overtimeSavedPrefabDeltas")
+    )
+
+
 class ActivityAggregationService(MongoComposableMixin):
     def _overtime_rule_context(self) -> OvertimeRuleContext:
         return OvertimeRuleContext(
@@ -1371,32 +1383,33 @@ class ActivityAggregationService(MongoComposableMixin):
         overtime_active_microseconds = _time_microseconds(
             current, "overtimeActiveSeconds", "overtimeActiveMicroseconds"
         ) + _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds")
+        set_fields = {
+            **key,
+            "authorEmail": snapshot.get("authorEmail", ""),
+            "pluginVersion": snapshot.get("pluginVersion"),
+            "timeZoneId": snapshot.get("timeZoneId"),
+            "timeZoneDisplayName": snapshot.get("timeZoneDisplayName"),
+            "workWindowSeconds": snapshot.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
+            "activityCounts": activity_counts,
+            "savedPrefabs": saved_prefabs,
+            "overtimeActivityCounts": overtime_activity_counts,
+            "overtimeSavedPrefabs": overtime_saved_prefabs,
+            "hourlyActivity": hourly_activity,
+            "activeMicroseconds": active_microseconds,
+            "idleMicroseconds": idle_microseconds,
+            "breakSeconds": break_seconds,
+            "overtimeActiveMicroseconds": overtime_active_microseconds,
+            "activeSeconds": _seconds_from_microseconds(active_microseconds),
+            "idleSeconds": _seconds_from_microseconds(idle_microseconds),
+            "overtimeActiveSeconds": _seconds_from_microseconds(overtime_active_microseconds),
+        }
+
+        if _has_presence_delta(deltas):
+            set_fields["lastRecordedAt"] = snapshot.get("recordedAt")
+            set_fields["lastReceivedAt"] = snapshot.get("receivedAt")
 
         self.db.daily_author_activity.update_one(
             key,
-            {
-                "$set": {
-                    **key,
-                    "authorEmail": snapshot.get("authorEmail", ""),
-                    "pluginVersion": snapshot.get("pluginVersion"),
-                    "timeZoneId": snapshot.get("timeZoneId"),
-                    "timeZoneDisplayName": snapshot.get("timeZoneDisplayName"),
-                    "workWindowSeconds": snapshot.get("workWindowSeconds") or DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
-                    "lastRecordedAt": snapshot.get("recordedAt"),
-                    "lastReceivedAt": snapshot.get("receivedAt"),
-                    "activityCounts": activity_counts,
-                    "savedPrefabs": saved_prefabs,
-                    "overtimeActivityCounts": overtime_activity_counts,
-                    "overtimeSavedPrefabs": overtime_saved_prefabs,
-                    "hourlyActivity": hourly_activity,
-                    "activeMicroseconds": active_microseconds,
-                    "idleMicroseconds": idle_microseconds,
-                    "breakSeconds": break_seconds,
-                    "overtimeActiveMicroseconds": overtime_active_microseconds,
-                    "activeSeconds": _seconds_from_microseconds(active_microseconds),
-                    "idleSeconds": _seconds_from_microseconds(idle_microseconds),
-                    "overtimeActiveSeconds": _seconds_from_microseconds(overtime_active_microseconds),
-                },
-            },
+            {"$set": set_fields},
             upsert=True,
         )

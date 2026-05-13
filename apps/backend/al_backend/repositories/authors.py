@@ -147,11 +147,10 @@ class AuthorRepository(MongoComposableMixin):
         )
 
     def touch_last_raw_report_received_at(self, raw_author: str, received_at: dt.datetime) -> None:
-        """Bump author profile time used for reports_stopped / merged lastReceivedAt.
+        """Bump author profile time used for reports_stopped liveness.
 
-        Call only when ingest produced accounting time deltas (typically after inserting
-        event-driven report_rows, or snapshot ingest). Routine heartbeat-only batches that
-        insert no report rows must not invoke this helper.
+        This tracks raw report liveness, including heartbeat-only batches. Activity presence
+        timestamps are stored on report rows and daily aggregates separately.
         """
         raw_author = _normalize_author(raw_author)
 

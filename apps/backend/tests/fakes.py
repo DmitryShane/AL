@@ -171,6 +171,10 @@ class FakeCollection:
         for key, value in operation.get("$inc", {}).items():
             item[key] = item.get(key, 0) + value
 
+        for key, value in operation.get("$max", {}).items():
+            if key not in item or item[key] < value:
+                item[key] = value
+
         for key in operation.get("$unset", {}).keys():
             item.pop(key, None)
 

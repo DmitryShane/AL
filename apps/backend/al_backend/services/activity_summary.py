@@ -964,7 +964,7 @@ class ActivitySummaryService(MongoComposableMixin):
                     "timeZoneId": profile.get("timeZoneId") or item.get("timeZoneId"),
                     "timeZoneDisplayName": profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName"),
                     "lastRecordedAt": item.get("lastRecordedAt") if has_presence_signal else "",
-                    "lastReceivedAt": item.get("lastReceivedAt") if has_presence_signal else "",
+                    "lastReceivedAt": _iso(item.get("lastReceivedAt")) if has_presence_signal else "",
                     "daySeconds": 0,
                     "telegramDaySeconds": 0,
                     "pluginDaySeconds": 0,
@@ -1076,10 +1076,13 @@ class ActivitySummaryService(MongoComposableMixin):
             if has_presence_signal and str(item.get("lastRecordedAt") or "") > str(author_row.get("lastRecordedAt") or ""):
                 author_row["lastRecordedAt"] = item.get("lastRecordedAt")
 
-            if has_presence_signal and item.get("lastReceivedAt") and (
-                not author_row.get("lastReceivedAt") or item.get("lastReceivedAt") > author_row.get("lastReceivedAt")
+            item_last_received_at = _coerce_datetime(item.get("lastReceivedAt"))
+            author_last_received_at = _coerce_datetime(author_row.get("lastReceivedAt"))
+
+            if has_presence_signal and item_last_received_at and (
+                not author_last_received_at or item_last_received_at > author_last_received_at
             ):
-                author_row["lastReceivedAt"] = item.get("lastReceivedAt")
+                author_row["lastReceivedAt"] = _iso(item.get("lastReceivedAt")) or item.get("lastReceivedAt")
 
             current_author = hourly_by_author.get(raw_author)
 
@@ -2059,8 +2062,6 @@ class ActivitySummaryService(MongoComposableMixin):
         for raw_author, author_row in authors_by_raw.items():
             profile = profiles.get(raw_author, {})
             profile_raw_dt = _coerce_datetime(profile.get("lastRawReportReceivedAt"))
-            row_dt = _coerce_datetime(author_row.get("lastReceivedAt"))
-            merged: list[dt.datetime] = []
 
             if profile_raw_dt:
                 profile_raw_date = _local_date_for_time_zone(
@@ -2078,13 +2079,7 @@ class ActivitySummaryService(MongoComposableMixin):
                     end_date,
                     date_mode,
                 ):
-                    merged.append(profile_raw_dt)
-
-            if row_dt:
-                merged.append(row_dt)
-
-            if merged:
-                author_row["lastReceivedAt"] = _iso(max(merged))
+                    author_row["_lastReportReceivedAt"] = _iso(profile_raw_dt)
 
     def _author_presence_overrides(
         self,

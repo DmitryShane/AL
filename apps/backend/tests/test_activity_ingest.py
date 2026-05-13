@@ -1428,7 +1428,7 @@ def test_activity_before_telegram_overtime_reminder_stays_normal_during_rebuild(
     assert daily["activeSeconds"] == 30
     assert daily["overtimeActiveSeconds"] == 0
 
-def test_zero_delta_event_save_report_does_not_touch_last_raw_report_received_at():
+def test_zero_delta_event_save_report_touches_report_liveness_without_report_rows():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "HB Author", "displayName": "HB Author"})
     payload = {
@@ -1457,7 +1457,7 @@ def test_zero_delta_event_save_report_does_not_touch_last_raw_report_received_at
 
     profile = repo.db.author_profiles.find_one({"rawAuthor": "HB Author"})
     assert profile is not None
-    assert profile.get("lastRawReportReceivedAt") is None
+    assert profile.get("lastRawReportReceivedAt") is not None
     assert repo.db.report_rows.items == []
     assert len(repo.db.raw_reports.items) == 1
     assert len(repo.db.raw_event_batches.items) == 1

@@ -1114,6 +1114,7 @@ def _with_author_presence(
     item = dict(author)
     presence_clock = now
     last_received_at = _coerce_datetime(item.get("lastReceivedAt"))
+    last_report_received_at = _coerce_datetime(item.get("_lastReportReceivedAt")) or last_received_at
     stale_threshold_seconds = max(0, send_interval_seconds * 2)
     active_meeting = bool(item.get("activeMeeting"))
     forced_offline = False
@@ -1123,8 +1124,8 @@ def _with_author_presence(
         pass
     elif not track_plugin_staleness:
         pass
-    elif last_received_at:
-        seconds_since_report = max(0, int((presence_clock - last_received_at).total_seconds()))
+    elif last_report_received_at:
+        seconds_since_report = max(0, int((presence_clock - last_report_received_at).total_seconds()))
 
         if seconds_since_report > stale_threshold_seconds:
             has_reports_stopped = True
@@ -1162,6 +1163,7 @@ def _with_author_presence(
 
     item["sendIntervalSeconds"] = send_interval_seconds
     item["staleThresholdSeconds"] = stale_threshold_seconds
+    item.pop("_lastReportReceivedAt", None)
     return item
 
 

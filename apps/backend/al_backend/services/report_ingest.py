@@ -124,7 +124,7 @@ class ReportIngestService(MongoComposableMixin):
         author_for_stale_touch = str(payload.get("author") or "Unknown User")
 
         if isinstance(payload.get("events"), list):
-            meaningful_for_stale = self._save_event_batch(
+            self._save_event_batch(
                 source=effective_source,
                 plugin_version=plugin_version,
                 payload=payload,
@@ -134,7 +134,7 @@ class ReportIngestService(MongoComposableMixin):
                 challenge_id=challenge_id,
                 device_id=resolved_device_id,
             )
-            if meaningful_for_stale and not self._is_unassigned_device_report_author(effective_source, author_for_stale_touch):
+            if not self._is_unassigned_device_report_author(effective_source, author_for_stale_touch):
                 composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
             composed(self).invalidate_activity_summary_cache()
             return str(raw_result.inserted_id)
