@@ -13,6 +13,9 @@ from ..overtime_rules import (
 from .activity_status_intervals import status_interval_context_for_event
 
 
+MIDNIGHT_OFFLINE_CARRYOVER_SUPPRESSION_SECONDS = 15 * 60
+
+
 def _float_or_none(value: Any) -> float | None:
     try:
         return float(value)
@@ -648,7 +651,7 @@ class ActivityRawEventAccountingMixin:
         if vacation_window:
             return vacation_window
 
-        night_window = None if self._suppress_night_overtime_after_previous_day_offline(event) else is_night_overtime_window(event)
+        night_window = None if self._suppress_night_overtime_for_midnight_offline_carryover(event) else is_night_overtime_window(event)
 
         if night_window:
             return night_window
@@ -669,7 +672,7 @@ class ActivityRawEventAccountingMixin:
         if event_window and _windows_overlap(start, end, event_window[0], event_window[1]):
             return event_window
 
-        if self._suppress_night_overtime_after_previous_day_offline(event):
+        if self._suppress_night_overtime_for_midnight_offline_carryover(event):
             return None
 
         probe = dict(event)
@@ -686,14 +689,14 @@ class ActivityRawEventAccountingMixin:
 
         if is_vacation_overtime_window(event, context):
             return "vacation"
-        if not self._suppress_night_overtime_after_previous_day_offline(event) and is_night_overtime_window(event):
+        if not self._suppress_night_overtime_for_midnight_offline_carryover(event) and is_night_overtime_window(event):
             return "night"
         if is_telegram_overtime_window(event, context):
             return "telegram"
 
         return None
 
-    def _suppress_night_overtime_after_previous_day_offline(self, event: dict[str, Any]) -> bool:
+    def _suppress_night_overtime_for_midnight_offline_carryover(self, event: dict[str, Any]) -> bool:
         occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or _coerce_datetime(event.get("occurredAt"))
         raw_author = str(event.get("author") or "Unknown User")
         day_date = str(event.get("date") or "")
@@ -721,10 +724,29 @@ class ActivityRawEventAccountingMixin:
                 latest_event = current
                 latest_timestamp = timestamp
 
+        if not latest_event or not latest_timestamp:
+            return False
+
+        if str(latest_event.get("eventType") or "") != "offline" or str(latest_event.get("date") or "") == day_date:
+            return False
+
+        time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
+        zone = ZoneInfo(time_zone_id)
+        occurred_local = occurred_at.astimezone(zone)
+        latest_local = latest_timestamp.astimezone(zone)
+
+        try:
+            event_day = dt.date.fromisoformat(day_date)
+        except ValueError:
+            return False
+
+        midnight_local = dt.datetime.combine(event_day, dt.time.min, zone)
+
         return (
-            bool(latest_event)
-            and str(latest_event.get("eventType") or "") == "offline"
-            and str(latest_event.get("date") or "") != day_date
+            latest_local.date() == event_day - dt.timedelta(days=1)
+            and latest_local <= midnight_local
+            and (midnight_local - latest_local).total_seconds() <= MIDNIGHT_OFFLINE_CARRYOVER_SUPPRESSION_SECONDS
+            and occurred_local.date() == event_day
         )
 
     def _has_reports_stopped_gap_overlap(self, event: dict[str, Any], start: dt.datetime, end: dt.datetime) -> bool:

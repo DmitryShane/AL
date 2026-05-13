@@ -1296,6 +1296,86 @@ def test_cross_midnight_raw_event_batch_splits_report_rows_by_local_date():
     rebuilt_rows_by_date = {row["date"]: row for row in repo.db.report_rows.items if row.get("source") == "cur"}
     assert rebuilt_rows_by_date["2026-05-03"]["overtimeActiveDeltaSeconds"] == 0
 
+def test_night_overtime_after_previous_day_offline_counts_new_day_activity():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "telegramUsername": "igor_mats",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    for break_event in [
+        {
+            "telegramUsername": "igor_mats",
+            "rawAuthor": "Igor Mats",
+            "eventType": "online",
+            "timestamp": dt.datetime(2026, 5, 12, 14, 0, tzinfo=dt.UTC),
+            "date": "2026-05-12",
+            "timeZoneId": "America/Vancouver",
+        },
+        {
+            "telegramUsername": "igor_mats",
+            "rawAuthor": "Igor Mats",
+            "eventType": "offline",
+            "timestamp": dt.datetime(2026, 5, 13, 0, 51, 7, tzinfo=dt.UTC),
+            "date": "2026-05-12",
+            "timeZoneId": "America/Vancouver",
+        },
+    ]:
+        repo.db.break_events.insert_one(break_event)
+
+    base_event = {
+        "source": "vsc",
+        "author": "Igor Mats",
+        "projectId": "AL",
+        "deviceId": "mac-mini",
+        "date": "2026-05-13",
+        "timeZoneId": "America/Vancouver",
+        "timeZoneDisplayName": "America/Vancouver",
+        "receivedAt": dt.datetime(2026, 5, 13, 7, 0, 1, tzinfo=dt.UTC),
+    }
+
+    repo._apply_raw_event_to_aggregates(
+        base_event
+        | {
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-13T07:00:01Z",
+            "occurredAtLocal": "2026-05-13T00:00:01-07:00",
+        }
+    )
+    active_deltas = repo._apply_raw_event_to_aggregates(
+        base_event
+        | {
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-13T07:02:01Z",
+            "occurredAtLocal": "2026-05-13T00:02:01-07:00",
+            "receivedAt": dt.datetime(2026, 5, 13, 7, 2, 1, tzinfo=dt.UTC),
+        }
+    )
+    heartbeat_deltas = repo._apply_raw_event_to_aggregates(
+        base_event
+        | {
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-05-13T08:15:00Z",
+            "occurredAtLocal": "2026-05-13T01:15:00-07:00",
+            "receivedAt": dt.datetime(2026, 5, 13, 8, 15, tzinfo=dt.UTC),
+        }
+    )
+
+    assert active_deltas["overtimeActiveDeltaSeconds"] == 120
+    assert active_deltas["activeDeltaSeconds"] == 0
+    assert heartbeat_deltas["idleDeltaSeconds"] == 0
+    assert heartbeat_deltas["activeDeltaSeconds"] == 0
+    assert heartbeat_deltas["overtimeActiveDeltaSeconds"] == 0
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Igor Mats", "source": "vsc", "date": "2026-05-13"}) or {}
+    assert daily["overtimeActiveSeconds"] == 120
+    assert daily["activeSeconds"] == 0
+    assert daily["idleSeconds"] == 0
+
 def test_cursor_activity_project_appears_in_saved_files_without_file_save():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
