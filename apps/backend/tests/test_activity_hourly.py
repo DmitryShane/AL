@@ -1233,6 +1233,60 @@ def test_auto_break_does_not_use_telegram_to_first_activity_gap():
     assert _hour_metric(hourly_by_hour[10], "telegramToFirstActivityIdleSeconds") == 17 * 60 + 30
     assert _hour_segments(hourly_by_hour[10], "telegram-idle")[0] == {"startSecond": 0, "endSecond": 17 * 60 + 30}
 
+def test_auto_break_does_not_use_idle_before_telegram_online():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "America/Vancouver",
+            "autoBreakEnabled": True,
+            "autoBreakEffectiveDate": "2026-05-13",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-13",
+            "startedAt": dt.datetime(2026, 5, 13, 14, 51, 7, tzinfo=dt.UTC),
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[6]["idleSeconds"] = 3537
+    hourly_activity[6]["idleMicroseconds"] = 3_537_000_000
+    hourly_activity[6]["fillSegments"] = [{"kind": "idle", "startSecond": 62, "endSecond": 3600}]
+    hourly_activity[7]["idleSeconds"] = 3600
+    hourly_activity[7]["idleMicroseconds"] = 3_600_000_000
+    hourly_activity[7]["fillSegments"] = [{"kind": "idle", "startSecond": 0, "endSecond": 3600}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "vsc",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "date": "2026-05-13",
+            "activeSeconds": 0,
+            "idleSeconds": 7137,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-05-13",
+        end_date="2026-05-13",
+        date_mode="authorLocalToday",
+        now=dt.datetime(2026, 5, 13, 16, tzinfo=dt.UTC),
+    )
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Future Artist")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert _hour_segments(hourly_by_hour[6], "auto-afk") == []
+    assert _hour_segments(hourly_by_hour[7], "auto-afk")[0]["startSecond"] >= 51 * 60 + 7
+    assert _missed_start_seconds(hourly_by_hour[7]) == 51 * 60 + 7
+
 def test_plugin_hour_gap_after_telegram_to_first_activity_extends_active_fill():
     hourly_activity = empty_hourly_activity()
     hourly_activity[12]["activeSeconds"] = 2739
@@ -1957,6 +2011,22 @@ def test_auto_break_places_partial_break_after_remaining_idle():
     public_hourly = public_hourly_activity(hourly_activity)
     assert _hour_segments(public_hourly[13], "auto-afk") == [{"startSecond": 2190, "endSecond": 3339}]
     assert _hour_segments(public_hourly[13], "idle") == [{"startSecond": 3339, "endSecond": 3600}]
+
+def test_auto_break_boundary_positions_partial_break_after_online_second():
+    repo = fake_repository()
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[7]["idleSeconds"] = 3600
+    hourly_activity[7]["idleMicroseconds"] = 3_600_000_000
+
+    transferred_seconds = transfer_summary_idle_to_auto_break(hourly_activity, 1200, {7: 1800})
+
+    assert transferred_seconds == 1200
+    public_hourly = public_hourly_activity(hourly_activity)
+    assert _hour_segments(public_hourly[7], "auto-afk") == [{"startSecond": 1800, "endSecond": 3000}]
+    assert _hour_segments(public_hourly[7], "idle") == [
+        {"startSecond": 0, "endSecond": 1800},
+        {"startSecond": 3000, "endSecond": 3600},
+    ]
 
 def test_auto_break_does_not_overflow_hour_with_visual_missed_start():
     repo = fake_repository()

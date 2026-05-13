@@ -115,6 +115,11 @@ class ActivitySummaryHourlyMixin:
             transferred_seconds = transfer_summary_idle_to_auto_break(
                 hourly_author.get("hourlyActivity", []),
                 remaining_seconds,
+                self._auto_break_start_second_by_hour(
+                    raw_author,
+                    profiles,
+                    summary_dates_by_author.get(raw_author, set()),
+                ),
             )
 
             if transferred_seconds <= 0:
@@ -159,6 +164,37 @@ class ActivitySummaryHourlyMixin:
             remaining_seconds += AUTO_BREAK_SECONDS
 
         return remaining_seconds
+
+    def _auto_break_start_second_by_hour(
+        self,
+        raw_author: str,
+        profiles: dict[str, dict[str, Any]],
+        summary_dates: set[str],
+    ) -> dict[int, int] | None:
+        if len(summary_dates) != 1:
+            return None
+
+        day_date = next(iter(summary_dates))
+        session = self.db.day_sessions.find_one(
+            {"rawAuthor": raw_author, "date": day_date},
+            {"_id": 0, "startedAt": 1, "timeZoneId": 1},
+        ) or {}
+        started_at = _coerce_datetime(session.get("startedAt"))
+
+        if not started_at:
+            return None
+
+        time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
+        local_started_at = _to_local_datetime(started_at, time_zone_id)
+
+        if local_started_at.date().isoformat() != day_date:
+            return None
+
+        start_second_by_hour = {hour: 3600 for hour in range(local_started_at.hour)}
+        start_second_by_hour[local_started_at.hour] = (
+            local_started_at.minute * 60 + local_started_at.second
+        )
+        return start_second_by_hour
 
     def _apply_vacation_summary_overrides(
         self,

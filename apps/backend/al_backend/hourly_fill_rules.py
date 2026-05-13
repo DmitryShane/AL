@@ -19,6 +19,7 @@ INTERNAL_OVERTIME_START_SECOND = "_overtimeStartSecond"
 INTERNAL_MISSED_START_SECONDS = "_visualMissedStartSeconds"
 INTERNAL_MISSED_END_SECONDS = "_visualMissedEndSeconds"
 INTERNAL_HAS_SOURCE_BREAK_OVERLAP = "_hasSourceBreakOverlap"
+INTERNAL_AUTO_BREAK_START_SECOND = "_autoBreakStartSecond"
 VISUAL_ACTIVE_NOISE_SECONDS = 10
 
 
@@ -56,6 +57,7 @@ def empty_hourly_activity() -> list[dict[str, Any]]:
             "missedSeconds": 0,
             INTERNAL_MISSED_START_SECONDS: 0,
             INTERNAL_MISSED_END_SECONDS: 0,
+            INTERNAL_AUTO_BREAK_START_SECOND: None,
             "telegramToFirstActivityIdleSeconds": 0,
             "workdayHourGapIdleSeconds": 0,
             "fillSegments": [],
@@ -144,7 +146,11 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
     _append_available_seconds(generated, "idle", generic_idle_seconds)
     if _clamp_second(overtime_start_second) is not None:
         _append_available_seconds(generated, "overtime-fill", int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)))
-    return normalize_hour_fill(generated, post_activity_start_second=overtime_start_second)
+    return normalize_hour_fill(
+        generated,
+        post_activity_start_second=overtime_start_second,
+        auto_afk_start_second=hour.get(INTERNAL_AUTO_BREAK_START_SECOND),
+    )
 
 
 def normalize_hour_fill(
@@ -152,6 +158,7 @@ def normalize_hour_fill(
     *,
     apply_stack_rules: bool = True,
     post_activity_start_second: Any = None,
+    auto_afk_start_second: Any = None,
 ) -> list[dict[str, Any]]:
     sanitized = _sanitize_fill_segments(segments)
 
@@ -182,7 +189,11 @@ def normalize_hour_fill(
             timeline[second] = "missed"
 
     if apply_stack_rules:
-        _apply_stack_layers(timeline, post_activity_start_second=post_activity_start_second)
+        _apply_stack_layers(
+            timeline,
+            post_activity_start_second=post_activity_start_second,
+            auto_afk_start_second=auto_afk_start_second,
+        )
 
     normalized = []
     cursor = 0
@@ -204,7 +215,12 @@ def normalize_hour_fill(
     return normalized
 
 
-def _apply_stack_layers(timeline: list[str | None], *, post_activity_start_second: Any = None) -> None:
+def _apply_stack_layers(
+    timeline: list[str | None],
+    *,
+    post_activity_start_second: Any = None,
+    auto_afk_start_second: Any = None,
+) -> None:
     bottom_stack_seconds = _stack_seconds_by_kind(timeline, BOTTOM_STACK_KINDS)
     meeting_stack_seconds = _stack_seconds_by_kind(timeline, MEETING_STACK_KINDS)
     auto_afk_stack_seconds = _stack_seconds_by_kind(timeline, AUTO_AFK_STACK_KINDS)
@@ -245,8 +261,11 @@ def _apply_stack_layers(timeline: list[str | None], *, post_activity_start_secon
     for kind in MEETING_STACK_KINDS:
         _fill_empty_timeline_slots(timeline, kind, meeting_stack_seconds.get(kind, 0), range(3600))
 
+    auto_afk_start = _clamp_second(auto_afk_start_second)
+    auto_afk_indexes = range(auto_afk_start, 3600) if auto_afk_start is not None else range(3600)
+
     for kind in AUTO_AFK_STACK_KINDS:
-        _fill_empty_timeline_slots(timeline, kind, auto_afk_stack_seconds.get(kind, 0), range(3600))
+        _fill_empty_timeline_slots(timeline, kind, auto_afk_stack_seconds.get(kind, 0), auto_afk_indexes)
 
     for kind in MIDDLE_STACK_KINDS:
         _fill_empty_timeline_slots(timeline, kind, middle_stack_seconds.get(kind, 0), range(3600))
@@ -674,7 +693,11 @@ def apply_visual_missed_end_fallbacks(
         add_visual_missed_seconds(hourly_activity, fallback_hour_index, 3600, INTERNAL_MISSED_END_SECONDS)
 
 
-def transfer_summary_idle_to_auto_break(hourly_activity: list[dict[str, Any]], remaining_seconds: int) -> int:
+def transfer_summary_idle_to_auto_break(
+    hourly_activity: list[dict[str, Any]],
+    remaining_seconds: int,
+    auto_break_start_second_by_hour: dict[int, int] | None = None,
+) -> int:
     if remaining_seconds <= 0:
         return 0
 
@@ -683,6 +706,16 @@ def transfer_summary_idle_to_auto_break(hourly_activity: list[dict[str, Any]], r
     for hour in sorted(hourly_activity, key=lambda item: int(item.get("hour", 0))):
         _disable_regular_afk_for_auto_break_hour(hour)
         if transferred_seconds >= remaining_seconds:
+            continue
+
+        hour_index = int(hour.get("hour", 0))
+        auto_break_start_second = (
+            max(0, min(3600, int(auto_break_start_second_by_hour.get(hour_index, 0))))
+            if auto_break_start_second_by_hour is not None
+            else 0
+        )
+
+        if auto_break_start_second >= 3600:
             continue
 
         idle_seconds = max(0, int(hour.get("idleSeconds", 0)))
@@ -710,7 +743,13 @@ def transfer_summary_idle_to_auto_break(hourly_activity: list[dict[str, Any]], r
         if available_break_seconds <= 0:
             continue
 
-        move_seconds = min(convertible_idle_seconds, available_break_seconds, remaining_seconds - transferred_seconds)
+        boundary_available_seconds = 3600 - auto_break_start_second
+        move_seconds = min(
+            convertible_idle_seconds,
+            available_break_seconds,
+            boundary_available_seconds,
+            remaining_seconds - transferred_seconds,
+        )
         idle_microseconds = max(
             0,
             time_microseconds(hour, "idleSeconds", "idleMicroseconds") - (move_seconds * MICROSECONDS_PER_SECOND),
@@ -720,6 +759,13 @@ def transfer_summary_idle_to_auto_break(hourly_activity: list[dict[str, Any]], r
         _clamp_synthetic_idle_counters(hour)
         hour["breakSeconds"] = int(hour.get("breakSeconds", 0)) + move_seconds
         hour["autoBreakSeconds"] = int(hour.get("autoBreakSeconds", 0)) + move_seconds
+        if auto_break_start_second > 0:
+            current_start_second = _clamp_second(hour.get(INTERNAL_AUTO_BREAK_START_SECOND))
+            hour[INTERNAL_AUTO_BREAK_START_SECOND] = (
+                min(current_start_second, auto_break_start_second)
+                if current_start_second is not None
+                else auto_break_start_second
+            )
         normalize_fill_segments_in_hour(hour)
         transferred_seconds += move_seconds
 
