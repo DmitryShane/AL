@@ -105,6 +105,9 @@ class ReportListingService(MongoComposableMixin):
         source_candidate_rows = list(self.db.report_rows.find(source_query, self._reports_projection()))
         meeting_lookup = self._meeting_lookup_for_reports(candidate_rows)
         break_lookup = self._break_lookup_for_reports(candidate_rows)
+        uses_post_filters = date_mode == "authorLocalToday" or self._reports_page_uses_post_filters(
+            hour, status_intervals, candidate_rows, meeting_lookup, break_lookup
+        )
         source_meeting_lookup = self._meeting_lookup_for_reports(source_candidate_rows)
         source_break_lookup = self._break_lookup_for_reports(source_candidate_rows)
         sources = sorted(
@@ -129,14 +132,10 @@ class ReportListingService(MongoComposableMixin):
             key=lambda value: value.lower(),
         )
         reports: list[dict[str, Any]] = []
-        total = 0
 
-        for item in candidate_rows:
-            row_context = self._report_row_author_context(item, profiles)
-
-            if not self._report_row_visible_in_scope(
-                item,
-                row_context,
+        if uses_post_filters:
+            filtered_rows = self._filtered_reports_page_rows(
+                query,
                 profiles,
                 now,
                 start_date,
@@ -144,26 +143,34 @@ class ReportListingService(MongoComposableMixin):
                 date_mode,
                 hour,
                 status_intervals,
-                meeting_lookup,
-                break_lookup,
-            ):
-                continue
+            )
+            total = len(filtered_rows)
+            reports = [self._enrich_report_table_row(item, profiles) for item in filtered_rows[offset : offset + limit]]
+        else:
+            total = 0
+            for item in candidate_rows:
+                row_context = self._report_row_author_context(item, profiles)
 
-            if total >= offset and len(reports) < limit:
-                resolved_author = row_context["resolved_author"]
-                profile = row_context["profile"]
-                item["displayName"] = _display_name(resolved_author, profile)
-                item["team"] = profile.get("team", "")
-                item["timeZoneId"] = profile.get("timeZoneId") or item.get("timeZoneId")
-                item["timeZoneDisplayName"] = profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName")
-                item["receivedAt"] = _iso(item.get("receivedAt"))
-                reports.append(item)
+                if not self._report_row_visible_in_scope(
+                    item,
+                    row_context,
+                    profiles,
+                    now,
+                    start_date,
+                    end_date,
+                    date_mode,
+                    hour,
+                    status_intervals,
+                    meeting_lookup,
+                    break_lookup,
+                ):
+                    continue
 
-            total += 1
+                if total >= offset and len(reports) < limit:
+                    reports.append(self._enrich_report_table_row(item, profiles, row_context))
 
-        if date_mode != "authorLocalToday" and not self._reports_page_uses_post_filters(
-            hour, status_intervals, candidate_rows, meeting_lookup, break_lookup
-        ):
+                total += 1
+
             total = self.db.report_rows.count_documents(query)
 
         return {
@@ -306,6 +313,56 @@ class ReportListingService(MongoComposableMixin):
         rows = list(cursor)
         rows.sort(key=lambda row: _report_table_sort_key(row, status_intervals), reverse=True)
         return rows
+
+    def _filtered_reports_page_rows(
+        self,
+        query: dict[str, Any],
+        profiles: dict[str, dict[str, Any]],
+        now: dt.datetime,
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        hour: int | None,
+        status_intervals: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]],
+    ) -> list[dict[str, Any]]:
+        rows = list(self.db.report_rows.find(query, self._reports_projection()))
+        rows.sort(key=lambda row: _report_table_sort_key(row, status_intervals), reverse=True)
+        meeting_lookup = self._meeting_lookup_for_reports(rows)
+        break_lookup = self._break_lookup_for_reports(rows)
+        return [
+            item
+            for item in rows
+            if self._report_row_visible_in_scope(
+                item,
+                self._report_row_author_context(item, profiles),
+                profiles,
+                now,
+                start_date,
+                end_date,
+                date_mode,
+                hour,
+                status_intervals,
+                meeting_lookup,
+                break_lookup,
+            )
+        ]
+
+    def _enrich_report_table_row(
+        self,
+        item: dict[str, Any],
+        profiles: dict[str, dict[str, Any]],
+        row_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        row = dict(item)
+        context = row_context or self._report_row_author_context(row, profiles)
+        resolved_author = context["resolved_author"]
+        profile = context["profile"]
+        row["displayName"] = _display_name(resolved_author, profile)
+        row["team"] = profile.get("team", "")
+        row["timeZoneId"] = profile.get("timeZoneId") or row.get("timeZoneId")
+        row["timeZoneDisplayName"] = profile.get("timeZoneDisplayName") or row.get("timeZoneDisplayName")
+        row["receivedAt"] = _iso(row.get("receivedAt"))
+        return row
 
     def _reports_page_uses_post_filters(
         self,

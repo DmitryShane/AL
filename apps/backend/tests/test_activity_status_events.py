@@ -809,6 +809,47 @@ def test_reports_page_hides_source_rows_between_status_offline_and_online():
         ("status", "offline"),
     ]
 
+def test_reports_page_total_is_stable_with_hour_post_filter():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    for index in range(60):
+        minute = index % 60
+        repo.db.report_rows.insert_one(
+            {
+                "source": "ual",
+                "pluginVersion": "unity-plugin",
+                "author": "Future Artist",
+                "date": "2026-04-29",
+                "recordedAt": f"2026-04-29T11:{minute:02d}:00+00:00",
+                "receivedAt": dt.datetime(2026, 4, 29, 11, minute, tzinfo=dt.UTC),
+                "activeDeltaSeconds": 60,
+                "idleDeltaSeconds": 0,
+                "overtimeActiveDeltaSeconds": 0,
+            }
+        )
+    for index in range(13):
+        repo.db.report_rows.insert_one(
+            {
+                "source": "ual",
+                "pluginVersion": "unity-plugin",
+                "author": "Future Artist",
+                "date": "2026-04-29",
+                "recordedAt": f"2026-04-29T10:{index:02d}:00+00:00",
+                "receivedAt": dt.datetime(2026, 4, 29, 10, index, tzinfo=dt.UTC),
+                "activeDeltaSeconds": 60,
+                "idleDeltaSeconds": 0,
+                "overtimeActiveDeltaSeconds": 0,
+            }
+        )
+
+    first_page = repo.reports_page(start_date="2026-04-29", end_date="2026-04-29", author="Future Artist", hour=10, limit=10, offset=0)
+    last_page = repo.reports_page(start_date="2026-04-29", end_date="2026-04-29", author="Future Artist", hour=10, limit=10, offset=10)
+
+    assert first_page["total"] == 13
+    assert last_page["total"] == 13
+    assert len(first_page["reports"]) == 10
+    assert len(last_page["reports"]) == 3
+
 def test_reports_page_hides_only_source_rows_after_open_status_offline():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
