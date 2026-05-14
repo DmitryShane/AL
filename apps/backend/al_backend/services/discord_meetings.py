@@ -647,6 +647,14 @@ class DiscordMeetingService(MongoComposableMixin):
         now = dt.datetime.now(dt.UTC)
         started = _parse_timestamp(started_at)
         ended = _parse_timestamp(ended_at)
+        started, ended, participant_discord_user_ids, participant_names = self._resolve_meeting_recording_activity_window(
+            guild_id=guild_id,
+            channel_id=channel_id,
+            started_at=started,
+            ended_at=ended,
+            participant_discord_user_ids=participant_discord_user_ids,
+            participant_names=participant_names,
+        )
         duration_seconds = max(0, int((ended - started).total_seconds()))
         settings = composed(self).get_discord_settings()
         self._schedule_telegram_meeting_recording_notification(
@@ -771,8 +779,11 @@ class DiscordMeetingService(MongoComposableMixin):
             {
                 "$set": {
                     "status": "waiting_for_telegram",
+                    "startedAt": started,
                     "endedAt": ended,
                     "durationSeconds": duration_seconds,
+                    "participantDiscordUserIds": participant_discord_user_ids,
+                    "participantNames": participant_names,
                     "summaryId": summary_id,
                     "updatedAt": now,
                 },
@@ -781,6 +792,89 @@ class DiscordMeetingService(MongoComposableMixin):
             upsert=True,
         )
         return {"ok": True, "status": "summary_created", "summaryId": summary_id}
+
+    def _resolve_meeting_recording_activity_window(
+        self,
+        *,
+        guild_id: str | None,
+        channel_id: str | None,
+        started_at: dt.datetime,
+        ended_at: dt.datetime,
+        participant_discord_user_ids: list[str],
+        participant_names: list[str],
+    ) -> tuple[dt.datetime, dt.datetime, list[str], list[str]]:
+        if not channel_id:
+            return started_at, ended_at, participant_discord_user_ids, participant_names
+
+        query_start = started_at - dt.timedelta(hours=12)
+        query_end = ended_at + dt.timedelta(minutes=5)
+        query: dict[str, Any] = {
+            "channelId": str(channel_id or ""),
+            "eventType": {"$in": ["join", "leave"]},
+            "timestamp": {"$gte": query_start, "$lte": query_end},
+        }
+
+        if guild_id:
+            query["guildId"] = str(guild_id or "")
+
+        events = list(self.db.meeting_events.find(query, {"_id": 0}).sort([("timestamp", 1)]))
+
+        if not events:
+            return started_at, ended_at, participant_discord_user_ids, participant_names
+
+        active: dict[str, str] = {}
+        segment_started_at: dt.datetime | None = None
+        segment_participants: dict[str, str] = {}
+        best: tuple[dt.datetime, dt.datetime, dict[str, str]] | None = None
+
+        for event in events:
+            event_time = _coerce_datetime(event.get("timestamp"))
+
+            if not event_time:
+                continue
+
+            discord_user_id = _normalize_discord_user_id(event.get("discordUserId"))
+            name = str(event.get("discordUsername") or event.get("rawAuthor") or discord_user_id).strip()
+
+            if not discord_user_id:
+                continue
+
+            if event.get("eventType") == "join":
+                if not active:
+                    segment_started_at = event_time
+                    segment_participants = {}
+
+                active[discord_user_id] = name
+                segment_participants[discord_user_id] = name
+                continue
+
+            if event.get("eventType") != "leave":
+                continue
+
+            if discord_user_id in active:
+                segment_participants[discord_user_id] = active[discord_user_id] or name
+                active.pop(discord_user_id, None)
+
+            if segment_started_at and not active:
+                if segment_started_at <= ended_at and event_time >= started_at:
+                    best = (segment_started_at, event_time, dict(segment_participants))
+                segment_started_at = None
+                segment_participants = {}
+
+        if not best and segment_started_at and segment_started_at <= ended_at:
+            best = (segment_started_at, max(ended_at, started_at), dict(segment_participants or active))
+
+        if not best:
+            return started_at, ended_at, participant_discord_user_ids, participant_names
+
+        window_started_at, window_ended_at, window_participants = best
+
+        if window_ended_at <= window_started_at:
+            return started_at, ended_at, participant_discord_user_ids, participant_names
+
+        ids = sorted(window_participants.keys())
+        names = [window_participants[item] or item for item in ids]
+        return window_started_at, window_ended_at, ids or participant_discord_user_ids, names or participant_names
 
     def queue_meeting_recording_summary_processing(
         self,

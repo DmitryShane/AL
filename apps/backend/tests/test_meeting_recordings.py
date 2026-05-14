@@ -122,6 +122,68 @@ def test_meeting_recording_finished_creates_summary_notification():
     assert "Meeting summary" in repo.recent_meeting_activity()[1]["recording"]["telegramMessage"]
     assert "Discord summaries" in repo.recent_meeting_activity()[1]["recording"]["telegramMessage"]
 
+def test_meeting_recording_summary_uses_voice_event_window_when_recording_started_late():
+    repo = fake_repository()
+
+    for discord_user_id, raw_author, username in (
+        ("1", "Dmitry Shane", "dmitryshane"),
+        ("2", "Denis Ostrovskiy", "vedamir"),
+        ("3", "Igor Mats", "igor.mats"),
+    ):
+        repo.db.author_profiles.insert_one(
+            {
+                "rawAuthor": raw_author,
+                "displayName": raw_author,
+                "telegramUsername": username.replace(".", ""),
+                "discordUserId": discord_user_id,
+            }
+        )
+
+    repo.upsert_discord_summary_settings(
+        meeting_auto_afk_timeout_seconds=600,
+        meeting_summaries_enabled=True,
+        meeting_summary_min_participants=2,
+        meeting_summary_min_duration_seconds=60,
+        meeting_summary_language="English",
+        meeting_summary_recipient="work_chat",
+        meeting_audio_retention_seconds=0,
+        meeting_summary_prompt="",
+    )
+
+    for discord_user_id, raw_author, username, joined_at, left_at in (
+        ("1", "Dmitry Shane", "dmitryshane", "2026-05-14T14:51:14+00:00", "2026-05-14T15:20:11+00:00"),
+        ("2", "Denis Ostrovskiy", "vedamir", "2026-05-14T14:51:23+00:00", "2026-05-14T15:20:12+00:00"),
+        ("3", "Igor Mats", "igor.mats", "2026-05-14T14:51:19+00:00", "2026-05-14T15:20:19+00:00"),
+    ):
+        repo.record_discord_voice_event(discord_user_id, username, "join", "guild", "channel", joined_at)
+        repo.record_discord_voice_event(discord_user_id, username, "leave", "guild", "channel", left_at)
+
+    class FakeSummary:
+        transcript = "The team discussed production meeting summary duration."
+        summary = "Discussed:\n- Production meeting summary duration.\n\nDecisions:\n- Use the voice channel window.\n\nAction items:\n- Ship the fix.\n\nOpen questions:\n- None."
+
+    result = repo.process_meeting_recording_finished(
+        recording_id="recording-late",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-05-14T15:14:44+00:00",
+        ended_at="2026-05-14T15:20:19+00:00",
+        participant_discord_user_ids=["1", "2"],
+        participant_names=["Dmitry", "Denis"],
+        audio_path="/tmp/missing.wav",
+        summary_generator=lambda path, people, language, prompt_template, progress_callback=None: FakeSummary(),
+    )
+    recording = repo.db.meeting_recordings.find_one({"recordingId": "recording-late"})
+    summary = repo.db.meeting_summaries.find_one({"recordingId": "recording-late"})
+
+    assert result["status"] == "summary_created"
+    assert recording["startedAt"] == dt.datetime(2026, 5, 14, 14, 51, 14, tzinfo=dt.UTC)
+    assert recording["endedAt"] == dt.datetime(2026, 5, 14, 15, 20, 19, tzinfo=dt.UTC)
+    assert recording["durationSeconds"] == 1745
+    assert recording["participantNames"] == ["dmitryshane", "vedamir", "igor.mats"]
+    assert summary["durationSeconds"] == 1745
+    assert summary["participantNames"] == ["dmitryshane", "vedamir", "igor.mats"]
+
 def test_meeting_recording_start_and_finish_create_telegram_notifications():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
