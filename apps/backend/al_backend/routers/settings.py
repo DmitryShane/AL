@@ -81,6 +81,14 @@ def remake_activity_snapshots(
     }
 
 
+@router.delete("/api/v1/settings/activity-snapshots/old-versions")
+def cleanup_old_activity_snapshots(
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.cleanup_old_activity_day_summary_snapshot_versions()
+
+
 @router.put("/api/v1/settings/avatars")
 def update_avatar_settings(
     settings_in: AvatarSettingsIn,

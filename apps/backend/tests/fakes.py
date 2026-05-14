@@ -132,6 +132,9 @@ class FakeCollection:
             item_value = item.get(key)
 
             if isinstance(value, dict):
+                if "$ne" in value and item_value == value["$ne"]:
+                    return False
+
                 if "$in" in value and item_value not in value["$in"]:
                     return False
 

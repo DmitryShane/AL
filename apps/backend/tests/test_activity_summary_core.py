@@ -782,6 +782,75 @@ def test_activity_author_day_snapshot_materializes_one_author_per_call():
     assert repo.db.activity_author_day_summary_snapshots.count_documents({"date": "2026-04-29"}) == 2
     assert repo.db.activity_day_summary_snapshots.find_one({"date": "2026-04-29"}) is not None
 
+def test_activity_author_day_snapshot_candidates_include_active_devices_and_publishers():
+    repo = fake_repository()
+    now = dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC)
+    repo.db.author_profiles.insert_one({"rawAuthor": "Alpha Artist", "displayName": "Alpha Artist", "timeZoneId": "UTC"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Publisher QA", "displayName": "Publisher QA", "profileType": "publisher"})
+
+    for author in ("Alpha Artist", "Device5", "Publisher QA"):
+        repo.db.daily_author_activity.insert_one(
+            {
+                "source": "cur",
+                "author": author,
+                "projectId": "al",
+                "date": "2026-04-29",
+                "activeSeconds": 120,
+                "idleSeconds": 0,
+                "activityCounts": [],
+                "savedPrefabs": [],
+                "overtimeActivityCounts": [],
+                "overtimeSavedPrefabs": [],
+                "hourlyActivity": empty_hourly_activity(),
+            }
+        )
+
+    first = repo.materialize_next_completed_author_day_snapshot(now=now)
+    second = repo.materialize_next_completed_author_day_snapshot(now=now)
+    third = repo.materialize_next_completed_author_day_snapshot(now=now)
+    fourth = repo.materialize_next_completed_author_day_snapshot(now=now)
+    status = repo.activity_snapshot_materialization_status(now=now)
+
+    assert first["processed"] is True
+    assert first["rawAuthor"] == "Alpha Artist"
+    assert second["processed"] is True
+    assert second["rawAuthor"] == "Device5"
+    assert third["processed"] is True
+    assert third["rawAuthor"] == "Publisher QA"
+    assert third["composed"] is True
+    assert fourth["processed"] is False
+    assert repo.db.activity_author_day_summary_snapshots.count_documents({"date": "2026-04-29"}) == 3
+    assert [row["rawAuthor"] for row in status["rows"]] == ["Alpha Artist", "Device5", "Publisher QA"]
+
+def test_historical_activity_summary_uses_only_authors_active_on_selected_day():
+    repo = fake_repository()
+    now = dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC)
+    repo.db.author_profiles.insert_one({"rawAuthor": "Alpha Artist", "displayName": "Alpha Artist", "timeZoneId": "UTC"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Inactive Publisher", "displayName": "Inactive Publisher", "profileType": "publisher"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Publisher QA", "displayName": "Publisher QA", "profileType": "publisher"})
+
+    for author in ("Alpha Artist", "Device5", "Publisher QA"):
+        repo.db.daily_author_activity.insert_one(
+            {
+                "source": "cur",
+                "author": author,
+                "projectId": "al",
+                "date": "2026-04-29",
+                "activeSeconds": 120,
+                "idleSeconds": 0,
+                "activityCounts": [],
+                "savedPrefabs": [],
+                "overtimeActivityCounts": [],
+                "overtimeSavedPrefabs": [],
+                "hourlyActivity": empty_hourly_activity(),
+            }
+        )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", date_mode=None, now=now)
+
+    assert [item["rawAuthor"] for item in summary["authors"]] == ["Alpha Artist", "Device5", "Publisher QA"]
+    assert [item["rawAuthor"] for item in summary["hourlyActivityByAuthor"]] == ["Alpha Artist", "Device5", "Publisher QA"]
+
 def test_activity_author_day_snapshot_skips_live_local_day():
     repo = fake_repository()
     now = dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC)
@@ -982,6 +1051,45 @@ def test_activity_snapshot_remake_range_deletes_selected_dates_and_processing_st
     assert repo.db.activity_author_day_summary_snapshots.find_one({"date": "2026-05-11"}) is None
     assert repo.db.activity_day_summary_snapshots.find_one({"date": "2026-05-12"}) is None
     assert repo.db.activity_snapshot_maintenance_state.find_one({"date": "2026-05-11"}) is None
+
+def test_activity_snapshot_store_removes_old_day_versions_for_same_date():
+    repo = fake_repository()
+    current_version = repo.activity_day_summary_snapshot_version()
+    old_version = current_version - 1
+
+    repo.db.activity_day_summary_snapshots.insert_one(
+        {"date": "2026-05-11", "view": "activity-day", "snapshotVersion": old_version, "payload": {"authors": []}}
+    )
+    repo.db.activity_day_summary_snapshots.insert_one(
+        {"date": "2026-05-10", "view": "activity-day", "snapshotVersion": old_version, "payload": {"authors": []}}
+    )
+
+    repo.store_activity_day_summary_snapshot("2026-05-11", {"authors": [{"rawAuthor": "Alpha Artist"}]})
+
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": "2026-05-11", "snapshotVersion": old_version}) is None
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": "2026-05-11", "snapshotVersion": current_version}) is not None
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": "2026-05-10", "snapshotVersion": old_version}) is not None
+
+def test_activity_snapshot_cleanup_old_versions_removes_stale_snapshot_documents():
+    repo = fake_repository()
+    current_version = repo.activity_day_summary_snapshot_version()
+    old_version = current_version - 1
+
+    repo.db.activity_day_summary_snapshots.insert_one({"date": "2026-05-11", "view": "activity-day", "snapshotVersion": old_version})
+    repo.db.activity_day_summary_snapshots.insert_one({"date": "2026-05-12", "view": "activity-day", "snapshotVersion": current_version})
+    repo.db.activity_author_day_summary_snapshots.insert_one({"date": "2026-05-11", "rawAuthor": "Alpha", "snapshotVersion": old_version})
+    repo.db.activity_author_day_summary_snapshots.insert_one({"date": "2026-05-12", "rawAuthor": "Alpha", "snapshotVersion": current_version})
+    repo.db.activity_snapshot_maintenance_state.insert_one({"kind": "author-day", "date": "2026-05-11", "snapshotVersion": old_version})
+
+    result = repo.cleanup_old_activity_day_summary_snapshot_versions()
+
+    assert result["deletedDaySnapshots"] == 1
+    assert result["deletedAuthorDaySnapshots"] == 1
+    assert repo.db.activity_day_summary_snapshots.find_one({"snapshotVersion": old_version}) is None
+    assert repo.db.activity_author_day_summary_snapshots.find_one({"snapshotVersion": old_version}) is None
+    assert repo.db.activity_snapshot_maintenance_state.find_one({"snapshotVersion": old_version}) is None
+    assert repo.db.activity_day_summary_snapshots.find_one({"snapshotVersion": current_version}) is not None
+    assert repo.db.activity_author_day_summary_snapshots.find_one({"snapshotVersion": current_version}) is not None
 
 def test_report_ingest_invalidates_only_affected_day_snapshots():
     repo = fake_repository()
@@ -1455,7 +1563,7 @@ def test_author_local_today_summary_uses_observer_selected_date_for_activity():
     assert kyiv_observer_authors["Kyiv Author"]["activeSeconds"] == 600
     assert kyiv_observer_authors["Vancouver Author"]["activeSeconds"] == 120
 
-def test_activity_summary_regular_date_keeps_calendar_filter_and_all_authors():
+def test_activity_summary_regular_single_day_keeps_only_authors_active_on_selected_day():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Madrid Author", "displayName": "Madrid Author", "timeZoneId": "Europe/Madrid"})
     repo.db.author_profiles.insert_one({"rawAuthor": "Utc Author", "displayName": "Utc Author", "timeZoneId": "UTC"})
@@ -1492,8 +1600,7 @@ def test_activity_summary_regular_date_keeps_calendar_filter_and_all_authors():
 
     authors = {author["rawAuthor"]: author for author in summary["authors"]}
     assert authors["Madrid Author"]["activeSeconds"] == 60
-    assert authors["Utc Author"]["activeSeconds"] == 0
-    assert authors["Utc Author"]["status"] == "stale"
+    assert "Utc Author" not in authors
 
 def test_plugin_day_time_is_capped_to_work_window():
     item = {"activeSeconds": 8 * 3600, "idleSeconds": 2 * 3600, "workWindowSeconds": 9 * 3600}

@@ -69,7 +69,8 @@ class ActivitySummaryService(
         include_breakdowns: bool = True,
     ) -> dict[str, Any]:
         composed(self).materialize_live_meeting_reports(now)
-        hidden_device_authors = self._hidden_device_authors()
+        historical_single_day = bool(start_date and start_date == end_date and not date_mode)
+        hidden_device_authors = set() if historical_single_day else self._hidden_device_authors()
         totals = {
             "daySeconds": 0,
             "telegramDaySeconds": 0,
@@ -530,11 +531,12 @@ class ActivitySummaryService(
                 totals["pluginDaySeconds"] = max(0, int(totals.get("pluginDaySeconds", 0)) - applied_reduction)
                 totals["rawPluginDaySeconds"] = max(0, int(totals.get("rawPluginDaySeconds", 0)) - applied_reduction)
 
-        for raw_author in composed(self).list_authors():
-            if raw_author in hidden_device_authors:
-                continue
+        if not historical_single_day:
+            for raw_author in composed(self).list_authors():
+                if raw_author in hidden_device_authors:
+                    continue
 
-            composed(self)._ensure_summary_author(authors_by_raw, raw_author, profiles)
+                composed(self)._ensure_summary_author(authors_by_raw, raw_author, profiles)
 
         for raw_author, author_row in authors_by_raw.items():
             if raw_author in hourly_by_author:
@@ -551,6 +553,11 @@ class ActivitySummaryService(
         for raw_author in hidden_device_authors:
             authors_by_raw.pop(raw_author, None)
             hourly_by_author.pop(raw_author, None)
+
+        if historical_single_day:
+            for raw_author in list(hourly_by_author):
+                if raw_author not in authors_by_raw:
+                    hourly_by_author.pop(raw_author, None)
 
         self._apply_vacation_summary_overrides(
             authors_by_raw,

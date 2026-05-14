@@ -8,9 +8,10 @@ from ..hourly_fill_rules import empty_hourly_activity
 class ActivityDaySummarySnapshotsMixin:
     ACTIVITY_DAY_SUMMARY_SNAPSHOT_VIEW = "activity-day"
     ACTIVITY_AUTHOR_DAY_SUMMARY_MAINTENANCE_LIMIT = 3
+    ACTIVITY_DAY_SUMMARY_SNAPSHOT_VERSION_OFFSET = 1
 
     def activity_day_summary_snapshot_version(self) -> int:
-        return int(getattr(composed(self), "aggregates_version", 0))
+        return int(getattr(composed(self), "aggregates_version", 0)) + self.ACTIVITY_DAY_SUMMARY_SNAPSHOT_VERSION_OFFSET
 
     def activity_day_summary_snapshot_for_request(
         self,
@@ -72,18 +73,26 @@ class ActivityDaySummarySnapshotsMixin:
         if not snapshot_date:
             raise ValueError("day_date is required")
 
+        version = self.activity_day_summary_snapshot_version()
         stored_payload = {key: value for key, value in payload.items() if key not in {"cache", "snapshot"}}
+        self.db.activity_day_summary_snapshots.delete_many(
+            {
+                "date": snapshot_date,
+                "view": self.ACTIVITY_DAY_SUMMARY_SNAPSHOT_VIEW,
+                "snapshotVersion": {"$ne": version},
+            }
+        )
         self.db.activity_day_summary_snapshots.update_one(
             {
                 "date": snapshot_date,
                 "view": self.ACTIVITY_DAY_SUMMARY_SNAPSHOT_VIEW,
-                "snapshotVersion": self.activity_day_summary_snapshot_version(),
+                "snapshotVersion": version,
             },
             {
                 "$set": {
                     "date": snapshot_date,
                     "view": self.ACTIVITY_DAY_SUMMARY_SNAPSHOT_VIEW,
-                    "snapshotVersion": self.activity_day_summary_snapshot_version(),
+                    "snapshotVersion": version,
                     "payload": stored_payload,
                     "builtAt": dt.datetime.now(dt.UTC),
                 }
@@ -203,6 +212,9 @@ class ActivityDaySummarySnapshotsMixin:
                 include_breakdowns=True,
             )
             author_payload = self._author_day_payload_from_summary(payload, raw_author)
+            self.db.activity_author_day_summary_snapshots.delete_many(
+                {"date": day_date, "rawAuthor": raw_author, "snapshotVersion": {"$ne": version}}
+            )
             self.db.activity_author_day_summary_snapshots.update_one(
                 {"date": day_date, "rawAuthor": raw_author, "snapshotVersion": version},
                 {
@@ -347,6 +359,9 @@ class ActivityDaySummarySnapshotsMixin:
                     include_breakdowns=True,
                 )
                 author_payload = self._author_day_payload_from_summary(payload, raw_author)
+                self.db.activity_author_day_summary_snapshots.delete_many(
+                    {"date": day_date, "rawAuthor": raw_author, "snapshotVersion": {"$ne": version}}
+                )
                 self.db.activity_author_day_summary_snapshots.update_one(
                     {"date": day_date, "rawAuthor": raw_author, "snapshotVersion": version},
                     {
@@ -382,6 +397,13 @@ class ActivityDaySummarySnapshotsMixin:
         self.invalidate_activity_day_summary_snapshots(dates)
         self.db.activity_snapshot_maintenance_state.delete_many({"kind": "author-day", "date": {"$in": dates}})
         return {"ok": True, "dates": dates, "deletedDates": len(dates)}
+
+    def cleanup_old_activity_day_summary_snapshot_versions(self) -> dict[str, Any]:
+        version = self.activity_day_summary_snapshot_version()
+        deleted_author_day = self.db.activity_author_day_summary_snapshots.delete_many({"snapshotVersion": {"$ne": version}}).deleted_count
+        deleted_day = self.db.activity_day_summary_snapshots.delete_many({"snapshotVersion": {"$ne": version}}).deleted_count
+        self.db.activity_snapshot_maintenance_state.delete_many({"kind": "author-day", "snapshotVersion": {"$ne": version}})
+        return {"ok": True, "snapshotVersion": version, "deletedAuthorDaySnapshots": deleted_author_day, "deletedDaySnapshots": deleted_day}
 
     def invalidate_activity_day_summary_snapshots(
         self,
@@ -434,7 +456,8 @@ class ActivityDaySummarySnapshotsMixin:
         excluded_candidates = exclude or set()
 
         for item in self.db.daily_author_activity.find({}, {"_id": 0, "author": 1, "date": 1, "timeZoneId": 1}):
-            raw_author = composed(self).resolve_author_alias(item.get("author") or "Unknown User")
+            source_raw_author = str(item.get("author") or "Unknown User")
+            raw_author = composed(self).resolve_author_alias(source_raw_author)
             day_date = str(item.get("date") or "")
 
             if not raw_author or not day_date:
@@ -464,9 +487,13 @@ class ActivityDaySummarySnapshotsMixin:
         authors: set[str] = set()
 
         for item in self.db.daily_author_activity.find({"date": day_date}, {"_id": 0, "author": 1, "timeZoneId": 1}):
-            raw_author = composed(self).resolve_author_alias(item.get("author") or "Unknown User")
+            source_raw_author = str(item.get("author") or "Unknown User")
+            raw_author = composed(self).resolve_author_alias(source_raw_author)
 
-            if raw_author and not self._is_author_day_live(raw_author, day_date, now, item.get("timeZoneId")):
+            if not raw_author:
+                continue
+
+            if not self._is_author_day_live(raw_author, day_date, now, item.get("timeZoneId")):
                 authors.add(raw_author)
 
         return sorted(authors)
@@ -476,7 +503,8 @@ class ActivityDaySummarySnapshotsMixin:
         authors: dict[str, dict[str, Any]] = {}
 
         for item in self.db.daily_author_activity.find({"date": day_date}, {"_id": 0, "author": 1, "timeZoneId": 1}):
-            raw_author = composed(self).resolve_author_alias(item.get("author") or "Unknown User")
+            source_raw_author = str(item.get("author") or "Unknown User")
+            raw_author = composed(self).resolve_author_alias(source_raw_author)
 
             if not raw_author:
                 continue
