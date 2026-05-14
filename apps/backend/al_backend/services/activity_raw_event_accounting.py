@@ -442,12 +442,15 @@ class ActivityRawEventAccountingMixin:
 
             deltas[activity_delta_key].append({"type": activity_type, "count": 1})
 
+        event_has_overtime_time_delta = _time_microseconds(
+            deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds"
+        ) > 0
         saved_prefab = None if is_inside_status_offline else _saved_prefab_delta(event)
 
         if saved_prefab:
             saved_prefab_delta_key = "savedPrefabDeltas"
 
-            if _is_overtime_event_delta(consumed_normal_microseconds, deltas, overtime_window):
+            if event_has_overtime_time_delta:
                 saved_prefab_delta_key = "overtimeSavedPrefabDeltas"
 
             deltas[saved_prefab_delta_key].append(saved_prefab)
@@ -457,7 +460,7 @@ class ActivityRawEventAccountingMixin:
         if worked_file:
             worked_file_delta_key = "savedPrefabDeltas"
 
-            if _is_overtime_event_delta(consumed_normal_microseconds, deltas, overtime_window):
+            if event_has_overtime_time_delta:
                 worked_file_delta_key = "overtimeSavedPrefabDeltas"
 
             deltas[worked_file_delta_key].append(worked_file)

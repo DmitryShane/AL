@@ -708,6 +708,52 @@ def test_night_overtime_active_counts_on_same_calendar_day():
     assert hour_3["totals"]["overtimeSeconds"] == 120
     assert hour_3["totals"]["idleSeconds"] == 0
 
+def test_night_asset_saved_without_overtime_time_stays_normal_saved_prefab():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Denis Ostrovskiy", "displayName": "Denis Ostrovskiy", "timeZoneId": "Europe/Kyiv"}
+    )
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Denis Ostrovskiy",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "date": "2026-05-14",
+            "timeZoneId": "Europe/Kyiv",
+            "eventType": "asset_saved",
+            "occurredAtUtc": "2026-05-14T02:36:42Z",
+            "occurredAtLocal": "2026-05-14T05:36:42+03:00",
+            "receivedAt": dt.datetime(2026, 5, 14, 9, 15, 37, tzinfo=dt.UTC),
+            "metadata": {
+                "path": "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset",
+                "name": "LiberationSans SDF - Fallback",
+            },
+        }
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Denis Ostrovskiy", "date": "2026-05-14", "source": "ual"})
+
+    assert deltas["overtimeActiveDeltaSeconds"] == 0
+    assert deltas["savedPrefabDeltas"] == [
+        {
+            "path": "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset",
+            "name": "LiberationSans SDF - Fallback",
+            "saveCount": 1,
+        }
+    ]
+    assert deltas["overtimeSavedPrefabDeltas"] == []
+    assert daily["overtimeActiveSeconds"] == 0
+    assert daily["savedPrefabs"] == [
+        {
+            "path": "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset",
+            "name": "LiberationSans SDF - Fallback",
+            "saveCount": 1,
+        }
+    ]
+    assert daily["overtimeSavedPrefabs"] == []
+
 def test_night_overtime_heartbeat_idle_is_ignored():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Night Worker", "displayName": "Night Worker", "timeZoneId": "UTC"})
