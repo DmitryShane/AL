@@ -1063,6 +1063,10 @@ def test_scoped_rebuild_rebuilds_only_selected_date():
     assert len(rebuilt_rows) == 1
     assert rebuilt_rows[0]["activeDeltaSeconds"] == 120
     assert repo.db.aggregate_day_state.find_one({"author": "Future Artist", "date": "2026-05-02"}) is not None
+    assert result["rebuiltActivitySnapshots"]["processed"] == [{"date": "2026-05-02", "rawAuthor": "Future Artist"}]
+    assert result["rebuiltActivitySnapshots"]["composedDates"] == ["2026-05-02"]
+    assert repo.db.activity_author_day_summary_snapshots.find_one({"date": "2026-05-02", "rawAuthor": "Future Artist"}) is not None
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": "2026-05-02", "view": "activity-day"}) is not None
 
 def test_scoped_rebuild_can_limit_authors():
     repo = fake_repository()

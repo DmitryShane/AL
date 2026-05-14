@@ -136,6 +136,7 @@ class ActivityAggregationRebuildMixin:
         state_count = self._persist_aggregate_day_state(target_dates, target_authors)
         self._report_rebuild_progress(progress_callback, "Capturing day state", 1, 1)
         composed(self).invalidate_activity_summary_cache(target_dates)
+        rebuilt_snapshots = composed(self).rebuild_activity_day_summary_snapshots_for_dates(target_dates, sorted(target_authors))
         return {
             "ok": True,
             "dates": target_dates,
@@ -147,6 +148,7 @@ class ActivityAggregationRebuildMixin:
             "capturedAggregateDayState": state_count,
             "backfilledLiveMeetingEvents": backfilled_live_meeting_events,
             "rawAuthorQuery": raw_author_query,
+            "rebuiltActivitySnapshots": rebuilt_snapshots,
         }
 
     def _backfill_live_meeting_events_from_report_rows(self, scoped_query: dict[str, Any]) -> int:

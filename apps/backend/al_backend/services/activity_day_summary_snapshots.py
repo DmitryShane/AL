@@ -272,6 +272,59 @@ class ActivityDaySummarySnapshotsMixin:
         payload = self.build_activity_day_summary_snapshot(snapshot_date)
         return payload
 
+    def rebuild_activity_day_summary_snapshots_for_dates(
+        self,
+        dates: list[str] | tuple[str, ...] | set[str],
+        authors: list[str] | tuple[str, ...] | set[str] | None = None,
+        now: dt.datetime | None = None,
+    ) -> dict[str, Any]:
+        now = now or dt.datetime.now(dt.UTC)
+        version = self.activity_day_summary_snapshot_version()
+        target_dates = sorted({str(day) for day in dates if str(day or "").strip()})
+        target_authors = sorted({str(author) for author in authors or [] if str(author or "").strip()})
+        processed: list[dict[str, Any]] = []
+        composed_dates: list[str] = []
+
+        for day_date in target_dates:
+            candidate_authors = self._completed_snapshot_candidate_authors_for_date(day_date, now)
+
+            if target_authors:
+                candidate_authors = [author for author in candidate_authors if author in target_authors]
+
+            for raw_author in candidate_authors:
+                if self._is_author_day_live(raw_author, day_date, now):
+                    continue
+
+                payload = self.activity_summary(
+                    start_date=day_date,
+                    end_date=day_date,
+                    date_mode=None,
+                    now=now,
+                    include_profiles=False,
+                    include_hourly=True,
+                    include_breakdowns=True,
+                )
+                author_payload = self._author_day_payload_from_summary(payload, raw_author)
+                self.db.activity_author_day_summary_snapshots.update_one(
+                    {"date": day_date, "rawAuthor": raw_author, "snapshotVersion": version},
+                    {
+                        "$set": {
+                            "date": day_date,
+                            "rawAuthor": raw_author,
+                            "snapshotVersion": version,
+                            "payload": author_payload,
+                            "builtAt": dt.datetime.now(dt.UTC),
+                        }
+                    },
+                    upsert=True,
+                )
+                processed.append({"date": day_date, "rawAuthor": raw_author})
+
+            if self.compose_completed_day_snapshot(day_date) is not None:
+                composed_dates.append(day_date)
+
+        return {"processed": processed, "composedDates": composed_dates}
+
     def invalidate_activity_day_summary_snapshots(
         self,
         dates: list[str] | tuple[str, ...] | set[str] | None = None,
