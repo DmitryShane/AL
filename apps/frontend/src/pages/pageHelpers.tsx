@@ -768,6 +768,10 @@ export function matchesAuthorSearch(author: AuthorRow, search: string) {
 }
 
 export function shouldHideInactiveOfflineAuthor(author: AuthorRow, now = new Date(), dateRange?: DateRange) {
+  if (author.profileType !== "publisher") {
+    return false;
+  }
+
   if (dateRange && dateRange.preset !== "live") {
     return false;
   }

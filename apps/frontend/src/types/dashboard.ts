@@ -67,6 +67,7 @@ export type AuthorRow = {
   authorEmail?: string;
   displayName: string;
   team?: string;
+  profileType?: "person" | "publisher";
   telegramUsername?: string;
   telegramPrivateChatId?: number;
   discordUserId?: string;

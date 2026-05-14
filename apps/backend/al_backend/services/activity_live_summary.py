@@ -497,6 +497,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
             "authorEmail": profile.get("authorEmail", ""),
             "displayName": _display_name(raw_author, profile),
             "team": profile.get("team", ""),
+            "profileType": profile.get("profileType") or "person",
             "telegramUsername": profile.get("telegramUsername", ""),
             "discordUserId": profile.get("discordUserId", ""),
             "discordUsername": profile.get("discordUsername", ""),

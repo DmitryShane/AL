@@ -357,6 +357,7 @@ class ActivitySummaryService(
                     "authorEmail": profile.get("authorEmail") or item.get("authorEmail", ""),
                     "displayName": display_name,
                     "team": profile.get("team", ""),
+                    "profileType": profile.get("profileType") or "person",
                     "telegramUsername": profile.get("telegramUsername", ""),
                     "telegramPrivateChatId": profile.get("telegramPrivateChatId"),
                     "discordUserId": profile.get("discordUserId", ""),
