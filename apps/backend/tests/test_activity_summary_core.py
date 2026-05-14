@@ -987,6 +987,22 @@ def test_report_ingest_invalidates_only_affected_day_snapshots():
     assert repo.db.activity_author_day_summary_snapshots.find_one({"date": changed_day}) is None
     assert repo.db.activity_day_summary_snapshots.find_one({"date": changed_day}) is None
 
+def test_empty_date_invalidation_does_not_clear_snapshots():
+    repo = fake_repository()
+    version = repo.activity_day_summary_snapshot_version()
+
+    repo.db.activity_author_day_summary_snapshots.insert_one(
+        {"date": "2026-04-29", "rawAuthor": "Snapshot Artist", "snapshotVersion": version}
+    )
+    repo.db.activity_day_summary_snapshots.insert_one(
+        {"date": "2026-04-29", "view": "activity-day", "snapshotVersion": version, "payload": {}}
+    )
+
+    repo.invalidate_activity_summary_cache([])
+
+    assert repo.db.activity_author_day_summary_snapshots.count_documents({}) == 1
+    assert repo.db.activity_day_summary_snapshots.count_documents({}) == 1
+
 def test_activity_day_summary_snapshot_version_mismatch_is_rebuilt():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})

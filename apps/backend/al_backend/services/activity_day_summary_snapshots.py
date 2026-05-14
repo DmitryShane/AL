@@ -129,14 +129,33 @@ class ActivityDaySummarySnapshotsMixin:
             lock.release()
 
     def materialize_next_completed_author_day_snapshot(self, now: dt.datetime | None = None) -> dict[str, Any]:
+        claimed = self.claim_next_activity_author_day_snapshot(now=now)
+
+        if not claimed.get("claimed"):
+            return {"processed": False, "reason": claimed.get("reason") or "no_completed_author_day_without_snapshot"}
+
+        return self.materialize_claimed_activity_author_day_snapshot(
+            str(claimed["date"]),
+            str(claimed["rawAuthor"]),
+            int(claimed["snapshotVersion"]),
+            now=now,
+        )
+
+    def claim_next_activity_author_day_snapshot(self, now: dt.datetime | None = None) -> dict[str, Any]:
+        version = self.activity_day_summary_snapshot_version()
+        existing = self._activity_snapshot_processing_state()
+
+        if existing:
+            return {"claimed": False, "reason": "maintenance_already_running", **existing}
+
         candidate = self._next_completed_author_day_snapshot_candidate(now=now)
 
         if not candidate:
-            return {"processed": False, "reason": "no_completed_author_day_without_snapshot"}
+            return {"claimed": False, "reason": "no_completed_author_day_without_snapshot"}
 
         raw_author = str(candidate["rawAuthor"])
         day_date = str(candidate["date"])
-        version = self.activity_day_summary_snapshot_version()
+        started_at = dt.datetime.now(dt.UTC)
         self.db.activity_snapshot_maintenance_state.update_one(
             {"kind": "author-day"},
             {
@@ -145,11 +164,33 @@ class ActivityDaySummarySnapshotsMixin:
                     "date": day_date,
                     "rawAuthor": raw_author,
                     "snapshotVersion": version,
-                    "startedAt": dt.datetime.now(dt.UTC),
+                    "startedAt": started_at,
                 }
             },
             upsert=True,
         )
+        return {
+            "claimed": True,
+            "date": day_date,
+            "rawAuthor": raw_author,
+            "snapshotVersion": version,
+            "startedAt": _iso(started_at),
+        }
+
+    def materialize_claimed_activity_author_day_snapshot(
+        self,
+        day_date: str,
+        raw_author: str,
+        snapshot_version: int | None = None,
+        now: dt.datetime | None = None,
+    ) -> dict[str, Any]:
+        raw_author = str(raw_author)
+        day_date = str(day_date)
+        version = self.activity_day_summary_snapshot_version()
+
+        if snapshot_version is not None and int(snapshot_version) != version:
+            self.db.activity_snapshot_maintenance_state.delete_many({"kind": "author-day", "date": day_date, "rawAuthor": raw_author})
+            return {"processed": False, "reason": "snapshot_version_changed", "rawAuthor": raw_author, "date": day_date}
 
         try:
             payload = self.activity_summary(
@@ -331,19 +372,21 @@ class ActivityDaySummarySnapshotsMixin:
         dates: list[str] | tuple[str, ...] | set[str] | None = None,
         authors: list[str] | tuple[str, ...] | set[str] | None = None,
     ) -> None:
-        if dates:
+        if dates is not None:
             date_values = sorted({str(day) for day in dates if str(day or "").strip()})
 
-            if date_values:
-                author_values = sorted({str(author) for author in authors or [] if str(author or "").strip()})
-                author_day_query: dict[str, Any] = {"date": {"$in": date_values}}
-
-                if author_values:
-                    author_day_query["rawAuthor"] = {"$in": author_values}
-
-                self.db.activity_author_day_summary_snapshots.delete_many(author_day_query)
-                self.db.activity_day_summary_snapshots.delete_many({"date": {"$in": date_values}})
+            if not date_values:
                 return
+
+            author_values = sorted({str(author) for author in authors or [] if str(author or "").strip()})
+            author_day_query: dict[str, Any] = {"date": {"$in": date_values}}
+
+            if author_values:
+                author_day_query["rawAuthor"] = {"$in": author_values}
+
+            self.db.activity_author_day_summary_snapshots.delete_many(author_day_query)
+            self.db.activity_day_summary_snapshots.delete_many({"date": {"$in": date_values}})
+            return
 
         self.db.activity_author_day_summary_snapshots.delete_many({})
         self.db.activity_day_summary_snapshots.delete_many({})

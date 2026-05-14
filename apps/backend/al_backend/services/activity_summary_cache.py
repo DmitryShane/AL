@@ -103,8 +103,10 @@ class ActivitySummaryCacheMixin:
     def invalidate_activity_summary_cache(self, dates: list[str] | tuple[str, ...] | set[str] | None = None) -> None:
         self.invalidate_activity_day_summary_snapshots(dates)
 
-        if dates:
+        if dates is not None:
             date_values = {str(day) for day in dates if str(day or "").strip()}
+            if not date_values:
+                return
             self.db.activity_summary_cache.delete_many({"dates": {"$in": sorted(date_values)}})
 
         self.db.activity_summary_cache.delete_many({})

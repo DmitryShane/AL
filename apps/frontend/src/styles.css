@@ -4333,9 +4333,7 @@ p {
 }
 
 .profile-table-shell.activity-snapshots-table-shell {
-  max-height: min(520px, 52vh);
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .activity-snapshots-table > .profile-table-head,
@@ -4346,9 +4344,13 @@ p {
 }
 
 .activity-snapshots-table > .profile-table-head {
-  position: sticky;
-  top: 0;
   z-index: 3;
+}
+
+.activity-snapshots-table-body {
+  max-height: min(470px, 47vh);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .site-user-name-cell {

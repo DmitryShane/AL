@@ -253,7 +253,7 @@ function saveCachedStatus(status: ActivitySnapshotStatus) {
 
 function loadTableState(): SnapshotTableState {
   try {
-    const raw = sessionStorage.getItem(SNAPSHOT_TABLE_STATE_KEY);
+    const raw = localStorage.getItem(SNAPSHOT_TABLE_STATE_KEY) ?? sessionStorage.getItem(SNAPSHOT_TABLE_STATE_KEY);
     const parsed = raw ? JSON.parse(raw) as Partial<SnapshotTableState> : {};
     const page = Number(parsed.page ?? 1);
     const pageSize = Number(parsed.pageSize ?? 5);
@@ -270,7 +270,7 @@ function loadTableState(): SnapshotTableState {
 
 function saveTableState(state: SnapshotTableState) {
   try {
-    sessionStorage.setItem(SNAPSHOT_TABLE_STATE_KEY, JSON.stringify(state));
+    localStorage.setItem(SNAPSHOT_TABLE_STATE_KEY, JSON.stringify(state));
   } catch {
     // Ignore storage failures; table controls still work for the current mount.
   }

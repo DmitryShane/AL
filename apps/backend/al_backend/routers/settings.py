@@ -44,7 +44,14 @@ def activity_snapshots_status(
     _: dict = Depends(require_permission("manageSettings")),
     service: BackendServices = Depends(get_settings_service),
 ) -> dict:
-    background_tasks.add_task(service.materialize_activity_author_day_summary_snapshots_locked, limit=1)
+    claimed = service.claim_next_activity_author_day_snapshot()
+    if claimed.get("claimed"):
+        background_tasks.add_task(
+            service.materialize_claimed_activity_author_day_snapshot,
+            claimed["date"],
+            claimed["rawAuthor"],
+            claimed["snapshotVersion"],
+        )
     return service.activity_snapshot_materialization_status(limit_days=limit_days)
 
 
