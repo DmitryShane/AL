@@ -1,9 +1,35 @@
 export type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings";
-export type SettingsTab = "general" | "authors" | "publisherProfiles" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingSummaries" | "users";
+export type SettingsTab = "general" | "authors" | "publisherProfiles" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingSummaries" | "snapshots" | "users";
 
 export type Health = {
   ok: boolean;
   mongo: boolean;
+};
+
+export type ActivitySnapshotStatusRow = {
+  date: string;
+  rawAuthor: string;
+  displayName: string;
+  timeZoneId: string;
+  status: "ready" | "next" | "pending" | "live";
+  authorSnapshotReady: boolean;
+  daySnapshotReady: boolean;
+  builtAt: string;
+};
+
+export type ActivitySnapshotStatus = {
+  snapshotVersion: number;
+  next?: {
+    date?: string;
+    rawAuthor?: string;
+  } | null;
+  totals: {
+    ready: number;
+    next: number;
+    pending: number;
+    live: number;
+  };
+  rows: ActivitySnapshotStatusRow[];
 };
 
 export type Report = {
@@ -106,6 +132,10 @@ export type ActivitySummary = {
   cache?: {
     hit?: boolean;
     key?: string;
+  };
+  snapshot?: {
+    hit?: boolean;
+    date?: string;
   };
 };
 

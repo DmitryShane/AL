@@ -44,6 +44,8 @@ class ActivityAggregationRebuildMixin:
             self._report_rebuild_progress(progress_callback, "Clearing derived data", 0, 1)
             self.db.report_rows.delete_many({})
             self.db.daily_author_activity.delete_many({})
+            self.db.activity_author_day_summary_snapshots.delete_many({})
+            self.db.activity_day_summary_snapshots.delete_many({})
             self.db.aggregate_session_state.delete_many({})
             self.db.aggregate_day_state.delete_many({})
             self._report_rebuild_progress(progress_callback, "Clearing derived data", 1, 1)

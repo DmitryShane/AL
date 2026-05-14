@@ -137,8 +137,9 @@ When debugging summaries, `status_events`, or idle accounting:
 
 - Storage is **MongoDB** (`AL_MONGO_DATABASE`, usually `al`), not a single file: many **collections**, see `apps/backend/al_backend/repository.py` → `ensure_indexes()`.
 - **Ingest / raw**: `raw_reports`, `raw_event_batches`, `raw_activity_events` (event-level, unique `eventId`).
-- **Derived / reporting**: `report_rows`, `daily_author_activity` (per author/source/project/day), `activity_snapshots`, `day_sessions`, plus author data in `author_profiles` / `author_aliases`.
+- **Derived / reporting**: `report_rows`, `daily_author_activity` (per author/source/project/day), `activity_author_day_summary_snapshots` (per-author/day historical Activity read model), `activity_day_summary_snapshots` (composed historical Activity day summaries), `activity_snapshots`, `day_sessions`, plus author data in `author_profiles` / `author_aliases`.
 - **Weeks / months** in the UI are built from daily (and related) data at query time, not one monolithic “all history” document per author.
+- For future analytics and historical Activity features, prefer per-author/day snapshots first, then composed day snapshots. Do not build new historical analytics by repeatedly scanning raw reports or `report_rows` at request time unless explicitly required.
 - **Performance**: compound and sparse indexes on the hot fields; aggregate docs are versioned (`aggregates_version`) and rebuilt when the backend bumps that version (`rebuild_aggregates_if_needed`).
 
 ## Production Data Sync

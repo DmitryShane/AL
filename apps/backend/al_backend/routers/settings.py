@@ -37,6 +37,15 @@ def openai_stats(
     return service.get_openai_stats(refresh=refresh, background_tasks=background_tasks)
 
 
+@router.get("/api/v1/settings/activity-snapshots")
+def activity_snapshots_status(
+    limit_days: int = Query(30, alias="limitDays", ge=1, le=120),
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.activity_snapshot_materialization_status(limit_days=limit_days)
+
+
 @router.put("/api/v1/settings/avatars")
 def update_avatar_settings(
     settings_in: AvatarSettingsIn,

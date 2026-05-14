@@ -27,6 +27,7 @@ from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 from .activity_summary_analytics import ActivitySummaryAnalyticsMixin
 from .activity_summary_cache import ActivitySummaryCacheMixin
+from .activity_day_summary_snapshots import ActivityDaySummarySnapshotsMixin
 from .activity_summary_helpers import _with_source_breakdowns
 from .activity_summary_hourly import ActivitySummaryHourlyMixin
 from .activity_summary_presence import ActivitySummaryPresenceMixin
@@ -42,6 +43,7 @@ def _is_device_profile_raw_author(value: str) -> bool:
 class ActivitySummaryService(
     ActivitySummaryReportsMixin,
     ActivitySummaryCacheMixin,
+    ActivityDaySummarySnapshotsMixin,
     ActivitySummaryReportFiltersMixin,
     ActivitySummaryHourlyMixin,
     ActivitySummaryPresenceMixin,

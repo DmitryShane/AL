@@ -89,6 +89,10 @@ class BackendContainer:
         self.indexes.ensure_indexes()
         close_imported_open_live_states(self.services)
         self.activity_aggregation.rebuild_aggregates_if_needed(scope=self.activity_aggregation.aggregate_version_rebuild_scope)
+        try:
+            self.activity_summary.materialize_activity_author_day_summary_snapshots()
+        except Exception:
+            pass
         self.auth.ensure_bootstrap_site_admin(self.settings.admin_email, self.settings.admin_password)
 
     def close(self) -> None:

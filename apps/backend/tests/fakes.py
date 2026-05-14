@@ -184,6 +184,8 @@ class FakeDb:
         self.author_profiles = FakeCollection()
         self.author_aliases = FakeCollection()
         self.activity_snapshots = FakeCollection()
+        self.activity_author_day_summary_snapshots = FakeCollection()
+        self.activity_day_summary_snapshots = FakeCollection()
         self.activity_summary_cache = FakeCollection()
         self.aggregate_metadata = FakeCollection()
         self.aggregate_day_state = FakeCollection()

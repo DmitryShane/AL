@@ -36,6 +36,18 @@ class IndexManager:
         self.db.activity_summary_cache.create_index("cacheKey", unique=True)
         self.db.activity_summary_cache.create_index("expiresAt", expireAfterSeconds=0)
         self.db.activity_summary_cache.create_index("dateMode")
+        self.db.activity_day_summary_snapshots.create_index(
+            [("date", ASCENDING), ("snapshotVersion", ASCENDING), ("view", ASCENDING)],
+            unique=True,
+        )
+        self.db.activity_day_summary_snapshots.create_index("date")
+        self.db.activity_day_summary_snapshots.create_index("builtAt")
+        self.db.activity_author_day_summary_snapshots.create_index(
+            [("date", ASCENDING), ("rawAuthor", ASCENDING), ("snapshotVersion", ASCENDING)],
+            unique=True,
+        )
+        self.db.activity_author_day_summary_snapshots.create_index([("date", ASCENDING), ("rawAuthor", ASCENDING)])
+        self.db.activity_author_day_summary_snapshots.create_index("builtAt")
         self.db.status_events.create_index(
             [("rawAuthor", ASCENDING), ("date", ASCENDING), ("statusEventType", ASCENDING), ("transitionAt", ASCENDING)],
             unique=True,

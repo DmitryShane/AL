@@ -21,6 +21,7 @@ import { GeneralSettingsTab } from "../components/settings/tabs/general/GeneralS
 import { MeetingSummariesTab } from "../components/settings/tabs/meetingSummaries/MeetingSummariesTab";
 import { AuthorRedirectsTab } from "../components/settings/tabs/redirects/AuthorRedirectsTab";
 import { TelegramSettingsTab } from "../components/settings/tabs/telegram/TelegramSettingsTab";
+import { ActivitySnapshotsTab } from "../components/settings/tabs/snapshots/ActivitySnapshotsTab";
 
 type DeleteActivityDraft = {
   mode: "today" | "range";
@@ -1384,6 +1385,8 @@ export function SettingsPage({
           onRefreshOpenAIStats={() => void loadOpenAIStats("month")}
           onRefreshOpenAIStatsTotals={() => void loadOpenAIStats("totals")}
         />
+      ) : settingsTab === "snapshots" ? (
+        <ActivitySnapshotsTab />
       ) : (
         <SiteUsersPanel currentUser={currentUser} authorProfiles={profiles} authorProfileDrafts={drafts} />
       )}

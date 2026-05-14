@@ -2366,6 +2366,79 @@ p {
   color: #ffffff;
 }
 
+.activity-snapshots-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.snapshot-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.snapshot-summary-metric {
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.snapshot-summary-metric span {
+  display: block;
+  color: #667085;
+  font-size: 12px;
+}
+
+.snapshot-summary-metric strong {
+  display: block;
+  margin-top: 4px;
+  color: #202a36;
+  font-size: 22px;
+}
+
+.activity-snapshots-table > .profile-table-head,
+.activity-snapshots-table > .profile-row {
+  grid-template-columns: minmax(110px, 0.8fr) minmax(220px, 1.5fr) minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(170px, 1fr);
+}
+
+.activity-snapshots-table .profile-row small {
+  display: block;
+  color: #667085;
+  font-size: 12px;
+}
+
+.snapshot-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 78px;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.snapshot-status-pill--ready {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.snapshot-status-pill--next {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.snapshot-status-pill--pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.snapshot-status-pill--live {
+  background: #f1f5f9;
+  color: #475569;
+}
+
 .settings-row {
   display: flex;
   align-items: end;
