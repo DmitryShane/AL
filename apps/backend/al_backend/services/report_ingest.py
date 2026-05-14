@@ -128,7 +128,7 @@ class ReportIngestService(MongoComposableMixin):
         author_for_stale_touch = str(payload.get("author") or "Unknown User")
 
         if isinstance(payload.get("events"), list):
-            self._save_event_batch(
+            affected_dates = self._save_event_batch(
                 source=effective_source,
                 plugin_version=plugin_version,
                 payload=payload,
@@ -140,7 +140,7 @@ class ReportIngestService(MongoComposableMixin):
             )
             if not self._is_unassigned_device_report_author(effective_source, author_for_stale_touch):
                 composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
-            composed(self).invalidate_activity_summary_cache()
+            composed(self).invalidate_activity_summary_cache(affected_dates)
             return str(raw_result.inserted_id)
 
         snapshot = dict(payload)
@@ -159,7 +159,7 @@ class ReportIngestService(MongoComposableMixin):
         composed(self)._apply_snapshot_to_aggregates(snapshot)
         if not self._is_unassigned_device_report_author(effective_source, author_for_stale_touch):
             composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
-        composed(self).invalidate_activity_summary_cache()
+        composed(self).invalidate_activity_summary_cache([str(snapshot.get("date") or "")])
         return str(raw_result.inserted_id)
 
     def _is_unassigned_device_report_author(self, source: str, author: Any) -> bool:
@@ -351,7 +351,7 @@ class ReportIngestService(MongoComposableMixin):
         received_at: dt.datetime,
         challenge_id: str,
         device_id: str | None,
-    ) -> bool:
+    ) -> list[str]:
         author = composed(self).resolve_author_alias(str(payload.get("author") or "Unknown User"))
         author_email = str(payload.get("authorEmail") or "")
         project_id = str(payload.get("projectId") or "")
@@ -434,7 +434,7 @@ class ReportIngestService(MongoComposableMixin):
         rows = self._build_event_batch_report_rows(batch, batch_delta_items)
 
         if not rows:
-            return False
+            return []
 
         _insert_many_if_supported(self.db.report_rows, rows)
 
@@ -449,7 +449,7 @@ class ReportIngestService(MongoComposableMixin):
             if not suppress_vacation_prompt:
                 composed(self)._schedule_telegram_online_prompt_if_needed(author, row_date, source, received_at)
 
-        return True
+        return sorted({str(row.get("date") or "") for row in rows if str(row.get("date") or "").strip()})
 
     def _build_event_batch_report_rows(
         self,

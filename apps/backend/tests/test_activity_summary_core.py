@@ -937,6 +937,42 @@ def test_activity_snapshot_materialization_status_reports_processing_separately_
     assert status["totals"]["processing"] == 1
     assert status["totals"]["next"] == 1
 
+def test_report_ingest_invalidates_only_affected_day_snapshots():
+    repo = fake_repository()
+    version = repo.activity_day_summary_snapshot_version()
+    old_day = "2026-04-29"
+    changed_day = "2026-05-14"
+
+    for day in (old_day, changed_day):
+        repo.db.activity_author_day_summary_snapshots.insert_one(
+            {"date": day, "rawAuthor": "Snapshot Artist", "snapshotVersion": version, "builtAt": dt.datetime(2026, 5, 14, tzinfo=dt.UTC)}
+        )
+        repo.db.activity_day_summary_snapshots.insert_one(
+            {"date": day, "view": "activity-day", "snapshotVersion": version, "payload": {}, "builtAt": dt.datetime(2026, 5, 14, tzinfo=dt.UTC)}
+        )
+
+    repo.save_report(
+        "ual",
+        "1.0.0",
+        "packet",
+        {
+            "author": "Snapshot Artist",
+            "projectId": "al",
+            "sessionId": "snapshot-session",
+            "date": changed_day,
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "recordedAt": "2026-05-14T12:00:00+00:00",
+            "timeZoneId": "UTC",
+        },
+        "challenge",
+    )
+
+    assert repo.db.activity_author_day_summary_snapshots.find_one({"date": old_day}) is not None
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": old_day}) is not None
+    assert repo.db.activity_author_day_summary_snapshots.find_one({"date": changed_day}) is None
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": changed_day}) is None
+
 def test_activity_day_summary_snapshot_version_mismatch_is_rebuilt():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
