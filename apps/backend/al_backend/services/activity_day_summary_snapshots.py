@@ -105,6 +105,28 @@ class ActivityDaySummarySnapshotsMixin:
 
         return {"processed": processed, "remaining": self._next_completed_author_day_snapshot_candidate(now=now) is not None}
 
+    def materialize_activity_author_day_summary_snapshots_locked(
+        self,
+        limit: int | None = None,
+        now: dt.datetime | None = None,
+        *,
+        wait: bool = False,
+    ) -> dict[str, Any]:
+        lock = getattr(self, "activity_snapshot_maintenance_lock", None)
+
+        if lock is None:
+            return self.materialize_activity_author_day_summary_snapshots(limit=limit, now=now)
+
+        acquired = lock.acquire(blocking=wait)
+
+        if not acquired:
+            return {"processed": [], "remaining": True, "skipped": "maintenance_already_running"}
+
+        try:
+            return self.materialize_activity_author_day_summary_snapshots(limit=limit, now=now)
+        finally:
+            lock.release()
+
     def materialize_next_completed_author_day_snapshot(self, now: dt.datetime | None = None) -> dict[str, Any]:
         candidate = self._next_completed_author_day_snapshot_candidate(now=now)
 
@@ -113,42 +135,63 @@ class ActivityDaySummarySnapshotsMixin:
 
         raw_author = str(candidate["rawAuthor"])
         day_date = str(candidate["date"])
-        payload = self.activity_summary(
-            start_date=day_date,
-            end_date=day_date,
-            date_mode=None,
-            now=now,
-            include_profiles=False,
-            include_hourly=True,
-            include_breakdowns=True,
-        )
-        author_payload = self._author_day_payload_from_summary(payload, raw_author)
         version = self.activity_day_summary_snapshot_version()
-        self.db.activity_author_day_summary_snapshots.update_one(
-            {"date": day_date, "rawAuthor": raw_author, "snapshotVersion": version},
+        self.db.activity_snapshot_maintenance_state.update_one(
+            {"kind": "author-day"},
             {
                 "$set": {
+                    "kind": "author-day",
                     "date": day_date,
                     "rawAuthor": raw_author,
                     "snapshotVersion": version,
-                    "payload": author_payload,
-                    "builtAt": dt.datetime.now(dt.UTC),
+                    "startedAt": dt.datetime.now(dt.UTC),
                 }
             },
             upsert=True,
         )
-        composed_payload = self.compose_completed_day_snapshot(day_date)
-        return {
-            "processed": True,
-            "rawAuthor": raw_author,
-            "date": day_date,
-            "composed": composed_payload is not None,
-        }
+
+        try:
+            payload = self.activity_summary(
+                start_date=day_date,
+                end_date=day_date,
+                date_mode=None,
+                now=now,
+                include_profiles=False,
+                include_hourly=True,
+                include_breakdowns=True,
+            )
+            author_payload = self._author_day_payload_from_summary(payload, raw_author)
+            self.db.activity_author_day_summary_snapshots.update_one(
+                {"date": day_date, "rawAuthor": raw_author, "snapshotVersion": version},
+                {
+                    "$set": {
+                        "date": day_date,
+                        "rawAuthor": raw_author,
+                        "snapshotVersion": version,
+                        "payload": author_payload,
+                        "builtAt": dt.datetime.now(dt.UTC),
+                    }
+                },
+                upsert=True,
+            )
+            composed_payload = self.compose_completed_day_snapshot(day_date)
+            return {
+                "processed": True,
+                "rawAuthor": raw_author,
+                "date": day_date,
+                "composed": composed_payload is not None,
+            }
+        finally:
+            self.db.activity_snapshot_maintenance_state.delete_many({"kind": "author-day", "date": day_date, "rawAuthor": raw_author})
 
     def activity_snapshot_materialization_status(self, now: dt.datetime | None = None, limit_days: int = 30) -> dict[str, Any]:
         now = now or dt.datetime.now(dt.UTC)
         version = self.activity_day_summary_snapshot_version()
-        next_candidate = self._next_completed_author_day_snapshot_candidate(now=now)
+        processing = self._activity_snapshot_processing_state()
+        excluded_candidates = {
+            (processing["date"], processing["rawAuthor"])
+        } if processing else set()
+        next_candidate = self._next_completed_author_day_snapshot_candidate(now=now, exclude=excluded_candidates)
         dates = sorted(
             {
                 str(item)
@@ -158,7 +201,7 @@ class ActivityDaySummarySnapshotsMixin:
             reverse=True,
         )[: max(1, int(limit_days or 30))]
         rows: list[dict[str, Any]] = []
-        totals = {"ready": 0, "pending": 0, "next": 0, "live": 0}
+        totals = {"ready": 0, "processing": 0, "next": 0, "pending": 0, "live": 0}
 
         for day_date in dates:
             authors = self._snapshot_status_authors_for_date(day_date, now)
@@ -183,6 +226,8 @@ class ActivityDaySummarySnapshotsMixin:
 
                 if item["live"]:
                     status = "live"
+                elif processing and processing.get("date") == day_date and processing.get("rawAuthor") == raw_author:
+                    status = "processing"
                 elif next_candidate and next_candidate.get("date") == day_date and next_candidate.get("rawAuthor") == raw_author:
                     status = "next"
 
@@ -202,6 +247,7 @@ class ActivityDaySummarySnapshotsMixin:
 
         return {
             "snapshotVersion": version,
+            "processing": processing,
             "next": next_candidate,
             "totals": totals,
             "rows": rows,
@@ -248,10 +294,31 @@ class ActivityDaySummarySnapshotsMixin:
         self.db.activity_author_day_summary_snapshots.delete_many({})
         self.db.activity_day_summary_snapshots.delete_many({})
 
-    def _next_completed_author_day_snapshot_candidate(self, now: dt.datetime | None = None) -> dict[str, str] | None:
+    def _activity_snapshot_processing_state(self) -> dict[str, str] | None:
+        version = self.activity_day_summary_snapshot_version()
+        doc = self.db.activity_snapshot_maintenance_state.find_one(
+            {"kind": "author-day", "snapshotVersion": version},
+            {"_id": 0, "date": 1, "rawAuthor": 1, "startedAt": 1},
+        )
+
+        if not doc or not doc.get("date") or not doc.get("rawAuthor"):
+            return None
+
+        return {
+            "date": str(doc.get("date")),
+            "rawAuthor": str(doc.get("rawAuthor")),
+            "startedAt": _iso(doc.get("startedAt")),
+        }
+
+    def _next_completed_author_day_snapshot_candidate(
+        self,
+        now: dt.datetime | None = None,
+        exclude: set[tuple[str, str]] | None = None,
+    ) -> dict[str, str] | None:
         now = now or dt.datetime.now(dt.UTC)
         version = self.activity_day_summary_snapshot_version()
         candidates: set[tuple[str, str]] = set()
+        excluded_candidates = exclude or set()
 
         for item in self.db.daily_author_activity.find({}, {"_id": 0, "author": 1, "date": 1, "timeZoneId": 1}):
             raw_author = composed(self).resolve_author_alias(item.get("author") or "Unknown User")
@@ -267,6 +334,9 @@ class ActivityDaySummarySnapshotsMixin:
                 {"date": day_date, "rawAuthor": raw_author, "snapshotVersion": version},
                 {"_id": 1},
             ):
+                continue
+
+            if (day_date, raw_author) in excluded_candidates:
                 continue
 
             candidates.add((day_date, raw_author))

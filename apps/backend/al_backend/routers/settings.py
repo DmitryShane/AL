@@ -39,10 +39,12 @@ def openai_stats(
 
 @router.get("/api/v1/settings/activity-snapshots")
 def activity_snapshots_status(
+    background_tasks: BackgroundTasks,
     limit_days: int = Query(30, alias="limitDays", ge=1, le=120),
     _: dict = Depends(require_permission("manageSettings")),
     service: BackendServices = Depends(get_settings_service),
 ) -> dict:
+    background_tasks.add_task(service.materialize_activity_author_day_summary_snapshots_locked, limit=1)
     return service.activity_snapshot_materialization_status(limit_days=limit_days)
 
 

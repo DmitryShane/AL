@@ -48,6 +48,7 @@ class IndexManager:
         )
         self.db.activity_author_day_summary_snapshots.create_index([("date", ASCENDING), ("rawAuthor", ASCENDING)])
         self.db.activity_author_day_summary_snapshots.create_index("builtAt")
+        self.db.activity_snapshot_maintenance_state.create_index("kind", unique=True)
         self.db.status_events.create_index(
             [("rawAuthor", ASCENDING), ("date", ASCENDING), ("statusEventType", ASCENDING), ("transitionAt", ASCENDING)],
             unique=True,

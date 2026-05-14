@@ -894,6 +894,49 @@ def test_activity_snapshot_materialization_status_reports_author_progress():
     assert status["totals"]["next"] == 1
     assert status["totals"]["live"] == 1
 
+def test_activity_snapshot_materialization_status_reports_processing_separately_from_next():
+    repo = fake_repository()
+    now = dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC)
+    version = repo.activity_day_summary_snapshot_version()
+
+    for author in ("Alpha Artist", "Beta Artist"):
+        repo.db.author_profiles.insert_one({"rawAuthor": author, "displayName": author, "timeZoneId": "UTC"})
+        repo.db.daily_author_activity.insert_one(
+            {
+                "source": "cur",
+                "author": author,
+                "projectId": "al",
+                "date": "2026-04-29",
+                "activeSeconds": 120,
+                "idleSeconds": 0,
+                "activityCounts": [],
+                "savedPrefabs": [],
+                "overtimeActivityCounts": [],
+                "overtimeSavedPrefabs": [],
+                "hourlyActivity": empty_hourly_activity(),
+            }
+        )
+
+    repo.db.activity_snapshot_maintenance_state.insert_one(
+        {
+            "kind": "author-day",
+            "date": "2026-04-29",
+            "rawAuthor": "Alpha Artist",
+            "snapshotVersion": version,
+            "startedAt": now,
+        }
+    )
+
+    status = repo.activity_snapshot_materialization_status(now=now)
+    rows = {(row["date"], row["rawAuthor"]): row for row in status["rows"]}
+
+    assert rows[("2026-04-29", "Alpha Artist")]["status"] == "processing"
+    assert rows[("2026-04-29", "Beta Artist")]["status"] == "next"
+    assert status["processing"] == {"date": "2026-04-29", "rawAuthor": "Alpha Artist", "startedAt": "2026-05-02T12:00:00+00:00"}
+    assert status["next"] == {"date": "2026-04-29", "rawAuthor": "Beta Artist"}
+    assert status["totals"]["processing"] == 1
+    assert status["totals"]["next"] == 1
+
 def test_activity_day_summary_snapshot_version_mismatch_is_rebuilt():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import threading
+
 from .repositories.auth import AuthRepository
 from .repositories.settings import SettingsRepository
 from .repositories.authors import AuthorRepository
@@ -26,6 +29,9 @@ from .local_live_state_guard import close_imported_open_live_states
 from .storage import MongoStorage
 from .settings import Settings
 from .indexes import IndexManager
+
+
+logger = logging.getLogger("al_backend")
 
 
 class BackendServices(
@@ -63,6 +69,7 @@ class BackendServices(
         self.aggregate_version_rebuild_scope = settings.aggregate_version_rebuild_scope
         self.openai_usage_api_key = settings.openai_usage_api_key
         self.openai_usage_project_id = settings.openai_usage_project_id
+        self.activity_snapshot_maintenance_lock = threading.Lock()
 
     def ping(self) -> bool:
         self.client.admin.command("ping")
@@ -90,9 +97,9 @@ class BackendContainer:
         close_imported_open_live_states(self.services)
         self.activity_aggregation.rebuild_aggregates_if_needed(scope=self.activity_aggregation.aggregate_version_rebuild_scope)
         try:
-            self.activity_summary.materialize_activity_author_day_summary_snapshots()
+            self.activity_summary.materialize_activity_author_day_summary_snapshots_locked(wait=True)
         except Exception:
-            pass
+            logger.exception("Activity snapshot maintenance failed during startup")
         self.auth.ensure_bootstrap_site_admin(self.settings.admin_email, self.settings.admin_password)
 
     def close(self) -> None:

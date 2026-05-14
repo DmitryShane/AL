@@ -11,7 +11,7 @@ export type ActivitySnapshotStatusRow = {
   rawAuthor: string;
   displayName: string;
   timeZoneId: string;
-  status: "ready" | "next" | "pending" | "live";
+  status: "ready" | "processing" | "next" | "pending" | "live";
   authorSnapshotReady: boolean;
   daySnapshotReady: boolean;
   builtAt: string;
@@ -23,8 +23,14 @@ export type ActivitySnapshotStatus = {
     date?: string;
     rawAuthor?: string;
   } | null;
+  processing?: {
+    date?: string;
+    rawAuthor?: string;
+    startedAt?: string;
+  } | null;
   totals: {
     ready: number;
+    processing: number;
     next: number;
     pending: number;
     live: number;

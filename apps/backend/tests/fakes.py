@@ -186,6 +186,7 @@ class FakeDb:
         self.activity_snapshots = FakeCollection()
         self.activity_author_day_summary_snapshots = FakeCollection()
         self.activity_day_summary_snapshots = FakeCollection()
+        self.activity_snapshot_maintenance_state = FakeCollection()
         self.activity_summary_cache = FakeCollection()
         self.aggregate_metadata = FakeCollection()
         self.aggregate_day_state = FakeCollection()
