@@ -730,6 +730,15 @@ def test_device_report_author_uses_next_free_device_number():
 
     assert repo.resolve_device_report_author("dev", "advertising-id-new") == "Device9"
 
+def test_device_report_author_does_not_reuse_historical_device_name_without_identity():
+    repo = fake_repository()
+    repo.db.device_report_identities.insert_one({"source": "dev", "deviceIdHash": "hash-1", "rawAuthor": "Device1"})
+    repo.db.device_report_identities.insert_one({"source": "dev", "deviceIdHash": "hash-2", "rawAuthor": "Device2"})
+    repo.db.device_report_identities.insert_one({"source": "dev", "deviceIdHash": "hash-7", "rawAuthor": "Device7"})
+    repo.db.report_rows.insert_one({"author": "Device8", "date": "2026-05-05", "source": "dev"})
+
+    assert repo.resolve_device_report_author("dev", "advertising-id-new") == "Device9"
+
 def test_new_device_report_author_does_not_reuse_aliased_device_name():
     repo = fake_repository()
     repo.db.device_report_identities.insert_one({"source": "dev", "deviceIdHash": "hash-7", "rawAuthor": "Device7"})

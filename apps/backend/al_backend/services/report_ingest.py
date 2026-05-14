@@ -290,10 +290,25 @@ class ReportIngestService(MongoComposableMixin):
 
         next_number = highest_number + 1
 
-        while self.db.device_report_identities.find_one({"rawAuthor": f"Device{next_number}"}, {"_id": 1}):
+        while self._device_report_author_exists(f"Device{next_number}"):
             next_number += 1
 
         return f"Device{next_number}"
+
+    def _device_report_author_exists(self, raw_author: str) -> bool:
+        return any(
+            (
+                self.db.device_report_identities.find_one({"rawAuthor": raw_author}, {"_id": 1}),
+                self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 1}),
+                self.db.author_aliases.find_one({"sourceRawAuthor": raw_author}, {"_id": 1}),
+                self.db.raw_event_batches.find_one({"author": raw_author}, {"_id": 1}),
+                self.db.raw_activity_events.find_one({"author": raw_author}, {"_id": 1}),
+                self.db.report_rows.find_one({"author": raw_author}, {"_id": 1}),
+                self.db.daily_author_activity.find_one({"author": raw_author}, {"_id": 1}),
+                self.db.activity_snapshots.find_one({"author": raw_author}, {"_id": 1}),
+                self.db.day_sessions.find_one({"rawAuthor": raw_author}, {"_id": 1}),
+            )
+        )
 
     def _is_heartbeat_only_event_payload(self, payload: dict[str, Any]) -> bool:
         events = payload.get("events")
