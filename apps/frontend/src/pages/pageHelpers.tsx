@@ -767,7 +767,11 @@ export function matchesAuthorSearch(author: AuthorRow, search: string) {
   );
 }
 
-export function shouldHideInactiveOfflineAuthor(author: AuthorRow, now = new Date()) {
+export function shouldHideInactiveOfflineAuthor(author: AuthorRow, now = new Date(), dateRange?: DateRange) {
+  if (dateRange && dateRange.preset !== "live") {
+    return false;
+  }
+
   if (author.status !== "stale" || (!isTelegramSignedOff(author.stalePresence) && author.stalePresence !== "device")) {
     return false;
   }

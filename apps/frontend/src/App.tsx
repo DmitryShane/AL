@@ -442,9 +442,9 @@ function App() {
   const visibleActivitySummary = useMemo(
     () => ({
       ...activityDisplaySummary,
-      authors: activityDisplaySummary.authors.filter((author) => !shouldHideInactiveOfflineAuthor(author))
+      authors: activityDisplaySummary.authors.filter((author) => !shouldHideInactiveOfflineAuthor(author, new Date(), appliedDateRange))
     }),
-    [activityDisplaySummary]
+    [activityDisplaySummary, appliedDateRange]
   );
   const settingsDisplaySummary = canShowCachedDashboard ? (summary ?? cachedSettingsSummary) : null;
   const isVisualLoading = canShowCachedDashboard && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
