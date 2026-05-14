@@ -4,7 +4,7 @@ import datetime as dt
 import re
 from typing import Any
 
-from ..activity_math import _author_color, _cached_author_avatar_api_url, _coerce_datetime, _display_name, _normalize_author, _valid_color
+from ..activity_math import _author_color, _cached_author_avatar_api_url, _coerce_datetime, _display_name, _iso, _normalize_author, _valid_color
 from ..author_avatar_cache import author_avatar_cache_file_path
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
@@ -164,6 +164,10 @@ class PublisherProfileService(MongoComposableMixin):
 
         if last_received_at:
             is_stale = max(0, int((now - last_received_at).total_seconds())) > threshold
+            if not item.get("lastReceivedAt"):
+                item["lastReceivedAt"] = _iso(last_received_at)
+            if not item.get("lastRecordedAt") and item.get("_lastReportRecordedAt"):
+                item["lastRecordedAt"] = item.get("_lastReportRecordedAt")
 
         item["status"] = "stale" if is_stale else "online"
         if is_stale:
@@ -172,6 +176,7 @@ class PublisherProfileService(MongoComposableMixin):
         item["sendIntervalSeconds"] = send_interval_seconds
         item["staleThresholdSeconds"] = threshold
         item.pop("_lastReportReceivedAt", None)
+        item.pop("_lastReportRecordedAt", None)
         return item
 
     def _publisher_profile(self, raw_author: str) -> dict[str, Any]:

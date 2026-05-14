@@ -126,6 +126,79 @@ class ActivitySummaryPresenceMixin:
                 ):
                     author_row["_lastReportReceivedAt"] = _iso(profile_raw_dt)
 
+        if date_mode == "authorLocalToday":
+            self._apply_latest_publisher_device_metadata(authors_by_raw, profiles)
+
+    def _apply_latest_publisher_device_metadata(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        profiles: dict[str, dict[str, Any]],
+    ) -> None:
+        for raw_author, author_row in authors_by_raw.items():
+            if str((profiles.get(raw_author) or {}).get("profileType") or author_row.get("profileType") or "person") != "publisher":
+                continue
+
+            latest: dict[str, Any] | None = None
+            latest_at: dt.datetime | None = None
+            alias_keys = composed(self).author_alias_keys(raw_author)
+
+            for report in self.db.report_rows.find({"author": {"$in": alias_keys}}, {"_id": 0}):
+                if report.get("source") == "status" or report.get("reportType") == "status":
+                    continue
+
+                if self._is_empty_plugin_report_without_signal(report):
+                    continue
+
+                received_at = _coerce_datetime(report.get("receivedAt") or report.get("lastReceivedAt"))
+                recorded_at = _coerce_datetime(report.get("recordedAt") or report.get("lastRecordedAt") or report.get("receivedAt"))
+                sort_at = received_at or recorded_at
+
+                if not sort_at or (latest_at and sort_at <= latest_at):
+                    continue
+
+                latest = {
+                    "source": report.get("source"),
+                    "pluginVersion": report.get("pluginVersion"),
+                    "lastRecordedAt": report.get("lastRecordedAt") or report.get("recordedAt"),
+                    "lastReceivedAt": report.get("lastReceivedAt") or report.get("receivedAt"),
+                }
+                latest_at = sort_at
+
+            for daily in self.db.daily_author_activity.find({"author": {"$in": alias_keys}}, {"_id": 0}):
+                if not self._daily_item_has_presence_signal(daily):
+                    continue
+
+                received_at = _coerce_datetime(daily.get("lastReceivedAt") or daily.get("receivedAt"))
+
+                if not received_at or (latest_at and received_at <= latest_at):
+                    continue
+
+                latest = {
+                    "source": daily.get("source"),
+                    "pluginVersion": daily.get("pluginVersion"),
+                    "lastRecordedAt": daily.get("lastRecordedAt") or daily.get("recordedAt"),
+                    "lastReceivedAt": daily.get("lastReceivedAt") or daily.get("receivedAt"),
+                }
+                latest_at = received_at
+
+            if not latest or not latest_at:
+                continue
+
+            current_report_at = _coerce_datetime(author_row.get("_lastReportReceivedAt"))
+
+            if not current_report_at or latest_at > current_report_at:
+                author_row["_lastReportReceivedAt"] = _iso(latest_at)
+                if latest.get("lastRecordedAt"):
+                    author_row["_lastReportRecordedAt"] = latest.get("lastRecordedAt")
+
+            current_received_at = _coerce_datetime(author_row.get("lastReceivedAt"))
+
+            if not current_received_at or latest_at > current_received_at:
+                author_row["source"] = latest.get("source") or author_row.get("source")
+                author_row["pluginVersion"] = latest.get("pluginVersion") or author_row.get("pluginVersion")
+                author_row["lastRecordedAt"] = latest.get("lastRecordedAt") or author_row.get("lastRecordedAt")
+                author_row["lastReceivedAt"] = _iso(latest.get("lastReceivedAt")) or author_row.get("lastReceivedAt")
+
     def _author_presence_overrides(
         self,
         raw_authors: Any,

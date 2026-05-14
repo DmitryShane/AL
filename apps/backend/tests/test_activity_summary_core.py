@@ -864,6 +864,89 @@ def test_historical_activity_summary_uses_only_authors_active_on_selected_day():
     assert [item["rawAuthor"] for item in summary["authors"]] == ["Alpha Artist", "Device5", "Publisher QA"]
     assert [item["rawAuthor"] for item in summary["hourlyActivityByAuthor"]] == ["Alpha Artist", "Device5", "Publisher QA"]
 
+
+def test_author_local_today_hides_inactive_publisher_after_twenty_four_hours():
+    repo = fake_repository()
+    now = dt.datetime(2026, 5, 15, 12, tzinfo=dt.UTC)
+    repo.db.author_profiles.insert_one({"rawAuthor": "Ketchapp", "displayName": "Ketchapp", "profileType": "publisher"})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device8", "targetRawAuthor": "Ketchapp"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "dev-android",
+            "author": "Device8",
+            "date": "2026-05-13",
+            "recordedAt": "2026-05-13T18:59:53+02:00",
+            "receivedAt": dt.datetime(2026, 5, 13, 16, 59, 53, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 1,
+            "idleDeltaSeconds": 0,
+        }
+    )
+
+    summary = repo.activity_summary(date_mode="authorLocalToday", now=now)
+
+    assert "Ketchapp" not in {item["rawAuthor"] for item in summary["authors"]}
+    assert "Ketchapp" not in {item["rawAuthor"] for item in summary["hourlyActivityByAuthor"]}
+
+
+def test_author_local_today_keeps_recent_stale_publisher_with_last_seen():
+    repo = fake_repository()
+    now = dt.datetime(2026, 5, 15, 12, tzinfo=dt.UTC)
+    repo.db.author_profiles.insert_one({"rawAuthor": "Ketchapp", "displayName": "Ketchapp", "profileType": "publisher"})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device8", "targetRawAuthor": "Ketchapp"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "dev-android",
+            "pluginVersion": "0.1.7",
+            "author": "Device8",
+            "date": "2026-05-14",
+            "recordedAt": "2026-05-14T15:30:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 14, 13, 30, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 1,
+            "idleDeltaSeconds": 0,
+        }
+    )
+
+    summary = repo.activity_summary(date_mode="authorLocalToday", now=now)
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Ketchapp")
+
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "device"
+    assert author["lastReceivedAt"] == "2026-05-14T13:30:00+00:00"
+    assert author["lastRecordedAt"] == "2026-05-14T15:30:00+02:00"
+
+
+def test_author_local_today_aggregates_publisher_device_activity_today():
+    repo = fake_repository()
+    now = dt.datetime(2026, 5, 15, 12, tzinfo=dt.UTC)
+    repo.db.author_profiles.insert_one({"rawAuthor": "Ketchapp", "displayName": "Ketchapp", "profileType": "publisher"})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device8", "targetRawAuthor": "Ketchapp"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "dev-android",
+            "author": "Device8",
+            "projectId": "Bike Rush 2",
+            "date": "2026-05-15",
+            "timeZoneId": "UTC",
+            "lastRecordedAt": "2026-05-15T11:59:00+00:00",
+            "lastReceivedAt": dt.datetime(2026, 5, 15, 11, 59, tzinfo=dt.UTC),
+            "activeSeconds": 120,
+            "idleSeconds": 30,
+            "activityCounts": [{"type": "click", "count": 2}],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(date_mode="authorLocalToday", now=now)
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Ketchapp")
+
+    assert author["activeSeconds"] == 120
+    assert author["rawPluginDaySeconds"] == 150
+    assert author["activityMix"] == [{"type": "click", "count": 2, "percent": 100}]
+
+
 def test_activity_author_day_snapshot_skips_live_local_day():
     repo = fake_repository()
     now = dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC)
