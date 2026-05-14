@@ -808,6 +808,20 @@ def test_activity_author_day_snapshot_skips_live_local_day():
     assert result["processed"] is False
     assert repo.db.activity_author_day_summary_snapshots.count_documents({}) == 0
 
+def test_activity_author_day_payload_handles_missing_hourly_row():
+    repo = fake_repository()
+
+    payload = repo._author_day_payload_from_summary(
+        {
+            "authors": [{"rawAuthor": "No Hourly Artist", "displayName": "No Hourly Artist", "activeSeconds": 60}],
+            "hourlyActivityByAuthor": [],
+        },
+        "No Hourly Artist",
+    )
+
+    assert payload["hourlyActivity"]["rawAuthor"] == "No Hourly Artist"
+    assert payload["hourlyActivity"]["hourlyActivity"] == empty_hourly_activity()
+
 def test_activity_author_day_snapshot_maintenance_pass_is_sequential_and_limited():
     repo = fake_repository()
     now = dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC)

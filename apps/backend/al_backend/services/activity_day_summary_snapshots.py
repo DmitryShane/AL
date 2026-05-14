@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..activity_math import *
 from ..backend_composable_host import composed
+from ..hourly_fill_rules import empty_hourly_activity
 
 
 class ActivityDaySummarySnapshotsMixin:
