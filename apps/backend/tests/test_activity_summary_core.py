@@ -647,6 +647,7 @@ def test_historical_single_day_activity_summary_miss_returns_preparing_then_read
         "date": "2026-04-29",
         "readyAuthors": [],
         "pendingAuthors": ["Future Artist"],
+        "liveAuthors": [],
     }
     assert snapshots == []
     assert second["snapshot"] == {"hit": True, "date": "2026-04-29"}
@@ -686,6 +687,7 @@ def test_historical_hourly_summary_uses_day_snapshot_payload():
         "date": "2026-04-29",
         "readyAuthors": [],
         "pendingAuthors": ["Future Artist"],
+        "liveAuthors": [],
     }
     assert first["activityMix"] == []
     assert len(list(repo.db.activity_day_summary_snapshots.find({"date": "2026-04-29"}))) == 0
@@ -887,6 +889,74 @@ def test_activity_author_day_snapshot_skips_live_local_day():
 
     assert result["processed"] is False
     assert repo.db.activity_author_day_summary_snapshots.count_documents({}) == 0
+
+def test_day_summary_snapshot_waits_for_live_author_after_completed_authors_are_ready():
+    repo = fake_repository()
+    version = repo.activity_day_summary_snapshot_version()
+    day_date = "2026-05-02"
+    early_now = dt.datetime(2026, 5, 3, 1, tzinfo=dt.UTC)
+    late_now = dt.datetime(2026, 5, 3, 8, 1, tzinfo=dt.UTC)
+    repo.db.author_profiles.insert_one({"rawAuthor": "UTC Artist", "displayName": "UTC Artist", "timeZoneId": "UTC"})
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Vancouver Artist", "displayName": "Vancouver Artist", "timeZoneId": "America/Vancouver"}
+    )
+
+    for author, time_zone_id in (("UTC Artist", "UTC"), ("Vancouver Artist", "America/Vancouver")):
+        repo.db.daily_author_activity.insert_one(
+            {
+                "source": "cur",
+                "author": author,
+                "projectId": "al",
+                "date": day_date,
+                "timeZoneId": time_zone_id,
+                "activeSeconds": 120,
+                "idleSeconds": 0,
+                "activityCounts": [],
+                "savedPrefabs": [],
+                "overtimeActivityCounts": [],
+                "overtimeSavedPrefabs": [],
+                "hourlyActivity": empty_hourly_activity(),
+            }
+        )
+
+    first = repo.materialize_activity_author_day_summary_snapshots(limit=10, now=early_now)
+    early_status = repo.activity_snapshot_materialization_status(now=early_now)
+    rows = {(row["date"], row["rawAuthor"]): row for row in early_status["rows"]}
+
+    assert [item["rawAuthor"] for item in first["processed"]] == ["UTC Artist"]
+    assert first["remaining"] is False
+    assert repo.db.activity_author_day_summary_snapshots.count_documents({"date": day_date}) == 1
+    assert repo.db.activity_author_day_summary_snapshots.find_one(
+        {"date": day_date, "rawAuthor": "UTC Artist", "snapshotVersion": version}
+    ) is not None
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": day_date, "snapshotVersion": version}) is None
+    assert rows[(day_date, "UTC Artist")]["status"] == "ready"
+    assert rows[(day_date, "Vancouver Artist")]["status"] == "live"
+    assert rows[(day_date, "UTC Artist")]["daySnapshotReady"] is False
+    assert rows[(day_date, "Vancouver Artist")]["daySnapshotReady"] is False
+    assert repo.activity_day_summary_snapshot_status(day_date, now=early_now) == {
+        "readyAuthors": ["UTC Artist"],
+        "pendingAuthors": [],
+        "liveAuthors": ["Vancouver Artist"],
+    }
+
+    second = repo.materialize_activity_author_day_summary_snapshots(limit=10, now=late_now)
+    late_status = repo.activity_snapshot_materialization_status(now=late_now)
+    late_rows = {(row["date"], row["rawAuthor"]): row for row in late_status["rows"]}
+
+    assert [item["rawAuthor"] for item in second["processed"]] == ["Vancouver Artist"]
+    assert second["processed"][0]["composed"] is True
+    assert repo.db.activity_author_day_summary_snapshots.count_documents({"date": day_date}) == 2
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": day_date, "snapshotVersion": version}) is not None
+    assert late_rows[(day_date, "UTC Artist")]["status"] == "ready"
+    assert late_rows[(day_date, "Vancouver Artist")]["status"] == "ready"
+    assert late_rows[(day_date, "UTC Artist")]["daySnapshotReady"] is True
+    assert late_rows[(day_date, "Vancouver Artist")]["daySnapshotReady"] is True
+    assert repo.activity_day_summary_snapshot_status(day_date, now=late_now) == {
+        "readyAuthors": ["UTC Artist", "Vancouver Artist"],
+        "pendingAuthors": [],
+        "liveAuthors": [],
+    }
 
 def test_activity_author_day_payload_handles_missing_hourly_row():
     repo = fake_repository()
@@ -1196,6 +1266,7 @@ def test_activity_day_summary_snapshot_version_mismatch_returns_preparing():
         "date": "2026-04-29",
         "readyAuthors": [],
         "pendingAuthors": ["Future Artist"],
+        "liveAuthors": [],
     }
     assert summary["totals"]["activeSeconds"] == 0
     assert repo.db.activity_day_summary_snapshots.find_one(

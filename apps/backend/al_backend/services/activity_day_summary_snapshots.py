@@ -151,7 +151,7 @@ class ActivityDaySummarySnapshotsMixin:
             result = self.materialize_next_completed_author_day_snapshot(now=now)
 
             if not result.get("processed"):
-                return {"processed": processed, "remaining": False, **result}
+                return {**result, "processed": processed, "remaining": False}
 
             processed.append(result)
 
@@ -290,7 +290,7 @@ class ActivityDaySummarySnapshotsMixin:
                 },
                 upsert=True,
             )
-            composed_payload = self.compose_completed_day_snapshot(day_date)
+            composed_payload = self.compose_completed_day_snapshot(day_date, now=now)
             return {
                 "processed": True,
                 "rawAuthor": raw_author,
@@ -369,14 +369,22 @@ class ActivityDaySummarySnapshotsMixin:
             "rows": rows,
         }
 
-    def compose_completed_day_snapshot(self, day_date: str) -> dict[str, Any] | None:
+    def compose_completed_day_snapshot(self, day_date: str, now: dt.datetime | None = None) -> dict[str, Any] | None:
         snapshot_date = str(day_date or "").strip()
 
         if not snapshot_date:
             return None
 
-        required_authors = self._completed_snapshot_candidate_authors_for_date(snapshot_date, dt.datetime.now(dt.UTC))
+        now = now or dt.datetime.now(dt.UTC)
+        required_authors = self._snapshot_authors_for_date(snapshot_date)
         version = self.activity_day_summary_snapshot_version()
+
+        if not required_authors:
+            return None
+
+        for raw_author in required_authors:
+            if self._is_author_day_live(raw_author, snapshot_date, now):
+                return None
 
         for raw_author in required_authors:
             if not self.db.activity_author_day_summary_snapshots.find_one(
@@ -441,7 +449,7 @@ class ActivityDaySummarySnapshotsMixin:
                 )
                 processed.append({"date": day_date, "rawAuthor": raw_author})
 
-            if self.compose_completed_day_snapshot(day_date) is not None:
+            if self.compose_completed_day_snapshot(day_date, now=now) is not None:
                 composed_dates.append(day_date)
 
         return {"processed": processed, "composedDates": composed_dates}
@@ -568,12 +576,15 @@ class ActivityDaySummarySnapshotsMixin:
 
     def _is_completed_day_snapshot_ready(self, day_date: str, now: dt.datetime) -> bool:
         version = self.activity_day_summary_snapshot_version()
-        required_authors = self._completed_snapshot_candidate_authors_for_date(day_date, now)
+        required_authors = self._snapshot_authors_for_date(day_date)
 
         if not required_authors:
             return False
 
         for raw_author in required_authors:
+            if self._is_author_day_live(raw_author, day_date, now):
+                return False
+
             if not self.db.activity_author_day_summary_snapshots.find_one(
                 {"date": day_date, "rawAuthor": raw_author, "snapshotVersion": version},
                 {"_id": 1},
@@ -586,10 +597,15 @@ class ActivityDaySummarySnapshotsMixin:
         snapshot_date = str(day_date or "").strip()
         now = now or dt.datetime.now(dt.UTC)
         version = self.activity_day_summary_snapshot_version()
-        required_authors = self._completed_snapshot_candidate_authors_for_date(snapshot_date, now)
+        required_authors = self._snapshot_authors_for_date(snapshot_date)
         ready_authors: list[str] = []
+        live_authors: list[str] = []
 
         for raw_author in required_authors:
+            if self._is_author_day_live(raw_author, snapshot_date, now):
+                live_authors.append(raw_author)
+                continue
+
             if self.db.activity_author_day_summary_snapshots.find_one(
                 {"date": snapshot_date, "rawAuthor": raw_author, "snapshotVersion": version},
                 {"_id": 1},
@@ -597,9 +613,11 @@ class ActivityDaySummarySnapshotsMixin:
                 ready_authors.append(raw_author)
 
         ready = set(ready_authors)
+        live = set(live_authors)
         return {
             "readyAuthors": sorted(ready_authors),
-            "pendingAuthors": [author for author in required_authors if author not in ready],
+            "pendingAuthors": [author for author in required_authors if author not in ready and author not in live],
+            "liveAuthors": sorted(live_authors),
         }
 
     def _compose_activity_day_snapshot_payload(self, day_date: str, required_authors: list[str], version: int) -> dict[str, Any]:
@@ -683,6 +701,18 @@ class ActivityDaySummarySnapshotsMixin:
                 continue
 
             if not self._is_author_day_live(raw_author, day_date, now, item.get("timeZoneId")):
+                authors.add(raw_author)
+
+        return sorted(authors)
+
+    def _snapshot_authors_for_date(self, day_date: str) -> list[str]:
+        authors: set[str] = set()
+
+        for item in self.db.daily_author_activity.find({"date": day_date}, {"_id": 0, "author": 1}):
+            source_raw_author = str(item.get("author") or "Unknown User")
+            raw_author = composed(self).resolve_author_alias(source_raw_author)
+
+            if raw_author:
                 authors.add(raw_author)
 
         return sorted(authors)
