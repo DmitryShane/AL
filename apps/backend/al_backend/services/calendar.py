@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..activity_math import *
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+from .publisher_profiles import PUBLISHER_PROFILE_TYPE
 
 
 class CalendarService(MongoComposableMixin):
@@ -12,8 +13,13 @@ class CalendarService(MongoComposableMixin):
         end_date = f"{year}-12-31"
         reasons = self.calendar_reasons()
         reasons_by_id = {item["id"]: item for item in reasons}
-        authors = composed(self).author_profiles()
+        authors = [item for item in composed(self).author_profiles() if str(item.get("profileType") or "person") != PUBLISHER_PROFILE_TYPE]
         authors_by_raw = {item["rawAuthor"]: item for item in authors}
+        publisher_raw_authors = {
+            str(item.get("rawAuthor") or "")
+            for item in self.db.author_profiles.find({"profileType": PUBLISHER_PROFILE_TYPE}, {"_id": 0, "rawAuthor": 1})
+            if item.get("rawAuthor")
+        }
         marks = []
         stats_by_author: dict[str, dict[str, Any]] = {
             author["rawAuthor"]: {
@@ -30,6 +36,9 @@ class CalendarService(MongoComposableMixin):
         query = {"date": {"$gte": start_date, "$lte": end_date}}
 
         for mark in self.db.calendar_marks.find(query, {"_id": 0}).sort("date", DESCENDING):
+            if str(mark.get("rawAuthor") or "") in publisher_raw_authors:
+                continue
+
             author = authors_by_raw.get(mark.get("rawAuthor"), {})
             reason = reasons_by_id.get(mark.get("reasonId"), {"id": mark.get("reasonId"), "label": mark.get("reasonId")})
             item = {
@@ -156,5 +165,4 @@ class CalendarService(MongoComposableMixin):
                 {"$set": {**reason, "updatedAt": now}, "$setOnInsert": {"createdAt": now}},
                 upsert=True,
             )
-
 

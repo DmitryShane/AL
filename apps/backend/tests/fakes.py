@@ -207,6 +207,7 @@ class FakeDb:
         self.meeting_sessions = FakeCollection()
         self.meeting_intervals = FakeCollection()
         self.calendar_marks = FakeCollection()
+        self.calendar_reasons = FakeCollection()
         self.daily_author_activity = FakeCollection()
         self.aggregate_session_state = FakeCollection()
         self.interval_settings = FakeCollection()

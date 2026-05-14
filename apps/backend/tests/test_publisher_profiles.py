@@ -20,6 +20,28 @@ def test_publisher_profile_can_be_empty_and_link_device_profile():
     assert repo.resolve_author_alias("Device8") == "Publisher QA"
 
 
+def test_publisher_profiles_are_hidden_from_calendar_summary():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Real Author",
+            "displayName": "Real Author",
+            "team": "Art",
+            "authorColor": "#22c55e",
+            "profileType": "person",
+        }
+    )
+    repo.upsert_publisher_profile("Publisher QA", "Publisher QA", "External", "#ef4444")
+    repo.db.calendar_marks.insert_one({"rawAuthor": "Real Author", "date": "2026-05-14", "reasonId": "vacation", "note": ""})
+    repo.db.calendar_marks.insert_one({"rawAuthor": "Publisher QA", "date": "2026-05-14", "reasonId": "vacation", "note": ""})
+
+    summary = repo.calendar_summary(2026)
+
+    assert [item["rawAuthor"] for item in summary["authors"]] == ["Real Author"]
+    assert [item["rawAuthor"] for item in summary["marks"]] == ["Real Author"]
+    assert [item["rawAuthor"] for item in summary["stats"]] == ["Real Author"]
+
+
 def test_publisher_device_stale_is_grey_device_offline_without_reports_stopped_event():
     repo = fake_repository()
     now = dt.datetime(2026, 5, 14, 1, 0, tzinfo=dt.UTC)
