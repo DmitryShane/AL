@@ -372,7 +372,8 @@ def test_late_activity_event_does_not_roll_back_raw_event_state():
 
     assert late_deltas["activeDeltaSeconds"] == 0
     assert late_deltas["idleDeltaSeconds"] == 0
-    assert late_deltas["activityCountDeltas"] == [{"type": "focus", "count": 1}]
+    assert late_deltas["activityCountDeltas"] == []
+    assert late_deltas["overtimeActivityCountDeltas"] == [{"type": "focus", "count": 1}]
 
     state = repo.db.aggregate_session_state.find_one(
         {"_id": "author_source_project_device_day_v2|Future Artist|2026-05-02|cur|al|mac-mini"}
@@ -2339,6 +2340,44 @@ def test_unity_asset_saved_is_counted_as_saved_file():
     assert saved == {
         "path": "Assets/Project/Materials/Road.mat",
         "name": "Road",
+        "saveCount": 1,
+    }
+
+
+def test_unity_imported_model_is_counted_as_saved_file():
+    saved = _saved_prefab_delta(
+        {
+            "source": "ual",
+            "eventType": "asset_saved",
+            "metadata": {
+                "path": "Assets/Art/Environment/Garage.Scene/Models/Garage.Scene.fbx",
+                "name": "Garage.Scene",
+            },
+        }
+    )
+
+    assert saved == {
+        "path": "Assets/Art/Environment/Garage.Scene/Models/Garage.Scene.fbx",
+        "name": "Garage.Scene",
+        "saveCount": 1,
+    }
+
+
+def test_unity_meta_asset_saved_is_normalized_to_source_asset():
+    saved = _saved_prefab_delta(
+        {
+            "source": "ual",
+            "eventType": "asset_saved",
+            "metadata": {
+                "path": "Assets/Art/Environment/Garage.Scene/Textures/Garage.Scene.png.meta",
+                "name": "Garage.Scene.png.meta",
+            },
+        }
+    )
+
+    assert saved == {
+        "path": "Assets/Art/Environment/Garage.Scene/Textures/Garage.Scene.png",
+        "name": "Garage.Scene.png",
         "saveCount": 1,
     }
 

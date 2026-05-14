@@ -44,7 +44,23 @@ SELECT_HEAVY_MIN_EVENTS = 20
 AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS = 300
 REPORT_CHALLENGE_TTL_SECONDS = 120
 DEVICE_SOURCES = {"dev", "dev-ios", "dev-android"}
-UAL_SAVED_FILE_EXTENSIONS = {".unity", ".prefab", ".asset", ".mat", ".controller", ".anim", ".shader", ".cs"}
+UAL_SAVED_FILE_EXTENSIONS = {
+    ".unity",
+    ".prefab",
+    ".asset",
+    ".mat",
+    ".controller",
+    ".anim",
+    ".shader",
+    ".cs",
+    ".fbx",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".tga",
+    ".psd",
+    ".exr",
+}
 UAL_IGNORED_SAVED_FILE_PATHS = {
     "packages/com.mempic.ad.provider/runtime/textures/texture.asset",
 }
@@ -563,6 +579,12 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
     if not path:
         return None
 
+    if event.get("source") == "ual":
+        path = _normalize_unity_saved_file_path(path)
+
+        if not path:
+            return None
+
     lower_path = path.lower()
 
     if event.get("source") == "ual":
@@ -591,12 +613,28 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     name = str(metadata.get("name") or path.rsplit("/", 1)[-1])
+
+    if event.get("source") == "ual" and name.lower().endswith(".meta"):
+        name = name[: -len(".meta")]
+
     saved_file = {"path": path, "name": name, "saveCount": 1}
 
     if event.get("source") == "cur":
         saved_file["projectId"] = str(event.get("projectId") or "")
 
     return saved_file
+
+
+def _normalize_unity_saved_file_path(path: str) -> str:
+    normalized = path.replace("\\", "/").strip()
+
+    if normalized.lower().endswith(".meta"):
+        normalized = normalized[: -len(".meta")]
+
+    if not normalized.lower().startswith("assets/"):
+        return ""
+
+    return normalized
 
 
 def _worked_file_delta(event: dict[str, Any]) -> dict[str, Any] | None:

@@ -708,7 +708,7 @@ def test_night_overtime_active_counts_on_same_calendar_day():
     assert hour_3["totals"]["overtimeSeconds"] == 120
     assert hour_3["totals"]["idleSeconds"] == 0
 
-def test_night_asset_saved_without_overtime_time_stays_normal_saved_prefab():
+def test_night_asset_saved_without_overtime_time_stays_overtime_saved_prefab():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
         {"rawAuthor": "Denis Ostrovskiy", "displayName": "Denis Ostrovskiy", "timeZoneId": "Europe/Kyiv"}
@@ -736,23 +736,23 @@ def test_night_asset_saved_without_overtime_time_stays_normal_saved_prefab():
     daily = repo.db.daily_author_activity.find_one({"author": "Denis Ostrovskiy", "date": "2026-05-14", "source": "ual"})
 
     assert deltas["overtimeActiveDeltaSeconds"] == 0
-    assert deltas["savedPrefabDeltas"] == [
+    assert deltas["savedPrefabDeltas"] == []
+    assert deltas["overtimeSavedPrefabDeltas"] == [
         {
             "path": "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset",
             "name": "LiberationSans SDF - Fallback",
             "saveCount": 1,
         }
     ]
-    assert deltas["overtimeSavedPrefabDeltas"] == []
     assert daily["overtimeActiveSeconds"] == 0
-    assert daily["savedPrefabs"] == [
+    assert daily["savedPrefabs"] == []
+    assert daily["overtimeSavedPrefabs"] == [
         {
             "path": "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset",
             "name": "LiberationSans SDF - Fallback",
             "saveCount": 1,
         }
     ]
-    assert daily["overtimeSavedPrefabs"] == []
 
 def test_night_overtime_heartbeat_idle_is_ignored():
     repo = fake_repository()
@@ -2995,6 +2995,93 @@ def test_overtime_activity_summary_splits_mix_and_saved_files():
     assert summary["overtimeActivityMix"] == [
         {"type": "play_mode", "count": 1, "percent": 50},
         {"type": "prefab_saved", "count": 1, "percent": 50},
+    ]
+
+def test_night_overtime_activity_summary_keeps_mix_and_saved_files_out_of_regular_cards():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "displayName": "Denis Ostrovskiy",
+            "telegramUsername": "vedamir_infinum",
+            "timeZoneId": "Europe/Kyiv",
+            "timeZoneDisplayName": "FLE Daylight Time",
+        }
+    )
+    base_event = {
+        "source": "ual",
+        "author": "Denis Ostrovskiy",
+        "authorEmail": "denis@example.com",
+        "projectId": "bike-rush-2",
+        "sessionId": "unity-session",
+        "date": "2026-05-15",
+        "receivedAt": dt.datetime(2026, 5, 14, 22, 15, tzinfo=dt.UTC),
+    }
+
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-14T22:10:00Z",
+            "occurredAtLocal": "2026-05-15T01:10:00+03:00",
+        }
+    )
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "play_mode",
+            "occurredAtUtc": "2026-05-14T22:12:00Z",
+            "occurredAtLocal": "2026-05-15T01:12:00+03:00",
+        }
+    )
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "prefab_saved",
+            "occurredAtUtc": "2026-05-14T22:15:00Z",
+            "occurredAtLocal": "2026-05-15T01:15:00+03:00",
+            "receivedAt": dt.datetime(2026, 5, 14, 22, 15, tzinfo=dt.UTC),
+            "metadata": {"path": "Assets/Project/Scenes/scene.garage/scene.garage.prefab", "name": "scene.garage"},
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-15", end_date="2026-05-15")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Denis Ostrovskiy")
+
+    assert author["activeSeconds"] == 0
+    assert author["activityMix"] == []
+    assert author["savedPrefabs"] == []
+    assert author["activityMixBySource"] == []
+    assert author["savedPrefabsBySource"] == []
+    assert author["overtimeActiveSeconds"] > 0
+    assert author["overtimeActivityMix"] == [
+        {"type": "select", "count": 1, "percent": 33},
+        {"type": "play_mode", "count": 1, "percent": 33},
+        {"type": "prefab_saved", "count": 1, "percent": 33},
+    ]
+    assert author["overtimeSavedPrefabs"] == [
+        {"path": "Assets/Project/Scenes/scene.garage/scene.garage.prefab", "name": "scene.garage", "saveCount": 1}
+    ]
+    assert author["overtimeActivityMixBySource"] == [
+        {
+            "source": "ual",
+            "totalCount": 3,
+            "activeSeconds": author["overtimeActiveSeconds"],
+            "activityMix": [
+                {"type": "select", "count": 1, "percent": 33},
+                {"type": "play_mode", "count": 1, "percent": 33},
+                {"type": "prefab_saved", "count": 1, "percent": 33},
+            ],
+        }
+    ]
+    assert author["overtimeSavedPrefabsBySource"] == [
+        {
+            "source": "ual",
+            "totalSaveCount": 1,
+            "savedPrefabs": [
+                {"path": "Assets/Project/Scenes/scene.garage/scene.garage.prefab", "name": "scene.garage", "saveCount": 1}
+            ],
+        }
     ]
 
 def test_activity_summary_returnsempty_hourly_activity_for_telegram_only_author():

@@ -47,7 +47,7 @@ export function ActivityBreakdownCards({ author }: ActivityBreakdownCardsProps) 
       />
       <BreakdownPanel
         key={`${author.rawAuthor}-saved-files`}
-        title="Saved Files"
+        title="Worked Files"
         items={savedPrefabItems}
         groups={savedPrefabGroups}
       />

@@ -430,27 +430,29 @@ class ActivityRawEventAccountingMixin:
                     author_last_accounting_local_at = heartbeat_local_end
                     author_last_accounting_scope = current_scope
 
+        event_has_overtime_time_delta = _time_microseconds(
+            deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds"
+        ) > 0
+        event_counts_as_overtime_breakdown = event_has_overtime_time_delta or overtime_window_kind == "night" or (
+            overtime_window_kind in {"telegram", "vacation"}
+            and consumed_normal_microseconds >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
+        )
+
         if is_activity:
             activity_type = _activity_count_type(event_type)
             activity_delta_key = "activityCountDeltas"
 
-            if _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") > 0 or (
-                overtime_window_kind in {"telegram", "vacation"}
-                and consumed_normal_microseconds >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
-            ):
+            if event_counts_as_overtime_breakdown:
                 activity_delta_key = "overtimeActivityCountDeltas"
 
             deltas[activity_delta_key].append({"type": activity_type, "count": 1})
 
-        event_has_overtime_time_delta = _time_microseconds(
-            deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds"
-        ) > 0
         saved_prefab = None if is_inside_status_offline else _saved_prefab_delta(event)
 
         if saved_prefab:
             saved_prefab_delta_key = "savedPrefabDeltas"
 
-            if event_has_overtime_time_delta:
+            if event_counts_as_overtime_breakdown:
                 saved_prefab_delta_key = "overtimeSavedPrefabDeltas"
 
             deltas[saved_prefab_delta_key].append(saved_prefab)
@@ -460,7 +462,7 @@ class ActivityRawEventAccountingMixin:
         if worked_file:
             worked_file_delta_key = "savedPrefabDeltas"
 
-            if event_has_overtime_time_delta:
+            if event_counts_as_overtime_breakdown:
                 worked_file_delta_key = "overtimeSavedPrefabDeltas"
 
             deltas[worked_file_delta_key].append(worked_file)
