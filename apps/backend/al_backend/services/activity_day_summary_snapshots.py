@@ -367,6 +367,22 @@ class ActivityDaySummarySnapshotsMixin:
 
         return {"processed": processed, "composedDates": composed_dates}
 
+    def remake_activity_day_summary_snapshots_for_range(self, start_date: str, end_date: str) -> dict[str, Any]:
+        start = _parse_date(start_date)
+        end = _parse_date(end_date)
+
+        if end < start:
+            raise ValueError("endDate must be on or after startDate")
+
+        day_count = (end - start).days + 1
+        if day_count > 120:
+            raise ValueError("Snapshot remake range cannot exceed 120 days")
+
+        dates = [(start + dt.timedelta(days=index)).isoformat() for index in range(day_count)]
+        self.invalidate_activity_day_summary_snapshots(dates)
+        self.db.activity_snapshot_maintenance_state.delete_many({"kind": "author-day", "date": {"$in": dates}})
+        return {"ok": True, "dates": dates, "deletedDates": len(dates)}
+
     def invalidate_activity_day_summary_snapshots(
         self,
         dates: list[str] | tuple[str, ...] | set[str] | None = None,

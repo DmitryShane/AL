@@ -951,6 +951,38 @@ def test_activity_snapshot_materialization_status_reports_processing_separately_
     assert status["totals"]["processing"] == 1
     assert status["totals"]["next"] == 1
 
+def test_activity_snapshot_remake_range_deletes_selected_dates_and_processing_state():
+    repo = fake_repository()
+    version = repo.activity_day_summary_snapshot_version()
+    built_at = dt.datetime(2026, 5, 14, tzinfo=dt.UTC)
+
+    for day in ("2026-05-10", "2026-05-11", "2026-05-12"):
+        repo.db.activity_author_day_summary_snapshots.insert_one(
+            {"date": day, "rawAuthor": "Snapshot Artist", "snapshotVersion": version, "builtAt": built_at}
+        )
+        repo.db.activity_day_summary_snapshots.insert_one(
+            {"date": day, "view": "activity-day", "snapshotVersion": version, "payload": {}, "builtAt": built_at}
+        )
+
+    repo.db.activity_snapshot_maintenance_state.insert_one(
+        {
+            "kind": "author-day",
+            "date": "2026-05-11",
+            "rawAuthor": "Snapshot Artist",
+            "snapshotVersion": version,
+            "startedAt": built_at,
+        }
+    )
+
+    result = repo.remake_activity_day_summary_snapshots_for_range("2026-05-11", "2026-05-12")
+
+    assert result == {"ok": True, "dates": ["2026-05-11", "2026-05-12"], "deletedDates": 2}
+    assert repo.db.activity_author_day_summary_snapshots.find_one({"date": "2026-05-10"}) is not None
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": "2026-05-10"}) is not None
+    assert repo.db.activity_author_day_summary_snapshots.find_one({"date": "2026-05-11"}) is None
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": "2026-05-12"}) is None
+    assert repo.db.activity_snapshot_maintenance_state.find_one({"date": "2026-05-11"}) is None
+
 def test_report_ingest_invalidates_only_affected_day_snapshots():
     repo = fake_repository()
     version = repo.activity_day_summary_snapshot_version()

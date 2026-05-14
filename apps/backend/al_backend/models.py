@@ -111,6 +111,11 @@ class AvatarSettingsIn(ApiModel):
     refresh_cadence: str = Field(alias="refreshCadence", min_length=1)
 
 
+class ActivitySnapshotsRemakeIn(ApiModel):
+    start_date: str = Field(alias="startDate", min_length=10, max_length=10)
+    end_date: str = Field(alias="endDate", min_length=10, max_length=10)
+
+
 class BulkAuthorsActivityDeleteIn(ApiModel):
     preset: Literal["1d", "2d", "3d", "week", "month", "full"]
     confirm_phrase: str = Field(alias="confirmPhrase", min_length=1)

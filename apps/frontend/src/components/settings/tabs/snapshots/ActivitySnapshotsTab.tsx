@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, RefreshCw, RotateCcw } from "lucide-react";
 import { apiFetch } from "../../../../api/client";
+import { DateRangePicker, type DateRange } from "../../../layout/DateRangePicker";
 import type { ActivitySnapshotStatus, ActivitySnapshotStatusRow } from "../../../../types/dashboard";
 import { formatTimestamp } from "../../../../pages/pageHelpers";
 
@@ -17,7 +18,9 @@ type SnapshotTableState = {
 export function ActivitySnapshotsTab() {
   const [status, setStatus] = useState<ActivitySnapshotStatus | null>(() => loadCachedStatus());
   const [tableState, setTableState] = useState<SnapshotTableState>(() => loadTableState());
+  const [remakeRange, setRemakeRange] = useState<DateRange>(() => yesterdayRange());
   const [loading, setLoading] = useState(true);
+  const [remaking, setRemaking] = useState(false);
   const [error, setError] = useState("");
 
   async function loadStatus() {
@@ -38,6 +41,35 @@ export function ActivitySnapshotsTab() {
       setError(requestError instanceof Error ? requestError.message : "Could not load snapshot status.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function remakeSnapshots() {
+    setRemaking(true);
+    setError("");
+
+    try {
+      const response = await apiFetch("/api/v1/settings/activity-snapshots/remake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startDate: remakeRange.startDate, endDate: remakeRange.endDate }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Snapshot remake request failed");
+      }
+
+      const payload = await response.json() as { status?: ActivitySnapshotStatus };
+      if (payload.status) {
+        setStatus(payload.status);
+        saveCachedStatus(payload.status);
+      } else {
+        await loadStatus();
+      }
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Could not remake snapshots.");
+    } finally {
+      setRemaking(false);
     }
   }
 
@@ -111,10 +143,17 @@ export function ActivitySnapshotsTab() {
           <h2>Activity Snapshots</h2>
           <p className="settings-caption">Historical Activity snapshot materialization progress by date and author.</p>
         </div>
-        <button className="primary-outline-button" onClick={() => void loadStatus()} disabled={loading}>
-          <RefreshCw size={16} />
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
+        <div className="activity-snapshot-header-actions">
+          <DateRangePicker value={remakeRange} onChange={setRemakeRange} showPresets={false} />
+          <button className="primary-outline-button" onClick={() => void remakeSnapshots()} disabled={remaking || loading}>
+            <RotateCcw size={16} />
+            {remaking ? "Remaking..." : "Remake"}
+          </button>
+          <button className="primary-outline-button" onClick={() => void loadStatus()} disabled={loading || remaking}>
+            <RefreshCw size={16} />
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {status ? (
@@ -197,6 +236,20 @@ export function ActivitySnapshotsTab() {
       </div>
     </div>
   );
+}
+
+function yesterdayRange(): DateRange {
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+  const value = toDateInputValue(date);
+  return { startDate: value, endDate: value, preset: "yesterday" };
+}
+
+function toDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function SnapshotMetric({ label, value }: { label: string; value: number }) {

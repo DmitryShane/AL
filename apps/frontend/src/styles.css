@@ -2382,8 +2382,22 @@ p {
   min-width: 0;
 }
 
-.activity-snapshots-panel .settings-panel-header .primary-outline-button {
+.activity-snapshot-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   margin-left: auto;
+}
+
+.activity-snapshot-header-actions .date-range-control {
+  min-height: 34px;
+  box-shadow: none;
+}
+
+.activity-snapshot-header-actions .primary-outline-button {
+  min-height: 34px;
+  white-space: nowrap;
 }
 
 .snapshot-summary-grid {

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 
 from ..api_security import require_discord_bot_secret, require_permission, require_server_stats_permission
 from ..container import BackendServices
 from ..dependencies import get_settings_service
-from ..models import AvatarSettingsIn, DiscordSettingsIn, IntervalSettingsIn
+from ..models import ActivitySnapshotsRemakeIn, AvatarSettingsIn, DiscordSettingsIn, IntervalSettingsIn
 
 
 router = APIRouter()
@@ -53,6 +53,32 @@ def activity_snapshots_status(
             claimed["snapshotVersion"],
         )
     return service.activity_snapshot_materialization_status(limit_days=limit_days)
+
+
+@router.post("/api/v1/settings/activity-snapshots/remake")
+def remake_activity_snapshots(
+    remake_in: ActivitySnapshotsRemakeIn,
+    background_tasks: BackgroundTasks,
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    try:
+        result = service.remake_activity_day_summary_snapshots_for_range(remake_in.start_date, remake_in.end_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    claimed = service.claim_next_activity_author_day_snapshot()
+    if claimed.get("claimed"):
+        background_tasks.add_task(
+            service.materialize_claimed_activity_author_day_snapshot,
+            claimed["date"],
+            claimed["rawAuthor"],
+            claimed["snapshotVersion"],
+        )
+    return {
+        **result,
+        "claimed": claimed,
+        "status": service.activity_snapshot_materialization_status(limit_days=max(30, min(120, len(result["dates"]) + 7))),
+    }
 
 
 @router.put("/api/v1/settings/avatars")
