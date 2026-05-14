@@ -2292,6 +2292,78 @@ def test_blender_file_saved_is_counted_as_saved_file():
 
     assert saved == {"path": "/projects/scene/Shot01.blend", "name": "Shot01.blend", "saveCount": 1}
 
+def test_unity_scene_saved_is_counted_as_saved_file():
+    saved = _saved_prefab_delta(
+        {
+            "source": "ual",
+            "eventType": "scene_saved",
+            "metadata": {
+                "path": "Assets/Project/Levels/Level.005/Level.005.unity",
+                "name": "Level.005",
+            },
+        }
+    )
+
+    assert saved == {
+        "path": "Assets/Project/Levels/Level.005/Level.005.unity",
+        "name": "Level.005",
+        "saveCount": 1,
+    }
+
+
+def test_unity_asset_saved_is_counted_as_saved_file():
+    saved = _saved_prefab_delta(
+        {
+            "source": "ual",
+            "eventType": "asset_saved",
+            "metadata": {
+                "path": "Assets/Project/Materials/Road.mat",
+                "name": "Road",
+            },
+        }
+    )
+
+    assert saved == {
+        "path": "Assets/Project/Materials/Road.mat",
+        "name": "Road",
+        "saveCount": 1,
+    }
+
+
+def test_unity_generated_texture_asset_is_not_counted_as_saved_file():
+    saved = _saved_prefab_delta(
+        {
+            "source": "ual",
+            "eventType": "asset_saved",
+            "metadata": {
+                "path": "Packages/com.mempic.ad.provider/Runtime/Textures/Texture.asset",
+                "name": "Texture",
+            },
+        }
+    )
+
+    assert saved is None
+
+
+def test_unity_prefab_saved_is_counted_as_saved_file():
+    saved = _saved_prefab_delta(
+        {
+            "source": "ual",
+            "eventType": "prefab_saved",
+            "metadata": {
+                "path": "Assets/Project/Prefabs/Boost.000.prefab",
+                "name": "Boost.000",
+            },
+        }
+    )
+
+    assert saved == {
+        "path": "Assets/Project/Prefabs/Boost.000.prefab",
+        "name": "Boost.000",
+        "saveCount": 1,
+    }
+
+
 def test_figma_file_saved_is_counted_as_saved_file():
     saved = _saved_prefab_delta(
         {

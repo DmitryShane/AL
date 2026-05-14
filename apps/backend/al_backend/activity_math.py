@@ -44,6 +44,10 @@ SELECT_HEAVY_MIN_EVENTS = 20
 AFK_IDLE_ARTIFACT_THRESHOLD_SECONDS = 300
 REPORT_CHALLENGE_TTL_SECONDS = 120
 DEVICE_SOURCES = {"dev", "dev-ios", "dev-android"}
+UAL_SAVED_FILE_EXTENSIONS = {".unity", ".prefab", ".asset", ".mat", ".controller", ".anim", ".shader", ".cs"}
+UAL_IGNORED_SAVED_FILE_PATHS = {
+    "packages/com.mempic.ad.provider/runtime/textures/texture.asset",
+}
 RAW_ACTIVITY_EVENT_TYPES = {
     "click",
     "hold",
@@ -550,7 +554,7 @@ def _activity_count_type(event_type: str) -> str:
 def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
     event_type = str(event.get("eventType") or "")
 
-    if event_type not in {"prefab_saved", "asset_saved", "file_saved"}:
+    if event_type not in {"prefab_saved", "asset_saved", "scene_saved", "file_saved"}:
         return None
 
     metadata = event.get("metadata") or {}
@@ -561,7 +565,21 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
 
     lower_path = path.lower()
 
-    if event_type in {"prefab_saved", "asset_saved"} and not lower_path.endswith(".prefab"):
+    if event.get("source") == "ual":
+        if lower_path in UAL_IGNORED_SAVED_FILE_PATHS:
+            return None
+
+        if event_type == "prefab_saved" and not lower_path.endswith(".prefab"):
+            return None
+        if event_type == "scene_saved" and not lower_path.endswith(".unity"):
+            return None
+        if event_type == "asset_saved" and not any(lower_path.endswith(extension) for extension in UAL_SAVED_FILE_EXTENSIONS):
+            return None
+        if event_type == "file_saved":
+            return None
+    elif event_type in {"prefab_saved", "asset_saved"} and not lower_path.endswith(".prefab"):
+        return None
+    elif event_type == "scene_saved":
         return None
 
     if event_type == "file_saved" and event.get("source") == "fch":
