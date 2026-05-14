@@ -4332,6 +4332,25 @@ p {
   text-align: right;
 }
 
+.profile-table-shell.activity-snapshots-table-shell {
+  max-height: min(520px, 52vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.activity-snapshots-table > .profile-table-head,
+.activity-snapshot-date-row,
+.activity-snapshot-date-group .profile-row {
+  min-width: 0;
+  grid-template-columns: minmax(110px, 0.8fr) minmax(220px, 1.5fr) minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(170px, 1fr);
+}
+
+.activity-snapshots-table > .profile-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
 .site-user-name-cell {
   min-width: 0;
   align-self: center;
