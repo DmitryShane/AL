@@ -39,19 +39,10 @@ def openai_stats(
 
 @router.get("/api/v1/settings/activity-snapshots")
 def activity_snapshots_status(
-    background_tasks: BackgroundTasks,
     limit_days: int = Query(30, alias="limitDays", ge=1, le=120),
     _: dict = Depends(require_permission("manageSettings")),
     service: BackendServices = Depends(get_settings_service),
 ) -> dict:
-    claimed = service.claim_next_activity_author_day_snapshot()
-    if claimed.get("claimed"):
-        background_tasks.add_task(
-            service.materialize_claimed_activity_author_day_snapshot,
-            claimed["date"],
-            claimed["rawAuthor"],
-            claimed["snapshotVersion"],
-        )
     return service.activity_snapshot_materialization_status(limit_days=limit_days)
 
 
@@ -78,6 +69,19 @@ def remake_activity_snapshots(
         **result,
         "claimed": claimed,
         "status": service.activity_snapshot_materialization_status(limit_days=max(30, min(120, len(result["dates"]) + 7))),
+    }
+
+
+@router.post("/api/v1/settings/activity-snapshots/remake-all")
+def remake_all_activity_snapshots(
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    result = service.remake_all_activity_day_summary_snapshots()
+    service.start_activity_snapshot_background_drain()
+    return {
+        **result,
+        "status": service.activity_snapshot_materialization_status(limit_days=120),
     }
 
 

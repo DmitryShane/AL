@@ -2818,6 +2818,15 @@ def test_activity_hourly_cache_keeps_heavy_hourly_separate():
         include_hourly=False,
         include_breakdowns=False,
     )
+    preparing = repo.cached_activity_summary(
+        view="activity-hourly",
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        include_profiles=False,
+        include_hourly=True,
+        include_breakdowns=False,
+    )
+    repo.materialize_activity_author_day_summary_snapshots(limit=10, now=dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC))
     hourly_summary = repo.cached_activity_summary(
         view="activity-hourly",
         start_date="2026-04-29",
@@ -2828,6 +2837,7 @@ def test_activity_hourly_cache_keeps_heavy_hourly_separate():
     )
 
     assert lite["hourlyActivityByAuthor"] == []
+    assert preparing["snapshot"]["status"] == "preparing"
     assert hourly_summary["hourlyActivityByAuthor"][0]["rawAuthor"] == "Future Artist"
     assert _hour_metric(hourly_summary["hourlyActivityByAuthor"][0]["hourlyActivity"][10], "activeSeconds") == 60
 
@@ -2849,6 +2859,15 @@ def test_activity_hourly_public_items_only_use_canonical_schema():
         }
     )
 
+    preparing = repo.cached_activity_summary(
+        view="activity-hourly",
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        include_profiles=False,
+        include_hourly=True,
+        include_breakdowns=False,
+    )
+    repo.materialize_activity_author_day_summary_snapshots(limit=10, now=dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC))
     summary = repo.cached_activity_summary(
         view="activity-hourly",
         start_date="2026-04-29",
@@ -2859,6 +2878,7 @@ def test_activity_hourly_public_items_only_use_canonical_schema():
     )
     hour = summary["hourlyActivityByAuthor"][0]["hourlyActivity"][10]
 
+    assert preparing["snapshot"]["status"] == "preparing"
     assert set(hour) == {"hour", "totals", "fillSegments"}
     assert set(hour["totals"]) == {"activeSeconds", "overtimeSeconds", "afkSeconds", "meetingSeconds", "idleSeconds", "missedSeconds"}
 

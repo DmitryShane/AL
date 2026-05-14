@@ -55,11 +55,10 @@ class ActivitySummaryCacheMixin:
             payload["cache"] = {"hit": True, "key": cache_key}
             return payload
 
-        if snapshot_date and view == "activity-hourly":
-            snapshot_payload = self.build_activity_day_summary_snapshot(snapshot_date, now=now)
-            payload = dict(snapshot_payload)
+        if snapshot_date:
+            self.start_activity_snapshot_background_drain()
+            payload = self.activity_day_summary_preparing_payload(snapshot_date, now=now)
             payload["cache"] = {"hit": False, "key": cache_key}
-            payload["snapshot"] = {"hit": False, "date": snapshot_date}
             return payload
 
         payload = self.activity_summary(
@@ -71,13 +70,6 @@ class ActivitySummaryCacheMixin:
             include_hourly=include_hourly,
             include_breakdowns=include_breakdowns,
         )
-
-        if snapshot_date:
-            snapshot_payload = self.store_activity_day_summary_snapshot(snapshot_date, payload)
-            payload = dict(snapshot_payload)
-            payload["cache"] = {"hit": False, "key": cache_key}
-            payload["snapshot"] = {"hit": False, "date": snapshot_date}
-            return payload
 
         expires_at = now + dt.timedelta(seconds=self.SUMMARY_CACHE_TTL_SECONDS)
         self.db.activity_summary_cache.update_one(

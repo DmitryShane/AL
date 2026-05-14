@@ -38,6 +38,8 @@ export function ActivityPage({
   onRefreshAuthor: (author: string) => void;
 }) {
   const author = summary.authors.find((item) => item.rawAuthor === selectedAuthor) ?? summary.authors[0];
+  const snapshotPreparing = summary.snapshot?.status === "preparing";
+  const isHistoricalSingleDay = dateRange.preset !== "live" && dateRange.startDate === dateRange.endDate;
   const hourlyCacheKey = useMemo(() => JSON.stringify({
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
@@ -179,6 +181,11 @@ export function ActivityPage({
     let ignore = false;
 
     async function loadHourly() {
+      if (isHistoricalSingleDay && (snapshotPreparing || summary.hourlyActivityByAuthor.length)) {
+        setHourlyRows(summary.hourlyActivityByAuthor);
+        return;
+      }
+
       if (loading && !summary.hourlyActivityByAuthor.length) {
         return;
       }
@@ -244,7 +251,7 @@ export function ActivityPage({
     return () => {
       ignore = true;
     };
-  }, [dateRange.startDate, dateRange.endDate, dateRange.preset, hourlyCacheKey, loading, summary.hourlyActivityByAuthor]);
+  }, [dateRange.startDate, dateRange.endDate, dateRange.preset, hourlyCacheKey, isHistoricalSingleDay, loading, snapshotPreparing, summary.hourlyActivityByAuthor]);
 
   useEffect(() => {
     if (!author?.rawAuthor) {
@@ -410,7 +417,9 @@ export function ActivityPage({
           ))}
         </div>
 
-        {author ? (
+        {snapshotPreparing ? (
+          <p className="empty">Preparing historical activity snapshot for {summary.snapshot?.date ?? dateRange.startDate}...</p>
+        ) : author ? (
           <>
             <div className="toolbar">
               <div>

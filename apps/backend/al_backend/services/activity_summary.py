@@ -67,10 +67,38 @@ class ActivitySummaryService(
         include_profiles: bool = True,
         include_hourly: bool = True,
         include_breakdowns: bool = True,
+        raw_author_scope: str | None = None,
     ) -> dict[str, Any]:
-        composed(self).materialize_live_meeting_reports(now)
+        now = now or dt.datetime.now(dt.UTC)
         historical_single_day = bool(start_date and start_date == end_date and not date_mode)
-        hidden_device_authors = set() if historical_single_day else self._hidden_device_authors()
+        profiles = composed(self)._profiles_by_raw_author()
+        selected_day_is_live = False
+        if historical_single_day and start_date:
+            live_dates = {now.astimezone(dt.UTC).date().isoformat()}
+            for profile in profiles.values():
+                live_dates.add(
+                    _local_date_for_time_zone(
+                        now,
+                        _author_time_zone_id(profile.get("rawAuthor"), {}, profile.get("timeZoneId")),
+                    )
+                )
+            selected_day_is_live = start_date in live_dates
+        if not historical_single_day or selected_day_is_live:
+            composed(self).materialize_live_meeting_reports(now)
+        hidden_device_authors = self._hidden_device_authors()
+        if historical_single_day:
+            selected_daily_device_authors = {
+                str(author or "")
+                for author in self.db.daily_author_activity.distinct("author", {"date": start_date})
+                if _is_device_profile_raw_author(str(author or ""))
+            }
+            selected_raw_device_authors = {
+                str(author or "")
+                for collection_name in ("raw_activity_events", "activity_snapshots", "report_rows")
+                for author in getattr(self.db, collection_name).distinct("author", {"date": start_date})
+                if _is_device_profile_raw_author(str(author or ""))
+            }
+            hidden_device_authors -= selected_daily_device_authors - selected_raw_device_authors
         totals = {
             "daySeconds": 0,
             "telegramDaySeconds": 0,
@@ -99,8 +127,6 @@ class ActivitySummaryService(
         meeting_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         meeting_overlap_consumed_by_author_date_hour: dict[tuple[str, str], list[dict[str, int]]] = {}
         summary_dates_by_author: dict[str, set[str]] = {}
-        profiles = composed(self)._profiles_by_raw_author()
-        now = now or dt.datetime.now(dt.UTC)
         daily_items = sorted(
             self.db.daily_author_activity.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0}),
             key=lambda item: (
@@ -109,6 +135,13 @@ class ActivitySummaryService(
                 str(item.get("source") or ""),
             ),
         )
+        scoped_raw_author = str(raw_author_scope or "").strip()
+        if scoped_raw_author:
+            daily_items = [
+                item
+                for item in daily_items
+                if composed(self).resolve_author_alias(str(item.get("author") or "Unknown User")) == scoped_raw_author
+            ]
         if date_mode == "authorLocalToday":
             daily_items = [
                 item
@@ -124,6 +157,30 @@ class ActivitySummaryService(
                     end_date,
                 )
             ]
+        report_rows_by_daily_key: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        report_projection = {
+            "_id": 0,
+            "author": 1,
+            "date": 1,
+            "source": 1,
+            "recordedAt": 1,
+            "activeDeltaSeconds": 1,
+            "overtimeActiveDeltaSeconds": 1,
+        }
+        report_rows_for_daily_items = list(
+            self.db.report_rows.find(_report_date_query(start_date, end_date, date_mode, profiles, now), report_projection).sort("recordedAt", 1)
+        )
+        if scoped_raw_author:
+            report_rows_for_daily_items = [
+                row
+                for row in report_rows_for_daily_items
+                if composed(self).resolve_author_alias(str(row.get("author") or "Unknown User")) == scoped_raw_author
+            ]
+        for row in report_rows_for_daily_items:
+            report_rows_by_daily_key.setdefault(
+                (str(row.get("author") or "Unknown User"), str(row.get("date") or ""), str(row.get("source") or "")),
+                [],
+            ).append(row)
         break_buckets = composed(self)._break_buckets_for_daily_items(daily_items)
         mark_break_source_overlaps(break_buckets, daily_items)
         meeting_buckets = composed(self)._meeting_buckets_for_daily_items(daily_items, now)
@@ -143,12 +200,7 @@ class ActivitySummaryService(
             profile = profiles.get(raw_author, {})
             display_name = _display_name(raw_author, profile)
             source_hourly_activity = item.get("hourlyActivity", [])
-            source_reports = list(
-                self.db.report_rows.find(
-                    {"author": source_raw_author, "date": item_date, "source": item.get("source")},
-                    {"_id": 0, "recordedAt": 1, "activeDeltaSeconds": 1, "overtimeActiveDeltaSeconds": 1},
-                ).sort("recordedAt", 1)
-            )
+            source_reports = report_rows_by_daily_key.get((str(source_raw_author), str(item_date), str(item.get("source") or "")), [])
             add_report_activity_fill_segments(
                 source_hourly_activity,
                 source_reports,
@@ -558,6 +610,18 @@ class ActivitySummaryService(
             for raw_author in list(hourly_by_author):
                 if raw_author not in authors_by_raw:
                     hourly_by_author.pop(raw_author, None)
+            if not authors_by_raw:
+                for raw_author in {
+                    composed(self).resolve_author_alias(str(author or "Unknown User"))
+                    for author in self.db.raw_activity_events.distinct("author", {"date": start_date})
+                    if str(author or "").strip()
+                }:
+                    if raw_author in profiles:
+                        composed(self)._ensure_summary_author(authors_by_raw, raw_author, profiles)
+                for raw_author, profile in profiles.items():
+                    if not str(profile.get("telegramUsername") or "").strip():
+                        continue
+                    composed(self)._ensure_summary_author(authors_by_raw, raw_author, profiles)
 
         self._apply_vacation_summary_overrides(
             authors_by_raw,

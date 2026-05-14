@@ -1,5 +1,6 @@
 import datetime as dt
 import re
+import threading
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -233,6 +234,8 @@ def fake_repository() -> Any:
     repo.db = FakeDb()
     repo.default_send_interval_seconds = 60
     repo.avatar_cache_dir = Path(tempfile.mkdtemp())
+    repo.activity_snapshot_maintenance_lock = threading.Lock()
+    repo.activity_snapshot_background_disabled = True
     return repo
 
 

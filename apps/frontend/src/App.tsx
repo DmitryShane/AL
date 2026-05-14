@@ -348,13 +348,18 @@ function App() {
       const nextSummary = await summaryResponse.json() as Summary;
       const nextAuthors = nextSummary.activitySummary.authors;
       setSummary(nextSummary);
-      saveCachedDashboardSummary(requestedPage, requestedDateRange, nextSummary);
+      const snapshotPreparing = nextSummary.activitySummary.snapshot?.status === "preparing";
+      if (!snapshotPreparing) {
+        saveCachedDashboardSummary(requestedPage, requestedDateRange, nextSummary);
+      }
       setCachedAuthors(nextAuthors);
       saveCachedAuthors(requestedDateRange, nextAuthors);
 
       if (requestedPage === "activity") {
         setCachedActivitySummary(nextSummary.activitySummary);
-        saveCachedActivitySummary(requestedDateRange, nextSummary.activitySummary);
+        if (!snapshotPreparing) {
+          saveCachedActivitySummary(requestedDateRange, nextSummary.activitySummary);
+        }
       }
 
       if (requestedPage === "settings") {
@@ -416,6 +421,20 @@ function App() {
       window.clearInterval(intervalId);
     };
   }, [authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset, dashboardRefreshMs, page]);
+
+  useEffect(() => {
+    if (!authUser || page !== "activity" || summary?.activitySummary.snapshot?.status !== "preparing") {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void load(false);
+    }, 3000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [authUser?.email, page, summary?.activitySummary.snapshot?.status, dateRange.startDate, dateRange.endDate, dateRange.preset]);
 
   const canShowCachedDashboard = Boolean(authUser) || (authLoading && hasAuthHint);
   const activitySummary = canShowCachedDashboard ? (summary?.activitySummary ?? emptyActivitySummary) : emptyActivitySummary;
@@ -664,7 +683,7 @@ function summaryViewForPage(page: Page) {
   }
 
   if (page === "activity") {
-    return "activity-lite";
+    return "activity";
   }
 
   return "authors";

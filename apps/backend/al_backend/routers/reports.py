@@ -206,4 +206,8 @@ def reports_activity_hourly(
         include_hourly=True,
         include_breakdowns=False,
     )
-    return {"hourlyActivityByAuthor": summary.get("hourlyActivityByAuthor", []), "cache": summary.get("cache", {})}
+    return {
+        "hourlyActivityByAuthor": summary.get("hourlyActivityByAuthor", []),
+        "cache": summary.get("cache", {}),
+        "snapshot": summary.get("snapshot", {}),
+    }

@@ -142,6 +142,9 @@ export type ActivitySummary = {
   snapshot?: {
     hit?: boolean;
     date?: string;
+    status?: "preparing";
+    readyAuthors?: string[];
+    pendingAuthors?: string[];
   };
 };
 

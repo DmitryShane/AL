@@ -21,6 +21,7 @@ export function ActivitySnapshotsTab() {
   const [remakeRange, setRemakeRange] = useState<DateRange>(() => yesterdayRange());
   const [loading, setLoading] = useState(true);
   const [remaking, setRemaking] = useState(false);
+  const [remakingAll, setRemakingAll] = useState(false);
   const [error, setError] = useState("");
 
   async function loadStatus() {
@@ -73,11 +74,35 @@ export function ActivitySnapshotsTab() {
     }
   }
 
+  async function remakeAllSnapshots() {
+    setRemakingAll(true);
+    setError("");
+
+    try {
+      const response = await apiFetch("/api/v1/settings/activity-snapshots/remake-all", {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw new Error("Snapshot remake-all request failed");
+      }
+
+      const payload = await response.json() as { status?: ActivitySnapshotStatus };
+      if (payload.status) {
+        setStatus(payload.status);
+        saveCachedStatus(payload.status);
+      } else {
+        await loadStatus();
+      }
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Could not remake all snapshots.");
+    } finally {
+      setRemakingAll(false);
+    }
+  }
+
   useEffect(() => {
     void loadStatus();
-    const intervalId = window.setInterval(() => void loadStatus(), 10000);
-
-    return () => window.clearInterval(intervalId);
   }, []);
 
   useEffect(() => {
@@ -145,11 +170,15 @@ export function ActivitySnapshotsTab() {
         </div>
         <div className="activity-snapshot-header-actions">
           <DateRangePicker value={remakeRange} onChange={setRemakeRange} showPresets={false} />
-          <button className="primary-outline-button" onClick={() => void remakeSnapshots()} disabled={remaking || loading}>
+          <button className="primary-outline-button" onClick={() => void remakeSnapshots()} disabled={remaking || remakingAll || loading}>
             <RotateCcw size={16} />
             {remaking ? "Remaking..." : "Remake"}
           </button>
-          <button className="primary-outline-button" onClick={() => void loadStatus()} disabled={loading || remaking}>
+          <button className="primary-outline-button" onClick={() => void remakeAllSnapshots()} disabled={remaking || remakingAll || loading}>
+            <RotateCcw size={16} />
+            {remakingAll ? "Remaking all..." : "Remake all"}
+          </button>
+          <button className="primary-outline-button" onClick={() => void loadStatus()} disabled={loading || remaking || remakingAll}>
             <RefreshCw size={16} />
             {loading ? "Refreshing..." : "Refresh"}
           </button>

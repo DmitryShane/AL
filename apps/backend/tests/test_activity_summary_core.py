@@ -598,7 +598,7 @@ def test_activity_summary_cache_hits_and_invalidates():
     assert third["cache"]["hit"] is False
     assert second["totals"]["activeSeconds"] == first["totals"]["activeSeconds"]
 
-def test_historical_single_day_activity_summary_writes_and_reads_snapshot():
+def test_historical_single_day_activity_summary_miss_returns_preparing_then_reads_snapshot():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
     repo.db.daily_author_activity.insert_one(
@@ -626,6 +626,7 @@ def test_historical_single_day_activity_summary_writes_and_reads_snapshot():
         include_breakdowns=True,
     )
     snapshots = list(repo.db.activity_day_summary_snapshots.find({"date": "2026-04-29"}))
+    repo.materialize_activity_author_day_summary_snapshots(limit=10, now=dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC))
 
     def fail_activity_summary(*_args, **_kwargs):
         raise AssertionError("snapshot hit should not rebuild activity summary")
@@ -640,12 +641,16 @@ def test_historical_single_day_activity_summary_writes_and_reads_snapshot():
         include_breakdowns=True,
     )
 
-    assert first["snapshot"] == {"hit": False, "date": "2026-04-29"}
-    assert len(snapshots) == 1
-    assert snapshots[0]["view"] == "activity-day"
-    assert snapshots[0]["snapshotVersion"] == repo.activity_day_summary_snapshot_version()
+    assert first["snapshot"] == {
+        "hit": False,
+        "status": "preparing",
+        "date": "2026-04-29",
+        "readyAuthors": [],
+        "pendingAuthors": ["Future Artist"],
+    }
+    assert snapshots == []
     assert second["snapshot"] == {"hit": True, "date": "2026-04-29"}
-    assert second["totals"]["activeSeconds"] == first["totals"]["activeSeconds"]
+    assert second["totals"]["activeSeconds"] == 120
 
 def test_historical_hourly_summary_uses_day_snapshot_payload():
     repo = fake_repository()
@@ -675,9 +680,15 @@ def test_historical_hourly_summary_uses_day_snapshot_payload():
         include_breakdowns=False,
     )
 
-    assert first["snapshot"] == {"hit": False, "date": "2026-04-29"}
-    assert first["activityMix"] == [{"type": "file_saved", "count": 1, "percent": 100}]
-    assert len(list(repo.db.activity_day_summary_snapshots.find({"date": "2026-04-29"}))) == 1
+    assert first["snapshot"] == {
+        "hit": False,
+        "status": "preparing",
+        "date": "2026-04-29",
+        "readyAuthors": [],
+        "pendingAuthors": ["Future Artist"],
+    }
+    assert first["activityMix"] == []
+    assert len(list(repo.db.activity_day_summary_snapshots.find({"date": "2026-04-29"}))) == 0
 
 def test_activity_day_summary_snapshot_is_ignored_for_live_and_ranges():
     repo = fake_repository()
@@ -1143,7 +1154,7 @@ def test_empty_date_invalidation_does_not_clear_snapshots():
     assert repo.db.activity_author_day_summary_snapshots.count_documents({}) == 1
     assert repo.db.activity_day_summary_snapshots.count_documents({}) == 1
 
-def test_activity_day_summary_snapshot_version_mismatch_is_rebuilt():
+def test_activity_day_summary_snapshot_version_mismatch_returns_preparing():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
     repo.db.daily_author_activity.insert_one(
@@ -1179,11 +1190,17 @@ def test_activity_day_summary_snapshot_version_mismatch_is_rebuilt():
         include_breakdowns=True,
     )
 
-    assert summary["snapshot"] == {"hit": False, "date": "2026-04-29"}
-    assert summary["totals"]["activeSeconds"] == 120
+    assert summary["snapshot"] == {
+        "hit": False,
+        "status": "preparing",
+        "date": "2026-04-29",
+        "readyAuthors": [],
+        "pendingAuthors": ["Future Artist"],
+    }
+    assert summary["totals"]["activeSeconds"] == 0
     assert repo.db.activity_day_summary_snapshots.find_one(
         {"date": "2026-04-29", "snapshotVersion": repo.activity_day_summary_snapshot_version()}
-    )
+    ) is None
 
 def test_full_activity_rebuild_removes_day_summary_snapshots():
     repo = fake_repository()

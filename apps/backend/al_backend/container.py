@@ -97,7 +97,7 @@ class BackendContainer:
         close_imported_open_live_states(self.services)
         self.activity_aggregation.rebuild_aggregates_if_needed(scope=self.activity_aggregation.aggregate_version_rebuild_scope)
         try:
-            self.activity_summary.materialize_activity_author_day_summary_snapshots_locked(wait=True)
+            self.activity_summary.start_activity_snapshot_background_drain()
         except Exception:
             logger.exception("Activity snapshot maintenance failed during startup")
         self.auth.ensure_bootstrap_site_admin(self.settings.admin_email, self.settings.admin_password)
