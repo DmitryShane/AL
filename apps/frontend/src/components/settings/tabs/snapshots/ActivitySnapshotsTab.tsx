@@ -236,7 +236,7 @@ function dateProgressLabel(rows: ActivitySnapshotStatusRow[]) {
 
 function loadCachedStatus() {
   try {
-    const raw = sessionStorage.getItem(SNAPSHOT_STATUS_CACHE_KEY);
+    const raw = localStorage.getItem(SNAPSHOT_STATUS_CACHE_KEY) ?? sessionStorage.getItem(SNAPSHOT_STATUS_CACHE_KEY);
     return raw ? JSON.parse(raw) as ActivitySnapshotStatus : null;
   } catch {
     return null;
@@ -245,7 +245,9 @@ function loadCachedStatus() {
 
 function saveCachedStatus(status: ActivitySnapshotStatus) {
   try {
-    sessionStorage.setItem(SNAPSHOT_STATUS_CACHE_KEY, JSON.stringify(status));
+    const payload = JSON.stringify(status);
+    localStorage.setItem(SNAPSHOT_STATUS_CACHE_KEY, payload);
+    sessionStorage.setItem(SNAPSHOT_STATUS_CACHE_KEY, payload);
   } catch {
     // Ignore storage failures; live refresh still works.
   }

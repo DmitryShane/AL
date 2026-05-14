@@ -2371,6 +2371,21 @@ p {
   gap: 16px;
 }
 
+.activity-snapshots-panel .settings-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.activity-snapshots-panel .settings-panel-header > div {
+  min-width: 0;
+}
+
+.activity-snapshots-panel .settings-panel-header .primary-outline-button {
+  margin-left: auto;
+}
+
 .snapshot-summary-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(120px, 1fr));
