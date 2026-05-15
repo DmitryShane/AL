@@ -303,6 +303,14 @@ class ActivityRawEventAccountingMixin:
                     interval_is_active = (occurred_at - interval_activity_at).total_seconds() < idle_threshold_seconds
                     interval_end_at = occurred_at
                     interval_end_local_at = occurred_local_at
+                    workday_started_at = self._workday_started_at_for_event_interval(event, accounting_start_at, interval_end_at)
+
+                    if not interval_is_active and workday_started_at and accounting_start_at < workday_started_at < interval_end_at:
+                        accounting_start_at = workday_started_at
+                        accounting_start_local_at = _to_local_datetime(
+                            workday_started_at,
+                            _valid_time_zone_id(event.get("timeZoneId")) or "UTC",
+                        )
 
                     if not interval_is_active and count_idle_as_overtime:
                         interval_end_at = min(
@@ -698,6 +706,37 @@ class ActivityRawEventAccountingMixin:
             return "night"
         if is_telegram_overtime_window(event, context):
             return "telegram"
+
+        return None
+
+    def _workday_started_at_for_event_interval(
+        self,
+        event: dict[str, Any],
+        start: dt.datetime,
+        end: dt.datetime,
+    ) -> dt.datetime | None:
+        if end <= start:
+            return None
+
+        start_probe = dict(event)
+        start_probe["occurredAtUtc"] = start
+        if not is_night_overtime_window(start_probe):
+            return None
+
+        raw_author = str(event.get("author") or "Unknown User")
+        day_date = str(event.get("date") or "")
+
+        if not raw_author or not day_date:
+            return None
+
+        session = self.db.day_sessions.find_one(
+            {"rawAuthor": raw_author, "date": day_date},
+            {"_id": 0, "startedAt": 1},
+        )
+        started_at = _coerce_datetime((session or {}).get("startedAt"))
+
+        if started_at and start < started_at < end:
+            return started_at
 
         return None
 

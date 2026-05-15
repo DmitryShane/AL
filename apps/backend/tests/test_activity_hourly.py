@@ -754,6 +754,72 @@ def test_night_asset_saved_without_overtime_time_stays_overtime_saved_prefab():
         }
     ]
 
+
+def test_night_overtime_only_raw_events_do_not_anchor_regular_idle_before_workday_start():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "timeZoneId": "Europe/Madrid"}
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "date": "2026-05-15",
+            "startedAt": dt.datetime(2026, 5, 15, 10, 0, 34, tzinfo=dt.UTC),
+            "lastOnlineAt": dt.datetime(2026, 5, 15, 10, 0, 34, tzinfo=dt.UTC),
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    base_event = {
+        "source": "ual",
+        "author": "Dmitry Shane",
+        "projectId": "bike-rush-2",
+        "sessionId": "unity-session",
+        "date": "2026-05-15",
+        "timeZoneId": "Europe/Madrid",
+    }
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-15T00:39:32.567Z",
+            "occurredAtLocal": "2026-05-15T02:39:32.567+02:00",
+            "receivedAt": dt.datetime(2026, 5, 15, 11, 31, 23, tzinfo=dt.UTC),
+        }
+    )
+    night_save_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "asset_saved",
+            "occurredAtUtc": "2026-05-15T00:39:32.576Z",
+            "occurredAtLocal": "2026-05-15T02:39:32.576+02:00",
+            "receivedAt": dt.datetime(2026, 5, 15, 11, 31, 23, tzinfo=dt.UTC),
+            "metadata": {"path": "Assets/Night.asset", "name": "Night.asset"},
+        }
+    )
+    day_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "click",
+            "occurredAtUtc": "2026-05-15T11:20:37.370Z",
+            "occurredAtLocal": "2026-05-15T13:20:37.370+02:00",
+            "receivedAt": dt.datetime(2026, 5, 15, 11, 31, 23, tzinfo=dt.UTC),
+        }
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Dmitry Shane", "date": "2026-05-15", "source": "ual"})
+
+    assert night_save_deltas["savedPrefabDeltas"] == []
+    assert night_save_deltas["overtimeSavedPrefabDeltas"] == [
+        {"path": "Assets/Night.asset", "name": "Night.asset", "saveCount": 1}
+    ]
+    assert day_deltas["idleDeltaSeconds"] == 80 * 60 + 3
+    assert day_deltas["hourlyActivityDelta"][2]["idleSeconds"] == 0
+    assert all(daily["hourlyActivity"][hour]["idleSeconds"] == 0 for hour in range(2, 12))
+    assert daily["hourlyActivity"][12]["idleSeconds"] == 59 * 60 + 26
+    assert daily["hourlyActivity"][13]["idleSeconds"] == 20 * 60 + 37
+
+
 def test_night_overtime_heartbeat_idle_is_ignored():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Night Worker", "displayName": "Night Worker", "timeZoneId": "UTC"})
