@@ -908,6 +908,114 @@ def test_night_overtime_summary_fills_remainder_with_overtime_fill_not_missed():
     assert _overtime_fill_seconds(hour_0) == 3480
     assert _missed_end_seconds(hour_0) == 0
 
+
+def test_night_overtime_does_not_anchor_regular_plugin_idle_gaps_before_workday_start():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "displayName": "Denis Ostrovskiy",
+            "telegramUsername": "vedamir_infinum",
+            "timeZoneId": "Europe/Kyiv",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "date": "2026-05-15",
+            "startedAt": dt.datetime(2026, 5, 15, 8, 40, 6, tzinfo=dt.UTC),
+            "lastOnlineAt": dt.datetime(2026, 5, 15, 8, 40, 6, tzinfo=dt.UTC),
+            "timeZoneId": "Europe/Kyiv",
+        }
+    )
+    repo.db.break_events.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "date": "2026-05-15",
+            "eventType": "online",
+            "timestamp": dt.datetime(2026, 5, 15, 8, 40, 6, tzinfo=dt.UTC),
+            "timeZoneId": "Europe/Kyiv",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[1]["overtimeActiveSeconds"] = 30 * 60
+    hourly_activity[1]["overtimeActiveMicroseconds"] = 30 * 60 * 1_000_000
+    hourly_activity[1]["fillSegments"] = [{"kind": "overtime", "startSecond": 6 * 60, "endSecond": 36 * 60}]
+    hourly_activity[11]["activeSeconds"] = 126
+    hourly_activity[11]["activeMicroseconds"] = 126_000_000
+    hourly_activity[11]["fillSegments"] = [{"kind": "active", "startSecond": 46 * 60 + 33, "endSecond": 48 * 60 + 39}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "bal",
+            "author": "Denis Ostrovskiy",
+            "projectId": "al",
+            "date": "2026-05-15",
+            "timeZoneId": "Europe/Kyiv",
+            "activeSeconds": 126,
+            "activeMicroseconds": 126_000_000,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 30 * 60,
+            "overtimeActiveMicroseconds": 30 * 60 * 1_000_000,
+            "activityCounts": [],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": hourly_activity,
+            "lastRecordedAt": "2026-05-15T11:46:33+03:00",
+            "lastReceivedAt": dt.datetime(2026, 5, 15, 8, 46, 36, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "bal",
+            "author": "Denis Ostrovskiy",
+            "date": "2026-05-15",
+            "recordedAt": "2026-05-15T01:36:03+03:00",
+            "receivedAt": dt.datetime(2026, 5, 14, 22, 36, 5, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 30 * 60,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "telegram",
+            "reportType": "telegram",
+            "author": "Denis Ostrovskiy",
+            "date": "2026-05-15",
+            "recordedAt": "2026-05-15T08:40:06+00:00",
+            "receivedAt": dt.datetime(2026, 5, 15, 8, 40, 6, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "bal",
+            "author": "Denis Ostrovskiy",
+            "date": "2026-05-15",
+            "recordedAt": "2026-05-15T11:46:33+03:00",
+            "receivedAt": dt.datetime(2026, 5, 15, 8, 46, 36, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 126,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+
+    summary = repo.activity_summary(
+        date_mode="authorLocalToday",
+        now=dt.datetime(2026, 5, 15, 9, 48, tzinfo=dt.UTC),
+    )
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Denis Ostrovskiy")[
+        "hourlyActivity"
+    ]
+
+    assert _hour_segments(hourly[1], "overtime")
+    for hour_index in range(7, 11):
+        assert _hour_metric(hourly[hour_index], "idleSeconds") == 0
+        assert _hour_segments(hourly[hour_index], "idle") == []
+    assert _hour_segments(hourly[11], "telegram-idle") == [{"startSecond": 40 * 60 + 6, "endSecond": 46 * 60 + 33}]
+    assert not any(segment["kind"] == "idle" and segment["endSecond"] <= 40 * 60 + 6 for segment in hourly[11]["fillSegments"])
+
+
 def test_post_telegram_overtime_in_next_hour_uses_first_report_boundary_without_bridging_night_overtime():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(

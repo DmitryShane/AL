@@ -275,10 +275,12 @@ class ActivitySummaryHourlyMixin:
         now: dt.datetime,
     ) -> None:
         latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+        session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
         apply_plugin_hour_idle_gaps(
             authors_by_raw,
             hourly_by_author,
             latest_report_by_author_date,
+            list(self.db.day_sessions.find(session_query, {"_id": 0})),
             time_zone_id_for_author=lambda raw_author, time_zone_id: _author_time_zone_id(raw_author, profiles, time_zone_id),
             is_date_in_scope=lambda day_date, raw_author, time_zone_id: _date_in_summary_scope(
                 day_date,

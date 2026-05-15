@@ -1087,11 +1087,34 @@ def apply_plugin_hour_idle_gaps(
     authors_by_raw: dict[str, dict[str, Any]],
     hourly_by_author: dict[str, dict[str, Any]],
     latest_report_by_author_date: dict[tuple[str, str], dt.datetime],
+    sessions: list[dict[str, Any]],
     *,
     time_zone_id_for_author: Any,
     is_date_in_scope: Any,
     is_vacation_day: Any,
 ) -> None:
+    session_start_by_key: dict[tuple[str, str], dt.datetime] = {}
+
+    for session in sessions:
+        raw_author = str(session.get("rawAuthor") or "Unknown User")
+        day_date = str(session.get("date") or "")
+        started_at = _coerce_datetime(session.get("startedAt"))
+
+        if not raw_author or not day_date or not started_at:
+            continue
+
+        time_zone_id = time_zone_id_for_author(raw_author, session.get("timeZoneId"))
+
+        if not is_date_in_scope(day_date, raw_author, time_zone_id):
+            continue
+
+        local_started_at = _to_local_datetime(started_at, time_zone_id)
+        key = (raw_author, day_date)
+        current = session_start_by_key.get(key)
+
+        if not current or local_started_at < current:
+            session_start_by_key[key] = local_started_at
+
     for (raw_author, day_date), latest_report_at in latest_report_by_author_date.items():
         time_zone_id = time_zone_id_for_author(raw_author, None)
 
@@ -1113,10 +1136,27 @@ def apply_plugin_hour_idle_gaps(
         if not hourly_activity:
             continue
 
+        session_started_at = session_start_by_key.get((raw_author, day_date))
+        start_hour = 0
+
+        if session_started_at:
+            start_hour = max(0, min(len(hourly_activity), session_started_at.hour))
+
         first_accounted_hour = None
-        for hour_index, hour in enumerate(hourly_activity):
-            accounted_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
-            if accounted_seconds > 0:
+        for hour_index in range(start_hour, len(hourly_activity)):
+            hour = hourly_activity[hour_index]
+            regular_accounted_seconds = (
+                time_seconds(hour, "activeSeconds", "activeMicroseconds")
+                + time_seconds(hour, "idleSeconds", "idleMicroseconds")
+                + int(hour.get("breakSeconds", 0))
+                + int(hour.get("autoBreakSeconds", 0))
+                + int(hour.get("meetingSeconds", 0))
+                + int(hour.get("telegramToFirstActivityIdleSeconds", 0))
+                + int(hour.get("missedSeconds", 0))
+            )
+            if session_started_at and hour_index == session_started_at.hour:
+                regular_accounted_seconds = max(regular_accounted_seconds, _second_of_hour(session_started_at))
+            if regular_accounted_seconds > 0:
                 first_accounted_hour = hour_index
                 break
 
@@ -1128,15 +1168,24 @@ def apply_plugin_hour_idle_gaps(
                 continue
 
             hour = hourly_activity[hour_index]
-            accounted_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
-            gap_seconds = max(0, 3600 - min(3600, accounted_seconds))
-            idle_seconds = gap_seconds
+            gap_start_second = 0
 
-            if idle_seconds <= 0:
-                continue
+            if session_started_at and hour_index == session_started_at.hour:
+                gap_start_second = _second_of_hour(session_started_at)
 
-            add_idle_seconds_to_hour(hour, idle_seconds)
-            hour["pluginHourGapIdleSeconds"] = int(hour.get("pluginHourGapIdleSeconds", 0)) + idle_seconds
+            for gap_start, gap_end in _empty_second_ranges(hour, gap_start_second, 3600):
+                idle_seconds = gap_end - gap_start
+
+                if idle_seconds <= 0:
+                    continue
+
+                idle_microseconds = time_microseconds(hour, "idleSeconds", "idleMicroseconds") + (
+                    idle_seconds * MICROSECONDS_PER_SECOND
+                )
+                hour["idleMicroseconds"] = idle_microseconds
+                hour["idleSeconds"] = seconds_from_microseconds(idle_microseconds)
+                hour["pluginHourGapIdleSeconds"] = int(hour.get("pluginHourGapIdleSeconds", 0)) + idle_seconds
+                _add_fill_segment(hour, "idle", gap_start, gap_end)
 
 
 def apply_offline_idle_gaps(
