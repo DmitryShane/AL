@@ -1877,7 +1877,7 @@ def test_cross_source_activity_clamps_unity_after_vscode_activity():
     assert background_deltas["activeDeltaSeconds"] == 0
     assert background_deltas["idleDeltaSeconds"] == 0
     assert focus_deltas["activeDeltaSeconds"] == 0
-    assert asset_deltas["activeDeltaSeconds"] == 94
+    assert asset_deltas["activeDeltaSeconds"] == 0
     assert focus_deltas["idleDeltaSeconds"] == 0
     assert asset_deltas["idleDeltaSeconds"] == 0
 
@@ -1987,8 +1987,9 @@ def test_rebuild_batch_row_ignores_deltas_before_previous_author_report():
             "sessionId": "unity-session",
             "batchId": "unity-batch",
             "eventType": "asset_saved",
-            "occurredAtUtc": "2026-05-01T20:00:33Z",
-            "occurredAtLocal": "2026-05-01T13:00:33-07:00",
+            "occurredAtUtc": "2026-05-01T20:01:33Z",
+            "occurredAtLocal": "2026-05-01T13:01:33-07:00",
+            "metadata": {"path": "Assets/Project/Materials/Road.mat", "name": "Road"},
         },
     ]:
         repo.db.raw_activity_events.insert_one(event)
@@ -1996,9 +1997,13 @@ def test_rebuild_batch_row_ignores_deltas_before_previous_author_report():
     repo.rebuild_aggregates_if_needed(force=True)
 
     unity_row = repo.db.report_rows.find_one({"author": author, "source": "ual", "batchId": "unity-batch"})
-    assert unity_row is not None
-    assert unity_row["activeDeltaSeconds"] == 94
-    assert unity_row["idleDeltaSeconds"] == 0
+    daily = repo.db.daily_author_activity.find_one({"author": author, "source": "ual", "date": "2026-05-01"})
+    assert unity_row is None
+    assert daily["activeSeconds"] == 0
+    assert {"type": "asset_saved", "count": 1} in daily["activityCounts"]
+    assert daily["savedPrefabs"] == [
+        {"path": "Assets/Project/Materials/Road.mat", "name": "Road", "saveCount": 1}
+    ]
 
 def test_raw_event_state_isolated_between_unity_blender_and_figma_sources():
     repo = fake_repository()

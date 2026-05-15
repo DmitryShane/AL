@@ -918,6 +918,83 @@ def test_ignored_unity_saved_asset_does_not_count_as_activity_mix():
     assert daily["savedPrefabs"] == []
 
 
+def test_unity_saved_file_events_do_not_anchor_active_time():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    base_event = {
+        "source": "ual",
+        "author": "Dmitry Shane",
+        "projectId": "bike-rush-2",
+        "sessionId": "unity-session",
+        "date": "2026-05-15",
+        "timeZoneId": "Europe/Madrid",
+        "receivedAt": dt.datetime(2026, 5, 15, 11, 40, tzinfo=dt.UTC),
+    }
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-15T11:20:00Z",
+            "occurredAtLocal": "2026-05-15T13:20:00+02:00",
+        }
+    )
+    asset_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "asset_saved",
+            "occurredAtUtc": "2026-05-15T11:21:00Z",
+            "occurredAtLocal": "2026-05-15T13:21:00+02:00",
+            "metadata": {"path": "Assets/Project/Materials/Road.mat", "name": "Road"},
+        }
+    )
+    prefab_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "prefab_saved",
+            "occurredAtUtc": "2026-05-15T11:31:00Z",
+            "occurredAtLocal": "2026-05-15T13:31:00+02:00",
+            "metadata": {"path": "Assets/Project/Prefabs/Boost.000.prefab", "name": "Boost.000"},
+        }
+    )
+    click_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "click",
+            "occurredAtUtc": "2026-05-15T11:32:00Z",
+            "occurredAtLocal": "2026-05-15T13:32:00+02:00",
+        }
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Dmitry Shane", "date": "2026-05-15", "source": "ual"})
+
+    assert asset_deltas["activeDeltaSeconds"] == 0
+    assert asset_deltas["idleDeltaSeconds"] == 0
+    assert asset_deltas["activityCountDeltas"] == [{"type": "asset_saved", "count": 1}]
+    assert asset_deltas["savedPrefabDeltas"] == [
+        {"path": "Assets/Project/Materials/Road.mat", "name": "Road", "saveCount": 1}
+    ]
+    assert prefab_deltas["activeDeltaSeconds"] == 0
+    assert prefab_deltas["idleDeltaSeconds"] == 0
+    assert prefab_deltas["activityCountDeltas"] == [{"type": "prefab_saved", "count": 1}]
+    assert prefab_deltas["savedPrefabDeltas"] == [
+        {"path": "Assets/Project/Prefabs/Boost.000.prefab", "name": "Boost.000", "saveCount": 1}
+    ]
+    assert click_deltas["activeDeltaSeconds"] == 0
+    assert click_deltas["idleDeltaSeconds"] == 12 * 60
+    assert daily["activeSeconds"] == 0
+    assert daily["idleSeconds"] == 12 * 60
+    assert daily["activityCounts"] == [
+        {"type": "select", "count": 1},
+        {"type": "asset_saved", "count": 1},
+        {"type": "prefab_saved", "count": 1},
+        {"type": "click", "count": 1},
+    ]
+    assert daily["savedPrefabs"] == [
+        {"path": "Assets/Project/Materials/Road.mat", "name": "Road", "saveCount": 1},
+        {"path": "Assets/Project/Prefabs/Boost.000.prefab", "name": "Boost.000", "saveCount": 1},
+    ]
+
+
 def test_night_overtime_heartbeat_idle_is_ignored():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Night Worker", "displayName": "Night Worker", "timeZoneId": "UTC"})

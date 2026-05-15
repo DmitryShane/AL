@@ -55,6 +55,14 @@ def _has_presence_delta(deltas: dict[str, Any]) -> bool:
     )
 
 
+def _is_unity_saved_file_event(event: dict[str, Any]) -> bool:
+    return str(event.get("source") or "") == "ual" and str(event.get("eventType") or "") in {
+        "asset_saved",
+        "prefab_saved",
+        "scene_saved",
+    }
+
+
 class ActivityRawEventAccountingMixin:
     def _apply_snapshot_to_aggregates(self, snapshot: dict[str, Any]) -> None:
         snapshot = dict(snapshot)
@@ -206,6 +214,7 @@ class ActivityRawEventAccountingMixin:
         deltas = _empty_event_deltas()
         raw_is_activity = _is_activity_event(event)
         is_activity = raw_is_activity and (source_is_focused is not False or event_type == "focus")
+        is_time_accounting_activity = is_activity and not _is_unity_saved_file_event(event)
         consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
         overtime_window = self._overtime_window_for_event(event)
         overtime_window_kind = self._overtime_window_kind_for_event(event)
@@ -265,8 +274,9 @@ class ActivityRawEventAccountingMixin:
 
         if is_inside_status_offline:
             is_activity = False
+            is_time_accounting_activity = False
 
-        if is_activity and event_type == "hold":
+        if is_time_accounting_activity and event_type == "hold":
             hold_deltas = self._device_hold_duration_deltas(
                 event,
                 author_state,
@@ -278,7 +288,7 @@ class ActivityRawEventAccountingMixin:
                 _merge_batch_deltas(deltas, hold_deltas)
                 skip_activity_interval_accounting = True
 
-        if is_activity:
+        if is_time_accounting_activity:
             if not first_activity_at:
                 first_activity_at = occurred_at
                 last_accounting_at = occurred_at
