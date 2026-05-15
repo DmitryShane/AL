@@ -3786,6 +3786,174 @@ def test_open_workday_idle_fill_uses_later_discord_meeting_as_gap_boundary():
     assert author["idleSeconds"] >= 5 * 3600
 
 
+def test_meeting_overlay_visible_tail_is_reconciled_as_idle():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-15",
+            "startedAt": dt.datetime(2026, 5, 15, 15, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 5, 15, 19, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[17]["activeSeconds"] = 551
+    hourly_activity[17]["activeMicroseconds"] = 551_000_000
+    hourly_activity[17]["idleSeconds"] = 2590
+    hourly_activity[17]["idleMicroseconds"] = 2_590_000_000
+    hourly_activity[17]["fillSegments"] = [
+        {"kind": "active", "startSecond": 900, "endSecond": 1451},
+        {"kind": "idle", "startSecond": 1451, "endSecond": 3141},
+    ]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-05-15",
+            "activeSeconds": 551,
+            "idleSeconds": 2590,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 5, 15, 17, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 15, 17, 15, tzinfo=dt.UTC),
+            "date": "2026-05-15",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 900,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-15", end_date="2026-05-15")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    assert sum(hourly[17]["totals"].values()) == 3600
+    assert _hour_metric(hourly[17], "meetingSeconds") == 900
+    assert _hour_segments(hourly[17], "idle")[-1] == {"startSecond": 1451, "endSecond": 3600}
+
+
+def test_meeting_overlay_visible_tails_are_reconciled_across_adjacent_hours():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-15",
+            "startedAt": dt.datetime(2026, 5, 15, 16, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 5, 15, 19, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[17]["activeSeconds"] = 741
+    hourly_activity[17]["activeMicroseconds"] = 741_000_000
+    hourly_activity[17]["idleSeconds"] = 2590
+    hourly_activity[17]["idleMicroseconds"] = 2_590_000_000
+    hourly_activity[17]["fillSegments"] = [
+        {"kind": "active", "startSecond": 920, "endSecond": 1661},
+        {"kind": "idle", "startSecond": 1661, "endSecond": 3331},
+    ]
+    hourly_activity[18]["activeSeconds"] = 1189
+    hourly_activity[18]["activeMicroseconds"] = 1_189_000_000
+    hourly_activity[18]["idleSeconds"] = 2019
+    hourly_activity[18]["idleMicroseconds"] = 2_019_000_000
+    hourly_activity[18]["fillSegments"] = [
+        {"kind": "active", "startSecond": 1697, "endSecond": 2886},
+        {"kind": "idle", "startSecond": 2886, "endSecond": 3208},
+    ]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-05-15",
+            "activeSeconds": 1930,
+            "idleSeconds": 4609,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 5, 15, 17, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 15, 17, 15, 20, tzinfo=dt.UTC),
+            "date": "2026-05-15",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 920,
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "startedAt": dt.datetime(2026, 5, 15, 18, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 15, 18, 28, 17, tzinfo=dt.UTC),
+            "date": "2026-05-15",
+            "timeZoneId": "UTC",
+            "meetingSeconds": 1697,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-15", end_date="2026-05-15")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    assert sum(hourly[17]["totals"].values()) == 3600
+    assert sum(hourly[18]["totals"].values()) == 3600
+    assert _hour_segments(hourly[17], "idle")[-1] == {"startSecond": 1661, "endSecond": 3600}
+    assert _hour_segments(hourly[18], "idle")[-1] == {"startSecond": 2886, "endSecond": 3600}
+
+
+def test_visible_reconciliation_respects_session_start_and_offline_bounds():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "timeZoneId": "America/Vancouver"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "date": "2026-05-15",
+            "startedAt": dt.datetime(2026, 5, 15, 14, 43, 43, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 5, 15, 16, tzinfo=dt.UTC),
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Igor Mats",
+            "date": "2026-05-15",
+            "activeSeconds": 0,
+            "idleSeconds": 1762,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+            "timeZoneId": "America/Vancouver",
+        }
+    )
+    repo.db.meeting_intervals.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "startedAt": dt.datetime(2026, 5, 15, 15, 0, tzinfo=dt.UTC),
+            "endedAt": dt.datetime(2026, 5, 15, 15, 28, 19, tzinfo=dt.UTC),
+            "date": "2026-05-15",
+            "timeZoneId": "America/Vancouver",
+            "meetingSeconds": 1699,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-15", end_date="2026-05-15")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Igor Mats")["hourlyActivity"]
+
+    assert _hour_metric(hourly[7], "idleSeconds") == 16 * 60 + 17
+    assert _hour_metric(hourly[7], "missedSeconds") == 43 * 60 + 43
+    assert sum(hourly[8]["totals"].values()) == 3600
+    assert _hour_metric(hourly[9], "idleSeconds") == 0
+
+
 def test_workday_idle_fill_requires_real_activity_signal():
     hourly = empty_hourly_activity()
     hourly[12]["idleSeconds"] = 900

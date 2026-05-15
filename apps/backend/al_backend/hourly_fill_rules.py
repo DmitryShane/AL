@@ -1282,6 +1282,48 @@ def apply_workday_idle_fill(
     return added_seconds
 
 
+def apply_visible_workday_idle_reconciliation(
+    hourly_activity: list[dict[str, Any]],
+    started_at: dt.datetime | None,
+    ended_at: dt.datetime | None,
+    time_zone_id: str,
+    has_activity_signal: bool,
+) -> int:
+    if not has_activity_signal or not started_at or not ended_at or ended_at <= started_at:
+        return 0
+
+    target_by_hour = {int(item.get("hour", 0)): item for item in hourly_activity}
+    added_seconds = 0
+
+    for hour_index, start_second, end_second, _seconds in split_interval_by_hour(started_at, ended_at, time_zone_id):
+        if is_night_overtime_hour(hour_index):
+            continue
+
+        hour = target_by_hour.get(hour_index)
+
+        if not hour:
+            continue
+
+        public_segments = public_hour(hour).get("fillSegments", [])
+        if not any(segment.get("kind") in {"afk", "auto-afk", "meeting"} for segment in public_segments):
+            continue
+
+        for gap_start, gap_end in _visible_empty_second_ranges(hour, start_second, end_second):
+            idle_seconds = gap_end - gap_start
+
+            if idle_seconds <= 0:
+                continue
+
+            idle_microseconds = time_microseconds(hour, "idleSeconds", "idleMicroseconds") + (idle_seconds * MICROSECONDS_PER_SECOND)
+            hour["idleMicroseconds"] = idle_microseconds
+            hour["idleSeconds"] = seconds_from_microseconds(idle_microseconds)
+            hour["workdayHourGapIdleSeconds"] = int(hour.get("workdayHourGapIdleSeconds", 0)) + idle_seconds
+            added_seconds += idle_seconds
+            _add_fill_segment(hour, "idle", gap_start, gap_end)
+
+    return added_seconds
+
+
 def hourly_activity_has_workday_signal(hourly_activity: list[dict[str, Any]]) -> bool:
     for hour in hourly_activity:
         if (
@@ -1316,6 +1358,37 @@ def _empty_second_ranges(hour: dict[str, Any], start_second: int, end_second: in
 
     occupied = [False] * 3600
     for segment in _raw_occupied_segments(hour):
+        for second in range(max(0, int(segment["startSecond"])), min(3600, int(segment["endSecond"]))):
+            occupied[second] = True
+
+    ranges = []
+    cursor = start_second
+
+    while cursor < end_second:
+        while cursor < end_second and occupied[cursor]:
+            cursor += 1
+
+        if cursor >= end_second:
+            break
+
+        gap_start = cursor
+        while cursor < end_second and not occupied[cursor]:
+            cursor += 1
+
+        ranges.append((gap_start, cursor))
+
+    return ranges
+
+
+def _visible_empty_second_ranges(hour: dict[str, Any], start_second: int, end_second: int) -> list[tuple[int, int]]:
+    start_second = max(0, min(3600, int(start_second)))
+    end_second = max(0, min(3600, int(end_second)))
+
+    if end_second <= start_second:
+        return []
+
+    occupied = [False] * 3600
+    for segment in public_hour(hour).get("fillSegments", []):
         for second in range(max(0, int(segment["startSecond"])), min(3600, int(segment["endSecond"]))):
             occupied[second] = True
 

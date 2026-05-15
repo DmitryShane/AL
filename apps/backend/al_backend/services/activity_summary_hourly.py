@@ -7,6 +7,7 @@ from ..hourly_fill_rules import (
     apply_visual_overtime_hour_gaps,
     apply_night_overtime_missed_end,
     apply_plugin_hour_idle_gaps,
+    apply_visible_workday_idle_reconciliation,
     apply_workday_idle_fill,
     apply_overtime_start_boundaries,
     convert_hourly_to_vacation_overtime,
@@ -367,6 +368,67 @@ class ActivitySummaryHourlyMixin:
 
             hourly_activity = hourly_author.get("hourlyActivity", [])
             added_idle_seconds = apply_workday_idle_fill(
+                hourly_activity,
+                _coerce_datetime(session.get("startedAt")),
+                _coerce_datetime(session.get("lastOfflineAt")) or latest_signal_by_author_date.get((raw_author, day_date)),
+                time_zone_id,
+                hourly_activity_has_workday_signal(hourly_activity),
+            )
+
+            if added_idle_seconds <= 0:
+                continue
+
+            author_row = authors_by_raw.get(raw_author)
+
+            if not author_row:
+                continue
+
+            author_row["idleSeconds"] = int(author_row.get("idleSeconds", 0)) + added_idle_seconds
+            author_row["pluginDaySeconds"] = int(author_row.get("pluginDaySeconds", 0)) + added_idle_seconds
+            author_row["rawPluginDaySeconds"] = int(author_row.get("rawPluginDaySeconds", 0)) + added_idle_seconds
+            totals["idleSeconds"] = int(totals.get("idleSeconds", 0)) + added_idle_seconds
+            totals["pluginDaySeconds"] = int(totals.get("pluginDaySeconds", 0)) + added_idle_seconds
+            totals["rawPluginDaySeconds"] = int(totals.get("rawPluginDaySeconds", 0)) + added_idle_seconds
+
+    def _apply_visible_workday_idle_reconciliation(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        hourly_by_author: dict[str, dict[str, Any]],
+        totals: dict[str, int],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> None:
+        session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+        sessions = list(self.db.day_sessions.find(session_query, {"_id": 0}))
+        latest_signal_by_author_date = self._latest_workday_signal_times_by_author_date(
+            start_date,
+            end_date,
+            date_mode,
+            profiles,
+            now,
+        )
+
+        for session in sessions:
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            day_date = str(session.get("date") or "")
+            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
+
+            if not day_date or not _date_in_summary_scope(day_date, raw_author, profiles, time_zone_id, now, start_date, end_date, date_mode):
+                continue
+
+            if composed(self).is_vacation_day(raw_author, day_date):
+                continue
+
+            hourly_author = hourly_by_author.get(raw_author)
+
+            if not hourly_author:
+                continue
+
+            hourly_activity = hourly_author.get("hourlyActivity", [])
+            added_idle_seconds = apply_visible_workday_idle_reconciliation(
                 hourly_activity,
                 _coerce_datetime(session.get("startedAt")),
                 _coerce_datetime(session.get("lastOfflineAt")) or latest_signal_by_author_date.get((raw_author, day_date)),

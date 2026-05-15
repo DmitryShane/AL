@@ -700,6 +700,16 @@ class ActivitySummaryService(
             profiles,
             summary_dates_by_author,
         )
+        self._apply_visible_workday_idle_reconciliation(
+            authors_by_raw,
+            hourly_by_author,
+            totals,
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+        )
         self._apply_visual_missed_hours(hourly_by_author, profiles, start_date, end_date, date_mode, now, include_start=False)
         self._apply_visual_overtime_hour_gaps(hourly_by_author, profiles, start_date, end_date, date_mode, now)
         latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
