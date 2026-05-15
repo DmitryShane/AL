@@ -217,6 +217,9 @@ class ActivityRawEventAccountingMixin:
             current_source,
         )
         received_at = _coerce_datetime(event.get("receivedAt"))
+        if self._is_stale_unity_night_event_after_workday_start(event, occurred_at, received_at):
+            return deltas
+
         status_context = self._status_interval_context_for_event(event, occurred_at, received_at)
         status_offline_at = status_context.get("offlineAt") if status_context else None
         status_online_at = status_context.get("onlineAt") if status_context else None
@@ -446,7 +449,14 @@ class ActivityRawEventAccountingMixin:
             and consumed_normal_microseconds >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
         )
 
-        if is_activity:
+        saved_prefab = None if is_inside_status_offline else _saved_prefab_delta(event)
+        suppress_activity_count = (
+            current_source == "ual"
+            and event_type in {"asset_saved", "prefab_saved", "scene_saved"}
+            and saved_prefab is None
+        )
+
+        if is_activity and not suppress_activity_count:
             activity_type = _activity_count_type(event_type)
             activity_delta_key = "activityCountDeltas"
 
@@ -454,8 +464,6 @@ class ActivityRawEventAccountingMixin:
                 activity_delta_key = "overtimeActivityCountDeltas"
 
             deltas[activity_delta_key].append({"type": activity_type, "count": 1})
-
-        saved_prefab = None if is_inside_status_offline else _saved_prefab_delta(event)
 
         if saved_prefab:
             saved_prefab_delta_key = "savedPrefabDeltas"
@@ -739,6 +747,32 @@ class ActivityRawEventAccountingMixin:
             return started_at
 
         return None
+
+    def _is_stale_unity_night_event_after_workday_start(
+        self,
+        event: dict[str, Any],
+        occurred_at: dt.datetime,
+        received_at: dt.datetime | None,
+    ) -> bool:
+        if str(event.get("source") or "") != "ual":
+            return False
+
+        if not received_at or not is_night_overtime_window(event):
+            return False
+
+        raw_author = str(event.get("author") or "Unknown User")
+        day_date = str(event.get("date") or "")
+
+        if not raw_author or not day_date:
+            return False
+
+        session = self.db.day_sessions.find_one(
+            {"rawAuthor": raw_author, "date": day_date},
+            {"_id": 0, "startedAt": 1},
+        )
+        started_at = _coerce_datetime((session or {}).get("startedAt"))
+
+        return bool(started_at and occurred_at < started_at <= received_at)
 
     def _suppress_night_overtime_for_midnight_offline_carryover(self, event: dict[str, Any]) -> bool:
         occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or _coerce_datetime(event.get("occurredAt"))
