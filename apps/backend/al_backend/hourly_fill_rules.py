@@ -735,30 +735,26 @@ def transfer_summary_idle_to_auto_break(
             + max(0, int(hour.get("offlineIdleGapSeconds", 0)))
             + max(0, int(hour.get("overtimeBoundaryIdleSeconds", 0)))
         )
-        visual_occupied_seconds = visual_hour_occupied_seconds(hour) + int(hour.get("missedSeconds", 0))
         convertible_idle_seconds = max(0, idle_seconds - synthetic_idle_seconds)
 
         if convertible_idle_seconds <= 0:
             continue
 
-        occupied_seconds = (
-            max(0, int(hour.get("activeSeconds", 0)))
-            + max(0, int(hour.get("meetingSeconds", 0)))
-            + max(0, int(hour.get("breakSeconds", 0)))
-            + max(0, int(hour.get("overtimeActiveSeconds", 0)))
-        )
-        available_break_seconds = max(0, 3600 - occupied_seconds)
-
-        if available_break_seconds <= 0:
-            continue
-
         boundary_available_seconds = 3600 - auto_break_start_second
-        move_seconds = min(
+        requested_seconds = min(
             convertible_idle_seconds,
-            available_break_seconds,
             boundary_available_seconds,
             remaining_seconds - transferred_seconds,
         )
+        move_seconds = _convert_visible_idle_segments_to_auto_break(
+            hour,
+            requested_seconds,
+            auto_break_start_second,
+        )
+
+        if move_seconds <= 0:
+            continue
+
         idle_microseconds = max(
             0,
             time_microseconds(hour, "idleSeconds", "idleMicroseconds") - (move_seconds * MICROSECONDS_PER_SECOND),
@@ -779,6 +775,64 @@ def transfer_summary_idle_to_auto_break(
         transferred_seconds += move_seconds
 
     return transferred_seconds
+
+
+def _convert_visible_idle_segments_to_auto_break(hour: dict[str, Any], requested_seconds: int, start_second: int) -> int:
+    requested_seconds = max(0, int(requested_seconds))
+    start_second = max(0, min(3600, int(start_second)))
+
+    if requested_seconds <= 0 or start_second >= 3600:
+        return 0
+
+    visible_segments = normalized_fill_segments(hour)
+    converted_seconds = 0
+    converted_segments: list[dict[str, Any]] = []
+
+    for segment in visible_segments:
+        if converted_seconds >= requested_seconds:
+            break
+
+        if segment["kind"] != "idle":
+            continue
+
+        segment_start = max(start_second, int(segment["startSecond"]))
+        segment_end = int(segment["endSecond"])
+        available_seconds = segment_end - segment_start
+
+        if available_seconds <= 0:
+            continue
+
+        move_seconds = min(available_seconds, requested_seconds - converted_seconds)
+        converted_segments.append(
+            {
+                "kind": "auto-afk",
+                "startSecond": segment_start,
+                "endSecond": segment_start + move_seconds,
+            }
+        )
+        converted_seconds += move_seconds
+
+    if converted_seconds <= 0:
+        return 0
+
+    converted_timeline = [False] * 3600
+    for segment in converted_segments:
+        for second in range(segment["startSecond"], segment["endSecond"]):
+            converted_timeline[second] = True
+
+    timeline: list[str | None] = [None] * 3600
+    for segment in visible_segments:
+        kind = segment["kind"]
+        for second in range(segment["startSecond"], segment["endSecond"]):
+            if converted_timeline[second]:
+                timeline[second] = "auto-afk"
+            elif kind in {"idle", "telegram-idle"}:
+                timeline[second] = "idle"
+            elif kind != "auto-afk":
+                timeline[second] = kind
+
+    hour["fillSegments"] = _segments_from_timeline(timeline)
+    return converted_seconds
 
 
 def convert_hourly_to_vacation_overtime(hourly_activity: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2235,6 +2289,27 @@ def _totals_from_segments(segments: list[dict[str, Any]]) -> dict[str, int]:
 
 def _segments_total_seconds(segments: list[dict[str, Any]]) -> int:
     return sum(int(segment["endSecond"]) - int(segment["startSecond"]) for segment in segments)
+
+
+def _segments_from_timeline(timeline: list[str | None]) -> list[dict[str, Any]]:
+    segments = []
+    cursor = 0
+
+    while cursor < min(3600, len(timeline)):
+        kind = timeline[cursor]
+
+        if kind is None:
+            cursor += 1
+            continue
+
+        end_second = cursor + 1
+        while end_second < min(3600, len(timeline)) and timeline[end_second] == kind:
+            end_second += 1
+
+        segments.append({"kind": kind, "startSecond": cursor, "endSecond": end_second})
+        cursor = end_second
+
+    return segments
 
 
 def _allowed_kinds_for_hour(hour: dict[str, Any]) -> set[str]:

@@ -2335,6 +2335,57 @@ def test_auto_break_adds_break_segment_at_end_of_hour():
     assert _hour_metric(hourly[13], "breakSeconds") == 240
     assert _hour_segments(hourly[13], "auto-afk") == [{"startSecond": 0, "endSecond": 240}]
 
+def test_auto_break_rewrites_visible_plugin_idle_segments_to_afk():
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[13]["activeSeconds"] = 200
+    hourly_activity[13]["idleSeconds"] = 1200
+    hourly_activity[13]["idleMicroseconds"] = 1_200_000_000
+    hourly_activity[13]["fillSegments"] = [
+        {"kind": "active", "startSecond": 0, "endSecond": 200},
+        {"kind": "idle", "startSecond": 200, "endSecond": 1400},
+    ]
+
+    transferred_seconds = transfer_summary_idle_to_auto_break(hourly_activity, 900)
+    public_hourly = public_hourly_activity(hourly_activity)
+
+    assert transferred_seconds == 900
+    assert _hour_metric(hourly_activity[13], "idleSeconds") == 300
+    assert _hour_metric(hourly_activity[13], "breakSeconds") == 900
+    assert _hour_metric(public_hourly[13], "idleSeconds") == 300
+    assert _hour_metric(public_hourly[13], "breakSeconds") == 900
+    assert _hour_segments(public_hourly[13], "auto-afk") == [{"startSecond": 200, "endSecond": 1100}]
+    assert _hour_segments(public_hourly[13], "idle") == [{"startSecond": 1100, "endSecond": 1400}]
+
+def test_auto_break_counts_only_visible_plugin_idle_as_afk():
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[16]["idleSeconds"] = 1704
+    hourly_activity[16]["idleMicroseconds"] = 1_704_000_000
+    hourly_activity[16]["telegramToFirstActivityIdleSeconds"] = 659
+    hourly_activity[16]["fillSegments"] = [{"kind": "idle", "startSecond": 2225, "endSecond": 3600}]
+    hourly_activity[16]["_visualMissedStartSeconds"] = 2225
+    hourly_activity[17]["idleSeconds"] = 3600
+    hourly_activity[17]["idleMicroseconds"] = 3_600_000_000
+    hourly_activity[17]["telegramToFirstActivityIdleSeconds"] = 3116
+    hourly_activity[17]["fillSegments"] = [{"kind": "idle", "startSecond": 0, "endSecond": 3600}]
+    hourly_activity[18]["idleSeconds"] = 3600
+    hourly_activity[18]["idleMicroseconds"] = 3_600_000_000
+    hourly_activity[18]["fillSegments"] = [{"kind": "idle", "startSecond": 0, "endSecond": 3600}]
+
+    transferred_seconds = transfer_summary_idle_to_auto_break(
+        hourly_activity,
+        3600,
+        {**{hour: 3600 for hour in range(16)}, 16: 2225},
+    )
+    public_hourly = public_hourly_activity(hourly_activity)
+
+    assert transferred_seconds == 3600
+    assert sum(_hour_metric(hour, "breakSeconds") for hour in public_hourly) == 3600
+    assert _hour_metric(public_hourly[16], "breakSeconds") == 716
+    assert _hour_metric(public_hourly[17], "breakSeconds") == 484
+    assert _hour_metric(public_hourly[18], "breakSeconds") == 2400
+    assert _hour_segments(public_hourly[16], "telegram-idle") == [{"startSecond": 2225, "endSecond": 2884}]
+    assert _hour_segments(public_hourly[17], "telegram-idle") == [{"startSecond": 0, "endSecond": 3116}]
+
 def test_break_interval_segments_can_cross_hour_boundary():
     repo = fake_repository()
     repo.db.break_intervals.insert_one(
