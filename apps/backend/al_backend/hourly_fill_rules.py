@@ -641,11 +641,14 @@ def apply_night_overtime_missed_end(
 def apply_visual_missed_end_fallbacks(
     hourly_by_author: dict[str, dict[str, Any]],
     sessions: list[dict[str, Any]],
+    latest_report_by_author_date: dict[tuple[str, str], dt.datetime] | None = None,
     *,
     time_zone_id_for_author: Any,
     is_date_in_scope: Any,
     is_vacation_day: Any,
 ) -> None:
+    latest_report_by_author_date = latest_report_by_author_date or {}
+
     for session in sessions:
         raw_author = str(session.get("rawAuthor") or "Unknown User")
         day_date = str(session.get("date") or "")
@@ -677,7 +680,13 @@ def apply_visual_missed_end_fallbacks(
         if visual_hour_available_seconds(hourly_activity[offline_hour_index]) > 0:
             continue
 
-        fallback_hour_index = offline_hour_index + 1
+        latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
+        latest_report_hour_index = None
+
+        if latest_report_at and latest_report_at > offline_at:
+            latest_report_hour_index = _to_local_datetime(latest_report_at, time_zone_id).hour
+
+        fallback_hour_index = (latest_report_hour_index if latest_report_hour_index is not None else offline_hour_index) + 1
 
         if fallback_hour_index >= len(hourly_activity):
             continue

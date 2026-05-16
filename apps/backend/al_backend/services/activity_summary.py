@@ -742,6 +742,7 @@ class ActivitySummaryService(
         apply_visual_missed_end_fallbacks(
             hourly_by_author,
             list(self.db.day_sessions.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0})),
+            latest_report_by_author_date,
             time_zone_id_for_author=lambda raw_author, session_time_zone_id: _author_time_zone_id(
                 raw_author,
                 profiles,
