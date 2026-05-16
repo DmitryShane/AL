@@ -708,7 +708,7 @@ def test_night_overtime_active_counts_on_same_calendar_day():
     assert hour_3["totals"]["overtimeSeconds"] == 120
     assert hour_3["totals"]["idleSeconds"] == 0
 
-def test_night_asset_saved_without_overtime_time_stays_overtime_saved_prefab():
+def test_real_night_asset_saved_without_overtime_time_stays_overtime_saved_prefab():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
         {"rawAuthor": "Denis Ostrovskiy", "displayName": "Denis Ostrovskiy", "timeZoneId": "Europe/Kyiv"}
@@ -725,7 +725,7 @@ def test_night_asset_saved_without_overtime_time_stays_overtime_saved_prefab():
             "eventType": "asset_saved",
             "occurredAtUtc": "2026-05-14T02:36:42Z",
             "occurredAtLocal": "2026-05-14T05:36:42+03:00",
-            "receivedAt": dt.datetime(2026, 5, 14, 9, 15, 37, tzinfo=dt.UTC),
+            "receivedAt": dt.datetime(2026, 5, 14, 2, 36, 43, tzinfo=dt.UTC),
             "metadata": {
                 "path": "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset",
                 "name": "LiberationSans SDF - Fallback",
@@ -753,6 +753,47 @@ def test_night_asset_saved_without_overtime_time_stays_overtime_saved_prefab():
             "saveCount": 1,
         }
     ]
+
+
+def test_late_delivered_night_unity_events_without_day_session_are_ignored():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "timeZoneId": "Europe/Madrid"}
+    )
+    base_event = {
+        "source": "ual",
+        "author": "Dmitry Shane",
+        "projectId": "bike-rush-2",
+        "sessionId": "unity-session",
+        "date": "2026-05-16",
+        "timeZoneId": "Europe/Madrid",
+    }
+    selection_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-15T22:14:09.179Z",
+            "occurredAtLocal": "2026-05-16T00:14:09.179+02:00",
+            "receivedAt": dt.datetime(2026, 5, 16, 14, 38, 5, tzinfo=dt.UTC),
+        }
+    )
+    asset_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "asset_saved",
+            "occurredAtUtc": "2026-05-15T22:14:09.184Z",
+            "occurredAtLocal": "2026-05-16T00:14:09.184+02:00",
+            "receivedAt": dt.datetime(2026, 5, 16, 14, 38, 5, tzinfo=dt.UTC),
+            "metadata": {"path": "Assets/Night.asset", "name": "Night.asset"},
+        }
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Dmitry Shane", "date": "2026-05-16", "source": "ual"})
+
+    assert selection_deltas == _empty_event_deltas()
+    assert asset_deltas == _empty_event_deltas()
+    assert daily is None
 
 
 def test_late_delivered_night_unity_events_after_workday_start_are_ignored():

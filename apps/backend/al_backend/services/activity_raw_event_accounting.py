@@ -767,8 +767,13 @@ class ActivityRawEventAccountingMixin:
         if str(event.get("source") or "") != "ual":
             return False
 
-        if not received_at or not is_night_overtime_window(event):
+        night_window = is_night_overtime_window(event)
+
+        if not received_at or not night_window:
             return False
+
+        if received_at >= night_window[1]:
+            return True
 
         raw_author = str(event.get("author") or "Unknown User")
         day_date = str(event.get("date") or "")
