@@ -208,6 +208,15 @@ class TelegramActivityService(MongoComposableMixin):
             probe_offline_at = day_probe.get("lastOfflineAt") if day_probe else None
             probe_offline_dt = _coerce_datetime(probe_offline_at)
 
+            if day_probe is None:
+                return {
+                    "ok": True,
+                    "status": "offline_without_online",
+                    "eventDate": event_date,
+                    "eventTimeLocal": _event_clock_local(event_time, time_zone_id),
+                    "timeZoneId": time_zone_id,
+                }
+
             if day_probe is not None and probe_offline_dt is not None:
                 return {
                     "ok": True,
@@ -304,12 +313,6 @@ class TelegramActivityService(MongoComposableMixin):
             break_result = self._close_break_session(normalized_telegram, raw_author, event_time)
             day_date = event_date
             day_state = self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": day_date})
-
-            if not day_state:
-                self._insert_telegram_report_row(
-                    raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, row_received_at, "offline_without_online", break_result
-                )
-                return {"ok": True, "status": "offline_without_online", **break_result}
 
             started_at = _coerce_datetime(day_state["startedAt"]) or event_time
             day_seconds = max(0, int((event_time - started_at).total_seconds()))

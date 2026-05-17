@@ -128,6 +128,36 @@ def test_telegram_bot_ignores_empty_messages_without_crashing(monkeypatch):
 
     assert calls == []
 
+def test_telegram_bot_warns_when_offline_has_no_online_today(monkeypatch):
+    sent_messages = []
+
+    monkeypatch.setattr(
+        "al_backend.telegram_bot.submit_break_event",
+        lambda *args, **kwargs: {"ok": True, "status": "offline_without_online"},
+    )
+    monkeypatch.setattr(
+        "al_backend.telegram_bot.send_plain_message",
+        lambda token, chat_id, text: sent_messages.append({"token": token, "chat_id": chat_id, "text": text}) or {"ok": True},
+    )
+
+    config = BotConfig(token="token", backend_url="http://backend", allowed_chat_id=123, bot_secret="secret")
+
+    handle_update(
+        config,
+        {
+            "message": {
+                "chat": {"id": 123, "type": "group"},
+                "from": {"username": "future_artist"},
+                "text": "offline",
+                "date": 1_777_777_777,
+            }
+        },
+    )
+
+    assert len(sent_messages) == 1
+    assert sent_messages[0]["chat_id"] == 123
+    assert "not online today yet" in sent_messages[0]["text"]
+
 def test_telegram_bot_reminder_message_mentions_author_and_has_buttons(monkeypatch):
     captured = {}
 
@@ -1420,6 +1450,33 @@ def test_duplicate_telegram_offline_skips_extra_report():
     offline_rows = [row for row in repo.db.report_rows.items if row.get("telegramEventType") == "offline"]
     assert len(offline_rows) == 1
     assert len([b for b in repo.db.break_events.items if b.get("eventType") == "offline"]) == 1
+
+def test_telegram_offline_without_online_does_not_create_activity_rows():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Dmitry Shane", "telegramUsername": "dmitry_shane", "timeZoneId": "Europe/Madrid"}
+    )
+
+    assert repo.record_break_event("dmitry_shane", "online", "2026-05-17T16:10:46Z")["status"] == "online_recorded"
+    result = repo.record_break_event("dmitry_shane", "offline", "2026-05-17T22:13:59Z")
+
+    assert result["status"] == "offline_without_online"
+    assert result["eventDate"] == "2026-05-18"
+    assert result["eventTimeLocal"] == "00:13"
+    previous_session = repo.db.day_sessions.find_one({"rawAuthor": "Dmitry Shane", "date": "2026-05-17"})
+    assert previous_session is not None
+    assert previous_session.get("lastOfflineAt") is None
+    assert repo.db.day_sessions.find_one({"rawAuthor": "Dmitry Shane", "date": "2026-05-18"}) is None
+    assert not [
+        event
+        for event in repo.db.break_events.items
+        if event.get("rawAuthor") == "Dmitry Shane" and event.get("eventType") == "offline" and event.get("date") == "2026-05-18"
+    ]
+    assert not [
+        row
+        for row in repo.db.report_rows.items
+        if row.get("author") == "Dmitry Shane" and row.get("telegramEventType") == "offline" and row.get("date") == "2026-05-18"
+    ]
 
 def test_duplicate_afk_prompt_confirm_online_records_break_closed():
     repo = fake_repository()

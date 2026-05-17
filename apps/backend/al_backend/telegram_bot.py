@@ -154,6 +154,14 @@ def handle_update(config: BotConfig, update: dict[str, Any]) -> None:
             )
             return
 
+        if dup_status == "offline_without_online":
+            send_plain_message(
+                config.token,
+                config.allowed_chat_id,
+                f"Hi @{username}. You are not online today yet, so offline cannot be recorded. Write online first when your workday starts.",
+            )
+            return
+
         if dup_status == "duplicate_afk":
             duplicate_afk_prompt_id = str(result.get("reminderId") or "")
             afk_time = str(result.get("afkStartedTimeLocal") or "unknown time")
