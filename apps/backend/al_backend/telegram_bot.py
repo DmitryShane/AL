@@ -228,12 +228,15 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
 
     LOGGER.info("Closed Telegram reminder %s (%s) with %s: %s", reminder_id, reminder_kind, action, result)
 
+    reminder_expired = result.get("status") == "reminder_day_expired"
+    edit_action = "expired" if reminder_expired else action
+
     if chat_id and message_id:
         edit_reminder_message(
             config.token,
             int(chat_id),
             int(message_id),
-            action,
+            edit_action,
             reminder_username or actor_username,
             reminder_kind=reminder_kind,
         )
@@ -254,6 +257,8 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
                 answer_text = "Online."
             else:
                 answer_text = "Still AFK."
+        elif reminder_expired:
+            answer_text = "Reminder expired. Offline was not recorded."
         else:
             answer_text = "Telegram day closed."
 
@@ -796,8 +801,11 @@ def edit_reminder_message(
         else:
             body = f"Done.{author} Still AFK."
     else:
-        label = "Overtime" if action == "overtime" else "Offline"
-        body = f"Done.{author} Telegram day closed as {label}."
+        if action == "expired":
+            body = "This reminder has expired because the local day has changed. Offline was not recorded."
+        else:
+            label = "Overtime" if action == "overtime" else "Offline"
+            body = f"Done.{author} Telegram day closed as {label}."
 
     return telegram_request(
         token,

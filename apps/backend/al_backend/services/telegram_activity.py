@@ -37,6 +37,17 @@ def _is_current_or_previous_author_date(day_date: str, now: dt.datetime, profile
     return day_date in {local_date.isoformat(), (local_date - dt.timedelta(days=1)).isoformat()}
 
 
+def _is_current_author_date(day_date: str, now: dt.datetime, profile: dict[str, Any]) -> bool:
+    time_zone_id = _valid_time_zone_id(profile.get("timeZoneId")) or "UTC"
+
+    try:
+        zone = ZoneInfo(time_zone_id)
+    except ZoneInfoNotFoundError:
+        zone = dt.UTC
+
+    return day_date == now.astimezone(zone).date().isoformat()
+
+
 def _is_night_overtime_prompt_time(value: dt.datetime, time_zone_id: Any) -> bool:
     zone_name = _valid_time_zone_id(time_zone_id) or "UTC"
 
@@ -386,7 +397,7 @@ class TelegramActivityService(MongoComposableMixin):
             if not raw_author or not telegram_username or not day_date or not started_at:
                 continue
 
-            if not _is_current_or_previous_author_date(day_date, now, profiles.get(raw_author, {})):
+            if not _is_current_author_date(day_date, now, profiles.get(raw_author, {})):
                 continue
 
             elapsed_seconds = max(0, int((now - started_at).total_seconds()))
@@ -481,13 +492,23 @@ class TelegramActivityService(MongoComposableMixin):
         if not raw_author or not telegram_username or not day_date:
             return {"ok": False, "error": "Reminder is missing author data"}
 
+        if event_date != day_date:
+            return {
+                "ok": True,
+                "status": "reminder_day_expired",
+                "reminderAction": action,
+                "eventDate": event_date,
+                "dayDate": day_date,
+                "timeZoneId": time_zone_id,
+            }
+
         self.db.break_events.insert_one(
             {
                 "telegramUsername": telegram_username,
                 "rawAuthor": raw_author,
                 "eventType": "offline",
                 "timestamp": event_time,
-                "date": event_date,
+                "date": day_date,
                 "timeZoneId": time_zone_id,
                 "createdAt": received_at,
                 "source": "telegram_reminder",
@@ -504,7 +525,7 @@ class TelegramActivityService(MongoComposableMixin):
                 telegram_username,
                 "offline",
                 event_time,
-                event_date,
+                day_date,
                 time_zone_id,
                 received_at,
                 f"reminder_{action}_without_online",
@@ -516,16 +537,16 @@ class TelegramActivityService(MongoComposableMixin):
             metadata["daySeconds"] = day_seconds
             self.db.day_sessions.update_one(
                 {"rawAuthor": raw_author, "date": day_date},
-                {"$set": {"date": event_date, "lastOfflineAt": event_time, "daySeconds": day_seconds, "reminderAction": action}},
+                {"$set": {"lastOfflineAt": event_time, "daySeconds": day_seconds, "reminderAction": action}},
                 upsert=True,
             )
-            self._upsert_telegram_day_activity(raw_author, telegram_username, event_date, time_zone_id, started_at, event_time, received_at, day_seconds)
+            self._upsert_telegram_day_activity(raw_author, telegram_username, day_date, time_zone_id, started_at, event_time, received_at, day_seconds)
             self._insert_telegram_report_row(
                 raw_author,
                 telegram_username,
                 "offline",
                 event_time,
-                event_date,
+                day_date,
                 time_zone_id,
                 received_at,
                 f"reminder_{action}",
