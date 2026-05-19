@@ -94,6 +94,7 @@ export function ReportsTable({
       <div className="table" style={{ "--reports-page-size": pageSize } as React.CSSProperties}>
         <div className="table-head">
           <span>Source</span>
+          <span>Version</span>
           <span>Author</span>
           <span>Date</span>
           <span>Active</span>
@@ -110,6 +111,7 @@ export function ReportsTable({
           {!loading && !error ? reports.map((report, index) => (
             <div className="table-row" key={`${report.recordedAt ?? "report"}-${index}`}>
               <span className="source-cell"><SourceIcon source={report.source} />{formatSource(report.source)}</span>
+              <span>{report.pluginVersion || "-"}</span>
               <span>{report.displayName ?? report.author ?? "Unknown User"}</span>
               <span>{formatReportTableDate(report.date)}</span>
               <span>{formatReportActive(report)}</span>

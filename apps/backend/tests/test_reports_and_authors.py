@@ -115,6 +115,26 @@ def test_reports_page_filters_by_author_local_hour():
     assert len(page["reports"]) == 1
     assert page["reports"][0]["recordedAt"] == "2026-05-01T13:30:00Z"
 
+
+def test_reports_page_includes_plugin_version():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "bal",
+            "pluginVersion": "0.1.2",
+            "author": "Future Artist",
+            "date": "2026-05-01",
+            "recordedAt": "2026-05-01T13:30:00Z",
+            "receivedAt": dt.datetime(2026, 5, 1, 13, 30, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+        }
+    )
+
+    page = repo.reports_page(start_date="2026-05-01", end_date="2026-05-01", author="Future Artist")
+
+    assert page["reports"][0]["pluginVersion"] == "0.1.2"
+
 def test_reports_page_orders_by_recorded_time_with_telegram_online_as_first_local_day_report():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats"})
