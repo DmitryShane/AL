@@ -461,7 +461,7 @@ class ReportIngestService(MongoComposableMixin):
             if _has_active_or_overtime_delta(row) and not suppress_vacation_prompt:
                 composed(self)._schedule_telegram_break_activity_prompt_if_needed(author, row_date, source, report_time)
 
-            if not suppress_vacation_prompt:
+            if _has_active_or_overtime_delta(row) and not suppress_vacation_prompt:
                 composed(self)._schedule_telegram_online_prompt_if_needed(author, row_date, source, received_at)
 
         return sorted({str(row.get("date") or "") for row in rows if str(row.get("date") or "").strip()})

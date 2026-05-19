@@ -5,10 +5,14 @@ from typing import Any
 from ..activity_math import DESCENDING, dt, _coerce_datetime
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+from ..overtime_rules import is_night_overtime_window
 
 
 class EditorActivityPurgeService(MongoComposableMixin):
     _EDITOR_PLUGIN_PURGE_SOURCE_DENYLIST = ("telegram", "discord")
+
+    def _should_preserve_purged_raw_event(self, event: dict[str, Any]) -> bool:
+        return is_night_overtime_window(event) is not None
 
     def _status_purge_author_keys(self, canonical_author: str, reminder_raw_author: str) -> list[str]:
         keys: set[str] = set()
@@ -49,14 +53,33 @@ class EditorActivityPurgeService(MongoComposableMixin):
 
         query_events = {"author": author, "date": day_date, "source": {"$nin": list(self._EDITOR_PLUGIN_PURGE_SOURCE_DENYLIST)}}
         batch_ids: set[str] = set()
+        deleted_events = 0
 
-        for event in self.db.raw_activity_events.find(query_events, {"_id": 0, "batchId": 1}):
+        for event in list(self.db.raw_activity_events.find(query_events, {"_id": 0})):
+            if self._should_preserve_purged_raw_event(event):
+                continue
+
             batch_id = str(event.get("batchId") or "").strip()
 
             if batch_id:
                 batch_ids.add(batch_id)
 
-        deleted_events = self.db.raw_activity_events.delete_many(query_events).deleted_count
+            event_id = str(event.get("eventId") or "").strip()
+
+            if event_id:
+                deleted_events += self.db.raw_activity_events.delete_many({"eventId": event_id}).deleted_count
+                continue
+
+            deleted_events += self.db.raw_activity_events.delete_one(
+                {
+                    "author": event.get("author"),
+                    "date": event.get("date"),
+                    "source": event.get("source"),
+                    "batchId": event.get("batchId"),
+                    "eventType": event.get("eventType"),
+                    "occurredAtUtc": event.get("occurredAtUtc"),
+                }
+            ).deleted_count
         deleted_batches = 0
         deleted_raw_reports = 0
 

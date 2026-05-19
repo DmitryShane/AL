@@ -275,6 +275,43 @@ def test_submit_report_ignores_without_writes_when_global_plugin_ingest_disabled
     assert repo.db.activity_snapshots.items == []
     assert repo.db.report_rows.items == []
 
+def test_idle_only_plugin_batch_does_not_schedule_telegram_online_prompt():
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "Europe/Madrid"})
+    received_at = dt.datetime(2026, 5, 19, 5, 10, 1, tzinfo=dt.UTC)
+    payload = {
+        "author": "A",
+        "authorEmail": "",
+        "projectId": "p",
+        "sessionId": "s",
+        "deviceId": "d",
+        "timeZoneId": "Europe/Madrid",
+        "events": [
+            {
+                "eventId": "idle-start",
+                "eventType": "selection",
+                "date": "2026-05-19",
+                "occurredAtUtc": "2026-05-19T05:00:00Z",
+                "occurredAtLocal": "2026-05-19T07:00:00+02:00",
+            },
+            {
+                "eventId": "idle-end",
+                "eventType": "heartbeat",
+                "date": "2026-05-19",
+                "occurredAtUtc": "2026-05-19T05:10:00Z",
+                "occurredAtLocal": "2026-05-19T07:10:00+02:00",
+            },
+        ],
+    }
+
+    repo._save_event_batch("ual", "1.0.0", payload, "raw-1", "auto", received_at, "challenge-1", None)
+
+    assert repo.db.report_rows.items
+    assert repo.db.report_rows.items[0]["idleDeltaSeconds"] == 600
+    assert repo.db.report_rows.items[0]["activeDeltaSeconds"] == 0
+    assert repo.db.telegram_online_prompts.items == []
+
 def test_raw_event_state_isolated_by_source_project_and_device():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})

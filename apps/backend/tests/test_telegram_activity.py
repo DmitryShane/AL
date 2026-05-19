@@ -1217,6 +1217,57 @@ def test_telegram_online_prompt_dismiss_purges_plugin_raw_events_preserves_disco
     assert repo.db.status_states.items[0]["status"] == "online"
     assert not [r for r in repo.db.report_rows.items if r.get("source") == "status" and r.get("date") == day]
 
+def test_telegram_online_prompt_dismiss_preserves_night_overtime_raw_events():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    day = "2026-04-30"
+
+    repo.db.raw_reports.insert_one({"_id": "night-report"})
+    repo.db.raw_event_batches.insert_one({"batchId": "night-batch", "rawReportId": "night-report"})
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "night-overtime",
+            "batchId": "night-batch",
+            "rawReportId": "night-report",
+            "source": "ual",
+            "author": "A",
+            "date": day,
+            "eventType": "selection",
+            "occurredAtUtc": dt.datetime(2026, 4, 30, 1, 0, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-30T01:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 7, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.raw_reports.insert_one({"_id": "day-report"})
+    repo.db.raw_event_batches.insert_one({"batchId": "day-batch", "rawReportId": "day-report"})
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "day-noise",
+            "batchId": "day-batch",
+            "rawReportId": "day-report",
+            "source": "ual",
+            "author": "A",
+            "date": day,
+            "eventType": "selection",
+            "occurredAtUtc": dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC),
+            "occurredAtLocal": "2026-04-30T08:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo._schedule_telegram_online_prompt_if_needed("A", day, "ual", dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC))
+    rid = repo.db.telegram_online_prompts.items[0]["reminderId"]
+    repo.db.telegram_online_prompts.items[0]["status"] = "sent"
+
+    result = repo.close_telegram_online_prompt(rid, "dismiss", "2026-04-30T12:00:00Z", "ta")
+
+    assert result["ok"]
+    assert result["deletedRawActivityEvents"] == 1
+    assert [event["eventId"] for event in repo.db.raw_activity_events.items] == ["night-overtime"]
+    assert [batch["batchId"] for batch in repo.db.raw_event_batches.items] == ["night-batch"]
+    assert [report["_id"] for report in repo.db.raw_reports.items] == ["night-report"]
+
 def test_telegram_online_prompt_confirm_records_online():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})

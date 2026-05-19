@@ -111,7 +111,7 @@ class ActivityRawEventAccountingMixin:
                 report_time,
             )
 
-        if materialize and not suppress_rebuild_notifications and _has_time_delta(deltas) and not suppress_vacation_prompt:
+        if materialize and not suppress_rebuild_notifications and _has_active_or_overtime_delta(deltas) and not suppress_vacation_prompt:
             composed(self)._schedule_telegram_online_prompt_if_needed(
                 str(snapshot.get("author") or "Unknown User"),
                 str(snapshot.get("date") or ""),
