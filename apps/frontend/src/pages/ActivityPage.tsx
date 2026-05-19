@@ -458,7 +458,7 @@ export function ActivityPage({
               setHourFilter={setReportHourFilter}
             />
           </>
-        ) : (
+        ) : loading ? null : (
           <p className="empty">No author activity for this period.</p>
         )}
     </section>

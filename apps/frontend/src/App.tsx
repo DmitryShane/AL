@@ -163,7 +163,7 @@ function readCachedActivitySummary(dateRange: DateRange): ActivitySummary | null
       return null;
     }
 
-    return JSON.parse(raw) as ActivitySummary;
+    return sanitizeCachedActivitySummaryValue(JSON.parse(raw) as ActivitySummary);
   } catch {
     return null;
   }
@@ -171,6 +171,12 @@ function readCachedActivitySummary(dateRange: DateRange): ActivitySummary | null
 
 function saveCachedActivitySummary(dateRange: DateRange, summary: ActivitySummary) {
   try {
+    const previous = readCachedActivitySummary(dateRange);
+
+    if (previous?.authors.length && !summary.authors.length) {
+      return;
+    }
+
     localStorage.setItem(activitySummaryCacheKey(dateRange), JSON.stringify(summary));
   } catch {
     // Browsers can reject storage writes in private mode or when the quota is full.
@@ -438,7 +444,12 @@ function App() {
 
   const canShowCachedDashboard = Boolean(authUser) || (authLoading && hasAuthHint);
   const activitySummary = canShowCachedDashboard ? (summary?.activitySummary ?? emptyActivitySummary) : emptyActivitySummary;
-  const activityDisplaySummary = canShowCachedDashboard ? (summary?.activitySummary ?? cachedActivitySummary ?? emptyActivitySummary) : emptyActivitySummary;
+  const cachedAuthorsActivitySummary = cachedAuthors.length
+    ? { ...emptyActivitySummary, authors: cachedAuthors }
+    : emptyActivitySummary;
+  const activityDisplaySummary = canShowCachedDashboard
+    ? (summary?.activitySummary ?? cachedActivitySummary ?? cachedAuthorsActivitySummary)
+    : emptyActivitySummary;
   const visibleActivitySummary = useMemo(
     () => ({
       ...activityDisplaySummary,
@@ -552,6 +563,7 @@ function App() {
   }
 
   const displaySessionUser = authUser ?? sessionUserPreview;
+  const isDashboardLoading = canShowCachedDashboard && pageUsesDashboardSummary(page) && (loading || authLoading || !authUser);
 
   if (authLoading && !hasAuthHint) {
     return <LoginPage checkingSession onLogin={setAuthUser} />;
@@ -621,7 +633,7 @@ function App() {
         <header className="workspace-topbar">
           <div className="topbar-title-block">
             <h1>{pageTitle(page)}</h1>
-            {!authLoading && isVisualLoading && pageUsesDashboardSummary(page) ? <span className="topbar-loading-popover">Loading dashboard data...</span> : null}
+            {!authLoading && isDashboardLoading ? <span className="topbar-loading-popover">Loading dashboard data...</span> : null}
             <p>{pageSubtitle(page)}</p>
           </div>
           {page === "authors" || page === "activity" ? (
@@ -705,8 +717,24 @@ function loadCachedDashboardSummary(page: Page, dateRange: DateRange) {
     return null;
   }
 
+  const cacheKey = dashboardSummaryCacheKey(page, dateRange);
+
   try {
-    const cached = sessionStorage.getItem(dashboardSummaryCacheKey(page, dateRange));
+    const localCached = page === "activity" ? localStorage.getItem(cacheKey) : null;
+
+    if (localCached) {
+      const summary = sanitizeCachedDashboardSummary(JSON.parse(localCached) as Summary);
+
+      if (summary) {
+        return summary;
+      }
+    }
+  } catch {
+    //
+  }
+
+  try {
+    const cached = sessionStorage.getItem(cacheKey);
 
     if (!cached) {
       return null;
@@ -718,8 +746,41 @@ function loadCachedDashboardSummary(page: Page, dateRange: DateRange) {
   }
 }
 
-function sanitizeCachedDashboardSummary(summary: Summary): Summary {
+function sanitizeCachedDashboardSummary(summary: Summary): Summary | null {
+  if (!summary || !sanitizeCachedActivitySummaryValue(summary.activitySummary)) {
+    return null;
+  }
+
   return summary;
+}
+
+function sanitizeCachedActivitySummaryValue(summary: ActivitySummary): ActivitySummary | null {
+  if (!summary || !Array.isArray(summary.authors)) {
+    return null;
+  }
+
+  return summary;
+}
+
+function canPersistDashboardSummary(page: Page, dateRange: DateRange, summary: Summary) {
+  if (page !== "activity") {
+    return true;
+  }
+
+  const nextActivitySummary = sanitizeCachedActivitySummaryValue(summary.activitySummary);
+
+  if (!nextActivitySummary) {
+    return false;
+  }
+
+  if (nextActivitySummary.snapshot?.status === "preparing") {
+    return false;
+  }
+
+  const previous = loadCachedDashboardSummary(page, dateRange);
+  const previousAuthors = previous?.activitySummary.authors ?? [];
+
+  return nextActivitySummary.authors.length > 0 || previousAuthors.length === 0;
 }
 
 function saveCachedDashboardSummary(page: Page, dateRange: DateRange, summary: Summary) {
@@ -727,8 +788,24 @@ function saveCachedDashboardSummary(page: Page, dateRange: DateRange, summary: S
     return;
   }
 
+  if (!canPersistDashboardSummary(page, dateRange, summary)) {
+    return;
+  }
+
+  const cacheKey = dashboardSummaryCacheKey(page, dateRange);
+
   try {
-    sessionStorage.setItem(dashboardSummaryCacheKey(page, dateRange), JSON.stringify(summary));
+    sessionStorage.setItem(cacheKey, JSON.stringify(summary));
+  } catch {
+    // Browsers can reject storage writes in private mode or when the quota is full.
+  }
+
+  if (page !== "activity") {
+    return;
+  }
+
+  try {
+    localStorage.setItem(cacheKey, JSON.stringify(summary));
   } catch {
     // Browsers can reject storage writes in private mode or when the quota is full.
   }
@@ -744,6 +821,7 @@ function clearDashboardSessionCaches() {
     "AL.Dashboard.CalendarSummary"
   ];
   const localPrefixes = [
+    DASHBOARD_SUMMARY_CACHE_PREFIX,
     LAST_AUTHORS_CACHE_PREFIX,
     ACTIVITY_SUMMARY_CACHE_PREFIX,
     "AL.Dashboard.ActivityHourly.",
