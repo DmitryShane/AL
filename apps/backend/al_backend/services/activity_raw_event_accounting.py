@@ -289,6 +289,11 @@ class ActivityRawEventAccountingMixin:
                 skip_activity_interval_accounting = True
 
         if is_time_accounting_activity:
+            waiting_for_first_workday_activity = self._is_waiting_for_first_workday_activity(
+                event,
+                author_last_activity_at,
+                occurred_at,
+            )
             if not first_activity_at:
                 first_activity_at = occurred_at
                 last_accounting_at = occurred_at
@@ -296,6 +301,7 @@ class ActivityRawEventAccountingMixin:
                 last_accounting_source = current_source
             elif (
                 not skip_activity_interval_accounting
+                and not waiting_for_first_workday_activity
                 and last_activity_at
                 and last_accounting_at
                 and occurred_at > last_activity_at
@@ -347,6 +353,10 @@ class ActivityRawEventAccountingMixin:
                     )
                     _merge_batch_deltas(deltas, interval_deltas)
 
+                last_accounting_at = occurred_at
+                last_accounting_local_at = occurred_local_at
+                last_accounting_source = current_source
+            elif waiting_for_first_workday_activity:
                 last_accounting_at = occurred_at
                 last_accounting_local_at = occurred_local_at
                 last_accounting_source = current_source
@@ -439,23 +449,24 @@ class ActivityRawEventAccountingMixin:
                     interval_end_local_at = interval_start_local_at + (interval_end_at - interval_start_at)
                     interval_is_active = interval_end_at > interval_start_at
 
-                interval_overtime_window = self._overtime_window_for_interval(event, interval_start_at, interval_end_at)
-                if (stale_heartbeat_capped and overtime_window_kind == "night") or self._has_reports_stopped_gap_overlap(
-                    event,
-                    interval_start_at,
-                    interval_end_at,
-                ):
-                    interval_overtime_window = None
-                interval_deltas = _interval_deltas(
-                    interval_start_at,
-                    interval_end_at,
-                    interval_start_local_at,
-                    interval_end_local_at,
-                    interval_is_active,
-                    consumed_normal_microseconds,
-                    interval_overtime_window,
-                )
-                _merge_batch_deltas(deltas, interval_deltas)
+                if not self._is_waiting_for_first_workday_activity(event, author_last_activity_at, interval_end_at):
+                    interval_overtime_window = self._overtime_window_for_interval(event, interval_start_at, interval_end_at)
+                    if (stale_heartbeat_capped and overtime_window_kind == "night") or self._has_reports_stopped_gap_overlap(
+                        event,
+                        interval_start_at,
+                        interval_end_at,
+                    ):
+                        interval_overtime_window = None
+                    interval_deltas = _interval_deltas(
+                        interval_start_at,
+                        interval_end_at,
+                        interval_start_local_at,
+                        interval_end_local_at,
+                        interval_is_active,
+                        consumed_normal_microseconds,
+                        interval_overtime_window,
+                    )
+                    _merge_batch_deltas(deltas, interval_deltas)
                 last_accounting_at = heartbeat_end
                 last_accounting_local_at = heartbeat_local_end
                 last_accounting_source = current_source
@@ -806,6 +817,29 @@ class ActivityRawEventAccountingMixin:
                 return started_at
 
         return None
+
+    def _is_waiting_for_first_workday_activity(
+        self,
+        event: dict[str, Any],
+        author_last_activity_at: dt.datetime | None,
+        at: dt.datetime,
+    ) -> bool:
+        raw_author = str(event.get("author") or "Unknown User")
+        day_date = str(event.get("date") or "")
+
+        if not raw_author or not day_date:
+            return False
+
+        session = self.db.day_sessions.find_one(
+            {"rawAuthor": raw_author, "date": day_date},
+            {"_id": 0, "startedAt": 1},
+        )
+        started_at = _coerce_datetime((session or {}).get("startedAt"))
+
+        if not started_at or at <= started_at:
+            return False
+
+        return not author_last_activity_at or author_last_activity_at < started_at
 
     def _is_stale_unity_night_event_after_workday_start(
         self,

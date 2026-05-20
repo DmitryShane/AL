@@ -920,11 +920,9 @@ def test_real_night_unity_events_received_before_workday_start_remain_overtime()
     assert night_save_deltas["overtimeSavedPrefabDeltas"] == [
         {"path": "Assets/Night.asset", "name": "Night.asset", "saveCount": 1}
     ]
-    assert day_deltas["idleDeltaSeconds"] == 80 * 60 + 3
+    assert day_deltas["idleDeltaSeconds"] == 0
     assert day_deltas["hourlyActivityDelta"][2]["idleSeconds"] == 0
-    assert all(daily["hourlyActivity"][hour]["idleSeconds"] == 0 for hour in range(2, 12))
-    assert daily["hourlyActivity"][12]["idleSeconds"] == 59 * 60 + 26
-    assert daily["hourlyActivity"][13]["idleSeconds"] == 20 * 60 + 37
+    assert all(daily["hourlyActivity"][hour]["idleSeconds"] == 0 for hour in range(2, 14))
 
 
 def test_night_unity_heartbeats_before_telegram_online_do_not_fill_morning_idle():
@@ -977,7 +975,7 @@ def test_night_unity_heartbeats_before_telegram_online_do_not_fill_morning_idle(
             "receivedAt": dt.datetime(2026, 5, 20, 9, 43, 26, tzinfo=dt.UTC),
         }
     )
-    after_online_deltas = repo._apply_raw_event_to_aggregates(
+    after_online_heartbeat_deltas = repo._apply_raw_event_to_aggregates(
         {
             **base_event,
             "eventType": "heartbeat",
@@ -986,14 +984,45 @@ def test_night_unity_heartbeats_before_telegram_online_do_not_fill_morning_idle(
             "receivedAt": dt.datetime(2026, 5, 20, 10, 0, 2, tzinfo=dt.UTC),
         }
     )
+    asset_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "asset_saved",
+            "occurredAtUtc": "2026-05-20T10:05:00Z",
+            "occurredAtLocal": "2026-05-20T12:05:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 20, 10, 5, 1, tzinfo=dt.UTC),
+            "metadata": {"path": "Assets/Project/Materials/Road.mat", "name": "Road"},
+        }
+    )
+    first_activity_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "click",
+            "occurredAtUtc": "2026-05-20T10:10:00Z",
+            "occurredAtLocal": "2026-05-20T12:10:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 20, 10, 10, 1, tzinfo=dt.UTC),
+        }
+    )
+    later_heartbeat_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-05-20T10:20:00Z",
+            "occurredAtLocal": "2026-05-20T12:20:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 20, 10, 20, 1, tzinfo=dt.UTC),
+        }
+    )
 
     daily = repo.db.daily_author_activity.find_one({"author": "Dmitry Shane", "date": "2026-05-20", "source": "ual"})
 
     assert before_online_deltas["idleDeltaSeconds"] == 0
-    assert after_online_deltas["idleDeltaSeconds"] == 15 * 60 + 6
+    assert after_online_heartbeat_deltas["idleDeltaSeconds"] == 0
+    assert asset_deltas["idleDeltaSeconds"] == 0
+    assert first_activity_deltas["idleDeltaSeconds"] == 0
+    assert later_heartbeat_deltas["idleDeltaSeconds"] == 10 * 60
     assert all(daily["hourlyActivity"][hour]["idleSeconds"] == 0 for hour in range(7, 11))
-    assert daily["hourlyActivity"][11]["idleSeconds"] == 15 * 60 + 5
-    assert daily["hourlyActivity"][12]["idleSeconds"] == 1
+    assert daily["hourlyActivity"][11]["idleSeconds"] == 0
+    assert daily["hourlyActivity"][12]["idleSeconds"] == 10 * 60
 
 
 def test_ignored_unity_saved_asset_does_not_count_as_activity_mix():
