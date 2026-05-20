@@ -414,28 +414,42 @@ class ActivityRawEventAccountingMixin:
                 interval_end_at = heartbeat_end
                 interval_end_local_at = heartbeat_local_end
                 interval_is_active = False
+                interval_start_at = last_accounting_at
+                interval_start_local_at = last_accounting_local_at or last_accounting_at
+
+                workday_started_at = self._workday_started_at_after_night_activity(
+                    event,
+                    last_activity_at,
+                    interval_start_at,
+                    interval_end_at,
+                )
+
+                if workday_started_at:
+                    interval_start_at = workday_started_at
+                    interval_start_local_at = _to_local_datetime(
+                        workday_started_at,
+                        _valid_time_zone_id(event.get("timeZoneId")) or "UTC",
+                    )
 
                 if count_idle_as_overtime:
                     interval_end_at = min(
                         heartbeat_end,
                         last_activity_at + dt.timedelta(seconds=idle_threshold_seconds),
                     )
-                    interval_end_local_at = (last_accounting_local_at or last_accounting_at) + (
-                        interval_end_at - last_accounting_at
-                    )
-                    interval_is_active = interval_end_at > last_accounting_at
+                    interval_end_local_at = interval_start_local_at + (interval_end_at - interval_start_at)
+                    interval_is_active = interval_end_at > interval_start_at
 
-                interval_overtime_window = self._overtime_window_for_interval(event, last_accounting_at, interval_end_at)
+                interval_overtime_window = self._overtime_window_for_interval(event, interval_start_at, interval_end_at)
                 if (stale_heartbeat_capped and overtime_window_kind == "night") or self._has_reports_stopped_gap_overlap(
                     event,
-                    last_accounting_at,
+                    interval_start_at,
                     interval_end_at,
                 ):
                     interval_overtime_window = None
                 interval_deltas = _interval_deltas(
-                    last_accounting_at,
+                    interval_start_at,
                     interval_end_at,
-                    last_accounting_local_at or last_accounting_at,
+                    interval_start_local_at,
                     interval_end_local_at,
                     interval_is_active,
                     consumed_normal_microseconds,
@@ -755,6 +769,41 @@ class ActivityRawEventAccountingMixin:
 
         if started_at and start < started_at < end:
             return started_at
+
+        return None
+
+    def _workday_started_at_after_night_activity(
+        self,
+        event: dict[str, Any],
+        activity_at: dt.datetime | None,
+        start: dt.datetime,
+        end: dt.datetime,
+    ) -> dt.datetime | None:
+        if not activity_at or end <= start:
+            return None
+
+        activity_probe = dict(event)
+        activity_probe["occurredAtUtc"] = activity_at
+        if not is_night_overtime_window(activity_probe):
+            return None
+
+        raw_author = str(event.get("author") or "Unknown User")
+        day_date = str(event.get("date") or "")
+
+        if not raw_author or not day_date:
+            return None
+
+        session = self.db.day_sessions.find_one(
+            {"rawAuthor": raw_author, "date": day_date},
+            {"_id": 0, "startedAt": 1},
+        )
+        started_at = _coerce_datetime((session or {}).get("startedAt"))
+
+        if started_at:
+            if started_at >= end:
+                return end
+            if start < started_at < end:
+                return started_at
 
         return None
 

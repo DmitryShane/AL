@@ -927,6 +927,75 @@ def test_real_night_unity_events_received_before_workday_start_remain_overtime()
     assert daily["hourlyActivity"][13]["idleSeconds"] == 20 * 60 + 37
 
 
+def test_night_unity_heartbeats_before_telegram_online_do_not_fill_morning_idle():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "timeZoneId": "Europe/Madrid"}
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "date": "2026-05-20",
+            "startedAt": dt.datetime(2026, 5, 20, 9, 44, 55, tzinfo=dt.UTC),
+            "lastOnlineAt": dt.datetime(2026, 5, 20, 9, 44, 55, tzinfo=dt.UTC),
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    base_event = {
+        "source": "ual",
+        "author": "Dmitry Shane",
+        "projectId": "bike-rush-2",
+        "sessionId": "unity-session",
+        "date": "2026-05-20",
+        "timeZoneId": "Europe/Madrid",
+    }
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-19T22:30:00Z",
+            "occurredAtLocal": "2026-05-20T00:30:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 19, 22, 30, 1, tzinfo=dt.UTC),
+        }
+    )
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-05-20T04:56:17Z",
+            "occurredAtLocal": "2026-05-20T06:56:17+02:00",
+            "receivedAt": dt.datetime(2026, 5, 20, 4, 56, 18, tzinfo=dt.UTC),
+        }
+    )
+    before_online_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-05-20T09:43:25Z",
+            "occurredAtLocal": "2026-05-20T11:43:25+02:00",
+            "receivedAt": dt.datetime(2026, 5, 20, 9, 43, 26, tzinfo=dt.UTC),
+        }
+    )
+    after_online_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-05-20T10:00:01Z",
+            "occurredAtLocal": "2026-05-20T12:00:01+02:00",
+            "receivedAt": dt.datetime(2026, 5, 20, 10, 0, 2, tzinfo=dt.UTC),
+        }
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Dmitry Shane", "date": "2026-05-20", "source": "ual"})
+
+    assert before_online_deltas["idleDeltaSeconds"] == 0
+    assert after_online_deltas["idleDeltaSeconds"] == 15 * 60 + 6
+    assert all(daily["hourlyActivity"][hour]["idleSeconds"] == 0 for hour in range(7, 11))
+    assert daily["hourlyActivity"][11]["idleSeconds"] == 15 * 60 + 5
+    assert daily["hourlyActivity"][12]["idleSeconds"] == 1
+
+
 def test_ignored_unity_saved_asset_does_not_count_as_activity_mix():
     repo = fake_repository()
 
