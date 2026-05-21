@@ -105,6 +105,9 @@ class AuthorRepository(MongoComposableMixin):
         if "@" not in normalized_email:
             return
 
+        if composed(self).is_deleted_author_profile(raw_author, normalized_email):
+            return
+
         existing_by_email = self.db.author_profiles.find_one(
             {"authorEmail": normalized_email},
             {"_id": 0, "rawAuthor": 1},
@@ -158,6 +161,9 @@ class AuthorRepository(MongoComposableMixin):
         if not raw_author or raw_author == "Unknown User":
             return
 
+        if composed(self).is_deleted_author_profile(raw_author):
+            return
+
         self.db.author_profiles.update_one(
             {"rawAuthor": raw_author},
             {
@@ -197,6 +203,9 @@ class AuthorRepository(MongoComposableMixin):
         normalized_time_zone = _author_configured_time_zone_id(raw_author) or _valid_time_zone_id(time_zone_id)
 
         if not raw_author or not normalized_time_zone:
+            return
+
+        if composed(self).is_deleted_author_profile(raw_author):
             return
 
         display_name = str(time_zone_display_name or "").strip() or normalized_time_zone
@@ -593,6 +602,22 @@ class AuthorRepository(MongoComposableMixin):
         if not normalized_author:
             return {"ok": False, "error": "Author is required"}
 
+        now = dt.datetime.now(dt.UTC)
+        profile = self.db.author_profiles.find_one({"rawAuthor": normalized_author}, {"_id": 0}) or {}
+        author_email = str(profile.get("authorEmail") or "").strip()
+        self.db.deleted_author_profiles.update_one(
+            {"rawAuthor": normalized_author},
+            {
+                "$set": {
+                    "rawAuthor": normalized_author,
+                    "authorEmail": author_email,
+                    "deletedAt": now,
+                    "updatedAt": now,
+                },
+                "$setOnInsert": {"createdAt": now},
+            },
+            upsert=True,
+        )
         remove_author_avatar_cache_file(getattr(self, "avatar_cache_dir", None), normalized_author)
 
         data_result = self.delete_author_data(normalized_author)
@@ -602,3 +627,13 @@ class AuthorRepository(MongoComposableMixin):
 
         composed(self).invalidate_activity_summary_cache()
         return {"ok": True, "author": normalized_author, "deleted": counts}
+
+    def is_deleted_author_profile(self, raw_author: str | None, author_email: str | None = None) -> bool:
+        normalized_author = composed(self).resolve_author_alias(_normalize_author(raw_author or ""))
+        normalized_email = str(author_email or "").strip()
+        query: dict[str, Any] = {"rawAuthor": normalized_author}
+
+        if normalized_email:
+            query = {"$or": [{"rawAuthor": normalized_author}, {"authorEmail": normalized_email}]}
+
+        return bool(self.db.deleted_author_profiles.find_one(query, {"_id": 1}))

@@ -847,6 +847,10 @@ class SettingsRepository(MongoComposableMixin):
             return False
 
         author = self.resolve_author_alias(_normalize_author(author))
+
+        if composed(self).is_deleted_author_profile(author):
+            return False
+
         profile = self.db.author_profiles.find_one({"rawAuthor": author}, {"pluginEnabled": 1})
 
         if profile and profile.get("pluginEnabled") is False:

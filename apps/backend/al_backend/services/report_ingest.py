@@ -101,6 +101,11 @@ class ReportIngestService(MongoComposableMixin):
 
         original_author = _normalize_author(payload.get("author") or "Unknown User")
         payload["author"] = composed(self).resolve_author_alias(original_author)
+        author_email = str(payload.get("authorEmail") or "").strip()
+
+        if composed(self).is_deleted_author_profile(payload.get("author"), author_email):
+            return ""
+
         normalized_time_zone = _author_configured_time_zone_id(payload["author"]) or _valid_time_zone_id(payload.get("timeZoneId"))
 
         if normalized_time_zone:

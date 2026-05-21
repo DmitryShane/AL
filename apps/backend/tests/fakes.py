@@ -197,6 +197,7 @@ class FakeDb:
         self.break_events = FakeCollection()
         self.break_sessions = FakeCollection()
         self.day_sessions = FakeCollection()
+        self.deleted_author_profiles = FakeCollection()
         self.device_report_identities = FakeCollection()
         self.telegram_day_reminders = FakeCollection()
         self.telegram_online_prompts = FakeCollection()

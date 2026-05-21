@@ -275,6 +275,68 @@ def test_submit_report_ignores_without_writes_when_global_plugin_ingest_disabled
     assert repo.db.activity_snapshots.items == []
     assert repo.db.report_rows.items == []
 
+def test_deleted_author_profile_blocks_plugin_config_profile_recreation():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Zhdamarov",
+            "displayName": "Dmitry Zhdamarov",
+            "authorEmail": "dmitry.zhdamarov@mempic.org",
+        }
+    )
+
+    delete_result = repo.delete_author_profile("Dmitry Zhdamarov")
+
+    result = plugin_config(
+        source="cur",
+        author="Dmitry Zhdamarov",
+        author_email="dmitry.zhdamarov@mempic.org",
+        project_id="AL",
+        device_id="mac-mini",
+        service=repo,
+    )
+
+    assert delete_result["ok"]
+    assert repo.db.deleted_author_profiles.find_one({"rawAuthor": "Dmitry Zhdamarov"}) is not None
+    assert result.enabled is False
+    assert repo.db.author_profiles.items == []
+
+def test_deleted_author_profile_blocks_raw_report_writes():
+    repo = fake_repository()
+    repo.db.deleted_author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Zhdamarov",
+            "authorEmail": "dmitry.zhdamarov@mempic.org",
+            "deletedAt": dt.datetime(2026, 5, 21, tzinfo=dt.UTC),
+        }
+    )
+    payload = {
+        "author": "Dmitry Zhdamarov",
+        "authorEmail": "dmitry.zhdamarov@mempic.org",
+        "projectId": "AL",
+        "sessionId": "session-1",
+        "deviceId": "mac-mini",
+        "timeZoneId": "UTC",
+        "events": [
+            {
+                "eventId": "blocked-1",
+                "eventType": "focus",
+                "date": "2026-05-21",
+                "occurredAtUtc": "2026-05-21T08:00:00Z",
+                "occurredAtLocal": "2026-05-21T08:00:00+00:00",
+            }
+        ],
+    }
+
+    report_id = repo.save_report("cur", "1.0.0", "encrypted", payload, "challenge-1")
+
+    assert report_id == ""
+    assert repo.db.raw_reports.items == []
+    assert repo.db.raw_event_batches.items == []
+    assert repo.db.raw_activity_events.items == []
+    assert repo.db.report_rows.items == []
+    assert repo.db.author_profiles.items == []
+
 def test_idle_only_plugin_batch_does_not_schedule_telegram_online_prompt():
     repo = fake_repository()
     set_idle_threshold(repo, 60)

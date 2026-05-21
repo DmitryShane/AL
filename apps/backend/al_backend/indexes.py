@@ -64,6 +64,8 @@ class IndexManager:
         self.db.aggregate_day_state.create_index([("date", ASCENDING), ("author", ASCENDING), ("stateId", ASCENDING)], unique=True)
         self.db.aggregate_day_state.create_index([("author", ASCENDING), ("date", ASCENDING)])
         self.db.author_profiles.create_index("rawAuthor", unique=True)
+        self.db.deleted_author_profiles.create_index("rawAuthor", unique=True)
+        self.db.deleted_author_profiles.create_index("authorEmail", sparse=True)
         self.db.author_aliases.create_index("sourceRawAuthor", unique=True)
         self.db.author_aliases.create_index("targetRawAuthor")
         self.db.author_profiles.create_index("telegramUsername", unique=True, sparse=True)

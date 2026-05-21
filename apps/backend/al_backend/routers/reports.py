@@ -34,8 +34,12 @@ def plugin_config(
         author = service.resolve_device_report_author(source, device_id)
 
     resolved_author = service.resolve_author_alias(author)
-    service.update_author_email(resolved_author, author_email)
-    enabled = service.is_plugin_enabled_for_author(resolved_author)
+    deleted = service.is_deleted_author_profile(resolved_author, author_email)
+    enabled = False if deleted else service.is_plugin_enabled_for_author(resolved_author)
+
+    if not deleted:
+        service.update_author_email(resolved_author, author_email)
+
     submit_report_now = enabled and service.should_submit_report_now(resolved_author)
 
     return PluginConfig(
@@ -65,6 +69,9 @@ def submit_report(report: ReportIn, service: BackendServices = Depends(get_repor
             message="Report used an unknown, expired, or already consumed challenge.",
         )
         raise HTTPException(status_code=400, detail="Invalid report challenge")
+
+    if service.is_deleted_author_profile(challenge.get("author"), challenge.get("authorEmail")):
+        return SubmitReportResponse(ok=True, reportId="", ignored=True)
 
     try:
         decoded = decode_alr1(challenge["privateKeyPem"], report.encrypted_packet)
