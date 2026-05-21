@@ -564,6 +564,84 @@ def test_heartbeat_idle_after_telegram_offline_is_suppressed_from_aggregates():
     assert daily["idleSeconds"] == 0
     assert daily["lastReceivedAt"] == dt.datetime(2026, 4, 28, 18, 0, tzinfo=dt.UTC)
 
+def test_new_day_after_night_overtime_waits_for_telegram_online_and_first_activity_before_idle():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    night_activity = {
+        "source": "ual",
+        "author": "Future Artist",
+        "projectId": "unity",
+        "sessionId": "unity-session",
+        "date": "2026-05-21",
+        "eventType": "selection",
+        "timeZoneId": "Europe/Madrid",
+        "occurredAtUtc": "2026-05-21T04:50:00Z",
+        "occurredAtLocal": "2026-05-21T06:50:00+02:00",
+        "receivedAt": dt.datetime(2026, 5, 21, 4, 50, tzinfo=dt.UTC),
+    }
+    repo._apply_raw_event_to_aggregates(night_activity)
+
+    morning_heartbeat = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-05-21",
+            "eventType": "heartbeat",
+            "timeZoneId": "Europe/Madrid",
+            "occurredAtUtc": "2026-05-21T05:30:00Z",
+            "occurredAtLocal": "2026-05-21T07:30:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 21, 5, 30, tzinfo=dt.UTC),
+        }
+    )
+
+    assert morning_heartbeat["idleDeltaSeconds"] == 0
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-05-21", "source": "ual"})
+    assert daily["idleSeconds"] == 0
+
+    repo.record_break_event("future_artist", "online", "2026-05-21T06:00:00Z")
+    first_after_online = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-05-21",
+            "eventType": "selection",
+            "timeZoneId": "Europe/Madrid",
+            "occurredAtUtc": "2026-05-21T06:05:00Z",
+            "occurredAtLocal": "2026-05-21T08:05:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 21, 6, 5, tzinfo=dt.UTC),
+        }
+    )
+
+    assert first_after_online["idleDeltaSeconds"] == 0
+
+    later_heartbeat = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-05-21",
+            "eventType": "heartbeat",
+            "timeZoneId": "Europe/Madrid",
+            "occurredAtUtc": "2026-05-21T06:15:00Z",
+            "occurredAtLocal": "2026-05-21T08:15:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 21, 6, 15, tzinfo=dt.UTC),
+        }
+    )
+
+    assert later_heartbeat["idleDeltaSeconds"] > 0
+
 def test_rebuild_suppresses_stored_heartbeat_idle_after_telegram_offline():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})

@@ -6,6 +6,8 @@ from ..activity_math import *
 from ..hourly_fill_rules import empty_hourly_activity, merge_hourly_activity
 from ..backend_composable_host import composed
 from ..overtime_rules import (
+    NIGHT_OVERTIME_END_HOUR,
+    NIGHT_OVERTIME_START_HOUR,
     is_night_overtime_window,
     is_telegram_overtime_window,
     is_vacation_overtime_window,
@@ -836,10 +838,59 @@ class ActivityRawEventAccountingMixin:
         )
         started_at = _coerce_datetime((session or {}).get("startedAt"))
 
-        if not started_at or at <= started_at:
+        if started_at:
+            if at <= started_at:
+                return False
+
+            return not author_last_activity_at or author_last_activity_at < started_at
+
+        if self._is_waiting_for_telegram_online_after_night_overtime(event, raw_author, day_date, at):
+            return True
+
+        return False
+
+    def _is_waiting_for_telegram_online_after_night_overtime(
+        self,
+        event: dict[str, Any],
+        raw_author: str,
+        day_date: str,
+        at: dt.datetime,
+    ) -> bool:
+        if str(event.get("source") or "") == "telegram":
             return False
 
-        return not author_last_activity_at or author_last_activity_at < started_at
+        time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
+
+        try:
+            day = dt.date.fromisoformat(day_date)
+            zone = ZoneInfo(time_zone_id)
+        except ValueError:
+            return False
+
+        night_start_at = dt.datetime.combine(day, dt.time(hour=NIGHT_OVERTIME_START_HOUR), zone).astimezone(dt.UTC)
+        night_end_at = dt.datetime.combine(day, dt.time(hour=NIGHT_OVERTIME_END_HOUR), zone).astimezone(dt.UTC)
+
+        if at < night_end_at:
+            return False
+
+        for daily in self.db.daily_author_activity.find(
+            {
+                "author": raw_author,
+                "date": day_date,
+                "overtimeActiveSeconds": {"$gt": 0},
+            },
+            {"_id": 0, "source": 1, "hourlyActivity": 1, "overtimeActiveSeconds": 1},
+        ):
+            for hour in daily.get("hourlyActivity") or []:
+                hour_start_at = dt.datetime.combine(day, dt.time(hour=int(hour.get("hour") or 0)), zone).astimezone(dt.UTC)
+                hour_end_at = hour_start_at + dt.timedelta(hours=1)
+                if (
+                    int(hour.get("overtimeActiveSeconds") or 0) > 0
+                    and _windows_overlap(hour_start_at, hour_end_at, night_start_at, night_end_at)
+                ):
+                    return True
+
+        return False
 
     def _is_stale_unity_night_event_after_workday_start(
         self,
