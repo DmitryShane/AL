@@ -580,6 +580,9 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     if event.get("source") == "ual":
+        if event_type == "asset_saved":
+            return None
+
         path = _normalize_unity_saved_file_path(path)
 
         if not path:

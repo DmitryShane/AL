@@ -1108,10 +1108,8 @@ def test_unity_saved_file_events_do_not_anchor_active_time():
 
     assert asset_deltas["activeDeltaSeconds"] == 0
     assert asset_deltas["idleDeltaSeconds"] == 0
-    assert asset_deltas["activityCountDeltas"] == [{"type": "asset_saved", "count": 1}]
-    assert asset_deltas["savedPrefabDeltas"] == [
-        {"path": "Assets/Project/Materials/Road.mat", "name": "Road", "saveCount": 1}
-    ]
+    assert asset_deltas["activityCountDeltas"] == []
+    assert asset_deltas["savedPrefabDeltas"] == []
     assert prefab_deltas["activeDeltaSeconds"] == 0
     assert prefab_deltas["idleDeltaSeconds"] == 0
     assert prefab_deltas["activityCountDeltas"] == [{"type": "prefab_saved", "count": 1}]
@@ -1124,12 +1122,10 @@ def test_unity_saved_file_events_do_not_anchor_active_time():
     assert daily["idleSeconds"] == 12 * 60
     assert daily["activityCounts"] == [
         {"type": "select", "count": 1},
-        {"type": "asset_saved", "count": 1},
         {"type": "prefab_saved", "count": 1},
         {"type": "click", "count": 1},
     ]
     assert daily["savedPrefabs"] == [
-        {"path": "Assets/Project/Materials/Road.mat", "name": "Road", "saveCount": 1},
         {"path": "Assets/Project/Prefabs/Boost.000.prefab", "name": "Boost.000", "saveCount": 1},
     ]
 

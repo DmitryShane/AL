@@ -2429,7 +2429,7 @@ def test_unity_scene_saved_is_counted_as_saved_file():
     }
 
 
-def test_unity_asset_saved_is_counted_as_saved_file():
+def test_unity_asset_saved_is_not_counted_as_saved_file():
     saved = _saved_prefab_delta(
         {
             "source": "ual",
@@ -2441,14 +2441,10 @@ def test_unity_asset_saved_is_counted_as_saved_file():
         }
     )
 
-    assert saved == {
-        "path": "Assets/Project/Materials/Road.mat",
-        "name": "Road",
-        "saveCount": 1,
-    }
+    assert saved is None
 
 
-def test_unity_imported_model_is_counted_as_saved_file():
+def test_unity_imported_model_is_not_counted_as_saved_file():
     saved = _saved_prefab_delta(
         {
             "source": "ual",
@@ -2460,14 +2456,10 @@ def test_unity_imported_model_is_counted_as_saved_file():
         }
     )
 
-    assert saved == {
-        "path": "Assets/Art/Environment/Garage.Scene/Models/Garage.Scene.fbx",
-        "name": "Garage.Scene",
-        "saveCount": 1,
-    }
+    assert saved is None
 
 
-def test_unity_meta_asset_saved_is_normalized_to_source_asset():
+def test_unity_meta_asset_saved_is_not_counted_as_saved_file():
     saved = _saved_prefab_delta(
         {
             "source": "ual",
@@ -2479,11 +2471,7 @@ def test_unity_meta_asset_saved_is_normalized_to_source_asset():
         }
     )
 
-    assert saved == {
-        "path": "Assets/Art/Environment/Garage.Scene/Textures/Garage.Scene.png",
-        "name": "Garage.Scene.png",
-        "saveCount": 1,
-    }
+    assert saved is None
 
 
 def test_unity_generated_texture_asset_is_not_counted_as_saved_file():
