@@ -1967,26 +1967,10 @@ p {
   fill: #5865f2;
 }
 
-.codex-icon-shell {
-  fill: #ffffff;
-  stroke: #1f2937;
-  stroke-linejoin: round;
-  stroke-width: 2;
-}
-
-.codex-icon-mark {
-  fill: #1f2937;
-}
-
-.codex-icon-line {
-  fill: none;
-  stroke: #1f2937;
-  stroke-linecap: round;
-  stroke-width: 1.8;
-}
-
-.codex-icon-node {
-  fill: #1f2937;
+.codex-icon {
+  border: 1.5px solid #1f2937;
+  border-radius: 999px;
+  object-fit: cover;
 }
 
 .blender-icon-mark {
