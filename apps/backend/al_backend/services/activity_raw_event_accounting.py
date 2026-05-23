@@ -255,6 +255,7 @@ class ActivityRawEventAccountingMixin:
         is_inside_status_offline = bool(status_context and status_context.get("insideOffline"))
         status_idle_accounted_until = _coerce_datetime(author_state.get("statusIdleAccountedUntil"))
         skip_activity_interval_accounting = False
+        waiting_for_first_workday_activity = False
 
         if event_type == "focus":
             source_is_focused = True
@@ -513,11 +514,15 @@ class ActivityRawEventAccountingMixin:
             and consumed_normal_microseconds >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
         )
 
-        saved_prefab = None if is_inside_status_offline else _saved_prefab_delta(event)
+        suppress_pre_workday_counts = waiting_for_first_workday_activity and current_source != "ual"
+        saved_prefab = None if is_inside_status_offline or suppress_pre_workday_counts else _saved_prefab_delta(event)
         suppress_activity_count = (
-            current_source == "ual"
-            and event_type in {"asset_saved", "prefab_saved", "scene_saved"}
-            and saved_prefab is None
+            suppress_pre_workday_counts
+            or (
+                current_source == "ual"
+                and event_type in {"prefab_saved", "scene_saved"}
+                and saved_prefab is None
+            )
         )
 
         if is_activity and not suppress_activity_count:
@@ -537,7 +542,7 @@ class ActivityRawEventAccountingMixin:
 
             deltas[saved_prefab_delta_key].append(saved_prefab)
 
-        worked_file = None if is_inside_status_offline else _worked_file_delta(event)
+        worked_file = None if is_inside_status_offline or suppress_pre_workday_counts else _worked_file_delta(event)
 
         if worked_file:
             worked_file_delta_key = "savedPrefabDeltas"
@@ -565,7 +570,7 @@ class ActivityRawEventAccountingMixin:
         suppress_deltas = self._should_suppress_post_offline_plugin_deltas(event, deltas)
         materialize = self._should_materialize_aggregate_date(str(snapshot.get("date") or ""), str(snapshot.get("author") or "Unknown User"))
 
-        if not suppress_deltas and materialize:
+        if not suppress_deltas and materialize and (not waiting_for_first_workday_activity or _has_presence_delta(deltas)):
             self._update_daily_author_activity(snapshot, deltas)
             cache = getattr(self, "_daily_consumed_microseconds_cache", None)
 

@@ -1409,6 +1409,47 @@ def test_non_codex_external_activity_keeps_external_type():
     assert deltas["activityCountDeltas"] == [{"type": "external", "count": 1}]
 
 
+def test_plugin_counts_do_not_create_daily_aggregate_before_telegram_online_after_night_overtime():
+    repo = fake_repository()
+    hourly = empty_hourly_activity()
+    hourly[1]["overtimeActiveSeconds"] = 120
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry Shane",
+            "projectId": "unity",
+            "date": "2026-05-23",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 120,
+            "activityCounts": [],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [{"type": "focus", "count": 1}],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": hourly,
+        }
+    )
+    event = {
+        "eventId": "figma-count-before-online",
+        "source": "fch",
+        "author": "Dmitry Shane",
+        "projectId": "figma",
+        "deviceId": "chrome",
+        "date": "2026-05-23",
+        "eventType": "selection",
+        "occurredAtUtc": dt.datetime(2026, 5, 23, 16, 39, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-05-23T18:39:00+02:00",
+        "receivedAt": dt.datetime(2026, 5, 23, 16, 39, 1, tzinfo=dt.UTC),
+        "timeZoneId": "Europe/Madrid",
+        "timeZoneDisplayName": "Europe/Madrid",
+    }
+
+    deltas = repo._apply_raw_event_to_aggregates(event)
+
+    assert deltas["activityCountDeltas"] == []
+    assert repo.db.daily_author_activity.find_one({"source": "fch", "author": "Dmitry Shane"}) is None
+
+
 def test_codex_native_event_type_creates_activity_count():
     repo = fake_repository()
     event = {
@@ -2249,9 +2290,7 @@ def test_rebuild_batch_row_ignores_deltas_before_previous_author_report():
     assert unity_row is None
     assert daily["activeSeconds"] == 0
     assert {"type": "asset_saved", "count": 1} in daily["activityCounts"]
-    assert daily["savedPrefabs"] == [
-        {"path": "Assets/Project/Materials/Road.mat", "name": "Road", "saveCount": 1}
-    ]
+    assert daily["savedPrefabs"] == []
 
 def test_raw_event_state_isolated_between_unity_blender_and_figma_sources():
     repo = fake_repository()
