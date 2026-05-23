@@ -1409,7 +1409,7 @@ def test_non_codex_external_activity_keeps_external_type():
     assert deltas["activityCountDeltas"] == [{"type": "external", "count": 1}]
 
 
-def test_plugin_counts_do_not_create_daily_aggregate_before_telegram_online_after_night_overtime():
+def test_plugin_counts_create_daily_aggregate_after_night_overtime_before_telegram_online():
     repo = fake_repository()
     hourly = empty_hourly_activity()
     hourly[1]["overtimeActiveSeconds"] = 120
@@ -1446,8 +1446,10 @@ def test_plugin_counts_do_not_create_daily_aggregate_before_telegram_online_afte
 
     deltas = repo._apply_raw_event_to_aggregates(event)
 
-    assert deltas["activityCountDeltas"] == []
-    assert repo.db.daily_author_activity.find_one({"source": "fch", "author": "Dmitry Shane"}) is None
+    assert deltas["activityCountDeltas"] == [{"type": "select", "count": 1}]
+    daily = repo.db.daily_author_activity.find_one({"source": "fch", "author": "Dmitry Shane"})
+    assert daily is not None
+    assert daily["activityCounts"] == [{"type": "select", "count": 1}]
 
 
 def test_codex_counts_before_telegram_online_after_night_overtime():

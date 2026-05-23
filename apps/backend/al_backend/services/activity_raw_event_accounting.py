@@ -515,15 +515,11 @@ class ActivityRawEventAccountingMixin:
             and consumed_normal_microseconds >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
         )
 
-        suppress_pre_workday_counts = waiting_for_first_workday_activity and current_source not in {"ual", "codex"}
-        saved_prefab = None if is_inside_status_offline or suppress_pre_workday_counts else _saved_prefab_delta(event)
+        saved_prefab = None if is_inside_status_offline else _saved_prefab_delta(event)
         suppress_activity_count = (
-            suppress_pre_workday_counts
-            or (
-                current_source == "ual"
-                and event_type in {"prefab_saved", "scene_saved"}
-                and saved_prefab is None
-            )
+            current_source == "ual"
+            and event_type in {"prefab_saved", "scene_saved"}
+            and saved_prefab is None
         )
 
         if is_activity and not suppress_activity_count:
@@ -543,7 +539,7 @@ class ActivityRawEventAccountingMixin:
 
             deltas[saved_prefab_delta_key].append(saved_prefab)
 
-        worked_file = None if is_inside_status_offline or suppress_pre_workday_counts else _worked_file_delta(event)
+        worked_file = None if is_inside_status_offline else _worked_file_delta(event)
 
         if worked_file:
             worked_file_delta_key = "savedPrefabDeltas"
