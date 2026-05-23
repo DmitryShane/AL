@@ -1450,6 +1450,67 @@ def test_plugin_counts_do_not_create_daily_aggregate_before_telegram_online_afte
     assert repo.db.daily_author_activity.find_one({"source": "fch", "author": "Dmitry Shane"}) is None
 
 
+def test_codex_counts_before_telegram_online_after_night_overtime():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    hourly = empty_hourly_activity()
+    hourly[1]["overtimeActiveSeconds"] = 120
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry Shane",
+            "projectId": "unity",
+            "date": "2026-05-23",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 120,
+            "activityCounts": [],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [{"type": "focus", "count": 1}],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": hourly,
+        }
+    )
+    first = {
+        "eventId": "codex-start-before-online",
+        "source": "codex",
+        "author": "Dmitry Shane",
+        "projectId": "AL",
+        "deviceId": "mac-mini",
+        "date": "2026-05-23",
+        "eventType": "external",
+        "occurredAtUtc": dt.datetime(2026, 5, 23, 16, 39, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-05-23T18:39:00+02:00",
+        "receivedAt": dt.datetime(2026, 5, 23, 16, 39, 1, tzinfo=dt.UTC),
+        "timeZoneId": "Europe/Madrid",
+        "timeZoneDisplayName": "Europe/Madrid",
+        "metadata": {"codexEventType": "session_started"},
+    }
+    second = {
+        **first,
+        "eventId": "codex-progress-before-online",
+        "eventType": "external",
+        "occurredAtUtc": dt.datetime(2026, 5, 23, 16, 41, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-05-23T18:41:00+02:00",
+        "receivedAt": dt.datetime(2026, 5, 23, 16, 41, 1, tzinfo=dt.UTC),
+        "metadata": {"codexEventType": "task_progress"},
+    }
+
+    first_deltas = repo._apply_raw_event_to_aggregates(first)
+    second_deltas = repo._apply_raw_event_to_aggregates(second)
+
+    assert first_deltas["activityCountDeltas"] == [{"type": "codex_session_started", "count": 1}]
+    assert second_deltas["activeDeltaSeconds"] == 120
+    assert second_deltas["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
+    daily = repo.db.daily_author_activity.find_one({"source": "codex", "author": "Dmitry Shane"})
+    assert daily is not None
+    assert daily["activeSeconds"] == 120
+    assert daily["activityCounts"] == [
+        {"type": "codex_session_started", "count": 1},
+        {"type": "codex_task_progress", "count": 1},
+    ]
+
+
 def test_codex_native_event_type_creates_activity_count():
     repo = fake_repository()
     event = {

@@ -315,6 +315,7 @@ class ActivityRawEventAccountingMixin:
                 author_last_activity_at,
                 occurred_at,
             )
+            waiting_blocks_interval_accounting = waiting_for_first_workday_activity and current_source != "codex"
             if not first_activity_at:
                 first_activity_at = occurred_at
                 last_accounting_at = occurred_at
@@ -322,7 +323,7 @@ class ActivityRawEventAccountingMixin:
                 last_accounting_source = current_source
             elif (
                 not skip_activity_interval_accounting
-                and not waiting_for_first_workday_activity
+                and not waiting_blocks_interval_accounting
                 and last_activity_at
                 and last_accounting_at
                 and occurred_at > last_activity_at
@@ -385,7 +386,7 @@ class ActivityRawEventAccountingMixin:
                 last_accounting_at = occurred_at
                 last_accounting_local_at = occurred_local_at
                 last_accounting_source = current_source
-            elif waiting_for_first_workday_activity:
+            elif waiting_blocks_interval_accounting:
                 last_accounting_at = occurred_at
                 last_accounting_local_at = occurred_local_at
                 last_accounting_source = current_source
@@ -514,7 +515,7 @@ class ActivityRawEventAccountingMixin:
             and consumed_normal_microseconds >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
         )
 
-        suppress_pre_workday_counts = waiting_for_first_workday_activity and current_source != "ual"
+        suppress_pre_workday_counts = waiting_for_first_workday_activity and current_source not in {"ual", "codex"}
         saved_prefab = None if is_inside_status_offline or suppress_pre_workday_counts else _saved_prefab_delta(event)
         suppress_activity_count = (
             suppress_pre_workday_counts
