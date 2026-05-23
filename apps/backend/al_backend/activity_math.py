@@ -79,6 +79,13 @@ RAW_ACTIVITY_EVENT_TYPES = {
     "file_loaded",
     "external",
 }
+CODEX_ACTIVITY_EVENT_TYPES = {
+    "session_started",
+    "task_progress",
+    "command_run",
+    "file_changed",
+    "session_finished",
+}
 
 
 def is_device_source(source: Any) -> bool:
@@ -548,6 +555,9 @@ def _is_activity_event(event: dict[str, Any] | str) -> bool:
     if isinstance(event, dict):
         event_type = str(event.get("eventType") or "")
 
+        if event.get("source") == "codex" and event_type in CODEX_ACTIVITY_EVENT_TYPES:
+            return True
+
         if event.get("source") == "cur" and event_type == "focus":
             return True
 
@@ -647,10 +657,7 @@ def _worked_file_delta(event: dict[str, Any]) -> dict[str, Any] | None:
     if source not in {"fch", "fig"}:
         return None
 
-    if event_type in {"prefab_saved", "asset_saved", "file_saved"}:
-        return None
-
-    if not _is_activity_event(event):
+    if event_type != "file_saved":
         return None
 
     metadata = event.get("metadata") or {}

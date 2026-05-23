@@ -502,9 +502,10 @@ class ReportIngestService(MongoComposableMixin):
         merged_items = _merge_event_delta_items_by_date(delta_items, cutoff)
 
         for batch_deltas, last_event in merged_items:
-            is_codex_presence_row = str(batch.get("source") or "") == "codex" and _has_count_or_file_delta(batch_deltas)
+            is_presence_report_source = str(batch.get("source") or "") in {"codex", "fch", "fig"}
+            is_presence_row = is_presence_report_source and _has_count_or_file_delta(batch_deltas)
 
-            if not last_event or not (_has_time_delta(batch_deltas) or is_codex_presence_row):
+            if not last_event or not (_has_time_delta(batch_deltas) or is_presence_row):
                 continue
 
             rows.append(
