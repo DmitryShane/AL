@@ -135,6 +135,30 @@ def test_reports_page_includes_plugin_version():
 
     assert page["reports"][0]["pluginVersion"] == "0.1.2"
 
+def test_reports_page_keeps_count_only_codex_activity_row():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
+    repo.db.report_rows.insert_one(
+        {
+            "source": "codex",
+            "pluginVersion": "0.1.3",
+            "author": "Dmitry Shane",
+            "date": "2026-05-23",
+            "recordedAt": "2026-05-23T17:54:20.760+02:00",
+            "receivedAt": dt.datetime(2026, 5, 23, 15, 54, 21, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "activityType": "codex_task_progress",
+        }
+    )
+
+    page = repo.reports_page(start_date="2026-05-23", end_date="2026-05-23", author="Dmitry Shane")
+
+    assert page["total"] == 1
+    assert page["sources"] == ["codex"]
+    assert page["reports"][0]["source"] == "codex"
+    assert page["reports"][0]["activityType"] == "codex_task_progress"
+
 def test_reports_page_orders_by_recorded_time_with_telegram_online_as_first_local_day_report():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats"})

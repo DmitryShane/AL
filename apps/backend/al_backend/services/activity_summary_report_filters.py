@@ -291,6 +291,10 @@ class ActivitySummaryReportFiltersMixin:
         if report_row.get("source") in {"discord", "telegram", "status"} or report_row.get("reportType") in {"meeting", "telegram", "status"}:
             return False
 
+        activity_type = str(report_row.get("activityType") or "")
+        if report_row.get("source") == "codex" and activity_type.startswith("codex_"):
+            return False
+
         if _has_time_delta(report_row):
             return False
 
