@@ -201,6 +201,8 @@ class FakeDb:
         self.device_report_identities = FakeCollection()
         self.telegram_day_reminders = FakeCollection()
         self.telegram_online_prompts = FakeCollection()
+        self.fake_online_settings = FakeCollection()
+        self.fake_online_attempts = FakeCollection()
         self.telegram_break_activity_prompts = FakeCollection()
         self.telegram_duplicate_afk_prompts = FakeCollection()
         self.telegram_meeting_auto_afk_notifications = FakeCollection()

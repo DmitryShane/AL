@@ -1025,6 +1025,85 @@ def test_telegram_online_prompt_superseded_when_day_session_exists_at_claim():
     assert doc["status"] == "closed"
     assert doc["closeAction"] == "superseded_day_session"
 
+def test_fake_online_settings_require_existing_author_with_telegram():
+    repo = fake_repository()
+
+    missing = repo.upsert_fake_online_settings("A", True, [3], "10:00", "11:00", 5, 60)
+    assert missing["ok"] is False
+
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "timeZoneId": "UTC"})
+    no_telegram = repo.upsert_fake_online_settings("A", True, [3], "10:00", "11:00", 5, 60)
+    assert no_telegram["ok"] is False
+
+def test_fake_online_claim_creates_visible_online_prompt_once_for_selected_day():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    saved = repo.upsert_fake_online_settings("A", True, [3], "10:00", "10:01", 5, 5)
+    assert saved["ok"] is True
+
+    assert repo.claim_due_fake_online_prompts(dt.datetime(2026, 4, 30, 9, 59, tzinfo=dt.UTC)) == []
+    now = dt.datetime(2026, 4, 30, 10, 2, tzinfo=dt.UTC)
+    due = repo.claim_due_fake_online_prompts(now)
+
+    assert len(due) == 1
+    assert due[0]["telegramUsername"] == "ta"
+    assert due[0]["autoConfirmDelaySeconds"] == 5
+    prompt = repo.db.telegram_online_prompts.items[0]
+    assert prompt["status"] == "claimed"
+    assert prompt["source"] == "fake_online"
+    assert repo.claim_due_fake_online_prompts(now + dt.timedelta(minutes=1)) == []
+
+def test_fake_online_claim_uses_full_local_window_even_when_claimed_after_end():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    repo.upsert_fake_online_settings("A", True, [3], "10:00", "10:01", 5, 5)
+
+    due = repo.claim_due_fake_online_prompts(dt.datetime(2026, 4, 30, 12, 0, tzinfo=dt.UTC))
+
+    assert len(due) == 1
+    attempt = repo.db.fake_online_attempts.items[0]
+    assert dt.datetime(2026, 4, 30, 10, 0, tzinfo=dt.UTC) <= attempt["scheduledPromptAt"] <= dt.datetime(2026, 4, 30, 10, 1, tzinfo=dt.UTC)
+
+def test_fake_online_claim_skips_when_day_session_already_open():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    repo.upsert_fake_online_settings("A", True, [3], "10:00", "10:01", 5, 5)
+    repo.db.day_sessions.insert_one({"rawAuthor": "A", "date": "2026-04-30", "telegramUsername": "ta"})
+
+    assert repo.claim_due_fake_online_prompts(dt.datetime(2026, 4, 30, 9, 59, tzinfo=dt.UTC)) == []
+    due = repo.claim_due_fake_online_prompts(dt.datetime(2026, 4, 30, 10, 2, tzinfo=dt.UTC))
+
+    assert due == []
+    assert repo.db.fake_online_attempts.items[0]["status"] == "closed"
+    assert repo.db.fake_online_attempts.items[0]["closeAction"] == "skipped_day_already_open"
+
+def test_fake_online_does_not_create_attempt_on_vacation_day():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    repo.db.calendar_marks.insert_one({"rawAuthor": "A", "date": "2026-04-30", "reasonId": "vacation", "note": ""})
+    repo.upsert_fake_online_settings("A", True, [3], "10:00", "10:01", 5, 5)
+
+    due = repo.claim_due_fake_online_prompts(dt.datetime(2026, 4, 30, 10, 2, tzinfo=dt.UTC))
+
+    assert due == []
+    assert repo.db.fake_online_attempts.items == []
+    assert repo.db.telegram_online_prompts.items == []
+
+def test_fake_online_prompt_confirm_reuses_online_prompt_flow():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    repo.upsert_fake_online_settings("A", True, [3], "10:00", "10:01", 5, 5)
+    assert repo.claim_due_fake_online_prompts(dt.datetime(2026, 4, 30, 9, 59, tzinfo=dt.UTC)) == []
+    prompt = repo.claim_due_fake_online_prompts(dt.datetime(2026, 4, 30, 10, 2, tzinfo=dt.UTC))[0]
+
+    result = repo.close_telegram_online_prompt(prompt["reminderId"], "confirm_online", "2026-04-30T10:02:05Z", "ta")
+
+    assert result["status"] == "online_prompt_confirmed_online"
+    assert repo.db.day_sessions.items[0]["rawAuthor"] == "A"
+    assert repo.db.day_sessions.items[0]["date"] == "2026-04-30"
+    assert repo.db.fake_online_attempts.items[0]["status"] == "closed"
+    assert repo.db.fake_online_attempts.items[0]["closeAction"] == "confirm_online"
+
 def test_telegram_online_prompt_claim_closes_stale_dates():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})

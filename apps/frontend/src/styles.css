@@ -3019,6 +3019,129 @@ p {
   transition: background-color 0.14s ease;
 }
 
+.fake-online-row {
+  display: grid;
+  grid-template-columns: 230px 104px 320px 92px 92px 100px 100px minmax(16px, 1fr) 112px 88px;
+  align-items: center;
+  gap: 8px;
+  justify-content: start;
+  border-bottom: 1px solid #f1f5f9;
+  padding: 12px 14px;
+  transition: background-color 0.14s ease;
+}
+
+.fake-online-row:nth-child(even) {
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.fake-online-row:hover {
+  background: rgba(241, 245, 249, 0.98);
+}
+
+.fake-online-weekdays {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-width: 320px;
+}
+
+.fake-online-weekdays .checkbox-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 58px;
+  min-width: 58px;
+  height: 38px;
+  min-height: 38px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0 8px;
+  box-sizing: border-box;
+  color: #526070;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.fake-online-weekdays .checkbox-cell input {
+  appearance: none;
+  flex: 0 0 auto;
+  position: static;
+  opacity: 1;
+  pointer-events: auto;
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  border: 1.5px solid #94a3b8;
+  border-radius: 3px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.fake-online-weekdays .checkbox-cell input:checked {
+  border-color: #2563eb;
+  background: #2563eb;
+}
+
+.fake-online-weekdays .checkbox-cell input:checked::after {
+  display: block;
+  width: 4px;
+  height: 7px;
+  margin: 1px auto 0;
+  border: solid #ffffff;
+  border-width: 0 1.5px 1.5px 0;
+  content: "";
+  transform: rotate(45deg);
+}
+
+.fake-online-weekdays .checkbox-cell:has(input:checked) {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.fake-online-weekdays .checkbox-cell:has(input:focus-visible) {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.fake-online-add-card {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) 140px;
+  align-items: end;
+  gap: 12px;
+  border-top: 1px solid #edf2f7;
+  padding: 12px 14px;
+}
+
+.fake-online-empty-state {
+  padding: 18px 14px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.fake-online-row input[type="time"],
+.fake-online-row input[type="number"] {
+  width: 100%;
+  max-width: 100px;
+  min-width: 0;
+}
+
+.fake-online-row label:not(.checkbox-cell):not(.radio-inline) {
+  white-space: nowrap;
+}
+
+.fake-online-row button:first-of-type {
+  grid-column: 9;
+}
+
 .auto-break-identity {
   display: flex;
   min-width: 0;
@@ -3079,9 +3202,14 @@ p {
 }
 
 @media (max-width: 640px) {
-  .auto-break-row {
+  .auto-break-row,
+  .fake-online-row {
     grid-template-columns: 1fr;
     align-items: start;
+  }
+
+  .fake-online-add-card {
+    grid-template-columns: 1fr;
   }
 
   .auto-break-actions {
@@ -3094,6 +3222,8 @@ p {
 .profile-create-card label,
 .site-user-create-card label,
 .profile-row label:not(.checkbox-cell):not(.radio-inline),
+.fake-online-add-card label,
+.fake-online-row label:not(.checkbox-cell):not(.radio-inline),
 .score-settings-grid label {
   display: grid;
   gap: 6px;
@@ -3118,6 +3248,9 @@ p {
 .site-user-create-card select,
 .profile-row input,
 .profile-row select,
+.fake-online-add-card select,
+.fake-online-row input,
+.fake-online-row select,
 .site-user-row input,
 .site-user-row select,
 .score-settings-grid input {
@@ -4422,6 +4555,9 @@ p {
 .profile-row input,
 .profile-row .checkbox-cell,
 .profile-row .profile-readonly-cell,
+.fake-online-row input,
+.fake-online-row .checkbox-cell,
+.fake-online-add-card select,
 .site-user-row input,
 .site-user-row select,
 .site-user-row .checkbox-cell {
@@ -4430,6 +4566,9 @@ p {
 }
 
 .profile-row input:focus-visible,
+.fake-online-row input:focus-visible,
+.fake-online-row select:focus-visible,
+.fake-online-add-card select:focus-visible,
 .site-user-row input:focus-visible,
 .site-user-row select:focus-visible {
   outline: none;
@@ -4453,6 +4592,53 @@ p {
   accent-color: #2563eb;
 }
 
+.fake-online-row input[type="checkbox"] {
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 6px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  accent-color: #2563eb;
+}
+
+.fake-online-row input[type="checkbox"]:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.fake-online-row .fake-online-weekdays input[type="checkbox"] {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  margin: 0;
+  border: 1.5px solid #94a3b8;
+  border-radius: 3px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.fake-online-row .fake-online-weekdays input[type="checkbox"]:checked {
+  border-color: #2563eb;
+  background: #2563eb;
+}
+
+.fake-online-row .fake-online-weekdays input[type="checkbox"]:checked::after {
+  display: block;
+  width: 4px;
+  height: 7px;
+  margin: 1px auto 0;
+  border: solid #ffffff;
+  border-width: 0 1.5px 1.5px 0;
+  content: "";
+  transform: rotate(45deg);
+}
+
 .profile-row input[type="radio"]:focus-visible {
   outline: 2px solid #2563eb;
   outline-offset: 2px;
@@ -4464,6 +4650,9 @@ p {
 .site-user-create-card select,
 .profile-row input:not([type="checkbox"]):not([type="color"]),
 .profile-row select,
+.fake-online-add-card select,
+.fake-online-row input:not([type="checkbox"]):not([type="color"]),
+.fake-online-row select,
 .site-user-row input:not([type="checkbox"]):not([type="color"]),
 .site-user-row select {
   font-size: 13px;
@@ -4699,7 +4888,8 @@ p {
 .profile-row .checkbox-cell,
 .profile-create-card .checkbox-cell,
 .site-user-row .checkbox-cell,
-.auto-break-row .checkbox-cell {
+.auto-break-row .checkbox-cell,
+.fake-online-row .checkbox-cell {
   font-size: 13px;
   font-weight: 500;
 }

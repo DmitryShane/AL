@@ -73,6 +73,15 @@ class DiscordSettingsIn(ApiModel):
     meeting_summary_telegram_template: str = Field(default="", alias="meetingSummaryTelegramTemplate")
 
 
+class FakeOnlineSettingsIn(ApiModel):
+    enabled: bool = False
+    days_of_week: list[int] = Field(default_factory=list, alias="daysOfWeek")
+    start_time: str = Field(default="10:00", alias="startTime", pattern=r"^\d{2}:\d{2}$")
+    end_time: str = Field(default="12:00", alias="endTime", pattern=r"^\d{2}:\d{2}$")
+    delay_min_seconds: int = Field(default=5, alias="delayMinSeconds", ge=0, le=3600)
+    delay_max_seconds: int = Field(default=60, alias="delayMaxSeconds", ge=0, le=3600)
+
+
 class TelegramPrivateChatIn(ApiModel):
     telegram_username: str = Field(alias="telegramUsername", min_length=1)
     chat_id: int = Field(alias="chatId")

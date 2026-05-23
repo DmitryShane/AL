@@ -17,6 +17,7 @@ import { SETTINGS_TABS } from "../components/settings/settingsTabs";
 import { DeviceProfilesTab } from "../components/settings/tabs/deviceProfiles/DeviceProfilesTab";
 import { PublisherProfilesTab } from "../components/settings/tabs/publisherProfiles/PublisherProfilesTab";
 import { DiscordSettingsTab } from "../components/settings/tabs/discord/DiscordSettingsTab";
+import { FakeOnlineTab } from "../components/settings/tabs/fakeOnline/FakeOnlineTab";
 import { GeneralSettingsTab } from "../components/settings/tabs/general/GeneralSettingsTab";
 import { MeetingSummariesTab } from "../components/settings/tabs/meetingSummaries/MeetingSummariesTab";
 import { AuthorRedirectsTab } from "../components/settings/tabs/redirects/AuthorRedirectsTab";
@@ -83,6 +84,7 @@ export function SettingsPage({
   const personProfiles = profiles.filter((profile) => profile.profileType !== "publisher");
   const aliases = summary?.activitySummary.authorAliases ?? [];
   const canManageSettings = currentUser.role === "admin" || currentUser.role === "editor";
+  const canManageUsers = currentUser.role === "admin";
   const settingsReadOnly = !canManageSettings;
   const avatarSettingsLockedTitle = "Only editors and admins can change GitHub avatar cache settings.";
   const [settingsTab, setSettingsTabState] = useState<SettingsTab>(() => loadSavedSettingsTab());
@@ -166,6 +168,12 @@ export function SettingsPage({
       meetingSummaryWorkspaceRef.current?.style.removeProperty("--meeting-summary-prompt-panel-height");
     };
   }, [settingsTab]);
+
+  useEffect(() => {
+    if (settingsTab === "fakeOnline" && !canManageUsers) {
+      setSettingsTab("general");
+    }
+  }, [canManageUsers, settingsTab]);
 
   useEffect(() => {
     if (!summary) {
@@ -1221,11 +1229,12 @@ export function SettingsPage({
   const savedAvatarRefreshCadence: "week" | "month" =
     summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month";
   const isAvatarCadenceDirty = avatarRefreshCadence !== savedAvatarRefreshCadence;
+  const visibleSettingsTabs = SETTINGS_TABS.filter((tab) => tab.key !== "fakeOnline" || canManageUsers);
 
   return (
     <section className="page-section settings-layout">
       <div className="settings-tabs">
-        {SETTINGS_TABS.map((tab) => (
+        {visibleSettingsTabs.map((tab) => (
           <button key={tab.key} className={settingsTab === tab.key ? "active" : ""} onClick={() => setSettingsTab(tab.key)}>
             {tab.label}
           </button>
@@ -1387,6 +1396,8 @@ export function SettingsPage({
         />
       ) : settingsTab === "snapshots" ? (
         <ActivitySnapshotsTab />
+      ) : settingsTab === "fakeOnline" && canManageUsers ? (
+        <FakeOnlineTab profiles={personProfiles} />
       ) : (
         <SiteUsersPanel currentUser={currentUser} authorProfiles={profiles} authorProfileDrafts={drafts} />
       )}

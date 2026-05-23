@@ -11,6 +11,7 @@ export const SETTINGS_TABS: { key: SettingsTab; label: string }[] = [
   { key: "telegram", label: "Telegram" },
   { key: "meetingSummaries", label: "Meeting Summaries" },
   { key: "snapshots", label: "Activity Snapshots" },
+  { key: "fakeOnline", label: "Fake Online" },
   { key: "users", label: "Site Users" }
 ];
 

@@ -1,5 +1,5 @@
 export type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings";
-export type SettingsTab = "general" | "authors" | "publisherProfiles" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingSummaries" | "snapshots" | "users";
+export type SettingsTab = "general" | "authors" | "publisherProfiles" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingSummaries" | "snapshots" | "fakeOnline" | "users";
 
 export type Health = {
   ok: boolean;
@@ -343,6 +343,30 @@ export type SiteUser = {
   active: boolean;
   /** Linked author profile avatar (GitHub-backed), when site email matches author_profiles. */
   avatarUrl?: string;
+};
+
+export type FakeOnlineSettings = {
+  rawAuthor: string;
+  displayName: string;
+  authorEmail?: string;
+  telegramUsername: string;
+  timeZoneId: string;
+  timeZoneDisplayName: string;
+  canEnable: boolean;
+  enabled: boolean;
+  daysOfWeek: number[];
+  startTime: string;
+  endTime: string;
+  delayMinSeconds: number;
+  delayMaxSeconds: number;
+};
+
+export type FakeOnlineAvailableProfile = {
+  rawAuthor: string;
+  displayName: string;
+  authorEmail?: string;
+  telegramUsername: string;
+  canEnable: boolean;
 };
 
 export type MeetingRecordingStatus = {

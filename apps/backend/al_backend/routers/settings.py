@@ -5,7 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from ..api_security import require_discord_bot_secret, require_permission, require_server_stats_permission
 from ..container import BackendServices
 from ..dependencies import get_settings_service
-from ..models import ActivitySnapshotsRemakeIn, AvatarSettingsIn, DiscordSettingsIn, IntervalSettingsIn
+from ..models import ActivitySnapshotsRemakeIn, AvatarSettingsIn, DiscordSettingsIn, FakeOnlineSettingsIn, IntervalSettingsIn
 
 
 router = APIRouter()
@@ -135,6 +135,49 @@ def update_discord_settings(
         meeting_summary_prompt=settings_in.meeting_summary_prompt,
         meeting_summary_telegram_template=settings_in.meeting_summary_telegram_template,
     )
+
+
+@router.get("/api/v1/settings/fake-online")
+def fake_online_settings(
+    _: dict = Depends(require_permission("manageUsers")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.fake_online_settings()
+
+
+@router.put("/api/v1/settings/fake-online/{raw_author}")
+def update_fake_online_settings(
+    raw_author: str,
+    settings_in: FakeOnlineSettingsIn,
+    _: dict = Depends(require_permission("manageUsers")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    try:
+        result = service.upsert_fake_online_settings(
+            raw_author=raw_author,
+            enabled=settings_in.enabled,
+            days_of_week=settings_in.days_of_week,
+            start_time=settings_in.start_time,
+            end_time=settings_in.end_time,
+            delay_min_seconds=settings_in.delay_min_seconds,
+            delay_max_seconds=settings_in.delay_max_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Fake online settings save failed"))
+
+    return result
+
+
+@router.delete("/api/v1/settings/fake-online/{raw_author}")
+def delete_fake_online_settings(
+    raw_author: str,
+    _: dict = Depends(require_permission("manageUsers")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.delete_fake_online_settings(raw_author)
 
 
 @router.get("/api/v1/discord/settings")

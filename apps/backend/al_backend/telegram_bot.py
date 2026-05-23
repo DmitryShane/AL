@@ -421,6 +421,45 @@ def send_due_reminders(config: BotConfig) -> None:
         message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
         mark_reminder_sent(config.backend_url, config.bot_secret, prompt_id, message_id, kind="online_prompt")
 
+    for prompt in bundle.get("fakeOnlinePrompts", []):
+        prompt_id = str(prompt.get("reminderId") or "")
+        telegram_name = str(prompt.get("telegramUsername") or "").strip().lstrip("@")
+
+        if not prompt_id or not telegram_name:
+            continue
+
+        text = (
+            f"Hi @{telegram_name}. You have activity today but no \"online\" message yet. "
+            "Are you online, or is this a mistake?"
+        )
+        result = send_online_prompt_message(config.token, config.allowed_chat_id, text, prompt_id)
+        message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
+        mark_reminder_sent(config.backend_url, config.bot_secret, prompt_id, message_id, kind="online_prompt")
+        delay_seconds = max(0, int(prompt.get("autoConfirmDelaySeconds") or 0))
+
+        if delay_seconds:
+            time.sleep(delay_seconds)
+
+        close_result = close_reminder(
+            config.backend_url,
+            config.bot_secret,
+            prompt_id,
+            "confirm_online",
+            telegram_name,
+            reminder_kind="online_prompt",
+        )
+        LOGGER.info("Auto-confirmed fake online prompt %s for @%s: %s", prompt_id, telegram_name, close_result)
+
+        if message_id:
+            edit_reminder_message(
+                config.token,
+                int(config.allowed_chat_id),
+                int(message_id),
+                "confirm_online",
+                telegram_name,
+                reminder_kind="online_prompt",
+            )
+
     for prompt in bundle.get("breakActivityPrompts", []):
         prompt_id = str(prompt.get("reminderId") or "")
         telegram_name = str(prompt.get("telegramUsername") or "").strip().lstrip("@")

@@ -26,6 +26,7 @@ def telegram_due_reminders(request: Request, service: BackendServices = Depends(
     return {
         "reminders": service.claim_due_telegram_day_reminders(),
         "onlinePrompts": service.claim_due_telegram_online_prompts(),
+        "fakeOnlinePrompts": service.claim_due_fake_online_prompts(),
         "breakActivityPrompts": service.claim_due_telegram_break_activity_prompts(),
         "meetingAutoAfkNotifications": service.claim_due_telegram_meeting_auto_afk_notifications(),
         "meetingRecordingNotifications": service.claim_due_telegram_meeting_recording_notifications(),

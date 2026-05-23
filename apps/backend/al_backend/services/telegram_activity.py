@@ -916,6 +916,7 @@ class TelegramActivityService(MongoComposableMixin):
             else:
                 response["purgeError"] = purge_result.get("error")
 
+            self._close_fake_online_attempt_for_prompt(reminder, "dismiss")
             return response
 
         first_report_at = _coerce_datetime(reminder.get("firstReportReceivedAt"))
@@ -941,6 +942,7 @@ class TelegramActivityService(MongoComposableMixin):
                     }
                 },
             )
+            self._close_fake_online_attempt_for_prompt(reminder, "closed_duplicate_online_confirm")
             return {"ok": True, "status": "online_prompt_closed_duplicate_online", **{k: v for k, v in break_result.items() if k != "ok"}}
 
         if not break_result.get("ok"):
@@ -957,7 +959,26 @@ class TelegramActivityService(MongoComposableMixin):
                 }
             },
         )
+        self._close_fake_online_attempt_for_prompt(reminder, "confirm_online")
         return {**break_result, "ok": True, "status": "online_prompt_confirmed_online"}
+
+    def _close_fake_online_attempt_for_prompt(self, reminder: dict[str, Any], action: str) -> None:
+        attempt_id = str(reminder.get("fakeOnlineAttemptId") or "")
+        if not attempt_id:
+            return
+
+        now = dt.datetime.now(dt.UTC)
+        self.db.fake_online_attempts.update_one(
+            {"attemptId": attempt_id},
+            {
+                "$set": {
+                    "status": "closed",
+                    "closeAction": action,
+                    "closedAt": now,
+                    "updatedAt": now,
+                }
+            },
+        )
 
     def close_telegram_break_activity_prompt(
         self,

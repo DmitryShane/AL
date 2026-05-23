@@ -182,6 +182,23 @@ class BackendComposableHost(Protocol):
 
     def get_discord_settings(self) -> dict[str, Any]: ...
 
+    def fake_online_settings(self) -> dict[str, Any]: ...
+
+    def delete_fake_online_settings(self, raw_author: str) -> dict[str, Any]: ...
+
+    def upsert_fake_online_settings(
+        self,
+        raw_author: str,
+        enabled: bool,
+        days_of_week: list[int],
+        start_time: str,
+        end_time: str,
+        delay_min_seconds: int,
+        delay_max_seconds: int,
+    ) -> dict[str, Any]: ...
+
+    def claim_due_fake_online_prompts(self, now: dt.datetime | None = None) -> list[dict[str, Any]]: ...
+
     def get_effective_plugin_ingest_resume_cutoff_utc(self, author: str) -> dt.datetime | None: ...
 
     def get_idle_threshold_for_author(self, author: str, source: str | None = None) -> int: ...
