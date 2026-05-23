@@ -1,5 +1,6 @@
 import React from "react";
 import { Activity, Box, Smartphone } from "lucide-react";
+import codexIconUrl from "../assets/codex-icon.png";
 import cursorIconUrl from "../assets/cursor-icon.png";
 import { REFRESH_INTERVAL_MS, REPORTS_PAGE_STORAGE_KEY, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
 import type { AuthorProfile, AuthorRow, DateRange, MeetingActivityItem, MeetingRecordingStatus, Report, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
@@ -459,6 +460,10 @@ export function breakTone(seconds: number) {
 }
 
 export function formatSource(source?: string) {
+  if (source === "codex") {
+    return "Codex";
+  }
+
   if (source === "ual") {
     return "Unity";
   }
@@ -515,6 +520,10 @@ export function formatSource(source?: string) {
 }
 
 export function sourceIcon(source?: string) {
+  if (source === "codex") {
+    return <CodexIcon />;
+  }
+
   if (source === "ual") {
     return <Box size={16} />;
   }
@@ -588,6 +597,10 @@ function CursorIcon() {
   return <img className="source-icon cursor-icon" src={cursorIconUrl} alt="" aria-hidden="true" />;
 }
 
+function CodexIcon() {
+  return <img className="source-icon codex-icon" src={codexIconUrl} alt="" aria-hidden="true" />;
+}
+
 function TelegramIcon() {
   return (
     <svg className="source-icon telegram-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -605,6 +618,10 @@ function DiscordIcon() {
 }
 
 export function formatReportType(report: Report) {
+  if (report.source === "codex") {
+    return formatActivityType(report.activityType ?? "external", report.source);
+  }
+
   if (report.reportType === "status") {
     return report.statusEventType ?? report.activityType ?? "status";
   }
@@ -672,8 +689,14 @@ export function formatDiscordEvent(eventType?: string, status?: string) {
   return labels[eventType ?? ""] ?? "meeting";
 }
 
-export function formatActivityType(type: string) {
+export function formatActivityType(type: string, source?: string) {
   const labels: Record<string, string> = {
+    codex_activity: "Codex Activity",
+    codex_command_run: "Command Run",
+    codex_file_changed: "File Changed",
+    codex_session_finished: "Session Finished",
+    codex_session_started: "Session Started",
+    codex_task_progress: "Codex Progress",
     external: "External",
     play_mode: "Play Mode",
     prefab_saved: "Prefab Save",
@@ -684,6 +707,10 @@ export function formatActivityType(type: string) {
     select: "Select",
     undo_redo: "Undo/Redo"
   };
+
+  if (source === "codex" && type === "external") {
+    return "Codex Activity";
+  }
 
   return labels[type] ?? type;
 }

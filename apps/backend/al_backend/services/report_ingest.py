@@ -17,6 +17,18 @@ def _has_count_or_file_delta(deltas: dict[str, Any]) -> bool:
     )
 
 
+def _primary_activity_type(deltas: dict[str, Any]) -> str | None:
+    for key in ("activityCountDeltas", "overtimeActivityCountDeltas"):
+        items = deltas.get(key)
+
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict) and item.get("type"):
+                    return str(item.get("type"))
+
+    return None
+
+
 def is_unknown_device_author(value: Any) -> bool:
     author = _normalize_author(value or "")
     return author in {"Unknown User", "Device"}
@@ -515,6 +527,7 @@ class ReportIngestService(MongoComposableMixin):
                     "batchId": batch.get("batchId"),
                     "challengeId": batch.get("challengeId"),
                     "reportType": batch.get("reportType", "auto"),
+                    "activityType": _primary_activity_type(batch_deltas),
                     **batch_deltas,
                 }
             )

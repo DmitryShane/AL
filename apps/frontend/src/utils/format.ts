@@ -16,6 +16,10 @@ export function formatMinutes(seconds: number) {
 }
 
 export function formatSource(source?: string) {
+  if (source === "codex") {
+    return "Codex";
+  }
+
   if (source === "ual") {
     return "Unity";
   }

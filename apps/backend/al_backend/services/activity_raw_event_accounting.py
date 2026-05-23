@@ -65,6 +65,24 @@ def _is_unity_saved_file_event(event: dict[str, Any]) -> bool:
     }
 
 
+def _codex_activity_count_type(event: dict[str, Any]) -> str:
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    metadata_activity_type = str(metadata.get("activityType") or "").strip()
+
+    if metadata_activity_type.startswith("codex_"):
+        return metadata_activity_type
+
+    codex_event_type = str(metadata.get("codexEventType") or event.get("eventType") or "").strip()
+    labels = {
+        "session_started": "codex_session_started",
+        "task_progress": "codex_task_progress",
+        "command_run": "codex_command_run",
+        "file_changed": "codex_file_changed",
+        "session_finished": "codex_session_finished",
+    }
+    return labels.get(codex_event_type, "codex_activity")
+
+
 class ActivityRawEventAccountingMixin:
     def _apply_snapshot_to_aggregates(self, snapshot: dict[str, Any]) -> None:
         snapshot = dict(snapshot)
@@ -494,7 +512,7 @@ class ActivityRawEventAccountingMixin:
         )
 
         if is_activity and not suppress_activity_count:
-            activity_type = _activity_count_type(event_type)
+            activity_type = _codex_activity_count_type(event) if current_source == "codex" else _activity_count_type(event_type)
             activity_delta_key = "activityCountDeltas"
 
             if event_counts_as_overtime_breakdown:

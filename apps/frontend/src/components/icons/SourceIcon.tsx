@@ -1,4 +1,5 @@
 import { Activity, Box, Smartphone } from "lucide-react";
+import codexIconUrl from "../../assets/codex-icon.png";
 import cursorIconUrl from "../../assets/cursor-icon.png";
 
 type SourceIconProps = {
@@ -24,6 +25,10 @@ export function SourceIcon({ source }: SourceIconProps) {
 
   if (source === "cur") {
     return <CursorIcon />;
+  }
+
+  if (source === "codex") {
+    return <CodexIcon />;
   }
 
   if (source === "dev" || source === "dev-ios" || source === "dev-android" || source === "dev-editor") {
@@ -76,6 +81,10 @@ function VSCodeIcon() {
 
 function CursorIcon() {
   return <img className="source-icon cursor-icon" src={cursorIconUrl} alt="" aria-hidden="true" />;
+}
+
+function CodexIcon() {
+  return <img className="source-icon codex-icon" src={codexIconUrl} alt="" aria-hidden="true" />;
 }
 
 function TelegramIcon() {

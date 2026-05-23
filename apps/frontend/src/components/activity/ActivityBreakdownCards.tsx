@@ -8,9 +8,9 @@ type ActivityBreakdownCardsProps = {
 };
 
 export function ActivityBreakdownCards({ author }: ActivityBreakdownCardsProps) {
-  const activityMixItems = (author.activityMix ?? []).map((item) => activityMixPanelItem(item.type, item.count, item.percent));
+  const activityMixItems = (author.activityMix ?? []).map((item) => activityMixPanelItem(item.type, item.count, item.percent, author.source));
   const savedPrefabItems = (author.savedPrefabs ?? []).map((prefab, index) => savedPrefabPanelItem(prefab, index));
-  const overtimeActivityMixItems = (author.overtimeActivityMix ?? []).map((item) => activityMixPanelItem(item.type, item.count, item.percent));
+  const overtimeActivityMixItems = (author.overtimeActivityMix ?? []).map((item) => activityMixPanelItem(item.type, item.count, item.percent, author.source));
   const overtimeSavedPrefabItems = (author.overtimeSavedPrefabs ?? []).map((prefab, index) => savedPrefabPanelItem(prefab, index));
   const activityMixGroups = (author.activityMixBySource ?? []).map((group) => ({
     source: group.source,
@@ -79,7 +79,7 @@ function activityMixPanelItem(type: string, count: number, percent: number, sour
 
   return {
     id: itemId,
-    label: formatActivityType(type),
+    label: formatActivityType(type, source),
     value: percent,
     displayValue: `${percent}%`,
     color: activityColor(type || String(count))

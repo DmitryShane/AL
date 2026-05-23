@@ -1310,14 +1310,37 @@ def test_count_only_raw_event_batch_creates_report_row():
 
     assert repo.db.report_rows.count_documents({"source": "codex", "author": "Dmitry Shane"}) == 1
     row = repo.db.report_rows.find_one({"source": "codex", "author": "Dmitry Shane"})
-    assert row["activityCountDeltas"] == [{"type": "external", "count": 1}]
+    assert row["activityType"] == "codex_task_progress"
+    assert row["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
     assert row["projectId"] == "AL"
 
     repo.rebuild_aggregates_if_needed(force=True)
 
     rebuilt = repo.db.report_rows.find_one({"source": "codex", "author": "Dmitry Shane"})
     assert rebuilt is not None
-    assert rebuilt["activityCountDeltas"] == [{"type": "external", "count": 1}]
+    assert rebuilt["activityType"] == "codex_task_progress"
+    assert rebuilt["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
+
+
+def test_non_codex_external_activity_keeps_external_type():
+    repo = fake_repository()
+    event = {
+        "eventId": "external-1",
+        "source": "bal",
+        "author": "Blender Artist",
+        "projectId": "Scene",
+        "deviceId": "mac-mini",
+        "date": "2026-05-23",
+        "eventType": "external",
+        "occurredAtUtc": dt.datetime(2026, 5, 23, 15, 30, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-05-23T15:30:00+00:00",
+        "receivedAt": dt.datetime(2026, 5, 23, 15, 30, 1, tzinfo=dt.UTC),
+        "metadata": {"codexEventType": "task_progress"},
+    }
+
+    deltas = repo._apply_raw_event_to_aggregates(event)
+
+    assert deltas["activityCountDeltas"] == [{"type": "external", "count": 1}]
 
 
 def test_full_rebuild_does_not_schedule_telegram_online_prompts_from_snapshots():
