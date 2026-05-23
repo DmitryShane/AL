@@ -620,7 +620,7 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
     if event_type == "file_saved" and event.get("source") == "fch":
         if "figma.com/" not in lower_path and not metadata.get("fileKey"):
             return None
-    elif event_type == "file_saved" and event.get("source") in {"cur", "vsc"}:
+    elif event_type == "file_saved" and event.get("source") in {"codex", "cur", "vsc"}:
         pass
     elif event_type == "file_saved" and not lower_path.endswith(".blend"):
         return None
@@ -632,7 +632,7 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
 
     saved_file = {"path": path, "name": name, "saveCount": 1}
 
-    if event.get("source") == "cur":
+    if event.get("source") in {"codex", "cur"}:
         saved_file["projectId"] = str(event.get("projectId") or "")
 
     return saved_file
