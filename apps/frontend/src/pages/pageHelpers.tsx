@@ -1,6 +1,5 @@
 import React from "react";
 import { Activity, Box, Smartphone } from "lucide-react";
-import codexIconUrl from "../assets/codex-icon.png";
 import cursorIconUrl from "../assets/cursor-icon.png";
 import { REFRESH_INTERVAL_MS, REPORTS_PAGE_STORAGE_KEY, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
 import type { AuthorProfile, AuthorRow, DateRange, MeetingActivityItem, MeetingRecordingStatus, Report, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
@@ -598,7 +597,20 @@ function CursorIcon() {
 }
 
 function CodexIcon() {
-  return <img className="source-icon codex-icon" src={codexIconUrl} alt="" aria-hidden="true" />;
+  return (
+    <svg className="source-icon codex-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        className="codex-icon-shell"
+        d="M12 2.5 4.5 6.8v8.4l7.5 4.3 7.5-4.3V6.8L12 2.5Z"
+      />
+      <path
+        className="codex-icon-mark"
+        d="M8.4 9.1h2.1l1.5 3.7 1.5-3.7h2.1v5.8h-1.7v-3.1l-1.2 3.1h-1.4l-1.2-3.1v3.1H8.4V9.1Z"
+      />
+      <path className="codex-icon-line" d="M6.9 16.1h10.2" />
+      <circle className="codex-icon-node" cx="7.2" cy="16.1" r="1.1" />
+    </svg>
+  );
 }
 
 function TelegramIcon() {
@@ -618,10 +630,6 @@ function DiscordIcon() {
 }
 
 export function formatReportType(report: Report) {
-  if (report.source === "codex") {
-    return formatActivityType(report.activityType ?? "external", report.source);
-  }
-
   if (report.reportType === "status") {
     return report.statusEventType ?? report.activityType ?? "status";
   }

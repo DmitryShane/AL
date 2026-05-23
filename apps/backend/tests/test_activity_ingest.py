@@ -1322,6 +1322,72 @@ def test_count_only_raw_event_batch_creates_report_row():
     assert rebuilt["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
 
 
+def test_codex_activity_accounts_active_time_between_events():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    first = {
+        "eventId": "codex-start",
+        "source": "codex",
+        "author": "Dmitry Shane",
+        "projectId": "AL",
+        "deviceId": "mac-mini",
+        "date": "2026-05-23",
+        "eventType": "external",
+        "occurredAtUtc": dt.datetime(2026, 5, 23, 15, 30, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-05-23T17:30:00+02:00",
+        "receivedAt": dt.datetime(2026, 5, 23, 15, 30, 1, tzinfo=dt.UTC),
+        "metadata": {"codexEventType": "session_started"},
+    }
+    second = {
+        **first,
+        "eventId": "codex-progress",
+        "occurredAtUtc": dt.datetime(2026, 5, 23, 15, 32, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-05-23T17:32:00+02:00",
+        "receivedAt": dt.datetime(2026, 5, 23, 15, 32, 1, tzinfo=dt.UTC),
+        "metadata": {"codexEventType": "task_progress"},
+    }
+
+    first_deltas = repo._apply_raw_event_to_aggregates(first)
+    second_deltas = repo._apply_raw_event_to_aggregates(second)
+
+    assert first_deltas["activeDeltaSeconds"] == 0
+    assert second_deltas["activeDeltaSeconds"] == 120
+    assert second_deltas["idleDeltaSeconds"] == 0
+    assert second_deltas["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
+
+
+def test_codex_activity_caps_active_time_without_idle_tail():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    first = {
+        "eventId": "codex-start",
+        "source": "codex",
+        "author": "Dmitry Shane",
+        "projectId": "AL",
+        "deviceId": "mac-mini",
+        "date": "2026-05-23",
+        "eventType": "external",
+        "occurredAtUtc": dt.datetime(2026, 5, 23, 15, 30, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-05-23T17:30:00+02:00",
+        "receivedAt": dt.datetime(2026, 5, 23, 15, 30, 1, tzinfo=dt.UTC),
+        "metadata": {"codexEventType": "session_started"},
+    }
+    second = {
+        **first,
+        "eventId": "codex-progress",
+        "occurredAtUtc": dt.datetime(2026, 5, 23, 15, 50, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-05-23T17:50:00+02:00",
+        "receivedAt": dt.datetime(2026, 5, 23, 15, 50, 1, tzinfo=dt.UTC),
+        "metadata": {"codexEventType": "task_progress"},
+    }
+
+    repo._apply_raw_event_to_aggregates(first)
+    second_deltas = repo._apply_raw_event_to_aggregates(second)
+
+    assert second_deltas["activeDeltaSeconds"] == 300
+    assert second_deltas["idleDeltaSeconds"] == 0
+
+
 def test_non_codex_external_activity_keeps_external_type():
     repo = fake_repository()
     event = {

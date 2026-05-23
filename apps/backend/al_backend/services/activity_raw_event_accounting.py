@@ -339,9 +339,17 @@ class ActivityRawEventAccountingMixin:
                     interval_activity_at = author_last_activity_at
 
                 if accounting_start_at < occurred_at:
-                    interval_is_active = (occurred_at - interval_activity_at).total_seconds() < idle_threshold_seconds
-                    interval_end_at = occurred_at
-                    interval_end_local_at = occurred_local_at
+                    if current_source == "codex":
+                        interval_end_at = min(
+                            occurred_at,
+                            accounting_start_at + dt.timedelta(seconds=idle_threshold_seconds),
+                        )
+                        interval_end_local_at = accounting_start_local_at + (interval_end_at - accounting_start_at)
+                        interval_is_active = interval_end_at > accounting_start_at
+                    else:
+                        interval_end_at = occurred_at
+                        interval_end_local_at = occurred_local_at
+                        interval_is_active = (occurred_at - interval_activity_at).total_seconds() < idle_threshold_seconds
                     workday_started_at = self._workday_started_at_for_event_interval(event, accounting_start_at, interval_end_at)
 
                     if not interval_is_active and workday_started_at and accounting_start_at < workday_started_at < interval_end_at:
@@ -400,6 +408,7 @@ class ActivityRawEventAccountingMixin:
                 author_last_activity_scope = current_scope
         elif (
             event_type == "heartbeat"
+            and current_source != "codex"
             and not is_inside_status_offline
             and first_activity_at
             and last_activity_at
