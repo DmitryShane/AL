@@ -1802,6 +1802,28 @@ def test_cursor_activity_project_appears_in_saved_files_without_file_save():
         "saveCount": 1,
     } in author["savedPrefabs"]
 
+def test_codex_activity_project_appears_in_saved_files_without_file_save():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "codex",
+            "author": "Future Artist",
+            "projectId": "AL",
+            "date": "2026-04-29",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "activityCounts": [{"type": "codex_session_started", "count": 3}],
+            "savedPrefabs": [],
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
+
+    assert {"path": "codex:AL", "name": "AL", "projectId": "AL", "saveCount": 3} in author["savedPrefabs"]
+
 def test_activity_summary_author_source_uses_latest_report_row():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})

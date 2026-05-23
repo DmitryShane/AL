@@ -239,30 +239,38 @@ def _saved_prefabs_for_summary_item(item: dict[str, Any]) -> list[dict[str, Any]
 
         return saved_prefabs
 
-    if item.get("source") != "cur":
+    editor_project_item = _editor_project_saved_prefab_item(item)
+
+    if not editor_project_item:
         return saved_prefabs
+
+    if any(prefab.get("path") == editor_project_item["path"] for prefab in saved_prefabs):
+        return saved_prefabs
+
+    saved_prefabs.append(editor_project_item)
+    return saved_prefabs
+
+
+def _editor_project_saved_prefab_item(item: dict[str, Any]) -> dict[str, Any] | None:
+    source = str(item.get("source") or "")
+
+    if source not in {"codex", "cur"}:
+        return None
 
     project_id = str(item.get("projectId") or "")
 
     if not project_id:
-        return saved_prefabs
+        return None
 
-    cursor_path = f"cursor:{project_id}"
-
-    if any(prefab.get("path") == cursor_path for prefab in saved_prefabs):
-        return saved_prefabs
-
+    path_prefix = "codex" if source == "codex" else "cursor"
     activity_count = sum(int(count.get("count", 0)) for count in item.get("activityCounts", []))
-    save_count = max(1, activity_count)
-    saved_prefabs.append(
-        {
-            "path": cursor_path,
-            "name": project_id,
-            "projectId": project_id,
-            "saveCount": save_count,
-        }
-    )
-    return saved_prefabs
+
+    return {
+        "path": f"{path_prefix}:{project_id}",
+        "name": project_id,
+        "projectId": project_id,
+        "saveCount": max(1, activity_count),
+    }
 
 
 def _overtime_saved_prefabs_for_summary_item(item: dict[str, Any]) -> list[dict[str, Any]]:
