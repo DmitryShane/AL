@@ -10,40 +10,40 @@ This repository is the main AL workspace. Work on the backend, frontend, and loc
 
 ## Unity And Blender Plugins
 
-The Unity package `com.al.ual` is linked into the Unity project from a separate plugin repository/folder. It is also the active source for the Blender Activity Logger add-on.
+The Unity package `com.mempic.al` is linked into the Unity project from a separate plugin repository/folder. It is also the active source for the Activity Logger plugins.
 
 When working on Unity or Blender Activity Logger plugin code, edit the linked package folder in the Unity project:
 
 ```text
-/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual
+/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.mempic.al
 ```
 
-Treat `com.al.ual` as the active plugin source for Unity and Blender work.
+Treat `com.mempic.al` as the active plugin source for Unity, Blender, VS Code, Cursor, Figma, Codex, and Device Activity Logger work.
 
-The Unity Activity Logger plugin and Device Activity Logger plugin are separate plugins. Do not treat `device_al` as the Unity editor plugin. The Unity editor plugin source lives in `com.al.ual/Editor` and reports with `source: ual`; the Device Activity Logger source lives in `com.al.ual/device_al` and reports with device sources such as `dev`, `dev-ios`, `dev-android`, or `dev-editor`.
+The Unity Activity Logger plugin and Device Activity Logger plugin are separate plugins. Do not treat `device_al` as the Unity editor plugin. The Unity editor plugin source lives in `com.mempic.al/unity_al` and reports with `source: ual`; the Device Activity Logger source lives in `com.mempic.al/device_al` and reports with device sources such as `dev`, `dev-ios`, `dev-android`, or `dev-editor`.
 
 When creating new Activity Logger plugins, keep them minimal and purpose-built for logging only. Do not create README files, standalone documentation, extra settings pages, sample apps, or other nonessential scaffolding unless the user explicitly asks for them.
 
 The Device Activity Logger plugin source lives in:
 
 ```text
-/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual/device_al
+/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.mempic.al/device_al
 ```
 
-After any behavior or end-user change under `device_al`, bump the Device Activity Logger plugin version in `device_al/DeviceAL.cs` (`PluginVersion`) only. Do **not** bump `com.al.ual/package.json` for Device Activity Logger changes, and do **not** update the Unity project `Packages/manifest.json` tag unless the owner explicitly asks to publish/update the root Unity package tag. The root `com.al.ual` package version and the Device Activity Logger runtime `PluginVersion` are separate version tracks.
+After any behavior or end-user change under `device_al`, bump the Device Activity Logger plugin version in `device_al/DeviceAL.cs` (`PluginVersion`) only. Do **not** bump `com.mempic.al/package.json` for Device Activity Logger changes, and do **not** update the Unity project `Packages/manifest.json` tag unless the owner explicitly asks to publish/update the root Unity package tag. The root `com.mempic.al` package version and the Device Activity Logger runtime `PluginVersion` are separate version tracks.
 
 The Blender add-on source lives in:
 
 ```text
-/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual/blender_al
+/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.mempic.al/blender_al
 ```
 
-After every code change in `com.al.ual/blender_al`, rebuild the installable add-on archive at `com.al.ual/blender_al.zip`.
+After every code change in `com.mempic.al/blender_al`, rebuild the installable add-on archive at `com.mempic.al/blender_al/blender_al.zip`.
 
 The VS Code Activity Logger extension source lives in:
 
 ```text
-/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual/vscode_al
+/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.mempic.al/vscode_al
 ```
 
 After any change under `vscode_al` (TypeScript in `src/`, `package.json`, or `tsconfig`), the agent must **finish the full workflow in the same session** without asking the user to run commands locally: `cd` into `vscode_al`, run `npm install` when dependencies or the lockfile changed (or when `node_modules` is missing), then run **`npm run package`**. That script runs `npm run compile` (updates `out/`) and **`vsce package`**, which writes the installable **`dist/al-vscode-activity-logger-<version>.vsix`**. Authors install the VSIX from `dist/`; leaving `dist/` stale while claiming the extension is ready is wrong. If you truly only need a TypeScript check without a VSIX, `npm run compile` alone is enough for `out/`, but default to **`npm run package`** whenever the change is meant for end users.
@@ -51,7 +51,7 @@ After any change under `vscode_al` (TypeScript in `src/`, `package.json`, or `ts
 The Cursor Activity Logger extension source lives in:
 
 ```text
-/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual/cursor_al
+/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.mempic.al/cursor_al
 ```
 
 After any behavior or end-user change under `cursor_al` (TypeScript in `src/`, `package.json`, or `tsconfig`), the agent must complete the full release/install workflow in the same session: bump the extension version in both `package.json` and `src/config.ts` (`PLUGIN_VERSION`), update the `npm run package` VSIX output filename to match, run `npm install` when dependencies or the lockfile changed (or when `node_modules` is missing), run **`npm run package`** to refresh `out/` and write **`dist/al-cursor-activity-logger-<version>.vsix`**, then install that VSIX locally when the owner asks to update the local Cursor plugin. Use the actual Cursor CLI at `/Applications/Cursor.app/Contents/Resources/app/bin/cursor --install-extension "<vsix-path>" --force`; do **not** use the generic `code` CLI for Cursor plugin installs because it installs into `~/.vscode/extensions`, while Cursor uses `~/.cursor/extensions`. After installation, verify that `~/.cursor/extensions/al.al-cursor-activity-logger-<version>/package.json` exists and the Cursor UI shows the new version. Never leave a changed Cursor plugin at the previous version or with stale `out/` / `dist/` artifacts.
@@ -123,7 +123,7 @@ When debugging summaries, `status_events`, or idle accounting:
 ## Terminology
 
 - **AL (Activity Logger)** — the product and service as a whole: this repository (FastAPI backend, web dashboard, Telegram/Discord bots, and how data is stored and summarized).
-- **UAL** — specifically the **Unity package** `com.al.ual` and the client plugin(s) that report into AL with `source: ual`. Other editors (Blender, VS Code) use separate add-ons/extensions under the same package tree but are not called “UAL” in user-facing text; prefer **Activity Logger** or **AL** when talking about the system in general.
+- **Unity AL** — specifically the Unity editor plugin under `com.mempic.al/unity_al`. It reports into AL with historical `source: ual`. Other editors (Blender, VS Code, Cursor, Figma, Codex) use separate add-ons/extensions under the same package tree; prefer **Activity Logger** or **AL** when talking about the system in general.
 
 ## Communication With The Repo Owner
 
@@ -166,6 +166,6 @@ Production runs at `activity.mempic.com`. When the user asks to pull production 
 
 - In owner chat, the word **"пуш"** means: review current changes, write a short accurate commit message, commit **all visible changes in the current `AL` repository** (`/Volumes/MacMiniExternal2TB/Development/AL`), and push that repository so the automatic deploy workflow can update production.
 - Do not leave changed `AL` files out of the commit just because they look unrelated to the latest task. Include them and make the commit message broad enough to describe all included changes.
-- Do not commit or push any linked/external repository (for example `/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2` or `Packages/com.al.ual`) as part of **"пуш"**. Only do that when the user explicitly names that repository or separately asks to push it.
+- Do not commit or push any linked/external repository (for example `/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2` or `Packages/com.mempic.al`) as part of **"пуш"**. Only do that when the user explicitly names that repository or separately asks to push it.
 - Before committing, inspect `git status --short` and the diff. Do not include secrets, environment files, MongoDB dumps, restored data exports, or generated data artifacts.
 - Keep the commit message concise and accurate. After pushing, report the commit message and push result briefly.

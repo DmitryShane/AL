@@ -1281,6 +1281,45 @@ def test_rebuild_restores_raw_event_batches_as_single_report_rows():
     assert rebuilt_rows[0]["idleDeltaSeconds"] == original_rows[0]["idleDeltaSeconds"]
     assert rebuilt_rows[0]["lastRecordedAt"] == original_rows[0]["lastRecordedAt"]
 
+
+def test_count_only_raw_event_batch_creates_report_row():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
+    received_at = dt.datetime(2026, 5, 23, 15, 30, tzinfo=dt.UTC)
+    payload = {
+        "author": "Dmitry Shane",
+        "authorEmail": "dmitry@example.com",
+        "projectId": "AL",
+        "sessionId": "codex-session",
+        "deviceId": "mac-mini",
+        "timeZoneId": "UTC",
+        "timeZoneDisplayName": "UTC",
+        "events": [
+            {
+                "eventId": "codex-progress-1",
+                "eventType": "external",
+                "date": "2026-05-23",
+                "occurredAtUtc": "2026-05-23T15:30:00Z",
+                "occurredAtLocal": "2026-05-23T15:30:00+00:00",
+                "metadata": {"codexEventType": "task_progress"},
+            }
+        ],
+    }
+
+    repo._save_event_batch("codex", "0.1.2", payload, "raw-codex-1", "auto", received_at, "challenge-1", None)
+
+    assert repo.db.report_rows.count_documents({"source": "codex", "author": "Dmitry Shane"}) == 1
+    row = repo.db.report_rows.find_one({"source": "codex", "author": "Dmitry Shane"})
+    assert row["activityCountDeltas"] == [{"type": "external", "count": 1}]
+    assert row["projectId"] == "AL"
+
+    repo.rebuild_aggregates_if_needed(force=True)
+
+    rebuilt = repo.db.report_rows.find_one({"source": "codex", "author": "Dmitry Shane"})
+    assert rebuilt is not None
+    assert rebuilt["activityCountDeltas"] == [{"type": "external", "count": 1}]
+
+
 def test_full_rebuild_does_not_schedule_telegram_online_prompts_from_snapshots():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})

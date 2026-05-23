@@ -6,7 +6,7 @@ AL is an Activity Logger workspace. It contains the FastAPI backend, React front
 
 - `apps/backend` - FastAPI API server with MongoDB persistence and ALR1 decoding.
 - `apps/frontend` - React/Vite dashboard.
-- `/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual` - linked Unity package and Blender Activity Logger add-on source.
+- `/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.mempic.al` - linked Activity Logger plugin package source.
 
 ## Local Requirements
 
@@ -69,8 +69,7 @@ If `TELEGRAM_ALLOWED_CHAT_ID` is omitted, the bot logs incoming chat ids so you 
 The active plugin source is the linked package at:
 
 ```text
-/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.al.ual
+/Volumes/MacMiniExternal2TB/Development/unity-bike-rush-2/Packages/com.mempic.al
 ```
 
-Blender add-on source lives in `blender_al` inside that package, with the installable archive at `blender_al.zip`.
-
+Unity editor plugin source lives in `unity_al` inside that package. Blender add-on source lives in `blender_al`, with the installable archive at `blender_al/blender_al.zip`.

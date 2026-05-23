@@ -6,6 +6,15 @@ from ..activity_math import *
 from ..backend_composable_host import composed
 
 
+def _has_count_or_file_delta(deltas: dict[str, Any]) -> bool:
+    return bool(
+        deltas.get("activityCountDeltas")
+        or deltas.get("savedPrefabDeltas")
+        or deltas.get("overtimeActivityCountDeltas")
+        or deltas.get("overtimeSavedPrefabDeltas")
+    )
+
+
 class ActivityAggregationRebuildMixin:
     def rebuild_aggregates_if_needed(
         self,
@@ -404,7 +413,9 @@ class ActivityAggregationRebuildMixin:
                 batch_delta_items.append((event, deltas))
                 continue
 
-            if not _has_time_delta(deltas):
+            is_codex_presence_row = str(event.get("source") or "") == "codex" and _has_count_or_file_delta(deltas)
+
+            if not (_has_time_delta(deltas) or is_codex_presence_row):
                 continue
 
             resolved_author = composed(self).resolve_author_alias(event.get("author") or "Unknown User")

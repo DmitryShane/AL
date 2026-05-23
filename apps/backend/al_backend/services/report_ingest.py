@@ -8,6 +8,15 @@ from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
 
+def _has_count_or_file_delta(deltas: dict[str, Any]) -> bool:
+    return bool(
+        deltas.get("activityCountDeltas")
+        or deltas.get("savedPrefabDeltas")
+        or deltas.get("overtimeActivityCountDeltas")
+        or deltas.get("overtimeSavedPrefabDeltas")
+    )
+
+
 def is_unknown_device_author(value: Any) -> bool:
     author = _normalize_author(value or "")
     return author in {"Unknown User", "Device"}
@@ -481,7 +490,9 @@ class ReportIngestService(MongoComposableMixin):
         merged_items = _merge_event_delta_items_by_date(delta_items, cutoff)
 
         for batch_deltas, last_event in merged_items:
-            if not last_event or not _has_time_delta(batch_deltas):
+            is_codex_presence_row = str(batch.get("source") or "") == "codex" and _has_count_or_file_delta(batch_deltas)
+
+            if not last_event or not (_has_time_delta(batch_deltas) or is_codex_presence_row):
                 continue
 
             rows.append(
