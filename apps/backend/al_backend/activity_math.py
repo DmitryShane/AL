@@ -657,7 +657,10 @@ def _worked_file_delta(event: dict[str, Any]) -> dict[str, Any] | None:
     if source not in {"fch", "fig"}:
         return None
 
-    if event_type != "file_saved":
+    if event_type in {"prefab_saved", "asset_saved", "file_saved"}:
+        return None
+
+    if not _is_activity_event(event):
         return None
 
     metadata = event.get("metadata") or {}

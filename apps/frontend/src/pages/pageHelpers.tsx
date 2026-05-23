@@ -1,6 +1,6 @@
 import React from "react";
 import { Activity, Box, Smartphone } from "lucide-react";
-import codexIconUrl from "../assets/codex-icon.webp";
+import codexIconUrl from "../assets/codex-icon.png";
 import cursorIconUrl from "../assets/cursor-icon.png";
 import { REFRESH_INTERVAL_MS, REPORTS_PAGE_STORAGE_KEY, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
 import type { AuthorProfile, AuthorRow, DateRange, MeetingActivityItem, MeetingRecordingStatus, Report, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";

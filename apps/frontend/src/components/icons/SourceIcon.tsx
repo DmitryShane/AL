@@ -1,5 +1,5 @@
 import { Activity, Box, Smartphone } from "lucide-react";
-import codexIconUrl from "../../assets/codex-icon.webp";
+import codexIconUrl from "../../assets/codex-icon.png";
 import cursorIconUrl from "../../assets/cursor-icon.png";
 
 type SourceIconProps = {

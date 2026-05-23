@@ -425,10 +425,9 @@ class ActivityAggregationRebuildMixin:
                 batch_delta_items.append((event, deltas))
                 continue
 
-            is_presence_report_source = str(event.get("source") or "") in {"codex", "fch", "fig"}
-            is_presence_row = is_presence_report_source and _has_count_or_file_delta(deltas)
+            is_codex_presence_row = str(event.get("source") or "") == "codex" and _has_count_or_file_delta(deltas)
 
-            if not (_has_time_delta(deltas) or is_presence_row):
+            if not (_has_time_delta(deltas) or is_codex_presence_row):
                 continue
 
             resolved_author = composed(self).resolve_author_alias(event.get("author") or "Unknown User")

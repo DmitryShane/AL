@@ -1430,37 +1430,6 @@ def test_codex_native_event_type_creates_activity_count():
     assert deltas["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
 
 
-def test_figma_count_only_batch_creates_report_row():
-    repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane"})
-    received_at = dt.datetime(2026, 5, 23, 16, 45, tzinfo=dt.UTC)
-    payload = {
-        "author": "Dmitry Shane",
-        "projectId": "figma",
-        "sessionId": "figma-session",
-        "deviceId": "figma-device",
-        "timeZoneId": "UTC",
-        "timeZoneDisplayName": "UTC",
-        "events": [
-            {
-                "eventId": "figma-selection-1",
-                "eventType": "selection",
-                "date": "2026-05-23",
-                "occurredAtUtc": "2026-05-23T16:45:00Z",
-                "occurredAtLocal": "2026-05-23T16:45:00+00:00",
-                "metadata": {},
-            }
-        ],
-    }
-
-    repo._save_event_batch("fch", "0.1.0", payload, "raw-figma-1", "auto", received_at, "challenge-1", None)
-
-    row = repo.db.report_rows.find_one({"source": "fch", "author": "Dmitry Shane"})
-    assert row is not None
-    assert row["activityType"] == "select"
-    assert row["activityCountDeltas"] == [{"type": "select", "count": 1}]
-
-
 def test_full_rebuild_does_not_schedule_telegram_online_prompts_from_snapshots():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
@@ -2707,26 +2676,11 @@ def test_figma_file_saved_is_counted_as_saved_file():
         "saveCount": 1,
     }
 
-def test_figma_activity_file_metadata_is_not_counted_as_saved_file_breakdown_item():
+def test_figma_activity_file_metadata_is_counted_as_saved_file_breakdown_item():
     worked = _worked_file_delta(
         {
             "source": "fch",
             "eventType": "selection",
-            "metadata": {
-                "path": "https://www.figma.com/design/abc123/Game-HUD",
-                "name": "Game HUD",
-                "fileKey": "abc123",
-            },
-        }
-    )
-
-    assert worked is None
-
-def test_figma_file_saved_metadata_is_counted_as_worked_file_breakdown_item():
-    worked = _worked_file_delta(
-        {
-            "source": "fch",
-            "eventType": "file_saved",
             "metadata": {
                 "path": "https://www.figma.com/design/abc123/Game-HUD",
                 "name": "Game HUD",
