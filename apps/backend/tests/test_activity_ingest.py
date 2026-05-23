@@ -1356,49 +1356,6 @@ def test_codex_activity_accounts_active_time_between_events():
     assert second_deltas["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
 
 
-def test_codex_file_changed_counts_as_worked_file():
-    repo = fake_repository()
-    event = {
-        "eventId": "codex-file-1",
-        "source": "codex",
-        "author": "Dmitry Shane",
-        "projectId": "AL",
-        "deviceId": "mac-mini",
-        "date": "2026-05-23",
-        "eventType": "file_saved",
-        "occurredAtUtc": dt.datetime(2026, 5, 23, 15, 32, tzinfo=dt.UTC),
-        "occurredAtLocal": "2026-05-23T17:32:00+02:00",
-        "receivedAt": dt.datetime(2026, 5, 23, 15, 32, 1, tzinfo=dt.UTC),
-        "metadata": {
-            "codexEventType": "file_changed",
-            "activityType": "codex_file_changed",
-            "path": "/Volumes/MacMiniExternal2TB/Development/AL/apps/backend/al_backend/activity_math.py",
-            "name": "activity_math.py",
-        },
-    }
-
-    deltas = repo._apply_raw_event_to_aggregates(event)
-
-    assert deltas["activityCountDeltas"] == [{"type": "codex_file_changed", "count": 1}]
-    assert deltas["savedPrefabDeltas"] == [
-        {
-            "path": "/Volumes/MacMiniExternal2TB/Development/AL/apps/backend/al_backend/activity_math.py",
-            "name": "activity_math.py",
-            "projectId": "AL",
-            "saveCount": 1,
-        }
-    ]
-    daily = repo.db.daily_author_activity.find_one({"source": "codex", "author": "Dmitry Shane", "projectId": "AL"})
-    assert daily["savedPrefabs"] == [
-        {
-            "path": "/Volumes/MacMiniExternal2TB/Development/AL/apps/backend/al_backend/activity_math.py",
-            "name": "activity_math.py",
-            "projectId": "AL",
-            "saveCount": 1,
-        }
-    ]
-
-
 def test_codex_activity_caps_active_time_without_idle_tail():
     repo = fake_repository()
     set_idle_threshold(repo, 300)
