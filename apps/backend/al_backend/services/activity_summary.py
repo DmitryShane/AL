@@ -442,28 +442,36 @@ class ActivitySummaryService(
             author_row["timeZoneDisplayName"] = (
                 profile.get("timeZoneDisplayName") or item.get("timeZoneDisplayName") or author_row.get("timeZoneDisplayName")
             )
-            if vacation_mark:
+            source_has_time = (
+                int(item.get("activeSeconds", 0))
+                + int(item.get("idleSeconds", 0))
+                + int(item.get("overtimeActiveSeconds", 0))
+                > 0
+            )
+            include_source_breakdown = bool(source_reports) or source_has_time or item.get("source") in {"telegram", "discord", "status"}
+            if vacation_mark and include_source_breakdown:
                 author_row["overtimeActivityCounts"] = _merge_count_list(
                     author_row.get("overtimeActivityCounts", []), item.get("activityCounts", []), "type", "count"
                 )
                 author_row["overtimeSavedPrefabs"] = _merge_count_list(
                     author_row.get("overtimeSavedPrefabs", []), saved_prefab_items, "path", "saveCount"
                 )
-            else:
+            elif not vacation_mark and include_source_breakdown:
                 author_row["activityCounts"] = _merge_count_list(
                     author_row.get("activityCounts", []), item.get("activityCounts", []), "type", "count"
                 )
                 author_row["savedPrefabs"] = _merge_count_list(
                     author_row.get("savedPrefabs", []), saved_prefab_items, "path", "saveCount"
                 )
-            author_row["overtimeActivityCounts"] = _merge_count_list(
-                author_row.get("overtimeActivityCounts", []), item.get("overtimeActivityCounts", []), "type", "count"
-            )
-            author_row["overtimeSavedPrefabs"] = _merge_count_list(
-                author_row.get("overtimeSavedPrefabs", []), overtime_saved_prefab_items, "path", "saveCount"
-            )
+            if include_source_breakdown:
+                author_row["overtimeActivityCounts"] = _merge_count_list(
+                    author_row.get("overtimeActivityCounts", []), item.get("overtimeActivityCounts", []), "type", "count"
+                )
+                author_row["overtimeSavedPrefabs"] = _merge_count_list(
+                    author_row.get("overtimeSavedPrefabs", []), overtime_saved_prefab_items, "path", "saveCount"
+                )
             source_key = str(item.get("source") or "unknown")
-            if vacation_mark:
+            if vacation_mark and include_source_breakdown:
                 author_row["_overtimeActivityCountsBySource"][source_key] = _merge_count_list(
                     author_row["_overtimeActivityCountsBySource"].get(source_key, []),
                     item.get("activityCounts", []),
@@ -479,7 +487,7 @@ class ActivitySummaryService(
                     "path",
                     "saveCount",
                 )
-            else:
+            elif not vacation_mark and include_source_breakdown:
                 author_row["_activityCountsBySource"][source_key] = _merge_count_list(
                     author_row["_activityCountsBySource"].get(source_key, []), item.get("activityCounts", []), "type", "count"
                 )
@@ -489,21 +497,22 @@ class ActivitySummaryService(
                 author_row["_savedPrefabsBySource"][source_key] = _merge_count_list(
                     author_row["_savedPrefabsBySource"].get(source_key, []), saved_prefab_items, "path", "saveCount"
                 )
-            author_row["_overtimeActivityCountsBySource"][source_key] = _merge_count_list(
-                author_row["_overtimeActivityCountsBySource"].get(source_key, []),
-                item.get("overtimeActivityCounts", []),
-                "type",
-                "count",
-            )
-            author_row["_overtimeActiveSecondsBySource"][source_key] = (
-                int(author_row["_overtimeActiveSecondsBySource"].get(source_key, 0)) + int(item.get("overtimeActiveSeconds", 0))
-            )
-            author_row["_overtimeSavedPrefabsBySource"][source_key] = _merge_count_list(
-                author_row["_overtimeSavedPrefabsBySource"].get(source_key, []),
-                overtime_saved_prefab_items,
-                "path",
-                "saveCount",
-            )
+            if include_source_breakdown:
+                author_row["_overtimeActivityCountsBySource"][source_key] = _merge_count_list(
+                    author_row["_overtimeActivityCountsBySource"].get(source_key, []),
+                    item.get("overtimeActivityCounts", []),
+                    "type",
+                    "count",
+                )
+                author_row["_overtimeActiveSecondsBySource"][source_key] = (
+                    int(author_row["_overtimeActiveSecondsBySource"].get(source_key, 0)) + int(item.get("overtimeActiveSeconds", 0))
+                )
+                author_row["_overtimeSavedPrefabsBySource"][source_key] = _merge_count_list(
+                    author_row["_overtimeSavedPrefabsBySource"].get(source_key, []),
+                    overtime_saved_prefab_items,
+                    "path",
+                    "saveCount",
+                )
 
             has_presence_signal = self._daily_item_has_presence_signal(item)
 

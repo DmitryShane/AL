@@ -974,8 +974,8 @@ def test_reports_page_hides_source_rows_between_status_offline_and_online():
 
     assert [(report["source"], report.get("statusEventType")) for report in page["reports"]] == [
         ("ual", None),
-        ("status", "online"),
         ("ual", None),
+        ("status", "online"),
         ("ual", None),
         ("status", "offline"),
     ]

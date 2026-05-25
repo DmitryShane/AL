@@ -2014,6 +2014,28 @@ def test_activity_summary_groups_author_breakdowns_by_source():
             "hourlyActivity": empty_hourly_activity(),
         }
     )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "cur",
+            "author": "Dmitry Shane",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T09:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 9, 0, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 120,
+            "idleDeltaSeconds": 0,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry Shane",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T09:01:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 9, 1, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 90,
+            "idleDeltaSeconds": 0,
+        }
+    )
 
     summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry Shane")
@@ -2075,6 +2097,27 @@ def test_activity_summary_groups_author_breakdowns_by_source():
             "savedPrefabs": [{"path": "cursor:OT", "name": "OT", "projectId": "AL", "saveCount": 1}],
         },
     ]
+
+def test_activity_summary_hides_source_breakdown_until_source_has_report_rows():
+    repo = fake_repository()
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry Shane",
+            "date": "2026-04-29",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "activityCounts": [{"type": "play_mode", "count": 3}],
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry Shane")
+
+    assert author["activityMix"] == []
+    assert author["savedPrefabs"] == []
+    assert author["activityMixBySource"] == []
 
 def test_activity_summary_puts_overtime_only_device_activity_in_overtime_saved_files():
     repo = fake_repository()
