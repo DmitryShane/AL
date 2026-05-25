@@ -546,7 +546,8 @@ def _report_table_sort_key(
         status_priority = 1
 
     if is_status and event_type == "online":
-        status_priority = 2
+        reason = str(report.get("statusReason") or (report.get("metadata") or {}).get("reason") or "")
+        status_priority = 4 if reason == "reports_resumed" else 2
 
     if is_status and event_type == "offline" and status_intervals:
         raw_author = str(report.get("author") or "Unknown User")
