@@ -3743,6 +3743,66 @@ def test_night_overtime_activity_summary_keeps_mix_and_saved_files_out_of_regula
         }
     ]
 
+
+def test_night_overtime_codex_project_appears_in_overtime_worked_files_only():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "displayName": "Dmitry Shane",
+            "telegramUsername": "dmitryshane",
+            "timeZoneId": "Europe/Madrid",
+            "timeZoneDisplayName": "Romance Daylight Time",
+        }
+    )
+    base_event = {
+        "source": "codex",
+        "author": "Dmitry Shane",
+        "authorEmail": "dmitry@example.com",
+        "projectId": "AL",
+        "sessionId": "codex-session",
+        "date": "2026-05-28",
+        "receivedAt": dt.datetime(2026, 5, 27, 22, 10, tzinfo=dt.UTC),
+        "timeZoneId": "Europe/Madrid",
+        "timeZoneDisplayName": "Romance Daylight Time",
+    }
+
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "session_started",
+            "occurredAtUtc": "2026-05-27T22:05:00Z",
+            "occurredAtLocal": "2026-05-28T00:05:00+02:00",
+        }
+    )
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "task_progress",
+            "occurredAtUtc": "2026-05-27T22:10:00Z",
+            "occurredAtLocal": "2026-05-28T00:10:00+02:00",
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-28", end_date="2026-05-28")
+    author = next(author for author in summary["authors"] if author["rawAuthor"] == "Dmitry Shane")
+
+    assert author["activityMix"] == []
+    assert author["savedPrefabs"] == []
+    assert author["savedPrefabsBySource"] == []
+    assert author["overtimeActivityMix"] == [
+        {"type": "codex_session_started", "count": 1, "percent": 50},
+        {"type": "codex_task_progress", "count": 1, "percent": 50},
+    ]
+    assert author["overtimeSavedPrefabs"] == [{"path": "codex:AL", "name": "AL", "projectId": "AL", "saveCount": 2}]
+    assert author["overtimeSavedPrefabsBySource"] == [
+        {
+            "source": "codex",
+            "totalSaveCount": 2,
+            "savedPrefabs": [{"path": "codex:AL", "name": "AL", "projectId": "AL", "saveCount": 2}],
+        }
+    ]
+
 def test_activity_summary_returnsempty_hourly_activity_for_telegram_only_author():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "telegramUsername": "igormats", "timeZoneId": "UTC"})
