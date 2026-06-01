@@ -3036,6 +3036,8 @@ def test_vacation_day_plugin_activity_is_overtime_only():
     assert _hour_metric(hour_10, "meetingSeconds") == 0
     assert _hour_metric(hour_10, "missedSeconds") == 0
     assert _hour_metric(hour_10, "overtimeActiveSeconds") == 1800
+    assert _overtime_fill_seconds(hour_10) == 1800
+    assert _hour_metric(author, "overtimeActiveSeconds") == 1800
     assert repo.db.telegram_online_prompts.count_documents({"rawAuthor": "Future Artist"}) == 0
 
 def test_vacation_day_meeting_is_overtime_in_summary():
@@ -3066,6 +3068,8 @@ def test_vacation_day_meeting_is_overtime_in_summary():
     assert _hour_metric(hour_11, "meetingSeconds") == 0
     assert _hour_metric(hour_11, "missedSeconds") == 0
     assert _hour_metric(hour_11, "overtimeActiveSeconds") == 2700
+    assert _overtime_fill_seconds(hour_11) == 900
+    assert _hour_metric(author, "overtimeActiveSeconds") == 2700
 
 def test_activity_after_work_window_without_offline_stays_normal():
     repo = fake_repository()

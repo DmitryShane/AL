@@ -868,6 +868,7 @@ def convert_hourly_to_vacation_overtime(hourly_activity: list[dict[str, Any]]) -
             hour["overtimeActiveSeconds"] = seconds_from_microseconds(overtime_microseconds)
             if not _segments_for_kind(hour, "overtime"):
                 _append_available_seconds(hour.setdefault("fillSegments", []), "overtime", hour["overtimeActiveSeconds"])
+            fill_visual_overtime_hour(hour)
         else:
             hour["overtimeActiveSeconds"] = 0
             hour["overtimeActiveMicroseconds"] = 0
