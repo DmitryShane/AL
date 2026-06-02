@@ -503,6 +503,17 @@ def send_due_reminders(config: BotConfig) -> None:
         message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
         mark_reminder_sent(config.backend_url, config.bot_secret, notification_id, message_id, kind="meeting_recording")
 
+    for notification in bundle.get("meetingNotifications", []):
+        notification_id = str(notification.get("reminderId") or "")
+
+        if not notification_id:
+            continue
+
+        text = format_meeting_notification_message(notification)
+        result = send_plain_message(config.token, config.allowed_chat_id, text)
+        message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
+        mark_reminder_sent(config.backend_url, config.bot_secret, notification_id, message_id, kind="meeting_notification")
+
     for notification in bundle.get("meetingSummaryNotifications", []):
         summary_id = str(notification.get("summaryId") or "")
         summary_text = str(notification.get("summary") or "").strip()
@@ -648,6 +659,17 @@ def format_meeting_recording_notification_message(notification: dict[str, Any]) 
         return f"Hi {participants_text}. Your meeting has ended. Thanks everyone, please wait for the summary."
 
     return f"Hi {participants_text}. Your meeting has started. Hope it goes smoothly!"
+
+
+def format_meeting_notification_message(notification: dict[str, Any]) -> str:
+    usernames = [
+        str(username).strip().lstrip("@")
+        for username in notification.get("telegramUsernames", [])
+        if str(username).strip()
+    ]
+    mentions = " ".join(f"@{username}" for username in usernames)
+    mention_text = f" {mentions}" if mentions else ""
+    return f"Hi team!{mention_text} Meeting time. Please join the Discord meeting channel."
 
 
 def format_meeting_summary_date(value: str) -> str:

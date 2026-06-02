@@ -9,6 +9,7 @@ export const SETTINGS_TABS: { key: SettingsTab; label: string }[] = [
   { key: "redirects", label: "Author Redirects" },
   { key: "discord", label: "Discord" },
   { key: "telegram", label: "Telegram" },
+  { key: "meetingNotification", label: "Meeting Notification" },
   { key: "meetingSummaries", label: "Meeting Summaries" },
   { key: "snapshots", label: "Activity Snapshots" },
   { key: "fakeOnline", label: "Fake Online" },

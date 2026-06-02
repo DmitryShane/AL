@@ -3142,6 +3142,112 @@ p {
   grid-column: 9;
 }
 
+.meeting-notification-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.meeting-notification-controls {
+  display: grid;
+  grid-template-columns: max-content max-content max-content 120px;
+  align-items: end;
+  gap: 12px;
+  border-top: 1px solid #edf2f7;
+  padding: 14px 0 0;
+}
+
+.meeting-notification-controls label:not(.checkbox-cell),
+.meeting-notification-author-row label:not(.checkbox-cell) {
+  display: grid;
+  gap: 6px;
+  color: #718093;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.meeting-notification-controls input:not([type="checkbox"]) {
+  height: 38px;
+  min-height: 0;
+  border: 1px solid #dce4ec;
+  border-radius: 10px;
+  padding: 0 12px;
+  color: #243040;
+  font: inherit;
+}
+
+.meeting-notification-timezone-value {
+  display: inline-flex;
+  height: 38px;
+  width: max-content;
+  align-items: center;
+  border: 1px solid #dce4ec;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 0 12px;
+  box-sizing: border-box;
+  color: #718093;
+  font: inherit;
+}
+
+.meeting-notification-controls label:nth-of-type(2) input {
+  width: 92px;
+  padding: 0 10px;
+}
+
+.meeting-notification-enabled {
+  width: max-content;
+  min-height: 42px;
+  justify-content: flex-start;
+  color: #405064;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.meeting-notification-weekdays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.meeting-notification-weekdays .checkbox-cell {
+  display: inline-flex;
+  width: max-content;
+  min-width: 0;
+  min-height: 38px;
+  justify-content: flex-start;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0 8px;
+}
+
+.meeting-notification-author-shell {
+  margin-top: 2px;
+}
+
+.meeting-notification-author-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) max-content;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid #f1f5f9;
+  padding: 12px 14px;
+}
+
+.meeting-notification-author-row .checkbox-cell {
+  width: max-content;
+}
+
+.meeting-notification-author-row:nth-child(even) {
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.meeting-notification-author-row:hover {
+  background: rgba(241, 245, 249, 0.98);
+}
+
 .auto-break-identity {
   display: flex;
   min-width: 0;
@@ -4889,7 +4995,8 @@ p {
 .profile-create-card .checkbox-cell,
 .site-user-row .checkbox-cell,
 .auto-break-row .checkbox-cell,
-.fake-online-row .checkbox-cell {
+.fake-online-row .checkbox-cell,
+.meeting-notification-panel .checkbox-cell {
   font-size: 13px;
   font-weight: 500;
 }

@@ -82,6 +82,14 @@ class FakeOnlineSettingsIn(ApiModel):
     delay_max_seconds: int = Field(default=60, alias="delayMaxSeconds", ge=0, le=3600)
 
 
+class MeetingNotificationSettingsIn(ApiModel):
+    enabled: bool = False
+    author_raw_authors: list[str] = Field(default_factory=list, alias="authorRawAuthors")
+    time: str = Field(default="10:00", pattern=r"^\d{2}:\d{2}$")
+    time_zone_id: str = Field(default="UTC", alias="timeZoneId", min_length=1)
+    days_of_week: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4], alias="daysOfWeek")
+
+
 class TelegramPrivateChatIn(ApiModel):
     telegram_username: str = Field(alias="telegramUsername", min_length=1)
     chat_id: int = Field(alias="chatId")
@@ -178,7 +186,7 @@ class TelegramReminderSentIn(ApiModel):
     kind: str = Field(
         default="day_end",
         alias="kind",
-        pattern="^(day_end|online_prompt|break_activity_prompt|duplicate_afk_prompt|meeting_auto_afk|meeting_recording|meeting_summary)$",
+        pattern="^(day_end|online_prompt|break_activity_prompt|duplicate_afk_prompt|meeting_auto_afk|meeting_recording|meeting_summary|meeting_notification)$",
     )
 
 
@@ -250,4 +258,5 @@ class SummaryResponse(ApiModel):
     reports: list[dict[str, Any]]
     interval_settings: dict[str, Any] = Field(alias="intervalSettings")
     discord_settings: dict[str, Any] = Field(alias="discordSettings")
+    meeting_notification_settings: dict[str, Any] = Field(alias="meetingNotificationSettings")
     activity_summary: dict[str, Any] = Field(alias="activitySummary")

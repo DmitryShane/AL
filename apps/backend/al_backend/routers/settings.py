@@ -5,7 +5,14 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from ..api_security import require_discord_bot_secret, require_permission, require_server_stats_permission
 from ..container import BackendServices
 from ..dependencies import get_settings_service
-from ..models import ActivitySnapshotsRemakeIn, AvatarSettingsIn, DiscordSettingsIn, FakeOnlineSettingsIn, IntervalSettingsIn
+from ..models import (
+    ActivitySnapshotsRemakeIn,
+    AvatarSettingsIn,
+    DiscordSettingsIn,
+    FakeOnlineSettingsIn,
+    IntervalSettingsIn,
+    MeetingNotificationSettingsIn,
+)
 
 
 router = APIRouter()
@@ -178,6 +185,37 @@ def delete_fake_online_settings(
     service: BackendServices = Depends(get_settings_service),
 ) -> dict:
     return service.delete_fake_online_settings(raw_author)
+
+
+@router.get("/api/v1/settings/meeting-notification")
+def meeting_notification_settings(
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.get_meeting_notification_settings()
+
+
+@router.put("/api/v1/settings/meeting-notification")
+def update_meeting_notification_settings(
+    settings_in: MeetingNotificationSettingsIn,
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    try:
+        result = service.upsert_meeting_notification_settings(
+            enabled=settings_in.enabled,
+            author_raw_authors=settings_in.author_raw_authors,
+            time=settings_in.time,
+            time_zone_id=settings_in.time_zone_id,
+            days_of_week=settings_in.days_of_week,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Meeting notification settings save failed"))
+
+    return result
 
 
 @router.get("/api/v1/discord/settings")

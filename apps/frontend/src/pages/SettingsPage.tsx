@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
-import type { AuthorProfile, MeetingActivityItem, OpenAIStats, SettingsTab, SiteUser, Summary } from "../types/dashboard";
+import type { AuthorProfile, MeetingActivityItem, MeetingNotificationSettings, OpenAIStats, SettingsTab, SiteUser, Summary } from "../types/dashboard";
 import {
   authorProfilePayload,
   emptyAuthorProfile,
@@ -19,6 +19,7 @@ import { PublisherProfilesTab } from "../components/settings/tabs/publisherProfi
 import { DiscordSettingsTab } from "../components/settings/tabs/discord/DiscordSettingsTab";
 import { FakeOnlineTab } from "../components/settings/tabs/fakeOnline/FakeOnlineTab";
 import { GeneralSettingsTab } from "../components/settings/tabs/general/GeneralSettingsTab";
+import { MeetingNotificationTab } from "../components/settings/tabs/meetingNotification/MeetingNotificationTab";
 import { MeetingSummariesTab } from "../components/settings/tabs/meetingSummaries/MeetingSummariesTab";
 import { AuthorRedirectsTab } from "../components/settings/tabs/redirects/AuthorRedirectsTab";
 import { TelegramSettingsTab } from "../components/settings/tabs/telegram/TelegramSettingsTab";
@@ -50,6 +51,14 @@ type ActivityRebuildProgress = {
 };
 
 const OPENAI_STATS_CACHE_KEY = "al.openAIStats.cache";
+const DEFAULT_MEETING_NOTIFICATION_SETTINGS: MeetingNotificationSettings = {
+  configured: false,
+  enabled: false,
+  authorRawAuthors: [],
+  time: "10:00",
+  timeZoneId: browserTimeZoneId(),
+  daysOfWeek: [0, 1, 2, 3, 4]
+};
 let cachedOpenAIStats: OpenAIStats | null = readCachedOpenAIStats();
 
 async function apiErrorDetail(response: Response, fallback: string): Promise<string> {
@@ -97,6 +106,17 @@ export function SettingsPage({
   const [discordAutoAfkTimeout, setDiscordAutoAfkTimeout] = useState(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
   const [telegramOnlinePromptDelayMinutes, setTelegramOnlinePromptDelayMinutes] = useState(
     String(intervalSettingsTelegramOnlinePromptMinutes(summary))
+  );
+  const [meetingNotificationEnabled, setMeetingNotificationEnabled] = useState(meetingNotificationSettingsForUi(summary).enabled);
+  const [meetingNotificationTime, setMeetingNotificationTime] = useState(meetingNotificationSettingsForUi(summary).time);
+  const [meetingNotificationTimeZoneId, setMeetingNotificationTimeZoneId] = useState(
+    meetingNotificationSettingsForUi(summary).timeZoneId
+  );
+  const [meetingNotificationDaysOfWeek, setMeetingNotificationDaysOfWeek] = useState(
+    meetingNotificationSettingsForUi(summary).daysOfWeek
+  );
+  const [meetingNotificationAuthorRawAuthors, setMeetingNotificationAuthorRawAuthors] = useState(
+    meetingNotificationSettingsForUi(summary).authorRawAuthors
   );
   const [meetingSummariesEnabled, setMeetingSummariesEnabled] = useState(Boolean(summary?.discordSettings.meetingSummariesEnabled));
   const [meetingSummaryMinParticipants, setMeetingSummaryMinParticipants] = useState(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
@@ -194,6 +214,12 @@ export function SettingsPage({
     setPluginIngestEnabled(summary?.intervalSettings.pluginIngestEnabled ?? true);
     setDiscordAutoAfkTimeout(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
     setTelegramOnlinePromptDelayMinutes(String(intervalSettingsTelegramOnlinePromptMinutes(summary)));
+    const meetingNotificationSettings = meetingNotificationSettingsForUi(summary);
+    setMeetingNotificationEnabled(meetingNotificationSettings.enabled);
+    setMeetingNotificationTime(meetingNotificationSettings.time);
+    setMeetingNotificationTimeZoneId(meetingNotificationSettings.timeZoneId);
+    setMeetingNotificationDaysOfWeek(meetingNotificationSettings.daysOfWeek);
+    setMeetingNotificationAuthorRawAuthors(meetingNotificationSettings.authorRawAuthors);
     setMeetingSummariesEnabled(Boolean(summary?.discordSettings.meetingSummariesEnabled));
     setMeetingSummaryMinParticipants(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
     setMeetingSummaryMinDuration(String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120));
@@ -389,6 +415,14 @@ export function SettingsPage({
   const discordSettingsDirty = discordAutoAfkTimeout !== String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600);
   const telegramPromptSettingsDirty =
     telegramOnlinePromptDelayMinutes !== String(intervalSettingsTelegramOnlinePromptMinutes(summary));
+  const meetingNotificationSettingsDirty =
+    JSON.stringify(normalizeMeetingNotificationSettingsDraft({
+      enabled: meetingNotificationEnabled,
+      authorRawAuthors: meetingNotificationAuthorRawAuthors,
+      time: meetingNotificationTime,
+      timeZoneId: meetingNotificationTimeZoneId,
+      daysOfWeek: meetingNotificationDaysOfWeek
+    })) !== JSON.stringify(normalizeMeetingNotificationSettingsDraft(meetingNotificationSettingsForUi(summary)));
 
   async function saveProfile(rawAuthor: string) {
     if (settingsReadOnly) {
@@ -638,6 +672,52 @@ export function SettingsPage({
       setSaving(null);
       window.setTimeout(() => {
         setSaveStatus((items) => ({ ...items, telegramPrompt: undefined }));
+      }, 2500);
+    }
+  }
+
+  async function saveMeetingNotificationSettings() {
+    if (settingsReadOnly) {
+      return;
+    }
+
+    setSaving("meetingNotification");
+    setSaveStatus((items) => ({ ...items, meetingNotification: undefined }));
+
+    try {
+      const payload = normalizeMeetingNotificationSettingsDraft({
+        enabled: meetingNotificationEnabled,
+        authorRawAuthors: meetingNotificationAuthorRawAuthors,
+        time: meetingNotificationTime,
+        timeZoneId: meetingNotificationTimeZoneId || browserTimeZoneId(),
+        daysOfWeek: meetingNotificationDaysOfWeek
+      });
+      const response = await apiFetch(`/api/v1/settings/meeting-notification`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(await apiErrorDetail(response, "Meeting notification settings save failed"));
+      }
+
+      const data = await response.json() as MeetingNotificationSettings & { ok?: boolean };
+      setMeetingNotificationEnabled(data.enabled ?? payload.enabled);
+      setMeetingNotificationTime(data.time ?? payload.time);
+      setMeetingNotificationTimeZoneId(data.timeZoneId ?? payload.timeZoneId);
+      setMeetingNotificationDaysOfWeek(data.daysOfWeek ?? payload.daysOfWeek);
+      setMeetingNotificationAuthorRawAuthors(data.authorRawAuthors ?? payload.authorRawAuthors);
+      setSaveStatus((items) => ({ ...items, meetingNotification: "saved" }));
+      onSaved();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Meeting notification settings save failed";
+      window.alert(message);
+      setSaveStatus((items) => ({ ...items, meetingNotification: "error" }));
+    } finally {
+      setSaving(null);
+      window.setTimeout(() => {
+        setSaveStatus((items) => ({ ...items, meetingNotification: undefined }));
       }, 2500);
     }
   }
@@ -1355,6 +1435,24 @@ export function SettingsPage({
           onTelegramOnlinePromptDelayMinutesChange={setTelegramOnlinePromptDelayMinutes}
           onSaveTelegramPromptSettings={() => void saveTelegramPromptSettings()}
         />
+      ) : settingsTab === "meetingNotification" ? (
+        <MeetingNotificationTab
+          profiles={personProfiles}
+          enabled={meetingNotificationEnabled}
+          time={meetingNotificationTime}
+          timeZoneId={meetingNotificationTimeZoneId}
+          daysOfWeek={meetingNotificationDaysOfWeek}
+          authorRawAuthors={meetingNotificationAuthorRawAuthors}
+          settingsReadOnly={settingsReadOnly}
+          saving={saving}
+          saveStatus={saveStatus}
+          dirty={meetingNotificationSettingsDirty}
+          onEnabledChange={setMeetingNotificationEnabled}
+          onTimeChange={setMeetingNotificationTime}
+          onDaysOfWeekChange={setMeetingNotificationDaysOfWeek}
+          onAuthorRawAuthorsChange={setMeetingNotificationAuthorRawAuthors}
+          onSave={() => void saveMeetingNotificationSettings()}
+        />
       ) : settingsTab === "meetingSummaries" ? (
         <MeetingSummariesTab
           workspaceRef={meetingSummaryWorkspaceRef}
@@ -1423,6 +1521,34 @@ function intervalSettingsDeviceIdleThreshold(summary: Summary | null) {
 function intervalSettingsTelegramOnlinePromptMinutes(summary: Summary | null) {
   const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { telegramOnlinePromptDelayMinutes?: number }) | undefined;
   return intervalSettings?.telegramOnlinePromptDelayMinutes ?? 15;
+}
+
+function browserTimeZoneId() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function meetingNotificationSettingsForUi(summary: Summary | null): MeetingNotificationSettings {
+  const settings = summary?.meetingNotificationSettings;
+
+  if (settings?.configured) {
+    return settings;
+  }
+
+  return {
+    ...DEFAULT_MEETING_NOTIFICATION_SETTINGS,
+    ...settings,
+    timeZoneId: browserTimeZoneId()
+  };
+}
+
+function normalizeMeetingNotificationSettingsDraft(settings: MeetingNotificationSettings): MeetingNotificationSettings {
+  return {
+    enabled: Boolean(settings.enabled),
+    authorRawAuthors: Array.from(new Set(settings.authorRawAuthors.map((author) => author.trim()).filter(Boolean))),
+    time: settings.time || "10:00",
+    timeZoneId: settings.timeZoneId || browserTimeZoneId(),
+    daysOfWeek: Array.from(new Set(settings.daysOfWeek.filter((day) => day >= 0 && day <= 6))).sort((left, right) => left - right)
+  };
 }
 
 function readCachedOpenAIStats(): OpenAIStats | null {

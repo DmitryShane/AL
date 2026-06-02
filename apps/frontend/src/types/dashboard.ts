@@ -1,5 +1,5 @@
 export type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings";
-export type SettingsTab = "general" | "authors" | "publisherProfiles" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingSummaries" | "snapshots" | "fakeOnline" | "users";
+export type SettingsTab = "general" | "authors" | "publisherProfiles" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingNotification" | "meetingSummaries" | "snapshots" | "fakeOnline" | "users";
 
 export type Health = {
   ok: boolean;
@@ -259,6 +259,7 @@ export type Summary = {
     meetingSummaryPrompt: string;
     meetingSummaryTelegramTemplate: string;
   };
+  meetingNotificationSettings: MeetingNotificationSettings;
   activitySummary: ActivitySummary;
 };
 
@@ -367,6 +368,15 @@ export type FakeOnlineAvailableProfile = {
   authorEmail?: string;
   telegramUsername: string;
   canEnable: boolean;
+};
+
+export type MeetingNotificationSettings = {
+  configured?: boolean;
+  enabled: boolean;
+  authorRawAuthors: string[];
+  time: string;
+  timeZoneId: string;
+  daysOfWeek: number[];
 };
 
 export type MeetingRecordingStatus = {

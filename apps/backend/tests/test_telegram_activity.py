@@ -1104,6 +1104,101 @@ def test_fake_online_prompt_confirm_reuses_online_prompt_flow():
     assert repo.db.fake_online_attempts.items[0]["status"] == "closed"
     assert repo.db.fake_online_attempts.items[0]["closeAction"] == "confirm_online"
 
+def test_meeting_notification_settings_save_and_due_timezone():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "Author A", "telegramUsername": "ta"})
+
+    saved = repo.upsert_meeting_notification_settings(
+        enabled=True,
+        author_raw_authors=["A"],
+        time="10:00",
+        time_zone_id="Europe/Madrid",
+        days_of_week=[0, 1, 2, 3, 4],
+    )
+
+    assert saved["ok"] is True
+    assert saved["timeZoneId"] == "Europe/Madrid"
+    assert repo.claim_due_telegram_meeting_notifications(dt.datetime(2026, 4, 30, 7, 59, tzinfo=dt.UTC)) == []
+
+    due = repo.claim_due_telegram_meeting_notifications(dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC))
+
+    assert len(due) == 1
+    assert due[0]["telegramUsernames"] == ["ta"]
+    assert due[0]["displayNames"] == ["Author A"]
+    assert due[0]["date"] == "2026-04-30"
+    assert repo.claim_due_telegram_meeting_notifications(dt.datetime(2026, 4, 30, 8, 1, tzinfo=dt.UTC)) == []
+
+def test_meeting_notification_defaults_to_weekdays_only():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "Author A", "telegramUsername": "ta"})
+    repo.upsert_meeting_notification_settings(
+        enabled=True,
+        author_raw_authors=["A"],
+        time="10:00",
+        time_zone_id="UTC",
+        days_of_week=[0, 1, 2, 3, 4],
+    )
+
+    assert repo.claim_due_telegram_meeting_notifications(dt.datetime(2026, 5, 2, 10, 0, tzinfo=dt.UTC)) == []
+    assert repo.db.telegram_meeting_notifications.items == []
+
+def test_meeting_notification_excludes_calendar_marks_and_missing_telegram():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "Author A", "telegramUsername": "ta"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "B", "displayName": "Author B", "telegramUsername": "tb"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "C", "displayName": "Author C"})
+    repo.db.calendar_marks.insert_one({"rawAuthor": "B", "date": "2026-04-30", "reasonId": "day_off", "note": ""})
+    repo.upsert_meeting_notification_settings(
+        enabled=True,
+        author_raw_authors=["A", "B", "C"],
+        time="10:00",
+        time_zone_id="UTC",
+        days_of_week=[3],
+    )
+
+    due = repo.claim_due_telegram_meeting_notifications(dt.datetime(2026, 4, 30, 10, 0, tzinfo=dt.UTC))
+
+    assert len(due) == 1
+    assert due[0]["telegramUsernames"] == ["ta"]
+    assert due[0]["displayNames"] == ["Author A"]
+
+def test_meeting_notification_closes_when_mention_list_empty():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "Author A", "telegramUsername": "ta"})
+    repo.db.calendar_marks.insert_one({"rawAuthor": "A", "date": "2026-04-30", "reasonId": "absence", "note": ""})
+    repo.upsert_meeting_notification_settings(
+        enabled=True,
+        author_raw_authors=["A"],
+        time="10:00",
+        time_zone_id="UTC",
+        days_of_week=[3],
+    )
+
+    assert repo.claim_due_telegram_meeting_notifications(dt.datetime(2026, 4, 30, 10, 0, tzinfo=dt.UTC)) == []
+
+    doc = repo.db.telegram_meeting_notifications.items[0]
+    assert doc["status"] == "closed"
+    assert doc["closeAction"] == "empty_mention_list"
+
+def test_mark_meeting_notification_sent():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "Author A", "telegramUsername": "ta"})
+    repo.upsert_meeting_notification_settings(
+        enabled=True,
+        author_raw_authors=["A"],
+        time="10:00",
+        time_zone_id="UTC",
+        days_of_week=[3],
+    )
+    notification = repo.claim_due_telegram_meeting_notifications(dt.datetime(2026, 4, 30, 10, 0, tzinfo=dt.UTC))[0]
+
+    result = repo.mark_telegram_meeting_notification_sent(notification["reminderId"], 123)
+
+    assert result["ok"] is True
+    doc = repo.db.telegram_meeting_notifications.items[0]
+    assert doc["status"] == "sent"
+    assert doc["messageId"] == 123
+
 def test_telegram_online_prompt_claim_closes_stale_dates():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})

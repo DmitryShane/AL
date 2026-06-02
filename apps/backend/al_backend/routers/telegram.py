@@ -30,6 +30,7 @@ def telegram_due_reminders(request: Request, service: BackendServices = Depends(
         "breakActivityPrompts": service.claim_due_telegram_break_activity_prompts(),
         "meetingAutoAfkNotifications": service.claim_due_telegram_meeting_auto_afk_notifications(),
         "meetingRecordingNotifications": service.claim_due_telegram_meeting_recording_notifications(),
+        "meetingNotifications": service.claim_due_telegram_meeting_notifications(),
         "meetingSummaryNotifications": service.claim_due_telegram_meeting_summary_notifications(),
     }
 
@@ -68,6 +69,9 @@ def telegram_reminder_sent(
 
     if sent.kind == "meeting_summary":
         return service.mark_telegram_meeting_summary_sent(sent.reminder_id, sent.message_id)
+
+    if sent.kind == "meeting_notification":
+        return service.mark_telegram_meeting_notification_sent(sent.reminder_id, sent.message_id)
 
     return service.mark_telegram_day_reminder_sent(sent.reminder_id, sent.message_id)
 

@@ -185,6 +185,7 @@ def reports_summary(
         reports=[],
         intervalSettings=settings_service.get_interval_settings(),
         discordSettings=settings_service.get_discord_settings(),
+        meetingNotificationSettings=settings_service.get_meeting_notification_settings(),
         activitySummary=summary_service.cached_activity_summary(
             view=view,
             start_date=start_date,
