@@ -131,6 +131,7 @@ When debugging summaries, `status_events`, or idle accounting:
 - In chat, always answer the owner briefly and concisely. Do not add broad context, extra details, optional explanations, or implementation notes unless the owner explicitly asks for them.
 - The user is the repository owner. When the owner asks to check "my" data, reports, activity, profile, or similar site data, interpret that as the website author **Dmitry Shane** unless the owner explicitly names another author.
 - The owner may write in Russian in chat; **repository and product text stay English** per the rule above. **Russian in chat is not an implicit request for Russian in the product** — if the owner describes desired wording in Russian (alerts, bot copy, UI labels, emails), implement it in **English** unless they clearly ask for a **Russian-language deliverable** (for example: “пусть в боте будет по-русски”, “Russian locale for Telegram”).
+- If the owner is chatting in Russian, keep chat replies in Russian even when the immediate task text, pasted plan, command, or implementation request is written in English (for example, “PLEASE IMPLEMENT THIS PLAN”). English task phrasing is not a request to switch chat responses to English.
 - Write implementation plans for the owner in Russian, because plans are part of chat communication. Keep repository and product text in English unless explicitly asked otherwise.
 
 ## MongoDB Data Layout (backend)

@@ -3581,6 +3581,97 @@ def test_analytics_summary_includes_day_hourly_activity():
     assert len(empty_day["hourlyActivity"]) == 24
     assert empty_day["hourlyActivity"] == empty_hourly_activity()
 
+def test_analytics_summary_hides_devices_and_publishers_while_aggregating_linked_device_activity():
+    repo = fake_repository()
+    today = dt.date.today()
+    hourly_activity = empty_hourly_activity()
+    own_hourly_activity = empty_hourly_activity()
+    hourly_activity[10]["activeSeconds"] = 1200
+    own_hourly_activity[9]["activeSeconds"] = 600
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "profileType": "person"}
+    )
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Publisher QA", "displayName": "Publisher QA", "profileType": "publisher"}
+    )
+    repo.db.device_report_identities.insert_one({"rawAuthor": "Device8", "source": "dev-android"})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device8", "targetRawAuthor": "Dmitry Shane"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Dmitry Shane",
+            "date": today.isoformat(),
+            "activeSeconds": 600,
+            "idleSeconds": 0,
+            "hourlyActivity": own_hourly_activity,
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Device8",
+            "date": today.isoformat(),
+            "activeSeconds": 1200,
+            "idleSeconds": 300,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Publisher QA",
+            "date": today.isoformat(),
+            "activeSeconds": 900,
+            "idleSeconds": 0,
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.analytics_summary()
+    authors = {item["rawAuthor"]: item for item in summary["authors"]}
+    month = next(item for item in authors["Dmitry Shane"]["months"] if item["month"] == today.month)
+    day = next(item for week in month["weeks"] for item in week["days"] if item["date"] == today.isoformat())
+
+    assert list(authors) == ["Dmitry Shane"]
+    assert month["totals"]["activeSeconds"] == 1800
+    assert _hour_metric(day["hourlyActivity"][9], "activeSeconds") == 600
+    assert _hour_metric(day["hourlyActivity"][10], "activeSeconds") == 1200
+
+def test_analytics_summary_hides_unlinked_device_authors():
+    repo = fake_repository()
+    today = dt.date.today()
+    repo.db.device_report_identities.insert_one({"rawAuthor": "Device8", "source": "dev-android"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Device8",
+            "date": today.isoformat(),
+            "activeSeconds": 1200,
+            "idleSeconds": 0,
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.analytics_summary()
+
+    assert summary["authors"] == []
+
+def test_analytics_summary_hides_publisher_authors_with_activity():
+    repo = fake_repository()
+    today = dt.date.today()
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Publisher QA", "displayName": "Publisher QA", "profileType": "publisher"}
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Publisher QA",
+            "date": today.isoformat(),
+            "activeSeconds": 1200,
+            "idleSeconds": 0,
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.analytics_summary()
+
+    assert summary["authors"] == []
+
 def test_overtime_activity_summary_splits_mix_and_saved_files():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "telegramUsername": "dmitryshane"})
