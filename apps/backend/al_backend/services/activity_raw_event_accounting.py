@@ -326,16 +326,80 @@ class ActivityRawEventAccountingMixin:
                 skip_activity_interval_accounting = True
 
         if is_time_accounting_activity and event_type == "scene_view_navigation":
-            navigation_deltas = self._scene_navigation_duration_deltas(
-                event,
-                author_state,
-                consumed_normal_microseconds,
-                overtime_window,
-            )
+            navigation_context = self._scene_navigation_duration_context(event, author_state)
+            navigation_start_at = navigation_context[1] if navigation_context else None
+            navigation_start_local_at = navigation_context[2] if navigation_context else None
+            navigation_deltas = _empty_event_deltas()
 
-            if _has_time_delta(navigation_deltas):
-                _merge_batch_deltas(deltas, navigation_deltas)
+            if navigation_context:
+                navigation_deltas = self._scene_navigation_duration_deltas(
+                    event,
+                    author_state,
+                    consumed_normal_microseconds,
+                    overtime_window,
+                )
 
+                if (
+                    navigation_start_at
+                    and first_activity_at
+                    and last_activity_at
+                    and last_accounting_at
+                    and navigation_start_at > last_accounting_at
+                ):
+                    accounting_start_at = last_accounting_at
+                    accounting_start_local_at = last_accounting_local_at or last_accounting_at
+
+                    if author_last_accounting_at and author_last_accounting_at > accounting_start_at:
+                        accounting_start_at = author_last_accounting_at
+                        accounting_start_local_at = author_last_accounting_local_at or author_last_accounting_at
+
+                    interval_activity_at = last_activity_at
+
+                    if author_last_activity_at and author_last_activity_at > interval_activity_at:
+                        interval_activity_at = author_last_activity_at
+
+                    idle_gap_seconds = (navigation_start_at - interval_activity_at).total_seconds()
+                    idle_interval_seconds = int((navigation_start_at - accounting_start_at).total_seconds())
+
+                    if (
+                        not self._is_waiting_for_first_workday_activity(
+                            event,
+                            author_last_activity_at,
+                            navigation_start_at,
+                        )
+                        and idle_gap_seconds >= idle_threshold_seconds
+                        and idle_interval_seconds >= MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS
+                    ):
+                        interval_overtime_window = self._overtime_window_for_interval(
+                            event,
+                            accounting_start_at,
+                            navigation_start_at,
+                        )
+                        if self._has_reports_stopped_gap_overlap(event, accounting_start_at, navigation_start_at):
+                            interval_overtime_window = None
+                        interval_deltas = _interval_deltas(
+                            accounting_start_at,
+                            navigation_start_at,
+                            accounting_start_local_at,
+                            navigation_start_local_at or navigation_start_at,
+                            False,
+                            consumed_normal_microseconds,
+                            interval_overtime_window,
+                        )
+                        _merge_batch_deltas(deltas, interval_deltas)
+
+                if _has_time_delta(navigation_deltas):
+                    _merge_batch_deltas(deltas, navigation_deltas)
+
+                last_accounting_at = occurred_at
+                last_accounting_local_at = occurred_local_at
+                last_accounting_source = current_source
+                if not author_last_accounting_at or occurred_at > author_last_accounting_at:
+                    author_last_accounting_at = occurred_at
+                    author_last_accounting_local_at = occurred_local_at
+                    author_last_accounting_scope = current_scope
+            else:
+                is_time_accounting_activity = False
             skip_activity_interval_accounting = True
 
         if is_time_accounting_activity:
@@ -762,35 +826,12 @@ class ActivityRawEventAccountingMixin:
         overtime_window: tuple[dt.datetime, dt.datetime] | None,
     ) -> dict[str, Any]:
         deltas = _empty_event_deltas()
+        context = self._scene_navigation_duration_context(event, author_state)
 
-        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-        navigation_duration_seconds = _float_or_none(metadata.get("navigationDurationSeconds"))
-
-        if navigation_duration_seconds is None or navigation_duration_seconds <= 0:
+        if not context:
             return deltas
 
-        previous_duration_seconds = _float_or_none(author_state.get("lastSceneNavigationDurationSeconds"))
-        previous_navigation_started_at = str(author_state.get("lastSceneNavigationStartedAt") or "")
-        current_navigation_started_at = str(metadata.get("firstNavigationAtUtc") or "")
-
-        if current_navigation_started_at and current_navigation_started_at != previous_navigation_started_at:
-            previous_duration_seconds = 0.0
-
-        duration_delta_seconds = navigation_duration_seconds - max(0.0, previous_duration_seconds or 0.0)
-
-        if duration_delta_seconds <= 0:
-            return deltas
-
-        occurred_at = _coerce_datetime(event.get("occurredAtUtc") or event.get("occurredAt"))
-        occurred_local_at = _parse_local_datetime(event.get("occurredAtLocal"))
-
-        if not occurred_at:
-            return deltas
-
-        duration_delta = dt.timedelta(seconds=duration_delta_seconds)
-        interval_start_at = occurred_at - duration_delta
-        interval_start_local_at = (occurred_local_at or occurred_at) - duration_delta
-        interval_end_local_at = occurred_local_at or occurred_at
+        _duration_delta_seconds, interval_start_at, interval_start_local_at, occurred_at, interval_end_local_at = context
         navigation_overtime_window = overtime_window or self._overtime_window_for_interval(event, interval_start_at, occurred_at)
         navigation_deltas = _interval_deltas(
             interval_start_at,
@@ -803,6 +844,41 @@ class ActivityRawEventAccountingMixin:
         )
         _merge_batch_deltas(deltas, navigation_deltas)
         return deltas
+
+    def _scene_navigation_duration_context(
+        self,
+        event: dict[str, Any],
+        author_state: dict[str, Any],
+    ) -> tuple[float, dt.datetime, dt.datetime, dt.datetime, dt.datetime] | None:
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        navigation_duration_seconds = _float_or_none(metadata.get("navigationDurationSeconds"))
+
+        if navigation_duration_seconds is None or navigation_duration_seconds <= 0:
+            return None
+
+        previous_duration_seconds = _float_or_none(author_state.get("lastSceneNavigationDurationSeconds"))
+        previous_navigation_started_at = str(author_state.get("lastSceneNavigationStartedAt") or "")
+        current_navigation_started_at = str(metadata.get("firstNavigationAtUtc") or "")
+
+        if current_navigation_started_at and current_navigation_started_at != previous_navigation_started_at:
+            previous_duration_seconds = 0.0
+
+        duration_delta_seconds = navigation_duration_seconds - max(0.0, previous_duration_seconds or 0.0)
+
+        if duration_delta_seconds <= 0:
+            return None
+
+        occurred_at = _coerce_datetime(event.get("occurredAtUtc") or event.get("occurredAt"))
+        occurred_local_at = _parse_local_datetime(event.get("occurredAtLocal"))
+
+        if not occurred_at:
+            return None
+
+        duration_delta = dt.timedelta(seconds=duration_delta_seconds)
+        interval_start_at = occurred_at - duration_delta
+        interval_start_local_at = (occurred_local_at or occurred_at) - duration_delta
+        interval_end_local_at = occurred_local_at or occurred_at
+        return duration_delta_seconds, interval_start_at, interval_start_local_at, occurred_at, interval_end_local_at
 
     def _normal_microseconds_consumed_for_event(self, event: dict[str, Any]) -> int:
         work_window_microseconds = DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
