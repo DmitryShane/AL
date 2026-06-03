@@ -124,7 +124,7 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
         generated.extend(active_segments)
     else:
         _append_available_seconds(generated, "active", time_seconds(hour, "activeSeconds", "activeMicroseconds"))
-    overtime_start_second = hour.get(INTERNAL_OVERTIME_START_SECOND)
+    overtime_start_second = _effective_overtime_start_second(hour)
     overtime_segments = _segments_for_kind(hour, "overtime")
     if _clamp_second(overtime_start_second) is not None:
         generated.extend(_stacked_segments("overtime", time_seconds(hour, "overtimeActiveSeconds", "overtimeActiveMicroseconds"), int(overtime_start_second)))
@@ -295,6 +295,25 @@ def _top_run_seconds(timeline: list[str | None], kind: str) -> int:
         seconds += 1
 
     return seconds
+
+
+def _effective_overtime_start_second(hour: dict[str, Any]) -> int | None:
+    start_second = _clamp_second(hour.get(INTERNAL_OVERTIME_START_SECOND))
+
+    if start_second is None:
+        return None
+
+    overtime_segments = _segments_for_kind(hour, "overtime")
+    earlier_overtime_starts = [
+        int(segment["startSecond"])
+        for segment in overtime_segments
+        if int(segment["startSecond"]) < start_second
+    ]
+
+    if not earlier_overtime_starts:
+        return start_second
+
+    return min(earlier_overtime_starts)
 
 
 def _fill_missed_hour_tail(timeline: list[str | None]) -> None:

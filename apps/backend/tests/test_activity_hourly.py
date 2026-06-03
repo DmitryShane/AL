@@ -26,6 +26,8 @@ from al_backend.activity_math import (
 )
 from al_backend.hourly_fill_rules import (
     INTERNAL_MISSED_END_SECONDS,
+    INTERNAL_OVERTIME_FILL_SECONDS,
+    INTERNAL_OVERTIME_START_SECOND,
     add_break_interval_to_buckets,
     add_meeting_interval_to_buckets,
     add_visual_missed_seconds,
@@ -3474,6 +3476,29 @@ def test_overtime_hourly_graph_fills_normal_to_overtime_transition_gap():
 
     assert _hour_metric(hour_13, "activeSeconds") == 153
     assert _hour_metric(hour_13, "overtimeActiveSeconds") == 3250
+
+
+def test_overtime_fill_stays_above_actual_overtime_when_merged_segments_precede_boundary():
+    hour = empty_hourly_activity()[21]
+    hour["overtimeActiveSeconds"] = 1886
+    hour["overtimeActiveMicroseconds"] = 1_886_000_000
+    hour[INTERNAL_OVERTIME_FILL_SECONDS] = 1714
+    hour[INTERNAL_OVERTIME_START_SECOND] = 258
+    hour["fillSegments"] = [
+        {"kind": "overtime", "startSecond": 0, "endSecond": 82},
+        {"kind": "overtime", "startSecond": 258, "endSecond": 1765},
+        {"kind": "overtime", "startSecond": 1802, "endSecond": 2102},
+        {"kind": "overtime", "startSecond": 3585, "endSecond": 3600},
+    ]
+
+    public = public_hour(hour)
+    overtime_fill_segments = _hour_segments(public, "overtime-fill")
+    overtime_segments = _hour_segments(public, "overtime")
+
+    assert overtime_segments[0]["startSecond"] == 0
+    assert overtime_fill_segments[0]["startSecond"] >= overtime_segments[-1]["endSecond"]
+    assert not any(segment["startSecond"] == 0 for segment in overtime_fill_segments)
+    assert public["totals"]["overtimeSeconds"] == 3600
 
 def test_activity_hourly_cache_keeps_heavy_hourly_separate():
     repo = fake_repository()
