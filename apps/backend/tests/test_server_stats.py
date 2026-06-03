@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import al_backend.repositories.settings as settings_repo
 from al_backend.repositories.settings import SettingsRepository
+from tests.fakes import fake_repository
 
 
 def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> None:
@@ -78,6 +79,50 @@ def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> N
             "activeEnteredAt": "Tue 2026-05-05 19:00:00 UTC",
         }
     ]
+    assert stats["cached"] is False
+
+
+def test_server_stats_reuses_cache_until_refresh(monkeypatch) -> None:
+    disk_usage = namedtuple("usage", "total used free")
+    calls = {"count": 0}
+
+    def fake_disk_usage(_path):
+        calls["count"] += 1
+        return disk_usage(1000, 500 + calls["count"], 499)
+
+    monkeypatch.setattr(settings_repo.shutil, "disk_usage", fake_disk_usage)
+    monkeypatch.setattr(settings_repo, "SERVER_STATS_PATHS", {})
+    monkeypatch.setattr(settings_repo, "SERVER_STATS_SERVICES", ())
+
+    repo = SettingsRepository.__new__(SettingsRepository)
+    first = repo.get_server_stats()
+    second = repo.get_server_stats()
+    refreshed = repo.get_server_stats(refresh=True)
+
+    assert first["cached"] is False
+    assert second["cached"] is True
+    assert second["root"]["usedBytes"] == first["root"]["usedBytes"]
+    assert refreshed["cached"] is False
+    assert refreshed["root"]["usedBytes"] != first["root"]["usedBytes"]
+    assert calls["count"] == 2
+
+
+def test_settings_bootstrap_is_lightweight(monkeypatch) -> None:
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "Author A"})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device A", "targetRawAuthor": "A"})
+
+    def fail_activity_summary(*_args, **_kwargs):
+        raise AssertionError("settings bootstrap must not build activity summary")
+
+    monkeypatch.setattr(repo, "cached_activity_summary", fail_activity_summary)
+    payload = repo.get_settings_bootstrap()
+
+    assert payload["intervalSettings"]["defaultSendIntervalSeconds"] == 60
+    assert payload["discordSettings"]["meetingAutoAfkTimeoutSeconds"] == 600
+    assert payload["activitySummary"]["authors"] == []
+    assert payload["activitySummary"]["profiles"][0]["rawAuthor"] == "A"
+    assert payload["activitySummary"]["authorAliases"][0]["sourceRawAuthor"] == "Device A"
 
 
 def test_server_stats_path_size_prefers_privileged_du(monkeypatch, tmp_path) -> None:

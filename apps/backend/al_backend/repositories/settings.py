@@ -43,6 +43,7 @@ OPENAI_STATS_LEGACY_CACHE_KIND = "openai_stats_cache"
 OPENAI_STATS_SYNC_STALE_SECONDS = 3600
 OPENAI_STATS_MONTH_REFRESH_SECONDS = 6 * 3600
 OPENAI_STATS_MAX_DAILY_BUCKETS = 31
+SERVER_STATS_CACHE_TTL_SECONDS = 60
 DEFAULT_FAKE_ONLINE_SETTINGS = {
     "enabled": False,
     "daysOfWeek": [],
@@ -1431,7 +1432,53 @@ class SettingsRepository(MongoComposableMixin):
             "avatarRefreshCadence": self.get_avatar_refresh_cadence(),
         }
 
-    def get_server_stats(self) -> dict[str, Any]:
+    def get_settings_bootstrap(self) -> dict[str, Any]:
+        return {
+            "authors": [],
+            "reports": [],
+            "intervalSettings": self.get_interval_settings(),
+            "discordSettings": self.get_discord_settings(),
+            "meetingNotificationSettings": self.get_meeting_notification_settings(),
+            "activitySummary": {
+                "totals": {
+                    "daySeconds": 0,
+                    "telegramDaySeconds": 0,
+                    "pluginDaySeconds": 0,
+                    "rawPluginDaySeconds": 0,
+                    "telegramToFirstActivitySeconds": 0,
+                    "activeSeconds": 0,
+                    "idleSeconds": 0,
+                    "meetingSeconds": 0,
+                    "breakSeconds": 0,
+                    "overtimeActiveSeconds": 0,
+                },
+                "authors": [],
+                "profiles": composed(self).author_profiles(),
+                "authorAliases": composed(self).author_aliases(),
+                "activityMix": [],
+                "savedPrefabs": [],
+                "overtimeActivityMix": [],
+                "overtimeSavedPrefabs": [],
+                "hourlyActivityByAuthor": [],
+            },
+        }
+
+    def get_server_stats(self, *, refresh: bool = False) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        cached_at = getattr(self, "_server_stats_cached_at", None)
+        cached_payload = getattr(self, "_server_stats_cache", None)
+
+        if (
+            not refresh
+            and cached_at is not None
+            and cached_payload is not None
+            and (now - cached_at).total_seconds() < SERVER_STATS_CACHE_TTL_SECONDS
+        ):
+            payload = dict(cached_payload)
+            payload["cached"] = True
+            payload["cacheExpiresAt"] = (cached_at + dt.timedelta(seconds=SERVER_STATS_CACHE_TTL_SECONDS)).isoformat()
+            return payload
+
         usage = shutil.disk_usage("/")
         total = int(usage.total)
         used = int(usage.used)
@@ -1461,7 +1508,7 @@ class SettingsRepository(MongoComposableMixin):
         else:
             warning_level = "ok"
 
-        return {
+        payload = {
             "generatedAt": dt.datetime.now(dt.UTC).isoformat(),
             "hostname": socket.gethostname(),
             "root": {
@@ -1477,7 +1524,12 @@ class SettingsRepository(MongoComposableMixin):
                 _server_stats_service(key, label, unit)
                 for key, label, unit in SERVER_STATS_SERVICES
             ],
+            "cached": False,
+            "cacheExpiresAt": (now + dt.timedelta(seconds=SERVER_STATS_CACHE_TTL_SECONDS)).isoformat(),
         }
+        self._server_stats_cache = dict(payload)
+        self._server_stats_cached_at = now
+        return payload
 
     def reboot_server(self) -> dict[str, Any]:
         requested_at = dt.datetime.now(dt.UTC)

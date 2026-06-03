@@ -16,7 +16,7 @@ export function ServerStatsPanel() {
   const [error, setError] = useState("");
   const [rebootMessage, setRebootMessage] = useState("");
 
-  async function loadStats(isRefresh = false) {
+  async function loadStats(isRefresh = false, forceRefresh = false) {
     if (isRefresh) {
       setRefreshing(true);
     } else {
@@ -24,7 +24,7 @@ export function ServerStatsPanel() {
     }
 
     try {
-      const response = await apiFetch("/api/v1/settings/server-stats");
+      const response = await apiFetch(`/api/v1/settings/server-stats${forceRefresh ? "?refresh=true" : ""}`);
 
       if (!response.ok) {
         throw new Error("Server stats request failed");
@@ -102,7 +102,7 @@ export function ServerStatsPanel() {
           <p className="settings-caption">Read-only production disk usage overview.</p>
         </div>
         <div className="server-stats-actions">
-          <button className="server-stats-refresh-button" onClick={() => void loadStats(true)} disabled={refreshing || rebooting}>
+          <button className="server-stats-refresh-button" onClick={() => void loadStats(true, true)} disabled={refreshing || rebooting}>
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button className="server-stats-reboot-button" onClick={() => setRebootModalOpen(true)} disabled={rebooting}>

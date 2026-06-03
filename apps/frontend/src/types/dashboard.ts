@@ -321,6 +321,8 @@ export type ServerStatsService = {
 
 export type ServerStats = {
   generatedAt: string;
+  cached?: boolean;
+  cacheExpiresAt?: string;
   hostname: string;
   root: {
     path: string;

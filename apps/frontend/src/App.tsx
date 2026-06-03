@@ -29,6 +29,8 @@ import { AuthorAvatar } from "./components/AuthorAvatar";
 import { formatSiteRole, formatSiteUserSidebarLabel, shouldHideInactiveOfflineAuthor } from "./pages/pageHelpers";
 import type { ActivitySummary, AuthorRow, DateRange, Health, Page, SiteUser, SiteUserRole, Summary } from "./types/dashboard";
 
+type HealthStatus = "checking" | "online" | "offline";
+
 const emptyActivitySummary: ActivitySummary = {
   totals: {
     daySeconds: 0,
@@ -215,6 +217,7 @@ function App() {
   const [hasAuthHint, setHasAuthHint] = useState(() => localStorage.getItem(AUTH_HINT_STORAGE_KEY) === "true");
   const [sessionUserPreview, setSessionUserPreview] = useState<SiteUser | null>(() => readStoredSessionUserPreview());
   const [health, setHealth] = useState<Health | null>(null);
+  const [healthStatus, setHealthStatus] = useState<HealthStatus>("checking");
   const [dateRange, setDateRange] = useState<DateRange>(() => loadSavedDateRange());
   const [appliedDateRange, setAppliedDateRange] = useState<DateRange>(() => loadSavedDateRange());
   const [summary, setSummary] = useState<Summary | null>(() => loadCachedDashboardSummary(loadSavedPage(), loadSavedDateRange()));
@@ -315,10 +318,54 @@ function App() {
         }
 
         if (!healthResponse.ok || !meResponse.ok) {
+          setHealthStatus(healthResponse.ok ? "online" : "offline");
           throw new Error("Backend request failed");
         }
 
         setHealth(await healthResponse.json());
+        setHealthStatus("online");
+        return;
+      }
+
+      if (requestedPage === "settings") {
+        if (showLoading && cachedSettingsSummary) {
+          setCachedSettingsSummary(cachedSettingsSummary);
+        }
+
+        void apiFetch(`/api/v1/health`)
+          .then(async (healthResponse) => {
+            if (!healthResponse.ok) {
+              setHealthStatus("offline");
+              return;
+            }
+
+            setHealth(await healthResponse.json());
+            setHealthStatus("online");
+          })
+          .catch(() => {
+            setHealthStatus("offline");
+          });
+
+        const bootstrapResponse = await apiFetch(`/api/v1/settings/bootstrap`);
+
+        if (bootstrapResponse.status === 401) {
+          setAuthUser(null);
+          setSessionUserPreview(null);
+          writeStoredSessionUserPreview(null);
+          setHasAuthHint(false);
+          localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
+          return;
+        }
+
+        if (!bootstrapResponse.ok) {
+          throw new Error("Backend request failed");
+        }
+
+        const nextSummary = await bootstrapResponse.json() as Summary;
+        setSummary(nextSummary);
+        setCachedSettingsSummary(nextSummary);
+        saveCachedSettingsSummary(nextSummary);
+        setAppliedDateRange(requestedDateRange);
         return;
       }
 
@@ -347,10 +394,12 @@ function App() {
       }
 
       if (!healthResponse.ok || !summaryResponse.ok) {
+        setHealthStatus(healthResponse.ok ? "online" : "offline");
         throw new Error("Backend request failed");
       }
 
       setHealth(await healthResponse.json());
+      setHealthStatus("online");
       const nextSummary = await summaryResponse.json() as Summary;
       const nextAuthors = nextSummary.activitySummary.authors;
       setSummary(nextSummary);
@@ -366,11 +415,6 @@ function App() {
         if (!snapshotPreparing) {
           saveCachedActivitySummary(requestedDateRange, nextSummary.activitySummary);
         }
-      }
-
-      if (requestedPage === "settings") {
-        setCachedSettingsSummary(nextSummary);
-        saveCachedSettingsSummary(nextSummary);
       }
 
       setAppliedDateRange(requestedDateRange);
@@ -459,6 +503,12 @@ function App() {
   );
   const settingsDisplaySummary = canShowCachedDashboard ? (summary ?? cachedSettingsSummary) : null;
   const isVisualLoading = canShowCachedDashboard && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
+  const hasDashboardDisplayData =
+    page === "activity"
+      ? Boolean(summary?.activitySummary ?? cachedActivitySummary ?? cachedAuthors.length)
+      : page === "settings"
+        ? Boolean(summary ?? cachedSettingsSummary)
+        : Boolean(summary ?? cachedAuthors.length);
   const authorsSource = isVisualLoading && !activitySummary.authors.length ? cachedAuthors : activitySummary.authors;
   const authors = useMemo(
     () => authorsSource.filter((author) => !shouldHideInactiveOfflineAuthor(author) && matchesAuthorSearch(author, search)),
@@ -542,6 +592,15 @@ function App() {
 
     setPage(nextPage);
     localStorage.setItem(PAGE_STORAGE_KEY, nextPage);
+    if (nextPage === "settings") {
+      const nextSettingsSummary = readCachedSettingsSummary();
+      setCachedSettingsSummary(nextSettingsSummary);
+      setSummary(nextSettingsSummary);
+    } else if (pageUsesDashboardSummary(nextPage)) {
+      setSummary(loadCachedDashboardSummary(nextPage, dateRange));
+    } else {
+      setSummary(null);
+    }
 
     if (shouldResetScroll) {
       window.requestAnimationFrame(() => {
@@ -564,6 +623,10 @@ function App() {
 
   const displaySessionUser = authUser ?? sessionUserPreview;
   const isDashboardLoading = canShowCachedDashboard && pageUsesDashboardSummary(page) && (loading || authLoading || !authUser);
+  const showDashboardLoading = isDashboardLoading && !hasDashboardDisplayData;
+  const backendStatusLabel =
+    healthStatus === "online" ? "Backend online" : healthStatus === "offline" ? "Backend offline" : "Checking backend...";
+  const backendStatusClassName = healthStatus === "online" ? "status-pill online" : `status-pill ${healthStatus}`;
 
   if (authLoading && !hasAuthHint) {
     return <LoginPage checkingSession onLogin={setAuthUser} />;
@@ -633,7 +696,7 @@ function App() {
         <header className="workspace-topbar">
           <div className="topbar-title-block">
             <h1>{pageTitle(page)}</h1>
-            {!authLoading && isDashboardLoading ? <span className="topbar-loading-popover">Loading dashboard data...</span> : null}
+            {!authLoading && showDashboardLoading ? <span className="topbar-loading-popover">Loading dashboard data...</span> : null}
             <p>{pageSubtitle(page)}</p>
           </div>
           {page === "authors" || page === "activity" ? (
@@ -642,9 +705,9 @@ function App() {
             </div>
           ) : page === "settings" ? (
             <div className="topbar-actions">
-              <span className={health?.ok ? "status-pill online" : "status-pill"}>
+              <span className={backendStatusClassName}>
                 <span className="status-pill-dot" aria-hidden="true" />
-                {health?.ok ? "Backend online" : "Backend offline"}
+                {backendStatusLabel}
               </span>
             </div>
           ) : null}
