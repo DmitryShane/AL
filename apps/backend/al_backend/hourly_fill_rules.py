@@ -135,13 +135,9 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
     _append_available_seconds(generated, "auto-afk", int(hour.get("autoBreakSeconds", 0)))
     if _clamp_second(overtime_start_second) is None:
         _append_available_seconds(generated, "overtime-fill", int(hour.get(INTERNAL_OVERTIME_FILL_SECONDS, 0)))
-    hidden_generic_idle_seconds = _hidden_generic_idle_seconds_after_telegram(hour, _segments_total_seconds(telegram_idle_segments))
-    if hidden_generic_idle_seconds > 0:
-        _append_available_seconds(generated, "active", hidden_generic_idle_seconds)
     generic_idle_seconds = _visible_generic_idle_seconds(
         hour,
         _segments_total_seconds(telegram_idle_segments),
-        hidden_generic_idle_seconds,
     )
     _append_available_seconds(generated, "idle", generic_idle_seconds)
     if _clamp_second(overtime_start_second) is not None:
@@ -2214,17 +2210,7 @@ def _telegram_idle_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
     return telegram_segments
 
 
-def _hidden_generic_idle_seconds_after_telegram(hour: dict[str, Any], telegram_idle_seconds: int) -> int:
-    idle_seconds = time_seconds(hour, "idleSeconds", "idleMicroseconds")
-    generic_idle_seconds = max(0, idle_seconds - max(0, int(telegram_idle_seconds)))
-
-    if telegram_idle_seconds <= 0 or generic_idle_seconds <= 0:
-        return 0
-
-    return min(generic_idle_seconds, max(0, int(hour.get("pluginHourGapIdleSeconds", 0))))
-
-
-def _visible_generic_idle_seconds(hour: dict[str, Any], telegram_idle_seconds: int, hidden_generic_idle_seconds: int = 0) -> int:
+def _visible_generic_idle_seconds(hour: dict[str, Any], telegram_idle_seconds: int) -> int:
     idle_seconds = time_seconds(hour, "idleSeconds", "idleMicroseconds")
     generic_idle_seconds = max(0, idle_seconds - max(0, int(telegram_idle_seconds)))
 
@@ -2232,8 +2218,7 @@ def _visible_generic_idle_seconds(hour: dict[str, Any], telegram_idle_seconds: i
         return generic_idle_seconds
 
     synthetic_after_telegram_seconds = (
-        max(0, int(hour.get("pluginHourGapIdleSeconds", 0)))
-        + max(0, int(hour.get("offlineIdleGapSeconds", 0)))
+        max(0, int(hour.get("offlineIdleGapSeconds", 0)))
         + max(0, int(hour.get("overtimeBoundaryIdleSeconds", 0)))
     )
 

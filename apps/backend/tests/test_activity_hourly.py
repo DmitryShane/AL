@@ -1941,7 +1941,7 @@ def test_auto_break_does_not_use_idle_before_telegram_online():
     assert _hour_segments(hourly_by_hour[7], "auto-afk")[0]["startSecond"] >= 51 * 60 + 7
     assert _missed_start_seconds(hourly_by_hour[7]) == 51 * 60 + 7
 
-def test_plugin_hour_gap_after_telegram_to_first_activity_extends_active_fill():
+def test_plugin_hour_gap_after_telegram_to_first_activity_stays_idle():
     hourly_activity = empty_hourly_activity()
     hourly_activity[12]["activeSeconds"] = 2739
     hourly_activity[12]["activeMicroseconds"] = 2739 * 1_000_000
@@ -1954,8 +1954,8 @@ def test_plugin_hour_gap_after_telegram_to_first_activity_extends_active_fill():
     public_hourly = public_hourly_activity(hourly_activity)
 
     assert _hour_segments(public_hourly[12], "telegram-idle") == [{"startSecond": 0, "endSecond": 860}]
-    assert _hour_segments(public_hourly[12], "active") == [{"startSecond": 860, "endSecond": 3600}]
-    assert _hour_segments(public_hourly[12], "idle") == []
+    assert _hour_segments(public_hourly[12], "active") == [{"startSecond": 860, "endSecond": 3599}]
+    assert _hour_segments(public_hourly[12], "idle") == [{"startSecond": 3599, "endSecond": 3600}]
 
 def test_public_hourly_missed_does_not_override_overtime_segments():
     hourly_activity = empty_hourly_activity()
@@ -2020,7 +2020,7 @@ def test_plugin_hour_gap_after_telegram_to_first_activity_keeps_real_idle_visibl
     public_hourly = public_hourly_activity(hourly_activity)
 
     assert sum(public_hourly[10]["totals"].values()) == 3600
-    assert _hour_metric(public_hourly[10], "idleSeconds") == 820
+    assert _hour_metric(public_hourly[10], "idleSeconds") == 1028
 
 
 def test_plugin_hour_gap_fills_empty_in_workday_hour_as_idle():
@@ -2701,6 +2701,29 @@ def test_auto_break_skips_incomplete_plugin_hour_idle_gaps():
     assert transferred_seconds == 0
     assert _hour_metric(hourly_activity[8], "idleSeconds") == 1800
     assert _hour_metric(hourly_activity[8], "breakSeconds") == 0
+
+
+def test_public_hourly_keeps_plugin_gap_after_telegram_idle_as_idle():
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[12]["activeSeconds"] = 408
+    hourly_activity[12]["activeMicroseconds"] = 408 * 1_000_000
+    hourly_activity[12]["idleSeconds"] = 3600
+    hourly_activity[12]["idleMicroseconds"] = 3600 * 1_000_000
+    hourly_activity[12]["telegramToFirstActivityIdleSeconds"] = 699
+    hourly_activity[12]["pluginHourGapIdleSeconds"] = 2400
+    hourly_activity[12]["fillSegments"] = [
+        {"kind": "idle", "startSecond": 0, "endSecond": 699},
+        {"kind": "idle", "startSecond": 699, "endSecond": 3099},
+        {"kind": "active", "startSecond": 2620, "endSecond": 3028},
+        {"kind": "idle", "startSecond": 3099, "endSecond": 3600},
+    ]
+
+    public_hourly = public_hourly_activity(hourly_activity)
+
+    assert _hour_metric(public_hourly[12], "activeSeconds") == 408
+    assert _hour_metric(public_hourly[12], "idleSeconds") == 3192
+    assert _hour_segments(public_hourly[12], "telegram-idle") == [{"startSecond": 0, "endSecond": 699}]
+
 
 def test_auto_break_places_partial_break_after_remaining_idle():
     repo = fake_repository()
