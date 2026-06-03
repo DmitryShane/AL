@@ -654,6 +654,28 @@ export function formatTelegramEvent(eventType?: string, status?: string) {
     return "break off";
   }
 
+  const normalizedEventType = (eventType ?? "").replace(/^telegram_/, "");
+
+  if (normalizedEventType === "online") {
+    return status === "online_prompt_confirmed_online" ? "online/prompt" : "online/manual";
+  }
+
+  if (normalizedEventType === "offline") {
+    if (status === "reminder_overtime") {
+      return "offline/overtime";
+    }
+
+    if (status === "reminder_offline" || status === "reminder_offline_without_online") {
+      return "offline/prompt";
+    }
+
+    return "offline/manual";
+  }
+
+  if (normalizedEventType === "afk") {
+    return "afk";
+  }
+
   const labels: Record<string, string> = {
     online: "online",
     afk: "afk",

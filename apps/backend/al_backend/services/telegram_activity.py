@@ -200,6 +200,8 @@ class TelegramActivityService(MongoComposableMixin):
         timestamp: str | None = None,
         *,
         ingest_received_at: dt.datetime | None = None,
+        report_status: str | None = None,
+        report_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_telegram = _normalize_telegram_username(telegram_username)
         event_time = _parse_timestamp(timestamp)
@@ -291,17 +293,23 @@ class TelegramActivityService(MongoComposableMixin):
                 }
 
         composed(self).invalidate_activity_summary_cache([event_date])
-        self.db.break_events.insert_one(
-            {
-                "telegramUsername": normalized_telegram,
-                "rawAuthor": raw_author,
-                "eventType": event_type,
-                "timestamp": event_time,
-                "date": event_date,
-                "timeZoneId": time_zone_id,
-                "createdAt": audit_now,
-            }
-        )
+        break_event_doc = {
+            "telegramUsername": normalized_telegram,
+            "rawAuthor": raw_author,
+            "eventType": event_type,
+            "timestamp": event_time,
+            "date": event_date,
+            "timeZoneId": time_zone_id,
+            "createdAt": audit_now,
+        }
+
+        if report_status:
+            break_event_doc["telegramStatus"] = report_status
+
+        if report_metadata:
+            break_event_doc["metadata"] = report_metadata
+
+        self.db.break_events.insert_one(break_event_doc)
 
         if event_type == "afk":
             self.db.break_sessions.update_one(
@@ -374,7 +382,17 @@ class TelegramActivityService(MongoComposableMixin):
             self._supersede_open_duplicate_afk_prompts(normalized_telegram, break_started_snap)
 
         if not break_result:
-            self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, row_received_at, "online_recorded")
+            self._insert_telegram_report_row(
+                raw_author,
+                normalized_telegram,
+                event_type,
+                event_time,
+                event_date,
+                time_zone_id,
+                row_received_at,
+                report_status or "online_recorded",
+                report_metadata,
+            )
             return {"ok": True, "status": "online_recorded"}
 
         self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, row_received_at, "break_closed", break_result)
@@ -513,6 +531,8 @@ class TelegramActivityService(MongoComposableMixin):
                 "createdAt": received_at,
                 "source": "telegram_reminder",
                 "reminderAction": action,
+                "telegramStatus": f"reminder_{action}",
+                "metadata": {"reminderAction": action},
             }
         )
         break_result = self._close_break_session(telegram_username, raw_author, event_time)
@@ -928,7 +948,14 @@ class TelegramActivityService(MongoComposableMixin):
             aligned_at = aligned_at.astimezone(dt.UTC)
 
         timestamp_str = aligned_at.isoformat().replace("+00:00", "Z")
-        break_result = self.record_break_event(telegram_username, "online", timestamp_str, ingest_received_at=aligned_at)
+        break_result = self.record_break_event(
+            telegram_username,
+            "online",
+            timestamp_str,
+            ingest_received_at=aligned_at,
+            report_status="online_prompt_confirmed_online",
+            report_metadata={"source": "online_prompt", "promptAction": "confirm_online"},
+        )
 
         if break_result.get("status") == "duplicate_online":
             self.db.telegram_online_prompts.update_one(

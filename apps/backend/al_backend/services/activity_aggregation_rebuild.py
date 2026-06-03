@@ -501,6 +501,7 @@ class ActivityAggregationRebuildMixin:
 
             received_at = _coerce_datetime(event.get("createdAt")) or event_time
             time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
+            metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else None
             composed(self)._insert_telegram_report_row(
                 str(event.get("rawAuthor") or "Unknown User"),
                 str(event.get("telegramUsername") or ""),
@@ -509,7 +510,8 @@ class ActivityAggregationRebuildMixin:
                 str(event.get("date") or _telegram_event_date(event_time, time_zone_id)),
                 time_zone_id,
                 received_at,
-                str(event.get("eventType") or "telegram"),
+                str(event.get("telegramStatus") or event.get("eventType") or "telegram"),
+                metadata,
             )
 
         if break_total == 0:

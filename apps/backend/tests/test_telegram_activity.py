@@ -519,6 +519,7 @@ def test_telegram_online_creates_visible_report_row_and_live_day_time():
     assert repo.db.report_rows.items[0]["source"] == "telegram"
     assert repo.db.report_rows.items[0]["reportType"] == "telegram"
     assert repo.db.report_rows.items[0]["telegramEventType"] == "online"
+    assert repo.db.report_rows.items[0]["telegramStatus"] == "online_recorded"
     assert authors["Future Artist"]["telegramDaySeconds"] == 10 * 60
 
 def test_telegram_to_first_activity_gap_counts_as_idle_hourly_activity():
@@ -777,6 +778,8 @@ def test_telegram_reminder_offline_closes_day_at_click_time():
     assert repo.db.report_rows.items[-1]["telegramEventType"] == "offline"
     assert repo.db.report_rows.items[-1]["telegramStatus"] == "reminder_offline"
     assert repo.db.report_rows.items[-1]["metadata"]["reminderAction"] == "offline"
+    assert repo.db.break_events.items[-1]["telegramStatus"] == "reminder_offline"
+    assert repo.db.break_events.items[-1]["metadata"] == {"reminderAction": "offline"}
 
 def test_telegram_reminder_overtime_closes_day_with_overtime_metadata():
     repo = fake_repository()
@@ -790,6 +793,26 @@ def test_telegram_reminder_overtime_closes_day_with_overtime_metadata():
     assert result["daySeconds"] == 10 * 3600 + 30 * 60
     assert repo.db.report_rows.items[-1]["telegramStatus"] == "reminder_overtime"
     assert repo.db.report_rows.items[-1]["metadata"]["reminderAction"] == "overtime"
+    assert repo.db.break_events.items[-1]["telegramStatus"] == "reminder_overtime"
+    assert repo.db.break_events.items[-1]["metadata"] == {"reminderAction": "overtime"}
+
+def test_telegram_reminder_marker_survives_scoped_rebuild():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC))[0]
+
+    repo.close_telegram_day_from_reminder(reminder["reminderId"], "overtime", "2026-04-28T19:30:00Z")
+    repo.rebuild_aggregates_for_dates("2026-04-28", dates=["2026-04-28"], authors=["Future Artist"])
+
+    reminder_reports = [
+        row
+        for row in repo.db.report_rows.items
+        if row.get("source") == "telegram" and row.get("telegramEventType") == "offline"
+    ]
+    assert len(reminder_reports) == 1
+    assert reminder_reports[0]["telegramStatus"] == "reminder_overtime"
+    assert reminder_reports[0]["metadata"] == {"reminderAction": "overtime"}
 
 def test_telegram_reminder_after_local_midnight_expires_without_mutating_activity():
     repo = fake_repository()
@@ -1461,6 +1484,32 @@ def test_telegram_online_prompt_confirm_records_online():
     assert len(telegram_reports) == 1
     assert telegram_reports[0]["recordedAt"] == "2026-04-30T07:59:00+00:00"
     assert telegram_reports[0]["receivedAt"] == dt.datetime(2026, 4, 30, 7, 59, tzinfo=dt.UTC)
+    assert telegram_reports[0]["telegramStatus"] == "online_prompt_confirmed_online"
+    assert telegram_reports[0]["metadata"] == {"source": "online_prompt", "promptAction": "confirm_online"}
+    assert repo.db.break_events.items[-1]["telegramStatus"] == "online_prompt_confirmed_online"
+    assert repo.db.break_events.items[-1]["metadata"] == {"source": "online_prompt", "promptAction": "confirm_online"}
+
+
+def test_telegram_online_prompt_marker_survives_scoped_rebuild():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "UTC"})
+    t0 = dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)
+    repo._schedule_telegram_online_prompt_if_needed("A", "2026-04-30", "ual", t0)
+    rid = repo.db.telegram_online_prompts.items[0]["reminderId"]
+    repo.db.telegram_online_prompts.items[0]["status"] = "sent"
+
+    repo.close_telegram_online_prompt(rid, "confirm_online", "2026-04-30T12:00:00Z", "ta")
+    repo.rebuild_aggregates_for_dates("2026-04-30", dates=["2026-04-30"], authors=["A"])
+
+    telegram_reports = [
+        row
+        for row in repo.db.report_rows.items
+        if row.get("source") == "telegram" and row.get("telegramEventType") == "online"
+    ]
+    assert len(telegram_reports) == 1
+    assert telegram_reports[0]["telegramStatus"] == "online_prompt_confirmed_online"
+    assert telegram_reports[0]["metadata"] == {"source": "online_prompt", "promptAction": "confirm_online"}
+
 
 def test_telegram_online_prompt_confirm_uses_first_activity_minus_one_minute_and_is_exempt_from_status_filter():
     repo = fake_repository()
@@ -1511,6 +1560,7 @@ def test_telegram_online_prompt_confirm_uses_first_activity_minus_one_minute_and
     assert telegram_row["recordedAt"] == "2026-04-30T11:22:00+00:00"
     assert telegram_row["receivedAt"] == dt.datetime(2026, 4, 30, 11, 22, tzinfo=dt.UTC)
     assert telegram_row["lastReceivedAt"] == dt.datetime(2026, 4, 30, 11, 22, tzinfo=dt.UTC)
+    assert telegram_row["telegramStatus"] == "online_prompt_confirmed_online"
     status_rows = [r for r in repo.db.report_rows.items if r.get("source") == "status"]
     intervals = repo._status_intervals_for_reports(status_rows)
     assert repo._is_report_inside_status_interval(telegram_row, intervals) is False
