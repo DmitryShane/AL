@@ -656,6 +656,117 @@ def test_device_hold_duration_counts_each_held_second_even_when_reports_exceed_t
     assert daily["overtimeActiveSeconds"] == 15
     assert daily["idleSeconds"] == 0
 
+
+def test_unity_scene_view_navigation_duration_counts_as_active_time():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one({"kind": "global", "idleThresholdSeconds": 60})
+
+    base_event = {
+        "source": "ual",
+        "author": "Evgeniy Dotsenko",
+        "projectId": "bike-rush-2",
+        "sessionId": "unity-session",
+        "deviceId": "unity-device",
+        "date": "2026-06-03",
+        "timeZoneId": "UTC",
+    }
+
+    first_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "scene_view_navigation",
+            "occurredAtUtc": "2026-06-03T10:00:02Z",
+            "occurredAtLocal": "2026-06-03T10:00:02+00:00",
+            "receivedAt": dt.datetime(2026, 6, 3, 10, 0, 2, tzinfo=dt.UTC),
+            "metadata": {
+                "firstNavigationAtUtc": "2026-06-03T10:00:00Z",
+                "lastNavigationAtUtc": "2026-06-03T10:00:02Z",
+                "navigationDurationSeconds": 2,
+            },
+        }
+    )
+    second_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "scene_view_navigation",
+            "occurredAtUtc": "2026-06-03T10:00:04Z",
+            "occurredAtLocal": "2026-06-03T10:00:04+00:00",
+            "receivedAt": dt.datetime(2026, 6, 3, 10, 0, 4, tzinfo=dt.UTC),
+            "metadata": {
+                "firstNavigationAtUtc": "2026-06-03T10:00:00Z",
+                "lastNavigationAtUtc": "2026-06-03T10:00:04Z",
+                "navigationDurationSeconds": 4,
+            },
+        }
+    )
+    duplicate_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "scene_view_navigation",
+            "occurredAtUtc": "2026-06-03T10:00:05Z",
+            "occurredAtLocal": "2026-06-03T10:00:05+00:00",
+            "receivedAt": dt.datetime(2026, 6, 3, 10, 0, 5, tzinfo=dt.UTC),
+            "metadata": {
+                "firstNavigationAtUtc": "2026-06-03T10:00:00Z",
+                "lastNavigationAtUtc": "2026-06-03T10:00:04Z",
+                "navigationDurationSeconds": 4,
+            },
+        }
+    )
+
+    assert first_deltas["activeDeltaSeconds"] == 2
+    assert second_deltas["activeDeltaSeconds"] == 2
+    assert duplicate_deltas["activeDeltaSeconds"] == 0
+    daily = repo.db.daily_author_activity.find_one({"author": "Evgeniy Dotsenko", "date": "2026-06-03", "source": "ual"})
+    assert daily is not None
+    assert daily["activeSeconds"] == 4
+    assert {item["type"]: item["count"] for item in daily["activityCounts"]} == {"scene_view_navigation": 3}
+
+
+def test_unity_scene_view_navigation_heartbeat_keeps_navigation_time_active():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one({"kind": "global", "idleThresholdSeconds": 60})
+
+    base_event = {
+        "source": "ual",
+        "author": "Evgeniy Dotsenko",
+        "projectId": "bike-rush-2",
+        "sessionId": "unity-session",
+        "deviceId": "unity-device",
+        "date": "2026-06-03",
+        "timeZoneId": "UTC",
+    }
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "scene_view_navigation",
+            "occurredAtUtc": "2026-06-03T10:00:10Z",
+            "occurredAtLocal": "2026-06-03T10:00:10+00:00",
+            "receivedAt": dt.datetime(2026, 6, 3, 10, 0, 10, tzinfo=dt.UTC),
+            "metadata": {
+                "firstNavigationAtUtc": "2026-06-03T10:00:00Z",
+                "lastNavigationAtUtc": "2026-06-03T10:00:10Z",
+                "navigationDurationSeconds": 10,
+            },
+        }
+    )
+    heartbeat_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "heartbeat",
+            "occurredAtUtc": "2026-06-03T10:01:20Z",
+            "occurredAtLocal": "2026-06-03T10:01:20+00:00",
+            "receivedAt": dt.datetime(2026, 6, 3, 10, 1, 20, tzinfo=dt.UTC),
+        }
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Evgeniy Dotsenko", "date": "2026-06-03", "source": "ual"})
+    assert daily is not None
+    assert daily["activeSeconds"] == 10
+    assert heartbeat_deltas["idleDeltaSeconds"] == 70
+    assert daily["idleSeconds"] == 70
+
+
 def test_device_ios_payload_is_stored_as_ios_device_source():
     repo = fake_repository()
     repo.save_report(

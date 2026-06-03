@@ -74,6 +74,7 @@ RAW_ACTIVITY_EVENT_TYPES = {
     "prefab_saved",
     "undo_redo",
     "play_mode",
+    "scene_view_navigation",
     "scene_changed",
     "file_saved",
     "file_loaded",

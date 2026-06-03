@@ -45,6 +45,22 @@ def _hold_started_at_for_state(event: dict[str, Any]) -> str | None:
     return str(metadata.get("firstHoldAtUtc") or "") or None
 
 
+def _scene_navigation_duration_seconds_for_state(event: dict[str, Any]) -> float | None:
+    if str(event.get("eventType") or "") != "scene_view_navigation":
+        return None
+
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    return _float_or_none(metadata.get("navigationDurationSeconds"))
+
+
+def _scene_navigation_started_at_for_state(event: dict[str, Any]) -> str | None:
+    if str(event.get("eventType") or "") != "scene_view_navigation":
+        return None
+
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    return str(metadata.get("firstNavigationAtUtc") or "") or None
+
+
 def _has_presence_delta(deltas: dict[str, Any]) -> bool:
     if _has_time_delta(deltas):
         return True
@@ -309,6 +325,19 @@ class ActivityRawEventAccountingMixin:
                 _merge_batch_deltas(deltas, hold_deltas)
                 skip_activity_interval_accounting = True
 
+        if is_time_accounting_activity and event_type == "scene_view_navigation":
+            navigation_deltas = self._scene_navigation_duration_deltas(
+                event,
+                author_state,
+                consumed_normal_microseconds,
+                overtime_window,
+            )
+
+            if _has_time_delta(navigation_deltas):
+                _merge_batch_deltas(deltas, navigation_deltas)
+
+            skip_activity_interval_accounting = True
+
         if is_time_accounting_activity:
             waiting_for_first_workday_activity = self._is_waiting_for_first_workday_activity(
                 event,
@@ -566,6 +595,28 @@ class ActivityRawEventAccountingMixin:
         }
         suppress_deltas = self._should_suppress_post_offline_plugin_deltas(event, deltas)
         materialize = self._should_materialize_aggregate_date(str(snapshot.get("date") or ""), str(snapshot.get("author") or "Unknown User"))
+        scene_navigation_duration_for_state = _scene_navigation_duration_seconds_for_state(event)
+        scene_navigation_started_for_state = _scene_navigation_started_at_for_state(event)
+        state_scene_navigation_duration = (
+            scene_navigation_duration_for_state
+            if scene_navigation_duration_for_state is not None
+            else state.get("lastSceneNavigationDurationSeconds")
+        )
+        state_scene_navigation_started = (
+            scene_navigation_started_for_state
+            if scene_navigation_started_for_state is not None
+            else state.get("lastSceneNavigationStartedAt")
+        )
+        author_state_scene_navigation_duration = (
+            scene_navigation_duration_for_state
+            if scene_navigation_duration_for_state is not None
+            else author_state.get("lastSceneNavigationDurationSeconds")
+        )
+        author_state_scene_navigation_started = (
+            scene_navigation_started_for_state
+            if scene_navigation_started_for_state is not None
+            else author_state.get("lastSceneNavigationStartedAt")
+        )
 
         if not suppress_deltas and materialize and (not waiting_for_first_workday_activity or _has_presence_delta(deltas)):
             self._update_daily_author_activity(snapshot, deltas)
@@ -599,6 +650,8 @@ class ActivityRawEventAccountingMixin:
                         "lastAccountingSource": last_accounting_source or None,
                         "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
                         "lastHoldStartedAt": _hold_started_at_for_state(event),
+                        "lastSceneNavigationDurationSeconds": state_scene_navigation_duration,
+                        "lastSceneNavigationStartedAt": state_scene_navigation_started,
                         "isFocused": source_is_focused,
                     },
                     "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
@@ -622,6 +675,8 @@ class ActivityRawEventAccountingMixin:
                         "lastAccountingScope": author_last_accounting_scope or None,
                         "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
                         "lastHoldStartedAt": _hold_started_at_for_state(event),
+                        "lastSceneNavigationDurationSeconds": author_state_scene_navigation_duration,
+                        "lastSceneNavigationStartedAt": author_state_scene_navigation_started,
                         "statusIdleAccountedUntil": status_idle_accounted_until.isoformat() if status_idle_accounted_until else None,
                     },
                     "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
@@ -697,6 +752,56 @@ class ActivityRawEventAccountingMixin:
             hold_overtime_window,
         )
         _merge_batch_deltas(deltas, hold_deltas)
+        return deltas
+
+    def _scene_navigation_duration_deltas(
+        self,
+        event: dict[str, Any],
+        author_state: dict[str, Any],
+        consumed_normal_microseconds: int,
+        overtime_window: tuple[dt.datetime, dt.datetime] | None,
+    ) -> dict[str, Any]:
+        deltas = _empty_event_deltas()
+
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        navigation_duration_seconds = _float_or_none(metadata.get("navigationDurationSeconds"))
+
+        if navigation_duration_seconds is None or navigation_duration_seconds <= 0:
+            return deltas
+
+        previous_duration_seconds = _float_or_none(author_state.get("lastSceneNavigationDurationSeconds"))
+        previous_navigation_started_at = str(author_state.get("lastSceneNavigationStartedAt") or "")
+        current_navigation_started_at = str(metadata.get("firstNavigationAtUtc") or "")
+
+        if current_navigation_started_at and current_navigation_started_at != previous_navigation_started_at:
+            previous_duration_seconds = 0.0
+
+        duration_delta_seconds = navigation_duration_seconds - max(0.0, previous_duration_seconds or 0.0)
+
+        if duration_delta_seconds <= 0:
+            return deltas
+
+        occurred_at = _coerce_datetime(event.get("occurredAtUtc") or event.get("occurredAt"))
+        occurred_local_at = _parse_local_datetime(event.get("occurredAtLocal"))
+
+        if not occurred_at:
+            return deltas
+
+        duration_delta = dt.timedelta(seconds=duration_delta_seconds)
+        interval_start_at = occurred_at - duration_delta
+        interval_start_local_at = (occurred_local_at or occurred_at) - duration_delta
+        interval_end_local_at = occurred_local_at or occurred_at
+        navigation_overtime_window = overtime_window or self._overtime_window_for_interval(event, interval_start_at, occurred_at)
+        navigation_deltas = _interval_deltas(
+            interval_start_at,
+            occurred_at,
+            interval_start_local_at,
+            interval_end_local_at,
+            True,
+            consumed_normal_microseconds,
+            navigation_overtime_window,
+        )
+        _merge_batch_deltas(deltas, navigation_deltas)
         return deltas
 
     def _normal_microseconds_consumed_for_event(self, event: dict[str, Any]) -> int:
