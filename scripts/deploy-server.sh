@@ -96,7 +96,7 @@ sudo -H -u "${APP_USER}" env \
 chmod 0755 "${APP_DIR}/scripts/clean-apt-cache.sh"
 
 cat > /etc/sudoers.d/al-server-stats-du <<EOF
-${APP_USER} ALL=(root) NOPASSWD: /usr/bin/du -sb -- /usr, /usr/bin/du -sb -- /var, /usr/bin/du -sb -- /opt/al, /usr/bin/du -sb -- /var/lib/mongodb, /usr/bin/du -sb -- /var/cache/apt, /usr/bin/du -sb -- /var/log
+${APP_USER} ALL=(root) NOPASSWD: /usr/bin/du -sb -- /usr, /usr/bin/du -sb -- /var, /usr/bin/du -sb -- /opt/al, /usr/bin/du -sb -- /tmp, /usr/bin/du -sb -- /var/lib/mongodb, /usr/bin/du -sb -- /var/cache/apt, /usr/bin/du -sb -- /var/log, /usr/bin/du -sb -- /var/log/journal, /usr/bin/du -sb -- /var/log/mongodb, /usr/bin/du -sb -- /var/log/nginx, /usr/bin/du -sb -- /opt/al/.cache, /usr/bin/du -sb -- /opt/al/.npm
 EOF
 chmod 0440 /etc/sudoers.d/al-server-stats-du
 visudo -cf /etc/sudoers.d/al-server-stats-du
@@ -130,6 +130,9 @@ sed \
   "${APP_DIR}/deploy/systemd/al-apt-cache-clean.service" > /etc/systemd/system/al-apt-cache-clean.service
 
 cp "${APP_DIR}/deploy/systemd/al-apt-cache-clean.timer" /etc/systemd/system/al-apt-cache-clean.timer
+install -d -m 0755 /etc/systemd/journald.conf.d
+cp "${APP_DIR}/deploy/systemd/al-journald-retention.conf" /etc/systemd/journald.conf.d/al-retention.conf
+cp "${APP_DIR}/deploy/logrotate/mongod" /etc/logrotate.d/mongod
 
 SSL_SERVER_BLOCK=""
 
@@ -182,6 +185,8 @@ ln -sf /etc/nginx/sites-available/al.conf /etc/nginx/sites-enabled/al.conf
 rm -f /etc/nginx/sites-enabled/default
 
 systemctl daemon-reload
+systemctl restart systemd-journald
+logrotate -d /etc/logrotate.conf >/dev/null
 systemctl enable mongod nginx al-backend al-telegram-bot al-discord-bot al-apt-cache-clean.timer
 systemctl start al-apt-cache-clean.timer
 systemctl start mongod

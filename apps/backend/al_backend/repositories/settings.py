@@ -21,11 +21,22 @@ from ..mongo_composable import MongoComposableMixin
 
 SERVER_STATS_PATHS = {
     "system": Path("/usr"),
-    "var": Path("/var"),
     "app": Path("/opt/al"),
     "mongo": Path("/var/lib/mongodb"),
     "aptCache": Path("/var/cache/apt"),
     "logs": Path("/var/log"),
+    "tmp": Path("/tmp"),
+    "journalLogs": Path("/var/log/journal"),
+    "mongoLogs": Path("/var/log/mongodb"),
+    "nginxLogs": Path("/var/log/nginx"),
+    "appUvCache": Path("/opt/al/.cache"),
+    "appNpmCache": Path("/opt/al/.npm"),
+}
+SERVER_STATS_ACCOUNTING_PATHS = {
+    "system": Path("/usr"),
+    "var": Path("/var"),
+    "app": Path("/opt/al"),
+    "tmp": Path("/tmp"),
 }
 SERVER_STATS_SERVICES = (
     ("backend", "AL Backend API", "al-backend.service"),
@@ -70,6 +81,12 @@ def _server_stats_category(key: str, path: Path) -> dict[str, Any]:
         "mongo": "MongoDB",
         "aptCache": "apt cache",
         "logs": "Logs",
+        "tmp": "Temporary files /tmp",
+        "journalLogs": "systemd journal",
+        "mongoLogs": "MongoDB logs",
+        "nginxLogs": "Nginx logs",
+        "appUvCache": "App uv cache",
+        "appNpmCache": "App npm cache",
     }
     exists = path.exists()
     size = _path_size_bytes(path) if exists else 0
@@ -1488,7 +1505,11 @@ class SettingsRepository(MongoComposableMixin):
             _server_stats_category(key, path)
             for key, path in SERVER_STATS_PATHS.items()
         ]
-        known_bytes = sum(int(item["bytes"]) for item in categories)
+        known_bytes = sum(
+            _path_size_bytes(path)
+            for path in SERVER_STATS_ACCOUNTING_PATHS.values()
+            if path.exists()
+        )
         other_bytes = max(0, used - known_bytes)
 
         categories.append(

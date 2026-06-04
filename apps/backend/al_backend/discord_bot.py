@@ -27,6 +27,8 @@ LOGGER = logging.getLogger("al.discord_bot")
 DEFAULT_SOLO_TIMEOUT_SECONDS = 10 * 60
 SOLO_CHECK_SECONDS = 15
 SETTINGS_REFRESH_SECONDS = 60
+DEFAULT_MEETING_TEMP_RETENTION_SECONDS = 3 * 24 * 60 * 60
+DEFAULT_MEETING_RETAINED_CLEANUP_INTERVAL_SECONDS = 5 * 60
 DAVE_READY_TIMEOUT_SECONDS = 2.0
 PCM_SAMPLE_RATE = 48000
 PCM_CHANNELS = 2
@@ -50,6 +52,8 @@ class DiscordBotConfig:
     meeting_channel_id: int
     afk_channel_id: int
     recording_temp_dir: str
+    meeting_temp_retention_seconds: int
+    meeting_retained_cleanup_interval_seconds: int
 
 
 @dataclass
@@ -95,6 +99,14 @@ def load_config() -> DiscordBotConfig:
     meeting_channel_id = _parse_required_int("DISCORD_MEETING_CHANNEL_ID")
     afk_channel_id = _parse_required_int("DISCORD_AFK_CHANNEL_ID")
     recording_temp_dir = os.getenv("AL_DISCORD_RECORDING_TEMP_DIR", tempfile.gettempdir()).strip()
+    meeting_temp_retention_seconds = _parse_optional_int(
+        "AL_MEETING_TEMP_RETENTION_SECONDS",
+        DEFAULT_MEETING_TEMP_RETENTION_SECONDS,
+    )
+    meeting_retained_cleanup_interval_seconds = _parse_optional_int(
+        "AL_MEETING_RETAINED_CLEANUP_INTERVAL_SECONDS",
+        DEFAULT_MEETING_RETAINED_CLEANUP_INTERVAL_SECONDS,
+    )
 
     if not token:
         raise RuntimeError("DISCORD_BOT_TOKEN is required")
@@ -110,6 +122,8 @@ def load_config() -> DiscordBotConfig:
         meeting_channel_id=meeting_channel_id,
         afk_channel_id=afk_channel_id,
         recording_temp_dir=recording_temp_dir,
+        meeting_temp_retention_seconds=meeting_temp_retention_seconds,
+        meeting_retained_cleanup_interval_seconds=meeting_retained_cleanup_interval_seconds,
     )
 
 
@@ -136,9 +150,11 @@ class MeetingClient(discord.Client):
         self.meeting_audio_retention_seconds = 0
         self.settings_loaded_at: datetime | None = None
         self.recording: RecordingSession | None = None
+        self.recording_cleanup_ran_at: datetime | None = None
 
     async def on_ready(self) -> None:
         LOGGER.info("Discord bot started as %s. Backend: %s", self.user, self.config.backend_url)
+        await self.cleanup_recording_temp_files_if_due(force=True)
         await self.refresh_solo_state()
 
         if self.solo_monitor_task is None or self.solo_monitor_task.done():
@@ -396,6 +412,24 @@ class MeetingClient(discord.Client):
                 except FileNotFoundError:
                     pass
                 recording.sink.delete_track_files()
+            await self.cleanup_recording_temp_files_if_due()
+
+    async def cleanup_recording_temp_files_if_due(self, *, force: bool = False) -> None:
+        now = datetime.now(timezone.utc)
+
+        if (
+            not force
+            and self.recording_cleanup_ran_at is not None
+            and (now - self.recording_cleanup_ran_at).total_seconds() < self.config.meeting_retained_cleanup_interval_seconds
+        ):
+            return
+
+        self.recording_cleanup_ran_at = now
+        await asyncio.to_thread(
+            cleanup_old_retained_recordings,
+            self.config.recording_temp_dir,
+            temp_retention_seconds=self.config.meeting_temp_retention_seconds,
+        )
 
     async def submit_voice_event(self, member: discord.Member, event_type: str) -> None:
         payload = {
@@ -900,6 +934,21 @@ def _parse_required_int(name: str) -> int:
     return int(value)
 
 
+def _parse_optional_int(name: str, default: int) -> int:
+    value = os.getenv(name, "").strip()
+
+    if not value:
+        return default
+
+    try:
+        parsed = int(value)
+    except ValueError:
+        LOGGER.warning("Ignoring invalid %s=%r. Using default %s.", name, value, default)
+        return default
+
+    return max(0, parsed)
+
+
 def file_size_bytes(path: str) -> int:
     try:
         return os.path.getsize(path)
@@ -960,21 +1009,56 @@ def retain_recording_recovery_files(recording: RecordingSession, retention_secon
     LOGGER.info("Retained Discord meeting recovery files until %s: %s", expires_at, manifest_path)
 
 
-def cleanup_old_retained_recordings(recording_temp_dir: str) -> None:
-    now = int(time.time())
+def cleanup_old_retained_recordings(
+    recording_temp_dir: str,
+    *,
+    temp_retention_seconds: int = DEFAULT_MEETING_TEMP_RETENTION_SECONDS,
+    now: int | None = None,
+) -> None:
+    temp_dir = Path(recording_temp_dir)
+    if not temp_dir.exists():
+        return
 
-    for path in Path(recording_temp_dir).glob("al-meeting-*.keep-until-*"):
+    cleanup_now = int(time.time()) if now is None else now
+    cutoff = cleanup_now - max(0, temp_retention_seconds)
+
+    for path in temp_dir.glob("al-meeting-*.keep-until-*"):
         try:
             expires_at = int(str(path).rsplit(".keep-until-", 1)[1])
         except (IndexError, ValueError):
             continue
 
-        if expires_at <= now:
+        if expires_at <= cleanup_now:
+            delete_recording_temp_file(path, "expired retained Discord meeting recording")
+
+    for pattern in (
+        "al-meeting-*.pcm",
+        "al-meeting-*.m4a.*.pcm",
+        "al-meeting-*.for-transcript.m4a",
+        "al-meeting-*.transcript.txt",
+        "al-meeting-*.recovery.json",
+    ):
+        for path in temp_dir.glob(pattern):
+            if ".keep-until-" in path.name:
+                continue
+
             try:
-                path.unlink()
-                LOGGER.info("Deleted expired retained Discord meeting recording: %s", path)
-            except FileNotFoundError:
-                pass
+                modified_at = int(path.stat().st_mtime)
+            except OSError:
+                continue
+
+            if modified_at <= cutoff:
+                delete_recording_temp_file(path, "stale Discord meeting temp file")
+
+
+def delete_recording_temp_file(path: Path, reason: str) -> None:
+    try:
+        path.unlink()
+        LOGGER.info("Deleted %s: %s", reason, path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        LOGGER.warning("Could not delete %s: %s", reason, path, exc_info=True)
 
 
 if __name__ == "__main__":

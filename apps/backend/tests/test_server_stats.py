@@ -38,6 +38,16 @@ def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> N
     )
     monkeypatch.setattr(
         settings_repo,
+        "SERVER_STATS_ACCOUNTING_PATHS",
+        {
+            "system": usr,
+            "app": opt,
+            "tmp": root / "tmp",
+            "var": root / "var",
+        },
+    )
+    monkeypatch.setattr(
+        settings_repo,
         "SERVER_STATS_SERVICES",
         (("backend", "AL Backend API", "al-backend.service"),),
     )
@@ -92,6 +102,7 @@ def test_server_stats_reuses_cache_until_refresh(monkeypatch) -> None:
 
     monkeypatch.setattr(settings_repo.shutil, "disk_usage", fake_disk_usage)
     monkeypatch.setattr(settings_repo, "SERVER_STATS_PATHS", {})
+    monkeypatch.setattr(settings_repo, "SERVER_STATS_ACCOUNTING_PATHS", {})
     monkeypatch.setattr(settings_repo, "SERVER_STATS_SERVICES", ())
 
     repo = SettingsRepository.__new__(SettingsRepository)

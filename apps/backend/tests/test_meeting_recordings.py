@@ -803,3 +803,67 @@ def test_cleanup_old_retained_recordings_removes_recovery_files(tmp_path):
     assert not expired_track.exists()
     assert not expired_manifest.exists()
     assert unrelated.exists()
+
+def test_cleanup_old_retained_recordings_keeps_unexpired_and_malformed_files(tmp_path):
+    unexpired_track = tmp_path / "al-meeting-new.m4a.123.pcm.keep-until-2000"
+    malformed_track = tmp_path / "al-meeting-bad.m4a.123.pcm.keep-until-never"
+    unexpired_track.write_bytes(b"pcm")
+    malformed_track.write_bytes(b"pcm")
+
+    cleanup_old_retained_recordings(str(tmp_path), now=1000)
+
+    assert unexpired_track.exists()
+    assert malformed_track.exists()
+
+def test_cleanup_old_retained_recordings_removes_stale_orphan_pcm(tmp_path):
+    stale_track = tmp_path / "al-meeting-old.m4a.123.pcm"
+    stale_track.write_bytes(b"pcm")
+
+    old_timestamp = 1000
+    stale_track.touch()
+    discord_bot_module.os.utime(stale_track, (old_timestamp, old_timestamp))
+
+    cleanup_old_retained_recordings(str(tmp_path), temp_retention_seconds=300, now=2000)
+
+    assert not stale_track.exists()
+
+def test_cleanup_old_retained_recordings_keeps_recent_orphan_pcm(tmp_path):
+    recent_track = tmp_path / "al-meeting-recent.m4a.123.pcm"
+    recent_track.write_bytes(b"pcm")
+
+    recent_timestamp = 1900
+    discord_bot_module.os.utime(recent_track, (recent_timestamp, recent_timestamp))
+
+    cleanup_old_retained_recordings(str(tmp_path), temp_retention_seconds=300, now=2000)
+
+    assert recent_track.exists()
+
+def test_cleanup_old_retained_recordings_removes_stale_transcript_audio_and_manifest(tmp_path):
+    transcript_audio = tmp_path / "al-meeting-old.for-transcript.m4a"
+    transcript_text = tmp_path / "al-meeting-old.transcript.txt"
+    recovery_manifest = tmp_path / "al-meeting-old.recovery.json"
+    transcript_audio.write_bytes(b"audio")
+    transcript_text.write_text("transcript")
+    recovery_manifest.write_text("{}")
+
+    old_timestamp = 1000
+    discord_bot_module.os.utime(transcript_audio, (old_timestamp, old_timestamp))
+    discord_bot_module.os.utime(transcript_text, (old_timestamp, old_timestamp))
+    discord_bot_module.os.utime(recovery_manifest, (old_timestamp, old_timestamp))
+
+    cleanup_old_retained_recordings(str(tmp_path), temp_retention_seconds=300, now=2000)
+
+    assert not transcript_audio.exists()
+    assert not transcript_text.exists()
+    assert not recovery_manifest.exists()
+
+def test_cleanup_old_retained_recordings_ignores_non_al_files(tmp_path):
+    unrelated = tmp_path / "other.pcm"
+    unrelated.write_bytes(b"pcm")
+
+    old_timestamp = 1000
+    discord_bot_module.os.utime(unrelated, (old_timestamp, old_timestamp))
+
+    cleanup_old_retained_recordings(str(tmp_path), temp_retention_seconds=300, now=2000)
+
+    assert unrelated.exists()
