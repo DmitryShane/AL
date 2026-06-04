@@ -44,6 +44,7 @@ export function ActivityBreakdownCards({ author }: ActivityBreakdownCardsProps) 
         title="Activity Mix"
         items={activityMixItems}
         groups={activityMixGroups}
+        showSummaryBar={false}
       />
       <BreakdownPanel
         key={`${author.rawAuthor}-saved-files`}

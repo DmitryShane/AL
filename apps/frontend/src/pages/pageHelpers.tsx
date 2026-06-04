@@ -255,33 +255,38 @@ export function normalizeAuthorInput(value: string) {
 
 export function activityColor(type: string) {
   const normalized = type.toLowerCase();
+  const colorsByType: Record<string, string> = {
+    click: "#14b8a6",
+    file_saved: "#13a37b",
+    hold: "#a855f7",
+    play_mode: "#0ea5e9",
+    prefab_saved: "#13a37b",
+    scene_saved: "#ef4444",
+    scene_view_navigation: "#64748b",
+    select: "#5b4dff",
+    undo_redo: "#f59e0b"
+  };
 
-  if (normalized === "select") {
-    return "#5b4dff";
+  if (colorsByType[normalized]) {
+    return colorsByType[normalized];
   }
 
-  if (normalized === "undo_redo") {
-    return "#f59e0b";
-  }
-
-  if (normalized === "prefab_saved") {
-    return "#13a37b";
-  }
-
-  if (normalized === "play_mode") {
-    return "#0ea5e9";
-  }
-
-  if (normalized === "scene_saved") {
-    return "#ef4444";
-  }
-
-  return paletteColor(normalized.length);
+  return paletteColor(stableStringHash(normalized));
 }
 
 export function paletteColor(index: number) {
   const colors = ["#5b4dff", "#13a37b", "#f59e0b", "#0ea5e9", "#a855f7", "#ef4444", "#14b8a6"];
   return colors[index % colors.length];
+}
+
+function stableStringHash(value: string) {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash;
 }
 
 export function savedFileLabel(prefab: SavedPrefab) {
@@ -722,6 +727,7 @@ export function formatActivityType(type: string, source?: string) {
     file_saved: "File Save",
     scene_changed: "Scene Change",
     scene_saved: "Scene Save",
+    scene_view_navigation: "Scene Navigation",
     select: "Select",
     undo_redo: "Undo/Redo"
   };

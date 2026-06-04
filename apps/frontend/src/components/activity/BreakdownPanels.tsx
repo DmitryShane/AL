@@ -16,7 +16,17 @@ export type BreakdownPanelGroup = {
   items: BreakdownPanelItem[];
 };
 
-export function BreakdownPanel({ title, items, groups = [] }: { title: string; items: BreakdownPanelItem[]; groups?: BreakdownPanelGroup[] }) {
+export function BreakdownPanel({
+  title,
+  items,
+  groups = [],
+  showSummaryBar = true
+}: {
+  title: string;
+  items: BreakdownPanelItem[];
+  groups?: BreakdownPanelGroup[];
+  showSummaryBar?: boolean;
+}) {
   const flatForBar = items.length > 0 ? items : groups.flatMap((group) => group.items);
   const total = flatForBar.reduce((sum, item) => sum + Math.max(0, item.value), 0);
   const barStyle = {
@@ -37,7 +47,7 @@ export function BreakdownPanel({ title, items, groups = [] }: { title: string; i
           )}
         </div>
       </div>
-      {total > 0 ? (
+      {showSummaryBar && total > 0 ? (
         <div className="breakdown-bar-row">
           <div className="breakdown-bar" style={barStyle} aria-hidden="true" />
           <strong>{totalDisplayValue(flatForBar)}</strong>
