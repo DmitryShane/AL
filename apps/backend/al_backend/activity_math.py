@@ -1180,15 +1180,19 @@ def _activity_mix_from_counts(activity_counts: dict[str, int]) -> list[dict[str,
 
 def _activity_mix_from_list(activity_counts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     total_activities = sum(int(count.get("count", 0)) for count in activity_counts)
-    return [
-        {
-            "type": count.get("type"),
-            "count": int(count.get("count", 0)),
-            "percent": round((int(count.get("count", 0)) / total_activities) * 100) if total_activities else 0,
-        }
-        for count in activity_counts
-        if count.get("type")
-    ]
+    activity_mix = []
+
+    for count in activity_counts:
+        activity_type = count.get("type")
+        activity_count = int(count.get("count", 0))
+        percent = round((activity_count / total_activities) * 100) if total_activities else 0
+
+        if not activity_type or percent <= 0:
+            continue
+
+        activity_mix.append({"type": activity_type, "count": activity_count, "percent": percent})
+
+    return activity_mix
 
 
 def _with_author_presence(

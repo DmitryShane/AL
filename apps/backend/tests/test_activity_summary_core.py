@@ -75,6 +75,30 @@ def test_productivity_exceeds_one_hundred_with_overtime():
 
     assert author["productivity"] == 125.0
 
+
+def test_activity_mix_hides_items_with_zero_display_percent():
+    author = _with_activity_mix(
+        {
+            "activityCounts": [
+                {"type": "scene_view_navigation", "count": 883},
+                {"type": "select", "count": 398},
+                {"type": "scene_saved", "count": 5},
+                {"type": "undo_redo", "count": 5},
+                {"type": "hold", "count": 4},
+                {"type": "play_mode", "count": 4},
+                {"type": "click", "count": 2},
+            ],
+            "overtimeActivityCounts": [{"type": "click", "count": 0}],
+        }
+    )
+
+    assert author["activityMix"] == [
+        {"type": "scene_view_navigation", "count": 883, "percent": 68},
+        {"type": "select", "count": 398, "percent": 31},
+    ]
+    assert author["overtimeActivityMix"] == []
+
+
 def test_date_query_uses_inclusive_range():
     assert _date_query("2026-04-01", "2026-04-30") == {"date": {"$gte": "2026-04-01", "$lte": "2026-04-30"}}
 
