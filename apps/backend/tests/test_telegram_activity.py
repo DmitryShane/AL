@@ -1783,6 +1783,81 @@ def test_break_event_flow_records_day_and_break():
     telegram_activity = next(item for item in repo.db.daily_author_activity.items if item.get("source") == "telegram")
     assert telegram_activity["daySeconds"] == 9 * 3600
 
+def test_night_overtime_afk_does_not_create_break_seconds():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "telegramUsername": "vedamir_infinum",
+            "timeZoneId": "Europe/Kyiv",
+        }
+    )
+    repo.db.daily_author_activity.insert_one({"author": "Denis Ostrovskiy", "date": "2026-06-05", "source": "bal", "breakSeconds": 0})
+    repo.db.daily_author_activity.insert_one({"author": "Denis Ostrovskiy", "date": "2026-06-05", "source": "ual", "breakSeconds": 0})
+
+    assert repo.record_break_event("vedamir_infinum", "afk", "2026-06-04T21:12:09Z")["status"] == "break_started"
+    closed = repo.record_break_event("vedamir_infinum", "online", "2026-06-04T22:04:47Z")
+
+    assert closed["status"] == "break_closed"
+    assert closed["breakSeconds"] == 0
+    assert closed["ignoredBreakSeconds"] == 3158
+    assert closed["ignoreReason"] == "night_overtime"
+    assert repo.db.break_sessions.items == []
+    assert repo.db.break_intervals.items == []
+    assert [item["breakSeconds"] for item in repo.db.daily_author_activity.items if item["author"] == "Denis Ostrovskiy"] == [0, 0]
+
+def test_afk_crossing_midnight_counts_only_before_night_overtime():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "telegramUsername": "vedamir_infinum",
+            "timeZoneId": "Europe/Kyiv",
+        }
+    )
+    repo.db.daily_author_activity.insert_one({"author": "Denis Ostrovskiy", "date": "2026-06-04", "breakSeconds": 0})
+    repo.db.daily_author_activity.insert_one({"author": "Denis Ostrovskiy", "date": "2026-06-05", "breakSeconds": 0})
+
+    repo.record_break_event("vedamir_infinum", "afk", "2026-06-04T20:40:00Z")
+    closed = repo.record_break_event("vedamir_infinum", "online", "2026-06-04T21:40:00Z")
+
+    assert closed["status"] == "break_closed"
+    assert closed["breakSeconds"] == 20 * 60
+    assert closed["ignoredBreakSeconds"] == 40 * 60
+    assert len(repo.db.break_intervals.items) == 1
+    interval = repo.db.break_intervals.items[0]
+    assert interval["date"] == "2026-06-04"
+    assert interval["startedAt"] == dt.datetime(2026, 6, 4, 20, 40, tzinfo=dt.UTC)
+    assert interval["endedAt"] == dt.datetime(2026, 6, 4, 21, 0, tzinfo=dt.UTC)
+    assert interval["breakSeconds"] == 20 * 60
+    assert repo.db.daily_author_activity.items[0]["breakSeconds"] == 20 * 60
+    assert repo.db.daily_author_activity.items[1]["breakSeconds"] == 0
+
+def test_afk_leaving_night_overtime_counts_only_after_window():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Denis Ostrovskiy",
+            "telegramUsername": "vedamir_infinum",
+            "timeZoneId": "Europe/Kyiv",
+        }
+    )
+    repo.db.daily_author_activity.insert_one({"author": "Denis Ostrovskiy", "date": "2026-06-05", "breakSeconds": 0})
+
+    repo.record_break_event("vedamir_infinum", "afk", "2026-06-05T03:50:00Z")
+    closed = repo.record_break_event("vedamir_infinum", "online", "2026-06-05T04:10:00Z")
+
+    assert closed["status"] == "break_closed"
+    assert closed["breakSeconds"] == 10 * 60
+    assert closed["ignoredBreakSeconds"] == 10 * 60
+    assert len(repo.db.break_intervals.items) == 1
+    interval = repo.db.break_intervals.items[0]
+    assert interval["date"] == "2026-06-05"
+    assert interval["startedAt"] == dt.datetime(2026, 6, 5, 4, 0, tzinfo=dt.UTC)
+    assert interval["endedAt"] == dt.datetime(2026, 6, 5, 4, 10, tzinfo=dt.UTC)
+    assert interval["breakSeconds"] == 10 * 60
+    assert repo.db.daily_author_activity.items[0]["breakSeconds"] == 10 * 60
+
 def test_repeated_afk_does_not_reset_break_start():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "telegramUsername": "dmitry_shane"})
