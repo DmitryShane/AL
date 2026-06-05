@@ -354,6 +354,42 @@ class TelegramActivityService(MongoComposableMixin):
             )
             return {"ok": True, "status": "day_closed", "daySeconds": day_seconds, **break_result}
 
+        pending_break_snapshot = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
+        break_started_snap = _coerce_datetime((pending_break_snapshot or {}).get("startedAt"))
+        break_result = self._close_break_session(normalized_telegram, raw_author, event_time)
+
+        if break_result:
+            self._supersede_open_duplicate_afk_prompts(normalized_telegram, break_started_snap)
+
+        if (
+            break_result
+            and break_result.get("ignoreReason") == "night_overtime"
+            and _is_night_overtime_prompt_time(event_time, time_zone_id)
+        ):
+            ignored_status = "break_closed_ignored"
+            self.db.break_events.update_one(
+                {
+                    "telegramUsername": normalized_telegram,
+                    "rawAuthor": raw_author,
+                    "eventType": event_type,
+                    "timestamp": event_time,
+                    "date": event_date,
+                },
+                {"$set": {"telegramStatus": ignored_status, "metadata": break_result}},
+            )
+            self._insert_telegram_report_row(
+                raw_author,
+                normalized_telegram,
+                event_type,
+                event_time,
+                event_date,
+                time_zone_id,
+                row_received_at,
+                ignored_status,
+                break_result,
+            )
+            return {"ok": True, "status": ignored_status, **break_result}
+
         online_date = event_date
         self.db.day_sessions.update_one(
             {"rawAuthor": raw_author, "date": online_date},
@@ -373,13 +409,6 @@ class TelegramActivityService(MongoComposableMixin):
 
         self._invalidate_telegram_online_prompts_for_online_day(raw_author, online_date)
         self._close_open_duplicate_afk_prompts_after_online_day(raw_author, online_date)
-
-        pending_break_snapshot = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
-        break_started_snap = _coerce_datetime((pending_break_snapshot or {}).get("startedAt"))
-        break_result = self._close_break_session(normalized_telegram, raw_author, event_time)
-
-        if break_result:
-            self._supersede_open_duplicate_afk_prompts(normalized_telegram, break_started_snap)
 
         if not break_result:
             self._insert_telegram_report_row(

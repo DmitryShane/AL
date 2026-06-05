@@ -157,6 +157,9 @@ class ActivityLiveSummaryService(MongoComposableMixin):
                     latest_offline_by_key[key] = timestamp
                 continue
 
+            if event.get("telegramStatus") == "break_closed_ignored":
+                continue
+
             if key not in first_online_by_key or timestamp < first_online_by_key[key]["timestamp"]:
                 first_online_by_key[key] = {
                     "timestamp": timestamp,

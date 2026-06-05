@@ -1783,7 +1783,7 @@ def test_break_event_flow_records_day_and_break():
     telegram_activity = next(item for item in repo.db.daily_author_activity.items if item.get("source") == "telegram")
     assert telegram_activity["daySeconds"] == 9 * 3600
 
-def test_night_overtime_afk_does_not_create_break_seconds():
+def test_night_overtime_afk_break_off_does_not_create_telegram_day_or_break_seconds():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
         {
@@ -1797,14 +1797,39 @@ def test_night_overtime_afk_does_not_create_break_seconds():
 
     assert repo.record_break_event("vedamir_infinum", "afk", "2026-06-04T21:12:09Z")["status"] == "break_started"
     closed = repo.record_break_event("vedamir_infinum", "online", "2026-06-04T22:04:47Z")
+    offline = repo.record_break_event("vedamir_infinum", "offline", "2026-06-04T22:55:40Z")
 
-    assert closed["status"] == "break_closed"
+    assert closed["status"] == "break_closed_ignored"
     assert closed["breakSeconds"] == 0
     assert closed["ignoredBreakSeconds"] == 3158
     assert closed["ignoreReason"] == "night_overtime"
+    assert offline["status"] == "offline_without_online"
     assert repo.db.break_sessions.items == []
     assert repo.db.break_intervals.items == []
+    assert repo.db.day_sessions.items == []
     assert [item["breakSeconds"] for item in repo.db.daily_author_activity.items if item["author"] == "Denis Ostrovskiy"] == [0, 0]
+    online_row = next(row for row in repo.db.report_rows.items if row.get("telegramEventType") == "online")
+    assert online_row["telegramStatus"] == "break_closed_ignored"
+    online_event = next(event for event in repo.db.break_events.items if event.get("eventType") == "online")
+    assert online_event["telegramStatus"] == "break_closed_ignored"
+
+    repo.db.raw_activity_events.insert_one(
+        {
+            "author": "Denis Ostrovskiy",
+            "date": "2026-06-05",
+            "source": "bal",
+            "eventType": "scene_changed",
+            "occurredAtUtc": "2026-06-04T22:04:59Z",
+        }
+    )
+    summary = repo.activity_summary(start_date="2026-06-05", end_date="2026-06-05", include_hourly=True)
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Denis Ostrovskiy")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Denis Ostrovskiy")
+
+    assert author["telegramDaySeconds"] == 0
+    assert author["telegramToFirstActivitySeconds"] == 0
+    assert author["idleSeconds"] == 0
+    assert all(hour["totals"]["afkSeconds"] == 0 for hour in hourly["hourlyActivity"])
 
 def test_afk_crossing_midnight_counts_only_before_night_overtime():
     repo = fake_repository()
@@ -1821,9 +1846,10 @@ def test_afk_crossing_midnight_counts_only_before_night_overtime():
     repo.record_break_event("vedamir_infinum", "afk", "2026-06-04T20:40:00Z")
     closed = repo.record_break_event("vedamir_infinum", "online", "2026-06-04T21:40:00Z")
 
-    assert closed["status"] == "break_closed"
+    assert closed["status"] == "break_closed_ignored"
     assert closed["breakSeconds"] == 20 * 60
     assert closed["ignoredBreakSeconds"] == 40 * 60
+    assert repo.db.day_sessions.items == []
     assert len(repo.db.break_intervals.items) == 1
     interval = repo.db.break_intervals.items[0]
     assert interval["date"] == "2026-06-04"
