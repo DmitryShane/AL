@@ -24,6 +24,8 @@ The Unity Activity Logger plugin and Device Activity Logger plugin are separate 
 
 When creating new Activity Logger plugins, keep them minimal and purpose-built for logging only. Do not create README files, standalone documentation, extra settings pages, sample apps, or other nonessential scaffolding unless the user explicitly asks for them.
 
+When Codex AL activity logging tools fail with `unsupported call`, first treat it as a Codex app/plugin activation problem: the Codex AL plugin is likely not added/enabled in the current Codex app after an app update. Do not diagnose production AL, the backend, networking, or MCP transport as the primary cause until the plugin UI has been checked. Tell the owner directly to open the Codex AL plugin page and press `Add`/enable it if the UI shows that state.
+
 The Device Activity Logger plugin source lives in:
 
 ```text

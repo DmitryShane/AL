@@ -1,5 +1,5 @@
 import { CalendarDays } from "lucide-react";
-import { type MouseEvent, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 
 export type DateRange = {
   startDate: string;
@@ -16,10 +16,21 @@ type DateRangePickerProps = {
 export function DateRangePicker({ value, onChange, showPresets = true }: DateRangePickerProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [focused, setFocused] = useState(false);
+  const maxDate = toDateInputValue(new Date());
 
   function updateSelectedDate(date: string) {
+    if (date > maxDate) {
+      return;
+    }
+
     onChange({ startDate: date, endDate: date, preset: "custom" });
   }
+
+  useEffect(() => {
+    if (value.startDate > maxDate || value.endDate > maxDate) {
+      onChange(showPresets ? todayRange() : { startDate: maxDate, endDate: maxDate, preset: "custom" });
+    }
+  }, [maxDate, onChange, showPresets, value.endDate, value.startDate]);
 
   function openDatePicker() {
     const input = inputRef.current;
@@ -56,6 +67,7 @@ export function DateRangePicker({ value, onChange, showPresets = true }: DateRan
           ref={inputRef}
           className="date-native-input"
           type="date"
+          max={maxDate}
           value={value.startDate}
           onChange={(event) => updateSelectedDate(event.target.value)}
           onFocus={() => setFocused(true)}
