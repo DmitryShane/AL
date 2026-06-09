@@ -889,14 +889,6 @@ def test_activity_day_summary_snapshot_is_ignored_for_live_and_ranges():
         include_hourly=True,
         include_breakdowns=True,
     )
-    current_day = repo.cached_activity_summary(
-        view="activity",
-        start_date=today,
-        end_date=today,
-        include_profiles=False,
-        include_hourly=True,
-        include_breakdowns=True,
-    )
     range_summary = repo.cached_activity_summary(
         view="activity",
         start_date="2026-04-28",
@@ -908,8 +900,6 @@ def test_activity_day_summary_snapshot_is_ignored_for_live_and_ranges():
 
     assert "snapshot" not in live
     assert live["totals"]["activeSeconds"] != 999
-    assert "snapshot" not in current_day
-    assert current_day["totals"]["activeSeconds"] != 999
     assert "snapshot" not in range_summary
     assert range_summary["totals"]["activeSeconds"] != 999
 

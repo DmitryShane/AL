@@ -61,7 +61,7 @@ def test_fresh_normal_plugin_report_without_telegram_offline_keeps_author_online
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
     _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 18, 0, tzinfo=dt.UTC))
 
-    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 1, tzinfo=dt.UTC))
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 1, tzinfo=dt.UTC), date_mode="authorLocalToday")
     assert author["status"] == "online"
     assert "stalePresence" not in author
 
@@ -70,7 +70,7 @@ def test_stale_plugin_report_before_telegram_online_does_not_create_reports_stop
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
     _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC))
 
-    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC))
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC), date_mode="authorLocalToday")
 
     assert author["status"] == "stale"
     assert author["stalePresence"] == "telegram"
@@ -101,7 +101,7 @@ def test_stale_presence_reports_when_unity_reports_stop_without_telegram_signoff
     )
     _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 17, 0, tzinfo=dt.UTC))
 
-    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC))
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC), date_mode="authorLocalToday")
     assert author["status"] == "stale"
     assert author["stalePresence"] == "reports"
 
@@ -279,7 +279,7 @@ def test_regular_date_still_applies_reports_stopped_when_it_is_author_local_toda
         }
     )
 
-    author = _author_from_summary(repo, dt.datetime(2026, 4, 29, 1, 30, tzinfo=dt.UTC))
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 29, 1, 30, tzinfo=dt.UTC), date_mode="authorLocalToday")
 
     assert author["status"] == "stale"
     assert author["stalePresence"] == "reports"
@@ -364,7 +364,7 @@ def test_open_telegram_workday_still_applies_reports_stopped_when_plugin_stale()
         }
     )
 
-    author = _author_from_summary(repo, dt.datetime(2026, 4, 29, 1, 30, tzinfo=dt.UTC))
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 29, 1, 30, tzinfo=dt.UTC), date_mode="authorLocalToday")
 
     assert author["status"] == "stale"
     assert author["stalePresence"] == "reports"
@@ -459,7 +459,7 @@ def test_overtime_report_after_telegram_offline_keeps_author_online():
         }
     )
 
-    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 11, tzinfo=dt.UTC))
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 11, tzinfo=dt.UTC), date_mode="authorLocalToday")
     assert author["status"] == "online"
     assert "stalePresence" not in author
 
@@ -505,7 +505,7 @@ def test_fresh_heartbeat_liveness_prevents_red_offline_inside_workday():
         }
     )
 
-    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 31, tzinfo=dt.UTC))
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 31, tzinfo=dt.UTC), date_mode="authorLocalToday")
 
     assert author["lastReceivedAt"] == "2026-04-28T18:00:00+00:00"
     assert "lastReportReceivedAt" not in author
@@ -883,7 +883,7 @@ def test_fresh_daily_activity_without_report_row_resumes_reports_stopped_status(
         }
     )
 
-    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", now=dt.datetime(2026, 4, 29, 9, 5, 30, tzinfo=dt.UTC))
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", date_mode="authorLocalToday", now=dt.datetime(2026, 4, 29, 9, 5, 30, tzinfo=dt.UTC))
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
 
     assert author["status"] == "online"
@@ -921,7 +921,7 @@ def test_fresh_daily_activity_resumes_when_status_state_online_but_latest_event_
         }
     )
 
-    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", now=dt.datetime(2026, 4, 29, 9, 5, 30, tzinfo=dt.UTC))
+    summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", date_mode="authorLocalToday", now=dt.datetime(2026, 4, 29, 9, 5, 30, tzinfo=dt.UTC))
     author = next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
     status_events = [event for event in repo.db.status_events.items if event.get("rawAuthor") == "Future Artist"]
 

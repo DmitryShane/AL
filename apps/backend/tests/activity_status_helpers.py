@@ -20,10 +20,9 @@ def _insert_presence_daily_activity(repo, received_at):
         }
     )
 
-def _author_from_summary(repo, now):
-    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28", now=now)
+def _author_from_summary(repo, now, date_mode=None):
+    summary = repo.activity_summary(start_date="2026-04-28", end_date="2026-04-28", date_mode=date_mode, now=now)
     return next(author for author in summary["authors"] if author["rawAuthor"] == "Future Artist")
 
-def _author_status(repo, now):
-    return _author_from_summary(repo, now)["status"]
-
+def _author_status(repo, now, date_mode=None):
+    return _author_from_summary(repo, now, date_mode=date_mode)["status"]

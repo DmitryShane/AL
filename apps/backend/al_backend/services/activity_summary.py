@@ -107,23 +107,9 @@ class ActivitySummaryService(
             except ValueError:
                 requested_date = None
 
-            live_dates = set()
-            for profile in profiles.values():
-                profile_time_zone_id = _valid_time_zone_id(profile.get("timeZoneId"))
-                if not profile_time_zone_id:
-                    continue
-
-                live_dates.add(
-                    _local_date_for_time_zone(
-                        now,
-                        profile_time_zone_id,
-                    )
-                )
-
             historical_completed_single_day = bool(
                 requested_date
                 and requested_date <= now.astimezone(dt.UTC).date()
-                and str(start_date) not in live_dates
             )
         hidden_device_authors = self._hidden_device_authors()
         if historical_single_day:
