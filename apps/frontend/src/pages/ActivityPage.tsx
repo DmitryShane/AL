@@ -22,6 +22,7 @@ export function ActivityPage({
   datePickerValue,
   onDatePickerChange,
   selectedAuthor,
+  authorSelectionError,
   setSelectedAuthor,
   loading,
   refreshing,
@@ -32,6 +33,7 @@ export function ActivityPage({
   datePickerValue: DateRange;
   onDatePickerChange: (range: DateRange) => void;
   selectedAuthor: string | null;
+  authorSelectionError: string | null;
   setSelectedAuthor: (value: string) => void;
   loading: boolean;
   refreshing: boolean;
@@ -458,6 +460,8 @@ export function ActivityPage({
               setHourFilter={setReportHourFilter}
             />
           </>
+        ) : authorSelectionError ? (
+          <p className="empty">{authorSelectionError}</p>
         ) : selectedAuthor ? (
           <p className="empty">Selected author is not available in the current activity data.</p>
         ) : loading ? null : (

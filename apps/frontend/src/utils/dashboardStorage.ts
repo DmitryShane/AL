@@ -389,30 +389,6 @@ export function savePageScroll(page: Page, scrollY: number) {
   sessionStorage.setItem(pageScrollStorageKey(page), String(scrollY));
 }
 
-export function readActivityAuthorFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const author = params.get("author")?.trim();
-
-  return author || null;
-}
-
-export function writeActivityAuthorToUrl(author: string) {
-  const normalized = author.trim();
-
-  if (!normalized) {
-    return;
-  }
-
-  const url = new URL(window.location.href);
-
-  if (url.searchParams.get("author") === normalized) {
-    return;
-  }
-
-  url.searchParams.set("author", normalized);
-  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-}
-
 function todayRange(): DateRange {
   const today = toDateInputValue(new Date());
   return { startDate: today, endDate: today, preset: "live" };

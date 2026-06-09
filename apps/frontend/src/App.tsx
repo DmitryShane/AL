@@ -17,6 +17,7 @@ import { useAuthSession } from "./hooks/useAuthSession";
 import { useDashboardData } from "./hooks/useDashboardData";
 import { useDashboardNavigation } from "./hooks/useDashboardNavigation";
 import { compareAuthorCardStatus, formatSiteRole, formatSiteUserSidebarLabel, shouldHideInactiveOfflineAuthor } from "./pages/pageHelpers";
+import { activityAuthorSlugForRawAuthor } from "./utils/activityAuthorUrl";
 import { emptyActivitySummary, loadSavedDateRange, pageUsesDashboardSummary } from "./utils/dashboardStorage";
 import type { AuthorRow, Page } from "./types/dashboard";
 
@@ -57,8 +58,6 @@ function App() {
     authLoading,
     clearAuthState
   });
-  const { selectedAuthor, lastSelectedActivityAuthor, setSelectedAuthor } = useActivityAuthorSelection(page);
-
   const hasKnownPage = page !== null;
   const activitySummary = canShowCachedDashboard ? (summary?.activitySummary ?? emptyActivitySummary) : emptyActivitySummary;
   const cachedAuthorsActivitySummary = cachedAuthors.length
@@ -78,6 +77,7 @@ function App() {
     () => [...visibleActivitySummary.authors].sort((left, right) => compareAuthorCardStatus(left, right, appliedDateRange))[0]?.rawAuthor ?? null,
     [visibleActivitySummary.authors, appliedDateRange]
   );
+  const { selectedAuthor, lastSelectedActivityAuthor, authorSelectionError, setSelectedAuthor } = useActivityAuthorSelection(page, visibleActivitySummary.authors);
   const settingsDisplaySummary = canShowCachedDashboard ? (summary ?? cachedSettingsSummary) : null;
   const isVisualLoading = canShowCachedDashboard && hasKnownPage && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
   const hasDashboardDisplayData =
@@ -107,8 +107,11 @@ function App() {
   }, [firstVisibleActivityAuthor, lastSelectedActivityAuthor, page, selectedAuthor, setSelectedAuthor]);
 
   function selectPage(nextPage: Page) {
-    const search = nextPage === "activity" && lastSelectedActivityAuthor
-      ? `?${new URLSearchParams({ author: lastSelectedActivityAuthor }).toString()}`
+    const lastSelectedActivityAuthorSlug = lastSelectedActivityAuthor
+      ? activityAuthorSlugForRawAuthor(visibleActivitySummary.authors, lastSelectedActivityAuthor)
+      : null;
+    const search = nextPage === "activity" && lastSelectedActivityAuthorSlug
+      ? `?${new URLSearchParams({ author: lastSelectedActivityAuthorSlug }).toString()}`
       : "";
     selectNavigationPage(nextPage, search);
     showCachedSummaryForPage(nextPage);
@@ -221,6 +224,7 @@ function App() {
             datePickerValue={dateRange}
             onDatePickerChange={setDateRange}
             selectedAuthor={selectedAuthor}
+            authorSelectionError={authorSelectionError}
             setSelectedAuthor={setSelectedAuthor}
             loading={isVisualLoading}
             refreshing={refreshingReports}
