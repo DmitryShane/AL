@@ -5,6 +5,7 @@ import cursorIconUrl from "../assets/cursor-icon.png";
 import { REFRESH_INTERVAL_MS, REPORTS_PAGE_STORAGE_KEY, SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
 import type { AuthorProfile, AuthorRow, DateRange, MeetingActivityItem, MeetingRecordingStatus, Report, SavedPrefab, SettingsTab, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
 import { isSettingsTab } from "../components/settings/settingsTabs";
+import { localBrowserStorage, readStorageItem } from "../utils/browserStorage";
 export function settingsSaveButtonLabel(key: string, saving: string | null, statuses: Record<string, "saved" | "error" | undefined>) {
   if (saving === key) {
     return "Saving...";
@@ -1002,7 +1003,7 @@ export function avatarStyle(authorColor?: string) {
 }
 
 export function loadSavedSettingsTab(): SettingsTab {
-  const savedTab = localStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
+  const savedTab = readStorageItem(localBrowserStorage(), SETTINGS_TAB_STORAGE_KEY);
 
   if (isSettingsTab(savedTab)) {
     return savedTab;
@@ -1012,7 +1013,7 @@ export function loadSavedSettingsTab(): SettingsTab {
 }
 
 export function loadSavedReportsPage() {
-  const savedPage = Number(localStorage.getItem(REPORTS_PAGE_STORAGE_KEY) ?? 1);
+  const savedPage = Number(readStorageItem(localBrowserStorage(), REPORTS_PAGE_STORAGE_KEY) ?? 1);
 
   if (Number.isInteger(savedPage) && savedPage > 0) {
     return savedPage;

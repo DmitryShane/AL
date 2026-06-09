@@ -11,6 +11,7 @@ import { DateRangePicker } from "../components/layout/DateRangePicker";
 import { apiFetch } from "../api/client";
 import { PAGE_SCROLL_STORAGE_PREFIX, REPORTS_PAGE_STORAGE_KEY } from "../constants/dashboard";
 import type { ActivitySummary, AuthorHourlyActivity, AuthorRow, DateRange, Report, ReportsPage, ReportsPageCache } from "../types/dashboard";
+import { localBrowserStorage, readStorageItem, sessionBrowserStorage, writeStorageCache, writeStorageState } from "../utils/browserStorage";
 import { compareAuthorCardStatus, loadSavedReportsPage } from "./pageHelpers";
 
 const ACTIVITY_HOURLY_CACHE_PREFIX = "AL.Dashboard.ActivityHourly.";
@@ -118,7 +119,7 @@ export function ActivityPage({
 
     function readSavedActivityScrollY() {
       try {
-        const raw = sessionStorage.getItem(`${PAGE_SCROLL_STORAGE_PREFIX}activity`);
+        const raw = readStorageItem(sessionBrowserStorage(), `${PAGE_SCROLL_STORAGE_PREFIX}activity`);
 
         if (!raw) {
           return 0;
@@ -276,7 +277,7 @@ export function ActivityPage({
     setReportsPageState((current) => {
       const nextPage = typeof page === "function" ? page(current) : page;
       const normalizedPage = Math.max(1, nextPage);
-      localStorage.setItem(REPORTS_PAGE_STORAGE_KEY, String(normalizedPage));
+      writeStorageState(localBrowserStorage(), REPORTS_PAGE_STORAGE_KEY, String(normalizedPage));
       return normalizedPage;
     });
   }
@@ -498,7 +499,7 @@ function loadCachedActivityHourly(key: string) {
   const storageKey = activityCacheKey(ACTIVITY_HOURLY_CACHE_PREFIX, key);
 
   try {
-    const cached = localStorage.getItem(storageKey) ?? sessionStorage.getItem(storageKey);
+    const cached = readStorageItem(localBrowserStorage(), storageKey) ?? readStorageItem(sessionBrowserStorage(), storageKey);
 
     if (!cached) {
       return null;
@@ -511,18 +512,14 @@ function loadCachedActivityHourly(key: string) {
 }
 
 function saveCachedActivityHourly(key: string, rows: AuthorHourlyActivity[]) {
-  try {
-    localStorage.setItem(activityCacheKey(ACTIVITY_HOURLY_CACHE_PREFIX, key), JSON.stringify(rows));
-  } catch {
-    // Ignore storage failures; live API data is still shown.
-  }
+  writeStorageCache(localBrowserStorage(), activityCacheKey(ACTIVITY_HOURLY_CACHE_PREFIX, key), JSON.stringify(rows));
 }
 
 function loadCachedReportsPage(key: string) {
   const storageKey = activityCacheKey(ACTIVITY_REPORTS_CACHE_PREFIX, key);
 
   try {
-    const cached = localStorage.getItem(storageKey) ?? sessionStorage.getItem(storageKey);
+    const cached = readStorageItem(localBrowserStorage(), storageKey) ?? readStorageItem(sessionBrowserStorage(), storageKey);
 
     if (!cached) {
       return null;
@@ -535,9 +532,5 @@ function loadCachedReportsPage(key: string) {
 }
 
 function saveCachedReportsPage(key: string, page: ReportsPage) {
-  try {
-    localStorage.setItem(activityCacheKey(ACTIVITY_REPORTS_CACHE_PREFIX, key), JSON.stringify(page));
-  } catch {
-    // Ignore storage failures; live API data is still shown.
-  }
+  writeStorageCache(localBrowserStorage(), activityCacheKey(ACTIVITY_REPORTS_CACHE_PREFIX, key), JSON.stringify(page));
 }

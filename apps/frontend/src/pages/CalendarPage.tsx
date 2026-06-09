@@ -3,6 +3,7 @@ import { apiFetch } from "../api/client";
 import { CALENDAR_SUMMARY_CACHE_KEY } from "../constants/dashboard";
 import type { CalendarMark, CalendarSummary } from "../types/dashboard";
 import { AuthorAvatar } from "../components/AuthorAvatar";
+import { readStorageItem, sessionBrowserStorage, writeStorageCache } from "../utils/browserStorage";
 import { dateRangeList, monthIndexes, uniqueDates } from "./pageHelpers";
 import { CalendarClearEditor, CalendarLegend, CalendarMarkEditor, CalendarStats, MonthCalendar, ReasonEditor } from "../components/calendar/CalendarComponents";
 export function CalendarPage() {
@@ -310,7 +311,7 @@ export function CalendarPage() {
 
 function loadCachedCalendarSummary(year: number) {
   try {
-    const cached = sessionStorage.getItem(calendarCacheKey(year));
+    const cached = readStorageItem(sessionBrowserStorage(), calendarCacheKey(year));
 
     if (!cached) {
       return null;
@@ -323,14 +324,9 @@ function loadCachedCalendarSummary(year: number) {
 }
 
 function saveCachedCalendarSummary(summary: CalendarSummary) {
-  try {
-    sessionStorage.setItem(calendarCacheKey(summary.year), JSON.stringify(summary));
-  } catch {
-    // Ignore storage failures; live API data is still shown.
-  }
+  writeStorageCache(sessionBrowserStorage(), calendarCacheKey(summary.year), JSON.stringify(summary));
 }
 
 function calendarCacheKey(year: number) {
   return `${CALENDAR_SUMMARY_CACHE_KEY}.${year}`;
 }
-

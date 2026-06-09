@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { apiFetch } from "../../api/client";
 import type { ServerStats, ServerStatsService } from "../../types/dashboard";
+import { readStorageItem, sessionBrowserStorage, writeStorageCache } from "../../utils/browserStorage";
 import { Modal } from "../ui/Modal";
 
 const SERVER_STATS_CACHE_KEY = "al.serverStats.cache";
@@ -329,7 +330,7 @@ function readCachedServerStats(): ServerStats | null {
   }
 
   try {
-    const value = window.sessionStorage.getItem(SERVER_STATS_CACHE_KEY);
+    const value = readStorageItem(sessionBrowserStorage(), SERVER_STATS_CACHE_KEY);
 
     if (!value) {
       return null;
@@ -343,7 +344,7 @@ function readCachedServerStats(): ServerStats | null {
 
 function writeCachedServerStats(stats: ServerStats): void {
   try {
-    window.sessionStorage.setItem(SERVER_STATS_CACHE_KEY, JSON.stringify(stats));
+    writeStorageCache(sessionBrowserStorage(), SERVER_STATS_CACHE_KEY, JSON.stringify(stats));
   } catch {
     // Storage can be unavailable in private mode; in-memory cache still works.
   }

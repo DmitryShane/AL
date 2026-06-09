@@ -4,6 +4,7 @@ import { AuthorAvatar } from "../components/AuthorAvatar";
 import { apiFetch } from "../api/client";
 import { ANALYTICS_SUMMARY_CACHE_KEY } from "../constants/dashboard";
 import type { AnalyticsSummary } from "../types/dashboard";
+import { readStorageItem, sessionBrowserStorage, writeStorageCache } from "../utils/browserStorage";
 
 export function AnalyticsPage() {
   const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(() => loadCachedAnalyticsSummary());
@@ -95,7 +96,7 @@ export function AnalyticsPage() {
 
 function loadCachedAnalyticsSummary() {
   try {
-    const cached = sessionStorage.getItem(ANALYTICS_SUMMARY_CACHE_KEY);
+    const cached = readStorageItem(sessionBrowserStorage(), ANALYTICS_SUMMARY_CACHE_KEY);
 
     if (!cached) {
       return null;
@@ -108,10 +109,5 @@ function loadCachedAnalyticsSummary() {
 }
 
 function saveCachedAnalyticsSummary(summary: AnalyticsSummary) {
-  try {
-    sessionStorage.setItem(ANALYTICS_SUMMARY_CACHE_KEY, JSON.stringify(summary));
-  } catch {
-    // Ignore storage failures; live API data is still shown.
-  }
+  writeStorageCache(sessionBrowserStorage(), ANALYTICS_SUMMARY_CACHE_KEY, JSON.stringify(summary));
 }
-

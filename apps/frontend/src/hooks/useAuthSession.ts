@@ -6,12 +6,13 @@ import {
   readStoredSessionUserPreview,
   writeStoredSessionUserPreview
 } from "../utils/dashboardStorage";
+import { localBrowserStorage, readStorageItem, removeStorageItem, writeStorageState } from "../utils/browserStorage";
 import type { SiteUser } from "../types/dashboard";
 
 export function useAuthSession() {
   const [authUser, setAuthUser] = useState<SiteUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [hasAuthHint, setHasAuthHint] = useState(() => localStorage.getItem(AUTH_HINT_STORAGE_KEY) === "true");
+  const [hasAuthHint, setHasAuthHint] = useState(() => readStorageItem(localBrowserStorage(), AUTH_HINT_STORAGE_KEY) === "true");
   const [sessionUserPreview, setSessionUserPreview] = useState<SiteUser | null>(() => readStoredSessionUserPreview());
 
   useEffect(() => {
@@ -27,7 +28,7 @@ export function useAuthSession() {
           const payload = await response.json();
           setAuthUser(payload.user);
           setHasAuthHint(true);
-          localStorage.setItem(AUTH_HINT_STORAGE_KEY, "true");
+          writeStorageState(localBrowserStorage(), AUTH_HINT_STORAGE_KEY, "true");
         } else {
           clearAuthState();
         }
@@ -51,7 +52,7 @@ export function useAuthSession() {
   function clearAuthState() {
     setAuthUser(null);
     setHasAuthHint(false);
-    localStorage.removeItem(AUTH_HINT_STORAGE_KEY);
+    removeStorageItem(localBrowserStorage(), AUTH_HINT_STORAGE_KEY);
     setSessionUserPreview(null);
     writeStoredSessionUserPreview(null);
   }

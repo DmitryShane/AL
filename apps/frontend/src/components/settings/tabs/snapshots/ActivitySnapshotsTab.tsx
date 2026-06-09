@@ -4,6 +4,7 @@ import { apiFetch } from "../../../../api/client";
 import { DateRangePicker, type DateRange } from "../../../layout/DateRangePicker";
 import type { ActivitySnapshotStatus, ActivitySnapshotStatusRow } from "../../../../types/dashboard";
 import { formatTimestamp } from "../../../../pages/pageHelpers";
+import { localBrowserStorage, readStorageItem, sessionBrowserStorage, writeStorageCache, writeStorageState } from "../../../../utils/browserStorage";
 
 const SNAPSHOT_STATUS_CACHE_KEY = "AL.Dashboard.ActivitySnapshots.Status.v1";
 const SNAPSHOT_TABLE_STATE_KEY = "AL.Dashboard.ActivitySnapshots.TableState.v1";
@@ -318,7 +319,7 @@ function dateProgressLabel(rows: ActivitySnapshotStatusRow[]) {
 
 function loadCachedStatus() {
   try {
-    const raw = localStorage.getItem(SNAPSHOT_STATUS_CACHE_KEY) ?? sessionStorage.getItem(SNAPSHOT_STATUS_CACHE_KEY);
+    const raw = readStorageItem(localBrowserStorage(), SNAPSHOT_STATUS_CACHE_KEY) ?? readStorageItem(sessionBrowserStorage(), SNAPSHOT_STATUS_CACHE_KEY);
     return raw ? JSON.parse(raw) as ActivitySnapshotStatus : null;
   } catch {
     return null;
@@ -326,18 +327,14 @@ function loadCachedStatus() {
 }
 
 function saveCachedStatus(status: ActivitySnapshotStatus) {
-  try {
-    const payload = JSON.stringify(status);
-    localStorage.setItem(SNAPSHOT_STATUS_CACHE_KEY, payload);
-    sessionStorage.setItem(SNAPSHOT_STATUS_CACHE_KEY, payload);
-  } catch {
-    // Ignore storage failures; live refresh still works.
-  }
+  const payload = JSON.stringify(status);
+  writeStorageCache(localBrowserStorage(), SNAPSHOT_STATUS_CACHE_KEY, payload);
+  writeStorageCache(sessionBrowserStorage(), SNAPSHOT_STATUS_CACHE_KEY, payload);
 }
 
 function loadTableState(): SnapshotTableState {
   try {
-    const raw = localStorage.getItem(SNAPSHOT_TABLE_STATE_KEY) ?? sessionStorage.getItem(SNAPSHOT_TABLE_STATE_KEY);
+    const raw = readStorageItem(localBrowserStorage(), SNAPSHOT_TABLE_STATE_KEY) ?? readStorageItem(sessionBrowserStorage(), SNAPSHOT_TABLE_STATE_KEY);
     const parsed = raw ? JSON.parse(raw) as Partial<SnapshotTableState> : {};
     const page = Number(parsed.page ?? 1);
     const pageSize = Number(parsed.pageSize ?? 5);
@@ -353,9 +350,5 @@ function loadTableState(): SnapshotTableState {
 }
 
 function saveTableState(state: SnapshotTableState) {
-  try {
-    localStorage.setItem(SNAPSHOT_TABLE_STATE_KEY, JSON.stringify(state));
-  } catch {
-    // Ignore storage failures; table controls still work for the current mount.
-  }
+  writeStorageState(localBrowserStorage(), SNAPSHOT_TABLE_STATE_KEY, JSON.stringify(state));
 }

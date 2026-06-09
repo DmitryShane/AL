@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
 import type { AuthorProfile, MeetingActivityItem, MeetingNotificationSettings, OpenAIStats, SettingsTab, SiteUser, Summary } from "../types/dashboard";
+import { localBrowserStorage, readStorageItem, sessionBrowserStorage, writeStorageCache, writeStorageState } from "../utils/browserStorage";
 import {
   authorProfilePayload,
   emptyAuthorProfile,
@@ -370,7 +371,7 @@ export function SettingsPage({
 
   function setSettingsTab(tab: SettingsTab) {
     setSettingsTabState(tab);
-    localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, tab);
+    writeStorageState(localBrowserStorage(), SETTINGS_TAB_STORAGE_KEY, tab);
   }
 
   async function loadOpenAIStats(refresh: "month" | "totals" | null = null) {
@@ -1557,7 +1558,7 @@ function readCachedOpenAIStats(): OpenAIStats | null {
   }
 
   try {
-    const value = window.sessionStorage.getItem(OPENAI_STATS_CACHE_KEY);
+    const value = readStorageItem(sessionBrowserStorage(), OPENAI_STATS_CACHE_KEY);
 
     if (!value) {
       return null;
@@ -1571,7 +1572,7 @@ function readCachedOpenAIStats(): OpenAIStats | null {
 
 function writeCachedOpenAIStats(stats: OpenAIStats): void {
   try {
-    window.sessionStorage.setItem(OPENAI_STATS_CACHE_KEY, JSON.stringify(stats));
+    writeStorageCache(sessionBrowserStorage(), OPENAI_STATS_CACHE_KEY, JSON.stringify(stats));
   } catch {
     // Storage can be unavailable in private mode; in-memory cache still keeps the card populated.
   }

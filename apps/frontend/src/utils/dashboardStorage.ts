@@ -5,6 +5,15 @@ import {
   PAGE_SCROLL_STORAGE_PREFIX,
   SESSION_USER_PREVIEW_STORAGE_KEY
 } from "../constants/dashboard";
+import {
+  clearDashboardCaches,
+  localBrowserStorage,
+  readStorageItem,
+  removeStorageItem,
+  sessionBrowserStorage,
+  writeStorageCache,
+  writeStorageState
+} from "./browserStorage";
 import type { ActivitySummary, AuthorRow, DateRange, Page, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
 
 const LAST_AUTHORS_CACHE_PREFIX = "AL.Dashboard.LastAuthors.";
@@ -35,12 +44,12 @@ export const emptyActivitySummary: ActivitySummary = {
 };
 
 export function readStoredSessionUserPreview(): SiteUser | null {
-  if (typeof window === "undefined" || localStorage.getItem(AUTH_HINT_STORAGE_KEY) !== "true") {
+  if (typeof window === "undefined" || readStorageItem(localBrowserStorage(), AUTH_HINT_STORAGE_KEY) !== "true") {
     return null;
   }
 
   try {
-    const raw = sessionStorage.getItem(SESSION_USER_PREVIEW_STORAGE_KEY);
+    const raw = readStorageItem(sessionBrowserStorage(), SESSION_USER_PREVIEW_STORAGE_KEY);
 
     if (!raw) {
       return null;
@@ -73,26 +82,23 @@ export function writeStoredSessionUserPreview(user: SiteUser | null) {
   }
 
   if (!user) {
-    sessionStorage.removeItem(SESSION_USER_PREVIEW_STORAGE_KEY);
+    removeStorageItem(sessionBrowserStorage(), SESSION_USER_PREVIEW_STORAGE_KEY);
     return;
   }
 
-  try {
-    const avatarUrl = typeof user.avatarUrl === "string" && user.avatarUrl.trim() ? user.avatarUrl.trim() : undefined;
-    sessionStorage.setItem(
-      SESSION_USER_PREVIEW_STORAGE_KEY,
-      JSON.stringify({
-        email: user.email,
-        displayName: user.displayName,
-        role: user.role,
-        canViewServerStats: user.canViewServerStats,
-        active: user.active,
-        ...(avatarUrl ? { avatarUrl } : {})
-      })
-    );
-  } catch {
-    //
-  }
+  const avatarUrl = typeof user.avatarUrl === "string" && user.avatarUrl.trim() ? user.avatarUrl.trim() : undefined;
+  writeStorageState(
+    sessionBrowserStorage(),
+    SESSION_USER_PREVIEW_STORAGE_KEY,
+    JSON.stringify({
+      email: user.email,
+      displayName: user.displayName,
+      role: user.role,
+      canViewServerStats: user.canViewServerStats,
+      active: user.active,
+      ...(avatarUrl ? { avatarUrl } : {})
+    })
+  );
 }
 
 function lastAuthorsCacheKey(dateRange: DateRange) {
@@ -102,7 +108,7 @@ function lastAuthorsCacheKey(dateRange: DateRange) {
 
 export function readCachedAuthors(dateRange: DateRange): AuthorRow[] {
   try {
-    const raw = localStorage.getItem(lastAuthorsCacheKey(dateRange));
+    const raw = readStorageItem(localBrowserStorage(), lastAuthorsCacheKey(dateRange));
 
     if (!raw) {
       return [];
@@ -121,11 +127,7 @@ export function readCachedAuthors(dateRange: DateRange): AuthorRow[] {
 }
 
 export function saveCachedAuthors(dateRange: DateRange, authors: AuthorRow[]) {
-  try {
-    localStorage.setItem(lastAuthorsCacheKey(dateRange), JSON.stringify(authors));
-  } catch {
-    // Browsers can reject storage writes in private mode or when the quota is full.
-  }
+  writeStorageCache(localBrowserStorage(), lastAuthorsCacheKey(dateRange), JSON.stringify(authors));
 }
 
 function activitySummaryCacheKey(dateRange: DateRange) {
@@ -135,7 +137,7 @@ function activitySummaryCacheKey(dateRange: DateRange) {
 
 export function readCachedActivitySummary(dateRange: DateRange): ActivitySummary | null {
   try {
-    const raw = localStorage.getItem(activitySummaryCacheKey(dateRange));
+    const raw = readStorageItem(localBrowserStorage(), activitySummaryCacheKey(dateRange));
 
     if (!raw) {
       return null;
@@ -155,7 +157,7 @@ export function saveCachedActivitySummary(dateRange: DateRange, summary: Activit
       return;
     }
 
-    localStorage.setItem(activitySummaryCacheKey(dateRange), JSON.stringify(summary));
+    writeStorageCache(localBrowserStorage(), activitySummaryCacheKey(dateRange), JSON.stringify(summary));
   } catch {
     // Browsers can reject storage writes in private mode or when the quota is full.
   }
@@ -163,7 +165,7 @@ export function saveCachedActivitySummary(dateRange: DateRange, summary: Activit
 
 export function readCachedSettingsSummary(): Summary | null {
   try {
-    const raw = localStorage.getItem(SETTINGS_SUMMARY_CACHE_KEY);
+    const raw = readStorageItem(localBrowserStorage(), SETTINGS_SUMMARY_CACHE_KEY);
 
     if (!raw) {
       return null;
@@ -176,11 +178,7 @@ export function readCachedSettingsSummary(): Summary | null {
 }
 
 export function saveCachedSettingsSummary(summary: Summary) {
-  try {
-    localStorage.setItem(SETTINGS_SUMMARY_CACHE_KEY, JSON.stringify(summary));
-  } catch {
-    // Browsers can reject storage writes in private mode or when the quota is full.
-  }
+  writeStorageCache(localBrowserStorage(), SETTINGS_SUMMARY_CACHE_KEY, JSON.stringify(summary));
 }
 
 export function summaryViewForPage(page: Page) {
@@ -214,7 +212,7 @@ export function loadCachedDashboardSummary(page: Page, dateRange: DateRange) {
   const cacheKey = dashboardSummaryCacheKey(page, dateRange);
 
   try {
-    const localCached = page === "activity" ? localStorage.getItem(cacheKey) : null;
+    const localCached = page === "activity" ? readStorageItem(localBrowserStorage(), cacheKey) : null;
 
     if (localCached) {
       const summary = sanitizeCachedDashboardSummary(JSON.parse(localCached) as Summary);
@@ -228,7 +226,7 @@ export function loadCachedDashboardSummary(page: Page, dateRange: DateRange) {
   }
 
   try {
-    const cached = sessionStorage.getItem(cacheKey);
+    const cached = readStorageItem(sessionBrowserStorage(), cacheKey);
 
     if (!cached) {
       return null;
@@ -340,61 +338,22 @@ export function saveCachedDashboardSummary(page: Page, dateRange: DateRange, sum
 
   const cacheKey = dashboardSummaryCacheKey(page, dateRange);
 
-  try {
-    sessionStorage.setItem(cacheKey, JSON.stringify(summary));
-  } catch {
-    // Browsers can reject storage writes in private mode or when the quota is full.
-  }
+  const payload = JSON.stringify(summary);
+  writeStorageCache(sessionBrowserStorage(), cacheKey, payload);
 
   if (page !== "activity") {
     return;
   }
 
-  try {
-    localStorage.setItem(cacheKey, JSON.stringify(summary));
-  } catch {
-    // Browsers can reject storage writes in private mode or when the quota is full.
-  }
+  writeStorageCache(localBrowserStorage(), cacheKey, payload);
 }
 
 export function clearDashboardSessionCaches() {
-  const sessionPrefixes = [
-    DASHBOARD_SUMMARY_CACHE_PREFIX,
-    "AL.Dashboard.ActivityHourly.",
-    "AL.Dashboard.ActivityReports.",
-    "AL.Dashboard.ActivityReports.v2.",
-    "AL.Dashboard.AnalyticsSummary",
-    "AL.Dashboard.CalendarSummary"
-  ];
-  const localPrefixes = [
-    DASHBOARD_SUMMARY_CACHE_PREFIX,
-    LAST_AUTHORS_CACHE_PREFIX,
-    ACTIVITY_SUMMARY_CACHE_PREFIX,
-    "AL.Dashboard.ActivityHourly.",
-    "AL.Dashboard.ActivityReports.",
-    "AL.Dashboard.ActivityReports.v2.",
-    SETTINGS_SUMMARY_CACHE_KEY
-  ];
-
-  for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
-    const key = sessionStorage.key(index);
-
-    if (key && sessionPrefixes.some((prefix) => key.startsWith(prefix))) {
-      sessionStorage.removeItem(key);
-    }
-  }
-
-  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
-    const key = localStorage.key(index);
-
-    if (key && localPrefixes.some((prefix) => key.startsWith(prefix))) {
-      localStorage.removeItem(key);
-    }
-  }
+  clearDashboardCaches();
 }
 
 export function loadSavedDateRange(): DateRange {
-  const savedRange = localStorage.getItem(DATE_RANGE_STORAGE_KEY);
+  const savedRange = readStorageItem(localBrowserStorage(), DATE_RANGE_STORAGE_KEY);
 
   if (!savedRange) {
     return todayRange();
@@ -426,7 +385,7 @@ export function loadSavedDateRange(): DateRange {
 }
 
 export function saveDateRange(dateRange: DateRange) {
-  localStorage.setItem(DATE_RANGE_STORAGE_KEY, JSON.stringify(dateRange));
+  writeStorageState(localBrowserStorage(), DATE_RANGE_STORAGE_KEY, JSON.stringify(dateRange));
 }
 
 export function pageScrollStorageKey(page: Page) {
@@ -434,11 +393,11 @@ export function pageScrollStorageKey(page: Page) {
 }
 
 export function getSavedPageScroll(page: Page) {
-  return Number(sessionStorage.getItem(pageScrollStorageKey(page)) ?? 0);
+  return Number(readStorageItem(sessionBrowserStorage(), pageScrollStorageKey(page)) ?? 0);
 }
 
 export function savePageScroll(page: Page, scrollY: number) {
-  sessionStorage.setItem(pageScrollStorageKey(page), String(scrollY));
+  writeStorageState(sessionBrowserStorage(), pageScrollStorageKey(page), String(scrollY));
 }
 
 function todayRange(): DateRange {
