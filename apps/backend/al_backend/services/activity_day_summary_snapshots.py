@@ -951,7 +951,7 @@ class ActivityDaySummarySnapshotsMixin:
                 )
             )
 
-        if start_date in live_dates or requested_date > now.astimezone(dt.UTC).date():
+        if start_date in live_dates:
             return None
 
         if view == "activity" and (not include_hourly or not include_breakdowns):

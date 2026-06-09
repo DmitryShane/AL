@@ -720,6 +720,26 @@ def test_empty_historical_single_day_returns_day_off_summary_with_zero_authors()
     assert repo.db.activity_day_summary_snapshots.count_documents({"date": "2026-04-26"}) == 0
 
 
+def test_future_single_day_returns_empty_summary_with_zero_authors():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "team": "Lead"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Igor Mats", "displayName": "Igor Mats", "team": "Tech Lead"})
+
+    summary = repo.cached_activity_summary(
+        view="activity",
+        start_date="2099-06-11",
+        end_date="2099-06-11",
+        include_profiles=False,
+        include_hourly=True,
+        include_breakdowns=True,
+    )
+
+    assert summary["snapshot"] == {"hit": False, "status": "empty", "date": "2099-06-11"}
+    assert [author["rawAuthor"] for author in summary["authors"]] == ["Dmitry Shane", "Igor Mats"]
+    assert all(author["activeSeconds"] == 0 for author in summary["authors"])
+    assert len(summary["hourlyActivityByAuthor"]) == 2
+
+
 def test_completed_day_snapshot_adds_zero_rows_for_inactive_people_when_one_author_has_input():
     repo = fake_repository()
     day_date = "2026-06-06"
