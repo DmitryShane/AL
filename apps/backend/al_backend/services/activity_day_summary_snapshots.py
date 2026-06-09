@@ -5,6 +5,7 @@ import threading
 from ..activity_math import *
 from ..backend_composable_host import composed
 from ..hourly_fill_rules import empty_hourly_activity
+from .activity_summary_helpers import _is_device_profile_raw_author
 
 
 class ActivityDaySummarySnapshotsMixin:
@@ -90,6 +91,43 @@ class ActivityDaySummarySnapshotsMixin:
             "authorAliases": [],
             "hourlyActivityByAuthor": [],
             "snapshot": {"hit": False, "status": "preparing", "date": snapshot_date, **status},
+        }
+
+    def activity_day_summary_empty_completed_day_payload(self, day_date: str) -> dict[str, Any]:
+        snapshot_date = str(day_date or "").strip()
+        authors = self._empty_completed_day_authors()
+        hourly = [
+            {
+                "author": author["displayName"],
+                "rawAuthor": author["rawAuthor"],
+                "timeZoneId": author.get("timeZoneId"),
+                "timeZoneDisplayName": author.get("timeZoneDisplayName"),
+                "hourlyActivity": empty_hourly_activity(),
+            }
+            for author in authors
+        ]
+        return {
+            "totals": {
+                "daySeconds": 0,
+                "telegramDaySeconds": 0,
+                "pluginDaySeconds": 0,
+                "rawPluginDaySeconds": 0,
+                "telegramToFirstActivitySeconds": 0,
+                "activeSeconds": 0,
+                "idleSeconds": 0,
+                "meetingSeconds": 0,
+                "overtimeActiveSeconds": 0,
+                "breakSeconds": 0,
+            },
+            "activityMix": [],
+            "savedPrefabs": [],
+            "overtimeActivityMix": [],
+            "overtimeSavedPrefabs": [],
+            "authors": authors,
+            "profiles": [],
+            "authorAliases": [],
+            "hourlyActivityByAuthor": hourly,
+            "snapshot": {"hit": False, "status": "empty", "date": snapshot_date},
         }
 
     def build_activity_day_summary_snapshot(self, day_date: str, now: dt.datetime | None = None) -> dict[str, Any]:
@@ -620,6 +658,30 @@ class ActivityDaySummarySnapshotsMixin:
             "liveAuthors": sorted(live_authors),
         }
 
+    def activity_day_has_summary_inputs(self, day_date: str) -> bool:
+        snapshot_date = str(day_date or "").strip()
+
+        if not snapshot_date:
+            return False
+
+        for collection_name in (
+            "daily_author_activity",
+            "raw_activity_events",
+            "activity_snapshots",
+            "report_rows",
+            "break_events",
+            "break_intervals",
+            "meeting_events",
+            "meeting_intervals",
+            "status_events",
+        ):
+            collection = getattr(self.db, collection_name, None)
+
+            if collection is not None and collection.count_documents({"date": snapshot_date}) > 0:
+                return True
+
+        return False
+
     def _compose_activity_day_snapshot_payload(self, day_date: str, required_authors: list[str], version: int) -> dict[str, Any]:
         docs = list(
             self.db.activity_author_day_summary_snapshots.find(
@@ -737,6 +799,64 @@ class ActivityDaySummarySnapshotsMixin:
             }
 
         return sorted(authors.values(), key=lambda item: (str(item["displayName"]).lower(), str(item["rawAuthor"])))
+
+    def _empty_completed_day_authors(self) -> list[dict[str, Any]]:
+        authors: list[dict[str, Any]] = []
+
+        for raw_author, profile in composed(self)._profiles_by_raw_author().items():
+            if not raw_author:
+                continue
+
+            if _is_device_profile_raw_author(raw_author):
+                continue
+
+            if str(profile.get("profileType") or "person") == "publisher":
+                continue
+
+            authors.append(self._empty_completed_day_author_row(raw_author, profile))
+
+        return sorted(authors, key=lambda item: (str(item.get("displayName") or "").lower(), str(item.get("rawAuthor") or "")))
+
+    def _empty_completed_day_author_row(self, raw_author: str, profile: dict[str, Any]) -> dict[str, Any]:
+        avatar_url = _cached_author_avatar_api_url(raw_author, _github_username_for_avatar_fetch(raw_author, profile), profile)
+        return {
+            "rawAuthor": raw_author,
+            "authorEmail": profile.get("authorEmail", ""),
+            "displayName": _display_name(raw_author, profile),
+            "team": profile.get("team", ""),
+            "profileType": profile.get("profileType") or "person",
+            "telegramUsername": profile.get("telegramUsername", ""),
+            "telegramPrivateChatId": profile.get("telegramPrivateChatId"),
+            "discordUserId": profile.get("discordUserId", ""),
+            "discordUsername": profile.get("discordUsername", ""),
+            "autoBreakEnabled": profile.get("autoBreakEnabled", False),
+            "authorColor": profile.get("authorColor") or _author_color(raw_author),
+            "avatarUrl": avatar_url,
+            "source": None,
+            "pluginVersion": None,
+            "timeZoneId": profile.get("timeZoneId"),
+            "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
+            "lastRecordedAt": "",
+            "lastReceivedAt": "",
+            "daySeconds": 0,
+            "telegramDaySeconds": 0,
+            "pluginDaySeconds": 0,
+            "rawPluginDaySeconds": 0,
+            "telegramToFirstActivitySeconds": 0,
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "meetingSeconds": 0,
+            "breakSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "productivity": 0,
+            "activityCounts": [],
+            "activityMix": [],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "status": "stale",
+            "stalePresence": "telegram",
+        }
 
     def _is_author_day_live(self, raw_author: str, day_date: str, now: dt.datetime, fallback_time_zone_id: Any = None) -> bool:
         profiles = composed(self)._profiles_by_raw_author()

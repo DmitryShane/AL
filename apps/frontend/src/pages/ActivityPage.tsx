@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { Coffee, RefreshCw } from "lucide-react";
 import { AuthorsTable } from "../components/AuthorsTable";
 import { HourlyActivityChart } from "../components/HourlyActivityChart";
 import { ActivityBreakdownCards } from "../components/activity/ActivityBreakdownCards";
@@ -41,6 +41,7 @@ export function ActivityPage({
 }) {
   const author = selectedAuthor ? summary.authors.find((item) => item.rawAuthor === selectedAuthor) ?? null : null;
   const snapshotPreparing = summary.snapshot?.status === "preparing";
+  const snapshotEmpty = summary.snapshot?.status === "empty";
   const isHistoricalSingleDay = dateRange.preset !== "live" && dateRange.startDate === dateRange.endDate;
   const hourlyCacheKey = useMemo(() => JSON.stringify({
     startDate: dateRange.startDate,
@@ -183,7 +184,7 @@ export function ActivityPage({
     let ignore = false;
 
     async function loadHourly() {
-      if (isHistoricalSingleDay && (snapshotPreparing || summary.hourlyActivityByAuthor.length)) {
+      if (isHistoricalSingleDay && (snapshotPreparing || snapshotEmpty || summary.hourlyActivityByAuthor.length)) {
         setHourlyRows(summary.hourlyActivityByAuthor);
         return;
       }
@@ -253,7 +254,7 @@ export function ActivityPage({
     return () => {
       ignore = true;
     };
-  }, [dateRange.startDate, dateRange.endDate, dateRange.preset, hourlyCacheKey, isHistoricalSingleDay, loading, snapshotPreparing, summary.hourlyActivityByAuthor]);
+  }, [dateRange.startDate, dateRange.endDate, dateRange.preset, hourlyCacheKey, isHistoricalSingleDay, loading, snapshotEmpty, snapshotPreparing, summary.hourlyActivityByAuthor]);
 
   useEffect(() => {
     if (!author?.rawAuthor) {
@@ -284,6 +285,15 @@ export function ActivityPage({
     let ignore = false;
 
     async function loadReports() {
+      if (snapshotEmpty) {
+        setReports([]);
+        setReportsTotal(0);
+        setReportSources([]);
+        setReportsLoading(false);
+        setReportsError(null);
+        return;
+      }
+
       if (!author?.rawAuthor) {
         if (loading) {
           return;
@@ -381,7 +391,7 @@ export function ActivityPage({
     return () => {
       ignore = true;
     };
-  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, loading, reportsPage, reportsPageSize, reportSourceFilter, reportHourFilter, reportsCacheKey]);
+  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, loading, reportsPage, reportsPageSize, reportSourceFilter, reportHourFilter, reportsCacheKey, snapshotEmpty]);
 
   return (
     <>
@@ -421,6 +431,14 @@ export function ActivityPage({
 
         {snapshotPreparing ? (
           <p className="empty">Preparing historical activity snapshot for {summary.snapshot?.date ?? dateRange.startDate}...</p>
+        ) : snapshotEmpty ? (
+          <div className="activity-empty-day-state">
+            <div className="activity-empty-day-illustration" aria-hidden="true">
+              <Coffee size={42} strokeWidth={1.8} />
+            </div>
+            <strong>No activity data for this day</strong>
+            <p>This was a day off, so nobody worked and no activity reports were recorded.</p>
+          </div>
         ) : author ? (
           <>
             <div className="toolbar">

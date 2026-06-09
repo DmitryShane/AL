@@ -652,6 +652,36 @@ class ActivitySummaryService(
             for raw_author in list(hourly_by_author):
                 if raw_author not in authors_by_raw:
                     hourly_by_author.pop(raw_author, None)
+            completed_snapshot_day = self._activity_day_summary_snapshot_date_for_request(
+                view="activity",
+                start_date=start_date,
+                end_date=end_date,
+                date_mode=date_mode,
+                include_profiles=False,
+                include_hourly=True,
+                include_breakdowns=True,
+                now=now,
+            )
+
+            if completed_snapshot_day:
+                for raw_author, profile in profiles.items():
+                    if raw_author in authors_by_raw:
+                        continue
+
+                    if raw_author in hidden_device_authors or _is_device_profile_raw_author(raw_author):
+                        continue
+
+                    if str(profile.get("profileType") or "person") == "publisher":
+                        continue
+
+                    authors_by_raw[raw_author] = self._empty_completed_day_author_row(raw_author, profile)
+                    hourly_by_author[raw_author] = {
+                        "author": authors_by_raw[raw_author]["displayName"],
+                        "rawAuthor": raw_author,
+                        "timeZoneId": profile.get("timeZoneId"),
+                        "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
+                        "hourlyActivity": empty_hourly_activity(),
+                    }
             if not authors_by_raw:
                 for raw_author in {
                     composed(self).resolve_author_alias(str(author or "Unknown User"))

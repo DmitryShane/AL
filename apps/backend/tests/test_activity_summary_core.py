@@ -677,6 +677,48 @@ def test_historical_single_day_activity_summary_miss_returns_preparing_then_read
     assert second["snapshot"] == {"hit": True, "date": "2026-04-29"}
     assert second["totals"]["activeSeconds"] == 120
 
+def test_empty_historical_single_day_returns_day_off_summary_with_zero_authors():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "team": "Tech Lead",
+            "timeZoneId": "Europe/Kyiv",
+            "authorColor": "#7c3aed",
+            "githubUsername": "igormats",
+        }
+    )
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Evgeniy Dotsenko",
+            "displayName": "Evgeniy Dotsenko",
+            "team": "QA",
+            "timeZoneId": "Europe/Kyiv",
+        }
+    )
+
+    summary = repo.cached_activity_summary(
+        view="activity",
+        start_date="2026-04-26",
+        end_date="2026-04-26",
+        include_profiles=False,
+        include_hourly=True,
+        include_breakdowns=True,
+    )
+
+    assert summary["snapshot"] == {"hit": False, "status": "empty", "date": "2026-04-26"}
+    assert summary["totals"]["activeSeconds"] == 0
+    assert summary["activityMix"] == []
+    assert [author["rawAuthor"] for author in summary["authors"]] == ["Evgeniy Dotsenko", "Igor Mats"]
+    assert all(author["activeSeconds"] == 0 for author in summary["authors"])
+    assert all(author["status"] == "stale" and author["stalePresence"] == "telegram" for author in summary["authors"])
+    assert next(author for author in summary["authors"] if author["rawAuthor"] == "Igor Mats")["avatarUrl"].startswith(
+        "/api/v1/avatars/author?rawAuthor=Igor%20Mats"
+    )
+    assert len(summary["hourlyActivityByAuthor"]) == 2
+    assert repo.db.activity_day_summary_snapshots.count_documents({"date": "2026-04-26"}) == 0
+
 def test_historical_hourly_summary_uses_day_snapshot_payload():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
@@ -859,10 +901,11 @@ def test_activity_author_day_snapshot_candidates_include_active_devices_and_publ
     assert repo.db.activity_author_day_summary_snapshots.count_documents({"date": "2026-04-29"}) == 3
     assert [row["rawAuthor"] for row in status["rows"]] == ["Alpha Artist", "Device5", "Publisher QA"]
 
-def test_historical_activity_summary_uses_only_authors_active_on_selected_day():
+def test_historical_activity_summary_adds_zero_rows_for_inactive_people_on_selected_day():
     repo = fake_repository()
     now = dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC)
     repo.db.author_profiles.insert_one({"rawAuthor": "Alpha Artist", "displayName": "Alpha Artist", "timeZoneId": "UTC"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Beta Artist", "displayName": "Beta Artist", "timeZoneId": "UTC"})
     repo.db.author_profiles.insert_one({"rawAuthor": "Inactive Publisher", "displayName": "Inactive Publisher", "profileType": "publisher"})
     repo.db.author_profiles.insert_one({"rawAuthor": "Publisher QA", "displayName": "Publisher QA", "profileType": "publisher"})
 
@@ -885,8 +928,13 @@ def test_historical_activity_summary_uses_only_authors_active_on_selected_day():
 
     summary = repo.activity_summary(start_date="2026-04-29", end_date="2026-04-29", date_mode=None, now=now)
 
-    assert [item["rawAuthor"] for item in summary["authors"]] == ["Alpha Artist", "Device5", "Publisher QA"]
-    assert [item["rawAuthor"] for item in summary["hourlyActivityByAuthor"]] == ["Alpha Artist", "Device5", "Publisher QA"]
+    assert [item["rawAuthor"] for item in summary["authors"]] == ["Alpha Artist", "Beta Artist", "Device5", "Publisher QA"]
+    assert [item["rawAuthor"] for item in summary["hourlyActivityByAuthor"]] == ["Alpha Artist", "Beta Artist", "Device5", "Publisher QA"]
+    beta = next(item for item in summary["authors"] if item["rawAuthor"] == "Beta Artist")
+    assert beta["activeSeconds"] == 0
+    assert beta["idleSeconds"] == 0
+    assert beta["productivity"] == 0
+    assert "Inactive Publisher" not in {item["rawAuthor"] for item in summary["authors"]}
 
 
 def test_author_local_today_hides_inactive_publisher_after_twenty_four_hours():

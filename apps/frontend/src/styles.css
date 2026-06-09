@@ -857,6 +857,43 @@ p {
   padding: 22px 4px;
 }
 
+.activity-empty-day-state {
+  display: flex;
+  min-height: 340px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  padding: 42px 18px;
+  color: #64748b;
+  text-align: center;
+}
+
+.activity-empty-day-illustration {
+  display: inline-flex;
+  width: 88px;
+  height: 88px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dbe4f0;
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, #ffffff, #f5f8fc);
+  color: #475569;
+  box-shadow: 0 18px 38px rgb(15 23 42 / 8%);
+}
+
+.activity-empty-day-state strong {
+  color: #1f2937;
+  font-size: 1.2rem;
+}
+
+.activity-empty-day-state p {
+  max-width: 460px;
+  margin: 0;
+  line-height: 1.55;
+}
+
 .author-card-strip {
   position: relative;
   display: flex;

@@ -55,6 +55,11 @@ class ActivitySummaryCacheMixin:
             return payload
 
         if snapshot_date:
+            if not self.activity_day_has_summary_inputs(snapshot_date):
+                payload = self.activity_day_summary_empty_completed_day_payload(snapshot_date)
+                payload["cache"] = {"hit": False, "key": cache_key}
+                return payload
+
             self.start_activity_snapshot_background_drain()
             payload = self.activity_day_summary_preparing_payload(snapshot_date, now=now)
             payload["cache"] = {"hit": False, "key": cache_key}
