@@ -1,10 +1,8 @@
 import {
-  ACTIVITY_AUTHOR_STORAGE_KEY,
   AUTH_HINT_STORAGE_KEY,
   DATE_RANGE_STORAGE_KEY,
   DASHBOARD_SUMMARY_CACHE_PREFIX,
   PAGE_SCROLL_STORAGE_PREFIX,
-  PAGE_STORAGE_KEY,
   SESSION_USER_PREVIEW_STORAGE_KEY
 } from "../constants/dashboard";
 import type { ActivitySummary, AuthorRow, DateRange, Page, SiteUser, SiteUserRole, Summary } from "../types/dashboard";
@@ -343,23 +341,6 @@ export function clearDashboardSessionCaches() {
   }
 }
 
-export function loadSavedPage(): Page {
-  const savedPage = localStorage.getItem(PAGE_STORAGE_KEY);
-
-  if (
-    savedPage === "activity" ||
-    savedPage === "analytics" ||
-    savedPage === "calendar" ||
-    savedPage === "alerts" ||
-    savedPage === "settings" ||
-    savedPage === "authors"
-  ) {
-    return savedPage;
-  }
-
-  return "authors";
-}
-
 export function loadSavedDateRange(): DateRange {
   const savedRange = localStorage.getItem(DATE_RANGE_STORAGE_KEY);
 
@@ -430,22 +411,6 @@ export function writeActivityAuthorToUrl(author: string) {
 
   url.searchParams.set("author", normalized);
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-}
-
-export function loadSavedActivityAuthor() {
-  const urlAuthor = readActivityAuthorFromUrl();
-
-  if (urlAuthor) {
-    return urlAuthor;
-  }
-
-  const savedAuthor = localStorage.getItem(ACTIVITY_AUTHOR_STORAGE_KEY);
-
-  if (savedAuthor && savedAuthor.trim()) {
-    return savedAuthor;
-  }
-
-  return null;
 }
 
 function todayRange(): DateRange {

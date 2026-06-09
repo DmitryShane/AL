@@ -59,6 +59,7 @@ function App() {
   });
   const { selectedAuthor, setSelectedAuthor } = useActivityAuthorSelection(page);
 
+  const hasKnownPage = page !== null;
   const activitySummary = canShowCachedDashboard ? (summary?.activitySummary ?? emptyActivitySummary) : emptyActivitySummary;
   const cachedAuthorsActivitySummary = cachedAuthors.length
     ? { ...emptyActivitySummary, authors: cachedAuthors }
@@ -74,7 +75,7 @@ function App() {
     [activityDisplaySummary, appliedDateRange]
   );
   const settingsDisplaySummary = canShowCachedDashboard ? (summary ?? cachedSettingsSummary) : null;
-  const isVisualLoading = canShowCachedDashboard && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
+  const isVisualLoading = canShowCachedDashboard && hasKnownPage && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
   const hasDashboardDisplayData =
     page === "activity"
       ? Boolean(summary?.activitySummary ?? cachedActivitySummary ?? cachedAuthors.length)
@@ -87,7 +88,7 @@ function App() {
     [authorsSource, search]
   );
   const displaySessionUser = authUser ?? sessionUserPreview;
-  const isDashboardLoading = canShowCachedDashboard && pageUsesDashboardSummary(page) && (loading || authLoading || !authUser);
+  const isDashboardLoading = canShowCachedDashboard && hasKnownPage && pageUsesDashboardSummary(page) && (loading || authLoading || !authUser);
   const showDashboardLoading = isDashboardLoading && !hasDashboardDisplayData;
   const backendStatusLabel =
     healthStatus === "online" ? "Backend online" : healthStatus === "offline" ? "Backend offline" : "Checking backend...";
@@ -217,6 +218,7 @@ function App() {
         {page === "settings" && displaySessionUser ? (
           <SettingsPage summary={settingsDisplaySummary} currentUser={displaySessionUser} onSaved={() => void load(false)} />
         ) : null}
+        {!page ? <p className="empty">Page not found.</p> : null}
       </main>
     </div>
   );
@@ -234,7 +236,11 @@ function matchesAuthorSearch(author: AuthorRow, search: string) {
     .some((value) => value!.toLowerCase().includes(query));
 }
 
-function pageTitle(page: Page) {
+function pageTitle(page: Page | null) {
+  if (!page) {
+    return "Not found";
+  }
+
   if (page === "activity") {
     return "Activity";
   }
@@ -258,7 +264,11 @@ function pageTitle(page: Page) {
   return "Authors";
 }
 
-function pageSubtitle(page: Page) {
+function pageSubtitle(page: Page | null) {
+  if (!page) {
+    return "";
+  }
+
   if (page === "activity") {
     return "Select an author and inspect detailed activity for the selected period.";
   }

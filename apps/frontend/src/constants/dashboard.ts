@@ -1,7 +1,5 @@
 export const REFRESH_INTERVAL_MS = 10000;
-export const PAGE_STORAGE_KEY = "AL.Dashboard.Page";
 export const PAGE_SCROLL_STORAGE_PREFIX = "AL.Dashboard.PageScroll.";
-export const ACTIVITY_AUTHOR_STORAGE_KEY = "AL.Dashboard.ActivityAuthor";
 export const DATE_RANGE_STORAGE_KEY = "AL.Dashboard.DateRange";
 export const REPORTS_PAGE_STORAGE_KEY = "AL.Dashboard.PluginReportsPage";
 export const SETTINGS_TAB_STORAGE_KEY = "AL.Dashboard.SettingsTab";

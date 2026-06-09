@@ -1,23 +1,16 @@
 import { useEffect, useState } from "react";
-import { ACTIVITY_AUTHOR_STORAGE_KEY } from "../constants/dashboard";
 import {
-  loadSavedActivityAuthor,
   readActivityAuthorFromUrl,
   writeActivityAuthorToUrl
 } from "../utils/dashboardStorage";
 import type { Page } from "../types/dashboard";
 
-export function useActivityAuthorSelection(page: Page) {
-  const [selectedAuthor, setSelectedAuthorState] = useState<string | null>(() => loadSavedActivityAuthor());
+export function useActivityAuthorSelection(page: Page | null) {
+  const [selectedAuthor, setSelectedAuthorState] = useState<string | null>(() => page === "activity" ? readActivityAuthorFromUrl() : null);
 
   useEffect(() => {
     function syncSelectedAuthorFromUrl() {
-      const urlAuthor = readActivityAuthorFromUrl();
-      setSelectedAuthorState(urlAuthor);
-
-      if (urlAuthor) {
-        localStorage.setItem(ACTIVITY_AUTHOR_STORAGE_KEY, urlAuthor);
-      }
+      setSelectedAuthorState(page === "activity" ? readActivityAuthorFromUrl() : null);
     }
 
     window.addEventListener("popstate", syncSelectedAuthorFromUrl);
@@ -25,19 +18,25 @@ export function useActivityAuthorSelection(page: Page) {
     return () => {
       window.removeEventListener("popstate", syncSelectedAuthorFromUrl);
     };
-  }, []);
+  }, [page]);
 
   useEffect(() => {
-    if (page !== "activity" || !selectedAuthor || readActivityAuthorFromUrl()) {
+    if (page !== "activity") {
+      setSelectedAuthorState(null);
       return;
     }
 
-    writeActivityAuthorToUrl(selectedAuthor);
+    const urlAuthor = readActivityAuthorFromUrl();
+
+    if (selectedAuthor === urlAuthor) {
+      return;
+    }
+
+    setSelectedAuthorState(urlAuthor);
   }, [page, selectedAuthor]);
 
   function setSelectedAuthor(value: string) {
     setSelectedAuthorState(value);
-    localStorage.setItem(ACTIVITY_AUTHOR_STORAGE_KEY, value);
     writeActivityAuthorToUrl(value);
   }
 

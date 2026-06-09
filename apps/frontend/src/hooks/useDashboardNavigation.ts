@@ -1,10 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { PAGE_STORAGE_KEY } from "../constants/dashboard";
 import {
   getSavedPageScroll,
-  loadSavedPage,
   savePageScroll
 } from "../utils/dashboardStorage";
+import { normalizeDashboardPath, pageToPath, pathToPage } from "../utils/dashboardRoutes";
 import type { Page } from "../types/dashboard";
 
 export function useDashboardNavigation({
@@ -12,8 +11,9 @@ export function useDashboardNavigation({
 }: {
   canRestoreScroll: boolean;
 }) {
-  const [page, setPage] = useState<Page>(() => loadSavedPage());
-  const [isRestoringScroll, setIsRestoringScroll] = useState(() => getSavedPageScroll(loadSavedPage()) > 0);
+  const initialPage = readPageFromLocation();
+  const [page, setPage] = useState<Page | null>(() => initialPage);
+  const [isRestoringScroll, setIsRestoringScroll] = useState(() => initialPage ? getSavedPageScroll(initialPage) > 0 : false);
   const isRestoringScrollRef = useRef(isRestoringScroll);
   const skipNextScrollRestoreRef = useRef(false);
 
@@ -24,6 +24,7 @@ export function useDashboardNavigation({
   useLayoutEffect(() => {
     const previousScrollRestoration = window.history.scrollRestoration;
     window.history.scrollRestoration = "manual";
+    replaceNonCanonicalPath();
 
     return () => {
       window.history.scrollRestoration = previousScrollRestoration;
@@ -31,7 +32,24 @@ export function useDashboardNavigation({
   }, []);
 
   useEffect(() => {
+    function syncPageFromLocation() {
+      replaceNonCanonicalPath();
+      setPage(readPageFromLocation());
+    }
+
+    window.addEventListener("popstate", syncPageFromLocation);
+
+    return () => {
+      window.removeEventListener("popstate", syncPageFromLocation);
+    };
+  }, []);
+
+  useEffect(() => {
     const saveCurrentPageScroll = (force = false) => {
+      if (!page) {
+        return;
+      }
+
       if (!force && isRestoringScrollRef.current) {
         return;
       }
@@ -52,7 +70,7 @@ export function useDashboardNavigation({
   }, [page]);
 
   useLayoutEffect(() => {
-    if (!canRestoreScroll) {
+    if (!canRestoreScroll || !page) {
       return;
     }
 
@@ -86,7 +104,7 @@ export function useDashboardNavigation({
     }
 
     setPage(nextPage);
-    localStorage.setItem(PAGE_STORAGE_KEY, nextPage);
+    window.history.pushState(window.history.state, "", pageToPath(nextPage));
 
     if (shouldResetScroll) {
       window.requestAnimationFrame(() => {
@@ -96,4 +114,35 @@ export function useDashboardNavigation({
   }
 
   return { page, selectPage, isRestoringScroll };
+}
+
+function readPageFromLocation() {
+  if (window.location.pathname === "/") {
+    return "authors";
+  }
+
+  return pathToPage(window.location.pathname);
+}
+
+function replaceRootPathWithAuthors() {
+  if (window.location.pathname !== "/") {
+    return;
+  }
+
+  window.history.replaceState(window.history.state, "", pageToPath("authors"));
+}
+
+function replaceNonCanonicalPath() {
+  if (window.location.pathname === "/") {
+    replaceRootPathWithAuthors();
+    return;
+  }
+
+  const normalized = normalizeDashboardPath(window.location.pathname);
+
+  if (normalized === window.location.pathname || !pathToPage(normalized)) {
+    return;
+  }
+
+  window.history.replaceState(window.history.state, "", `${normalized}${window.location.search}${window.location.hash}`);
 }

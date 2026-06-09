@@ -25,14 +25,14 @@ export function useDashboardData({
   authLoading,
   clearAuthState
 }: {
-  page: Page;
+  page: Page | null;
   dateRange: DateRange;
   authUser: SiteUser | null;
   authLoading: boolean;
   clearAuthState: () => void;
 }) {
   const [appliedDateRange, setAppliedDateRange] = useState<DateRange>(() => dateRange);
-  const [summary, setSummary] = useState<Summary | null>(() => loadCachedDashboardSummary(page, dateRange));
+  const [summary, setSummary] = useState<Summary | null>(() => page ? loadCachedDashboardSummary(page, dateRange) : null);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthStatus, setHealthStatus] = useState<HealthStatus>("checking");
   const [cachedAuthors, setCachedAuthors] = useState<AuthorRow[]>(() => readCachedAuthors(dateRange));
@@ -47,6 +47,12 @@ export function useDashboardData({
       if (!authLoading) {
         setLoading(false);
       }
+      return;
+    }
+
+    if (!page) {
+      setSummary(null);
+      setLoading(false);
       return;
     }
 
