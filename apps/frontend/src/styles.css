@@ -2627,6 +2627,13 @@ p {
   --server-stats-accent: #ef4444;
 }
 
+.server-stats-card-row {
+  display: grid;
+  align-items: start;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 18px;
+}
+
 .server-stats-header,
 .server-stats-summary {
   display: flex;
@@ -2646,22 +2653,10 @@ p {
   gap: 10px;
 }
 
-.server-stats-grid {
-  display: grid;
-  align-items: start;
-  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
-  gap: 22px;
-}
-
 .server-stats-disk-column,
 .server-stats-services-column {
   display: grid;
   gap: 18px;
-}
-
-.server-stats-services-column {
-  border-left: 1px solid #edf2f7;
-  padding-left: 22px;
 }
 
 .server-stats-section-header {
@@ -2923,15 +2918,8 @@ p {
 }
 
 @media (max-width: 900px) {
-  .server-stats-grid {
+  .server-stats-card-row {
     grid-template-columns: 1fr;
-  }
-
-  .server-stats-services-column {
-    border-left: 0;
-    border-top: 1px solid #edf2f7;
-    padding-top: 18px;
-    padding-left: 0;
   }
 
   .server-stats-summary {

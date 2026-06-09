@@ -101,6 +101,7 @@ export function ServerStatsPanel() {
   const displayStats: ReadyServerStats | null = stats?.ready === false || !stats?.root ? null : stats as ReadyServerStats;
   const isDiskRefreshing = diskRefreshing || stats?.refreshing === true;
   const isServicesRefreshing = servicesRefreshing;
+  const serviceRows = stats?.services ?? [];
   const usedPercent = Math.max(0, Math.min(100, displayStats?.root?.usedPercent ?? 0));
   const accentColor = serverStatsAccentColor(usedPercent);
   const panelStyle = {
@@ -111,38 +112,25 @@ export function ServerStatsPanel() {
   };
 
   return (
-    <section className={`panel server-stats-panel server-stats-panel-${displayStats?.root?.warningLevel ?? "ok"}`} style={panelStyle}>
-      <div className="server-stats-header">
-        <div>
-          <h2>Server Stats</h2>
-          <p className="settings-caption">Read-only production disk usage overview.</p>
-        </div>
-        <div className="server-stats-actions">
-          <button className="server-stats-reboot-button" onClick={() => setRebootModalOpen(true)} disabled={rebooting}>
-            {rebooting ? "Rebooting..." : "Reboot"}
+    <div className="server-stats-card-row">
+      <section className={`panel server-stats-panel server-stats-panel-${displayStats?.root?.warningLevel ?? "ok"}`} style={panelStyle}>
+        <div className="server-stats-header">
+          <div>
+            <h2>Disk Usage</h2>
+            <p className="settings-caption">Filesystem capacity and application storage.</p>
+          </div>
+          <button className="server-stats-refresh-button" onClick={() => void loadStats("disk")} disabled={isDiskRefreshing || rebooting}>
+            {isDiskRefreshing ? "Refreshing..." : "Refresh"}
           </button>
         </div>
-      </div>
 
-      {loading && !stats ? <p className="notice">Loading server statistics...</p> : null}
-      {stats?.ready === false ? <p className="notice">Preparing server statistics...</p> : null}
-      {error ? <p className="notice error">{error}</p> : null}
-      {rebootMessage ? <p className="notice">{rebootMessage}</p> : null}
+        {loading && !stats ? <p className="notice">Loading disk usage...</p> : null}
+        {stats?.ready === false ? <p className="notice">Preparing disk usage...</p> : null}
+        {error ? <p className="notice error">{error}</p> : null}
 
-      {displayStats ? (
-        <>
-          <div className="server-stats-grid">
+        {displayStats ? (
+          <>
             <div className="server-stats-disk-column">
-              <div className="server-stats-section-header">
-                <div>
-                  <h3>Disk Usage</h3>
-                  <p className="settings-caption">Filesystem capacity and application storage.</p>
-                </div>
-                <button className="server-stats-refresh-button" onClick={() => void loadStats("disk")} disabled={isDiskRefreshing || rebooting}>
-                  {isDiskRefreshing ? "Refreshing..." : "Refresh"}
-                </button>
-              </div>
-
               <div className="server-stats-summary">
                 <div className="server-stats-donut" style={donutStyle}>
                   <div>
@@ -177,41 +165,53 @@ export function ServerStatsPanel() {
               </div>
             </div>
 
-            <div className="server-stats-services-column">
-              <div className="server-stats-section-header">
-                <div>
-                  <h3>Services</h3>
-                  <p className="settings-caption">Runtime status of server processes.</p>
-                </div>
-                <button className="server-stats-refresh-button" onClick={() => void loadStats("services")} disabled={isServicesRefreshing || rebooting}>
-                  {isServicesRefreshing ? "Refreshing..." : "Refresh"}
-                </button>
-              </div>
-              <div className="server-stats-services">
-                {(displayStats.services ?? []).map((service) => (
-                  <ServiceStatus key={service.key} service={service} />
-                ))}
-              </div>
-            </div>
+            <p className="server-stats-footnote">
+              Last updated {formatDateTime(displayStats.generatedAt)}.
+              {displayStats.nextScheduledRefreshAt ? ` Next automatic refresh ${formatDateTime(displayStats.nextScheduledRefreshAt)}.` : ""}
+              {isDiskRefreshing ? " Disk refresh in progress." : ""}
+              {displayStats.lastRefreshError ? ` Last refresh failed: ${displayStats.lastRefreshError}` : ""}
+            </p>
+          </>
+        ) : null}
+      </section>
+
+      <section className="panel server-stats-panel server-stats-services-panel">
+        <div className="server-stats-header">
+          <div>
+            <h2>Services</h2>
+            <p className="settings-caption">Runtime status of server processes.</p>
           </div>
+          <div className="server-stats-actions">
+            <button className="server-stats-refresh-button" onClick={() => void loadStats("services")} disabled={isServicesRefreshing || rebooting}>
+              {isServicesRefreshing ? "Refreshing..." : "Refresh"}
+            </button>
+            <button className="server-stats-reboot-button" onClick={() => setRebootModalOpen(true)} disabled={rebooting}>
+              {rebooting ? "Rebooting..." : "Reboot"}
+            </button>
+          </div>
+        </div>
 
-          <p className="server-stats-footnote">
-            Last updated {formatDateTime(displayStats.generatedAt)}.
-            {displayStats.nextScheduledRefreshAt ? ` Next automatic refresh ${formatDateTime(displayStats.nextScheduledRefreshAt)}.` : ""}
-            {isDiskRefreshing ? " Disk refresh in progress." : ""}
-            {displayStats.lastRefreshError ? ` Last refresh failed: ${displayStats.lastRefreshError}` : ""}
-          </p>
-        </>
-      ) : null}
+        {loading && !stats ? <p className="notice">Loading service statuses...</p> : null}
+        {stats?.ready === false && serviceRows.length === 0 ? <p className="notice">Preparing service statuses...</p> : null}
+        {rebootMessage ? <p className="notice">{rebootMessage}</p> : null}
 
-      {rebootModalOpen ? (
-        <ServerRebootConfirmModal
-          saving={rebooting}
-          onCancel={() => setRebootModalOpen(false)}
-          onConfirm={() => void requestReboot()}
-        />
-      ) : null}
-    </section>
+        {serviceRows.length > 0 ? (
+          <div className="server-stats-services">
+            {serviceRows.map((service) => (
+              <ServiceStatus key={service.key} service={service} />
+            ))}
+          </div>
+        ) : null}
+
+        {rebootModalOpen ? (
+          <ServerRebootConfirmModal
+            saving={rebooting}
+            onCancel={() => setRebootModalOpen(false)}
+            onConfirm={() => void requestReboot()}
+          />
+        ) : null}
+      </section>
+    </div>
   );
 }
 
