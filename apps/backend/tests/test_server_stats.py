@@ -252,8 +252,9 @@ def test_server_stats_single_flight_refresh(monkeypatch) -> None:
     assert repo._server_stats_snapshot is not None
 
 
-def test_server_stats_cold_start_returns_preparing_without_heavy_scan(monkeypatch) -> None:
+def test_server_stats_cold_start_returns_fast_snapshot_without_heavy_scan(monkeypatch) -> None:
     repo = SettingsRepository.__new__(SettingsRepository)
+    disk_usage = namedtuple("usage", "total used free")
 
     def fake_start_refresh():
         repo._ensure_server_stats_runtime_state()
@@ -261,18 +262,54 @@ def test_server_stats_cold_start_returns_preparing_without_heavy_scan(monkeypatc
         repo._server_stats_refresh_started_at = dt.datetime(2026, 6, 9, 4, 1, tzinfo=dt.UTC)
         return True
 
-    def fail_disk_usage(_path):
-        raise AssertionError("cold server stats request must not scan disk")
+    def fail_path_size(_path):
+        raise AssertionError("cold server stats request must not scan category paths")
 
     monkeypatch.setattr(repo, "start_server_stats_refresh", fake_start_refresh)
-    monkeypatch.setattr(settings_repo.shutil, "disk_usage", fail_disk_usage)
+    monkeypatch.setattr(settings_repo.shutil, "disk_usage", lambda _path: disk_usage(1000, 250, 750))
+    monkeypatch.setattr(settings_repo, "_path_size_bytes", fail_path_size)
+    monkeypatch.setattr(settings_repo, "SERVER_STATS_SERVICES", ())
 
     stats = repo.get_server_stats()
 
-    assert stats["ready"] is False
+    assert stats["ready"] is True
     assert stats["refreshing"] is True
-    assert stats["root"] is None
+    assert stats["root"]["usedBytes"] == 250
     assert stats["categories"] == []
+
+
+def test_server_stats_loads_persisted_snapshot_after_restart(monkeypatch) -> None:
+    repo = fake_repository()
+    repo.db.system_settings.insert_one(
+        {
+            "kind": settings_repo.SERVER_STATS_SNAPSHOT_CACHE_KIND,
+            "payload": {
+                "generatedAt": "2026-06-09T04:00:00+00:00",
+                "hostname": "server",
+                "root": {
+                    "path": "/",
+                    "totalBytes": 1000,
+                    "usedBytes": 500,
+                    "freeBytes": 500,
+                    "usedPercent": 50.0,
+                    "warningLevel": "ok",
+                },
+                "categories": [{"key": "app", "label": "App /opt/al", "path": "/opt/al", "bytes": 100, "exists": True}],
+                "services": [],
+            },
+            "snapshotAt": dt.datetime(2026, 6, 9, 4, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    def fail_disk_usage(_path):
+        raise AssertionError("server stats request must use persisted snapshot after restart")
+
+    monkeypatch.setattr(settings_repo.shutil, "disk_usage", fail_disk_usage)
+    stats = repo.get_server_stats()
+
+    assert stats["ready"] is True
+    assert stats["root"]["usedBytes"] == 500
+    assert stats["categories"][0]["key"] == "app"
 
 
 def test_next_server_stats_refresh_at_uses_0400_utc() -> None:

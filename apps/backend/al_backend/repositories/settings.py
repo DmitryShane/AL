@@ -57,6 +57,7 @@ OPENAI_STATS_MONTH_REFRESH_SECONDS = 6 * 3600
 OPENAI_STATS_MAX_DAILY_BUCKETS = 31
 SERVER_STATS_CACHE_TTL_SECONDS = 60
 SERVER_STATS_DAILY_REFRESH_HOUR_UTC = 4
+SERVER_STATS_SNAPSHOT_CACHE_KIND = "server_stats_snapshot_v1"
 DEFAULT_FAKE_ONLINE_SETTINGS = {
     "enabled": False,
     "daysOfWeek": [],
@@ -1523,6 +1524,8 @@ class SettingsRepository(MongoComposableMixin):
         if refresh_mode == "services":
             self.refresh_server_stats_services()
         elif refresh_mode in {"all", "disk"} or getattr(self, "_server_stats_snapshot", None) is None:
+            if getattr(self, "_server_stats_snapshot", None) is None:
+                self._initialize_server_stats_fast_snapshot()
             self.start_server_stats_refresh()
 
         return self._server_stats_response()
@@ -1591,6 +1594,7 @@ class SettingsRepository(MongoComposableMixin):
                     "services": services,
                     "servicesGeneratedAt": now,
                 }
+            self._persist_server_stats_snapshot_locked()
 
     def _ensure_server_stats_runtime_state(self) -> None:
         if hasattr(self, "_server_stats_lock"):
@@ -1603,6 +1607,9 @@ class SettingsRepository(MongoComposableMixin):
         self._server_stats_last_refresh_error = None
         self._server_stats_stop_event = threading.Event()
         self._server_stats_daily_thread = None
+        persisted_snapshot = self._load_persisted_server_stats_snapshot()
+        if persisted_snapshot:
+            self._server_stats_snapshot, self._server_stats_snapshot_at = persisted_snapshot
 
     def _server_stats_daily_refresh_loop(self) -> None:
         while not self._server_stats_stop_event.is_set():
@@ -1626,6 +1633,48 @@ class SettingsRepository(MongoComposableMixin):
             self._server_stats_snapshot_at = dt.datetime.now(dt.UTC)
             self._server_stats_last_refresh_error = None
             self._server_stats_refreshing = False
+            self._persist_server_stats_snapshot_locked()
+
+    def _initialize_server_stats_fast_snapshot(self) -> None:
+        payload = self._build_server_stats_fast_payload()
+        with self._server_stats_lock:
+            if self._server_stats_snapshot is not None:
+                return
+
+            self._server_stats_snapshot = payload
+            self._server_stats_snapshot_at = dt.datetime.now(dt.UTC)
+            self._persist_server_stats_snapshot_locked()
+
+    def _load_persisted_server_stats_snapshot(self) -> tuple[dict[str, Any], dt.datetime | None] | None:
+        if not hasattr(self, "db"):
+            return None
+
+        doc = self.db.system_settings.find_one({"kind": SERVER_STATS_SNAPSHOT_CACHE_KIND}, {"_id": 0}) or {}
+        payload = doc.get("payload")
+
+        if not isinstance(payload, dict) or not payload.get("root"):
+            return None
+
+        snapshot_at = _coerce_datetime(doc.get("snapshotAt")) or _coerce_datetime(payload.get("generatedAt"))
+        return dict(payload), snapshot_at
+
+    def _persist_server_stats_snapshot_locked(self) -> None:
+        if not hasattr(self, "db") or not self._server_stats_snapshot:
+            return
+
+        snapshot_at = self._server_stats_snapshot_at or dt.datetime.now(dt.UTC)
+        self.db.system_settings.update_one(
+            {"kind": SERVER_STATS_SNAPSHOT_CACHE_KIND},
+            {
+                "$set": {
+                    "kind": SERVER_STATS_SNAPSHOT_CACHE_KIND,
+                    "payload": dict(self._server_stats_snapshot),
+                    "snapshotAt": snapshot_at,
+                    "updatedAt": dt.datetime.now(dt.UTC),
+                }
+            },
+            upsert=True,
+        )
 
     def _server_stats_response(self) -> dict[str, Any]:
         self._ensure_server_stats_runtime_state()
@@ -1718,6 +1767,41 @@ class SettingsRepository(MongoComposableMixin):
             "cacheExpiresAt": _next_server_stats_refresh_at(now).isoformat(),
         }
         return payload
+
+    def _build_server_stats_fast_payload(self) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        usage = shutil.disk_usage("/")
+        total = int(usage.total)
+        used = int(usage.used)
+        free = int(usage.free)
+        percent = round((used / total) * 100, 1) if total else 0.0
+
+        if percent >= 90:
+            warning_level = "critical"
+        elif percent >= 80:
+            warning_level = "warning"
+        else:
+            warning_level = "ok"
+
+        return {
+            "generatedAt": now.isoformat(),
+            "hostname": socket.gethostname(),
+            "root": {
+                "path": "/",
+                "totalBytes": total,
+                "usedBytes": used,
+                "freeBytes": free,
+                "usedPercent": percent,
+                "warningLevel": warning_level,
+            },
+            "categories": [],
+            "services": [
+                _server_stats_service(key, label, unit)
+                for key, label, unit in SERVER_STATS_SERVICES
+            ],
+            "cached": False,
+            "cacheExpiresAt": _next_server_stats_refresh_at(now).isoformat(),
+        }
 
     def reboot_server(self) -> dict[str, Any]:
         requested_at = dt.datetime.now(dt.UTC)
