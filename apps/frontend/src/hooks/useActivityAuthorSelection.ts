@@ -9,11 +9,14 @@ import type { AuthorRow, Page } from "../types/dashboard";
 
 export function useActivityAuthorSelection(page: Page | null, authors: AuthorRow[]) {
   const initialSlug = page === "activity" ? readActivityAuthorSlugFromUrl() : null;
-  const initialAuthor = rawAuthorForActivityAuthorSlug(authors, initialSlug).rawAuthor;
+  const initialLookup = rawAuthorForActivityAuthorSlug(authors, initialSlug);
+  const initialAuthor = initialLookup.rawAuthor;
+  const initialLastSlug = initialAuthor ? initialSlug : null;
   const [selectedAuthor, setSelectedAuthorState] = useState<string | null>(() => initialAuthor);
   const [lastSelectedActivityAuthor, setLastSelectedActivityAuthor] = useState<string | null>(() => initialAuthor);
+  const [lastSelectedActivityAuthorSlug, setLastSelectedActivityAuthorSlug] = useState<string | null>(() => initialLastSlug);
   const [selectedAuthorSlug, setSelectedAuthorSlug] = useState<string | null>(() => initialSlug);
-  const [authorSlugAmbiguous, setAuthorSlugAmbiguous] = useState(() => page === "activity" && rawAuthorForActivityAuthorSlug(authors, initialSlug).ambiguous);
+  const [authorSlugAmbiguous, setAuthorSlugAmbiguous] = useState(() => page === "activity" && initialLookup.ambiguous);
 
   useEffect(() => {
     function syncSelectedAuthorFromUrl() {
@@ -32,6 +35,7 @@ export function useActivityAuthorSelection(page: Page | null, authors: AuthorRow
 
       if (lookup.rawAuthor) {
         setLastSelectedActivityAuthor(lookup.rawAuthor);
+        setLastSelectedActivityAuthorSlug(urlSlug);
       }
     }
 
@@ -58,6 +62,7 @@ export function useActivityAuthorSelection(page: Page | null, authors: AuthorRow
     if (selectedAuthor === lookup.rawAuthor) {
       if (lookup.rawAuthor) {
         setLastSelectedActivityAuthor(lookup.rawAuthor);
+        setLastSelectedActivityAuthorSlug(urlSlug);
       }
       return;
     }
@@ -66,6 +71,7 @@ export function useActivityAuthorSelection(page: Page | null, authors: AuthorRow
 
     if (lookup.rawAuthor) {
       setLastSelectedActivityAuthor(lookup.rawAuthor);
+      setLastSelectedActivityAuthorSlug(urlSlug);
     }
   }, [authors, page, selectedAuthor]);
 
@@ -78,6 +84,7 @@ export function useActivityAuthorSelection(page: Page | null, authors: AuthorRow
 
     setSelectedAuthorState(value);
     setLastSelectedActivityAuthor(value);
+    setLastSelectedActivityAuthorSlug(slug);
     setSelectedAuthorSlug(slug);
     setAuthorSlugAmbiguous(false);
     writeActivityAuthorSlugToUrl(slug);
@@ -89,5 +96,5 @@ export function useActivityAuthorSelection(page: Page | null, authors: AuthorRow
       : "Selected author is not available in the current activity data."
     : null;
 
-  return { selectedAuthor, lastSelectedActivityAuthor, authorSelectionError, setSelectedAuthor };
+  return { selectedAuthor, lastSelectedActivityAuthor, lastSelectedActivityAuthorSlug, authorSelectionError, setSelectedAuthor };
 }

@@ -17,7 +17,6 @@ import { useAuthSession } from "./hooks/useAuthSession";
 import { useDashboardData } from "./hooks/useDashboardData";
 import { useDashboardNavigation } from "./hooks/useDashboardNavigation";
 import { compareAuthorCardStatus, formatSiteRole, formatSiteUserSidebarLabel, shouldHideInactiveOfflineAuthor } from "./pages/pageHelpers";
-import { activityAuthorSlugForRawAuthor } from "./utils/activityAuthorUrl";
 import { emptyActivitySummary, loadSavedDateRange, pageUsesDashboardSummary } from "./utils/dashboardStorage";
 import type { AuthorRow, Page } from "./types/dashboard";
 
@@ -77,7 +76,13 @@ function App() {
     () => [...visibleActivitySummary.authors].sort((left, right) => compareAuthorCardStatus(left, right, appliedDateRange))[0]?.rawAuthor ?? null,
     [visibleActivitySummary.authors, appliedDateRange]
   );
-  const { selectedAuthor, lastSelectedActivityAuthor, authorSelectionError, setSelectedAuthor } = useActivityAuthorSelection(page, visibleActivitySummary.authors);
+  const {
+    selectedAuthor,
+    lastSelectedActivityAuthor,
+    lastSelectedActivityAuthorSlug,
+    authorSelectionError,
+    setSelectedAuthor
+  } = useActivityAuthorSelection(page, visibleActivitySummary.authors);
   const settingsDisplaySummary = canShowCachedDashboard ? (summary ?? cachedSettingsSummary) : null;
   const isVisualLoading = canShowCachedDashboard && hasKnownPage && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
   const hasDashboardDisplayData =
@@ -99,17 +104,29 @@ function App() {
   const backendStatusClassName = healthStatus === "online" ? "status-pill online" : `status-pill ${healthStatus}`;
 
   useEffect(() => {
-    if (page !== "activity" || selectedAuthor || lastSelectedActivityAuthor || !firstVisibleActivityAuthor) {
+    if (
+      page !== "activity" ||
+      selectedAuthor ||
+      lastSelectedActivityAuthor ||
+      lastSelectedActivityAuthorSlug ||
+      authorSelectionError ||
+      !firstVisibleActivityAuthor
+    ) {
       return;
     }
 
     setSelectedAuthor(firstVisibleActivityAuthor);
-  }, [firstVisibleActivityAuthor, lastSelectedActivityAuthor, page, selectedAuthor, setSelectedAuthor]);
+  }, [
+    authorSelectionError,
+    firstVisibleActivityAuthor,
+    lastSelectedActivityAuthor,
+    lastSelectedActivityAuthorSlug,
+    page,
+    selectedAuthor,
+    setSelectedAuthor
+  ]);
 
   function selectPage(nextPage: Page) {
-    const lastSelectedActivityAuthorSlug = lastSelectedActivityAuthor
-      ? activityAuthorSlugForRawAuthor(visibleActivitySummary.authors, lastSelectedActivityAuthor)
-      : null;
     const search = nextPage === "activity" && lastSelectedActivityAuthorSlug
       ? `?${new URLSearchParams({ author: lastSelectedActivityAuthorSlug }).toString()}`
       : "";
