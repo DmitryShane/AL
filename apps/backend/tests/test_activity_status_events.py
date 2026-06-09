@@ -132,6 +132,17 @@ def test_historical_activity_summary_does_not_mark_stopped_reports_as_realtime_s
     assert author["status"] == "stale"
     assert author["stalePresence"] == "telegram"
 
+def test_historical_activity_summary_never_marks_fresh_report_online():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 29, 18, 0, tzinfo=dt.UTC))
+
+    author = _author_from_summary(repo, dt.datetime(2026, 4, 29, 18, 1, tzinfo=dt.UTC))
+
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "telegram"
+    assert repo.db.status_events.count_documents({"rawAuthor": "Future Artist", "reason": "reports_resumed"}) == 0
+
 def test_historical_activity_summary_keeps_selected_day_telegram_offline_gray():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})

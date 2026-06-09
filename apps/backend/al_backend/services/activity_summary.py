@@ -100,6 +100,27 @@ class ActivitySummaryService(
         now = now or dt.datetime.now(dt.UTC)
         historical_single_day = bool(start_date and start_date == end_date and not date_mode)
         profiles = composed(self)._profiles_by_raw_author()
+        historical_completed_single_day = False
+        if historical_single_day:
+            try:
+                requested_date = dt.date.fromisoformat(str(start_date))
+            except ValueError:
+                requested_date = None
+
+            live_dates = {now.astimezone(dt.UTC).date().isoformat()}
+            for profile in profiles.values():
+                live_dates.add(
+                    _local_date_for_time_zone(
+                        now,
+                        _author_time_zone_id(profile.get("rawAuthor"), {}, profile.get("timeZoneId")),
+                    )
+                )
+
+            historical_completed_single_day = bool(
+                requested_date
+                and requested_date <= now.astimezone(dt.UTC).date()
+                and str(start_date) not in live_dates
+            )
         hidden_device_authors = self._hidden_device_authors()
         if historical_single_day:
             selected_daily_device_authors = {
@@ -863,7 +884,14 @@ class ActivitySummaryService(
             send_interval_seconds = composed(self).get_interval_for_author(raw_author)
             base_author = _with_source_breakdowns(_with_activity_mix(_with_productivity(author)))
 
-            if composed(self).is_publisher_profile(raw_author, profiles):
+            if historical_completed_single_day:
+                summary_author = {
+                    **base_author,
+                    "status": "stale",
+                    "stalePresence": "telegram",
+                    "sendIntervalSeconds": send_interval_seconds,
+                }
+            elif composed(self).is_publisher_profile(raw_author, profiles):
                 summary_author = composed(self).with_publisher_device_presence(base_author, send_interval_seconds, now)
             else:
                 summary_author = _with_author_presence(
