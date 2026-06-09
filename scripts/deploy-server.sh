@@ -130,6 +130,8 @@ sed \
   "${APP_DIR}/deploy/systemd/al-apt-cache-clean.service" > /etc/systemd/system/al-apt-cache-clean.service
 
 cp "${APP_DIR}/deploy/systemd/al-apt-cache-clean.timer" /etc/systemd/system/al-apt-cache-clean.timer
+install -d -m 0755 /etc/systemd/system/mongod.service.d
+cp "${APP_DIR}/deploy/systemd/mongod-restart.conf" /etc/systemd/system/mongod.service.d/restart.conf
 install -d -m 0755 /etc/systemd/journald.conf.d
 cp "${APP_DIR}/deploy/systemd/al-journald-retention.conf" /etc/systemd/journald.conf.d/al-retention.conf
 cp "${APP_DIR}/deploy/logrotate/mongod" /etc/logrotate.d/mongod
