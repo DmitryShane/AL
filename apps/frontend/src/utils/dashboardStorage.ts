@@ -371,6 +371,10 @@ export function loadSavedDateRange(): DateRange {
       isDateInputValue(parsed.startDate) &&
       isDateInputValue(parsed.endDate)
     ) {
+      if (parsed.startDate === toDateInputValue(new Date()) && parsed.endDate === parsed.startDate) {
+        return todayRange();
+      }
+
       return {
         startDate: parsed.startDate,
         endDate: parsed.startDate,

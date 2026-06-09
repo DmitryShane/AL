@@ -23,7 +23,7 @@ export function DateRangePicker({ value, onChange, showPresets = true }: DateRan
       return;
     }
 
-    onChange({ startDate: date, endDate: date, preset: "custom" });
+    onChange(showPresets && date === maxDate ? todayRange() : { startDate: date, endDate: date, preset: "custom" });
   }
 
   useEffect(() => {
