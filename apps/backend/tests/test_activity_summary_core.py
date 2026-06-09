@@ -719,6 +719,87 @@ def test_empty_historical_single_day_returns_day_off_summary_with_zero_authors()
     assert len(summary["hourlyActivityByAuthor"]) == 2
     assert repo.db.activity_day_summary_snapshots.count_documents({"date": "2026-04-26"}) == 0
 
+
+def test_completed_day_snapshot_adds_zero_rows_for_inactive_people_when_one_author_has_input():
+    repo = fake_repository()
+    day_date = "2026-06-06"
+    now = dt.datetime(2026, 6, 10, 12, tzinfo=dt.UTC)
+
+    for raw_author, display_name in (
+        ("Dmitry Shane", "Dmitry Shane"),
+        ("Igor Mats", "Igor Mats"),
+        ("Denis Ostrovskiy", "Denis Ostrovskiy"),
+        ("Евгений Доценко", "Evgeniy Dotsenko"),
+    ):
+        repo.db.author_profiles.insert_one(
+            {
+                "rawAuthor": raw_author,
+                "displayName": display_name,
+                "timeZoneId": "UTC",
+            }
+        )
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Ketchapp",
+            "displayName": "Ketchapp",
+            "profileType": "publisher",
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "codex",
+            "author": "Dmitry Shane",
+            "projectId": "AL",
+            "date": day_date,
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "meetingSeconds": 0,
+            "breakSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "activityCounts": [],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    materialized = repo.materialize_activity_author_day_summary_snapshots(limit=10, now=now)
+    summary = repo.cached_activity_summary(
+        view="activity",
+        start_date=day_date,
+        end_date=day_date,
+        include_profiles=False,
+        include_hourly=True,
+        include_breakdowns=True,
+    )
+
+    assert [item["rawAuthor"] for item in materialized["processed"]] == ["Dmitry Shane"]
+    assert summary["snapshot"] == {"hit": True, "date": day_date}
+    assert [author["rawAuthor"] for author in summary["authors"]] == [
+        "Denis Ostrovskiy",
+        "Dmitry Shane",
+        "Евгений Доценко",
+        "Igor Mats",
+    ]
+    assert "Ketchapp" not in {author["rawAuthor"] for author in summary["authors"]}
+    assert [item["rawAuthor"] for item in summary["hourlyActivityByAuthor"]] == [
+        "Denis Ostrovskiy",
+        "Dmitry Shane",
+        "Евгений Доценко",
+        "Igor Mats",
+    ]
+
+    for raw_author in ("Igor Mats", "Denis Ostrovskiy", "Евгений Доценко"):
+        author = next(item for item in summary["authors"] if item["rawAuthor"] == raw_author)
+        assert author["activeSeconds"] == 0
+        assert author["idleSeconds"] == 0
+        assert author["meetingSeconds"] == 0
+        assert author["breakSeconds"] == 0
+        assert author["overtimeActiveSeconds"] == 0
+        assert author["productivity"] == 0
+
 def test_historical_hourly_summary_uses_day_snapshot_payload():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})

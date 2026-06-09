@@ -11,7 +11,7 @@ from .activity_summary_helpers import _is_device_profile_raw_author
 class ActivityDaySummarySnapshotsMixin:
     ACTIVITY_DAY_SUMMARY_SNAPSHOT_VIEW = "activity-day"
     ACTIVITY_AUTHOR_DAY_SUMMARY_MAINTENANCE_LIMIT = 3
-    ACTIVITY_DAY_SUMMARY_SNAPSHOT_VERSION_OFFSET = 1
+    ACTIVITY_DAY_SUMMARY_SNAPSHOT_VERSION_OFFSET = 2
     ACTIVITY_SNAPSHOT_STALE_LOCK_SECONDS = 15 * 60
     ACTIVITY_SNAPSHOT_BACKGROUND_DRAIN_LIMIT = 250
 
@@ -739,6 +739,30 @@ class ActivityDaySummarySnapshotsMixin:
             merge_counts(overtime_activity_counts, payload.get("overtimeActivityCounts", []))
             merge_saved(saved_prefabs, payload.get("savedPrefabs", []))
             merge_saved(overtime_saved_prefabs, payload.get("overtimeSavedPrefabs", []))
+
+        existing_authors = {str(author.get("rawAuthor") or "") for author in authors}
+        for raw_author, profile in composed(self)._profiles_by_raw_author().items():
+            if not raw_author or raw_author in existing_authors:
+                continue
+
+            if _is_device_profile_raw_author(raw_author):
+                continue
+
+            if str(profile.get("profileType") or "person") == "publisher":
+                continue
+
+            empty_author = self._empty_completed_day_author_row(raw_author, profile)
+            authors.append(empty_author)
+            hourly.append(
+                {
+                    "author": empty_author["displayName"],
+                    "rawAuthor": raw_author,
+                    "timeZoneId": profile.get("timeZoneId"),
+                    "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
+                    "hourlyActivity": empty_hourly_activity(),
+                }
+            )
+            existing_authors.add(raw_author)
 
         return {
             "totals": totals,
