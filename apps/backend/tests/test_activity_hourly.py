@@ -710,7 +710,7 @@ def test_night_overtime_active_counts_on_same_calendar_day():
     assert hour_3["totals"]["overtimeSeconds"] == 120
     assert hour_3["totals"]["idleSeconds"] == 0
 
-def test_real_night_asset_saved_without_overtime_time_stays_overtime_saved_prefab():
+def test_real_night_asset_saved_without_overtime_time_does_not_create_overtime_breakdown():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
         {"rawAuthor": "Denis Ostrovskiy", "displayName": "Denis Ostrovskiy", "timeZoneId": "Europe/Kyiv"}
@@ -738,23 +738,53 @@ def test_real_night_asset_saved_without_overtime_time_stays_overtime_saved_prefa
     daily = repo.db.daily_author_activity.find_one({"author": "Denis Ostrovskiy", "date": "2026-05-14", "source": "ual"})
 
     assert deltas["overtimeActiveDeltaSeconds"] == 0
+    assert deltas["overtimeActivityCountDeltas"] == []
     assert deltas["savedPrefabDeltas"] == []
-    assert deltas["overtimeSavedPrefabDeltas"] == [
-        {
-            "path": "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset",
-            "name": "LiberationSans SDF - Fallback",
-            "saveCount": 1,
-        }
-    ]
+    assert deltas["overtimeSavedPrefabDeltas"] == []
     assert daily["overtimeActiveSeconds"] == 0
     assert daily["savedPrefabs"] == []
-    assert daily["overtimeSavedPrefabs"] == [
+    assert daily["overtimeActivityCounts"] == []
+    assert daily["overtimeSavedPrefabs"] == []
+
+
+def test_night_blender_file_saved_without_overtime_time_does_not_create_overtime_breakdown():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Denis Ostrovskiy", "displayName": "Denis Ostrovskiy", "timeZoneId": "Europe/Kyiv"}
+    )
+
+    deltas = repo._apply_raw_event_to_aggregates(
         {
-            "path": "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset",
-            "name": "LiberationSans SDF - Fallback",
-            "saveCount": 1,
+            "source": "bal",
+            "pluginVersion": "0.1.2",
+            "author": "Denis Ostrovskiy",
+            "projectId": "dc8c272c6fa0dcab",
+            "sessionId": "746c73173caa475b98f3d14fb966716f",
+            "date": "2026-06-09",
+            "timeZoneId": "Europe/Kyiv",
+            "eventType": "file_saved",
+            "occurredAtUtc": "2026-06-09T00:27:44.105Z",
+            "occurredAtLocal": "2026-06-09T03:27:44.105625+03:00",
+            "receivedAt": dt.datetime(2026, 6, 9, 0, 27, 44, 443000, tzinfo=dt.UTC),
+            "metadata": {
+                "path": "X:\\DEVELOPMENT\\.SRC\\_Nextcloud_MEMPIC_SRC\\Shared\\MEMPIC.SRC\\Game sources\\In progress (new games)\\BikeRush2\\Env\\RoofProps.blend",
+                "name": "RoofProps.blend",
+            },
         }
-    ]
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Denis Ostrovskiy", "date": "2026-06-09", "source": "bal"})
+
+    assert deltas["overtimeActiveDeltaSeconds"] == 0
+    assert deltas["activityCountDeltas"] == []
+    assert deltas["savedPrefabDeltas"] == []
+    assert deltas["overtimeActivityCountDeltas"] == []
+    assert deltas["overtimeSavedPrefabDeltas"] == []
+    assert daily["overtimeActiveSeconds"] == 0
+    assert daily["activityCounts"] == []
+    assert daily["savedPrefabs"] == []
+    assert daily["overtimeActivityCounts"] == []
+    assert daily["overtimeSavedPrefabs"] == []
 
 
 def test_late_delivered_night_unity_events_without_day_session_are_ignored():
@@ -919,9 +949,7 @@ def test_real_night_unity_events_received_before_workday_start_remain_overtime()
     daily = repo.db.daily_author_activity.find_one({"author": "Dmitry Shane", "date": "2026-05-15", "source": "ual"})
 
     assert night_save_deltas["savedPrefabDeltas"] == []
-    assert night_save_deltas["overtimeSavedPrefabDeltas"] == [
-        {"path": "Assets/Night.asset", "name": "Night.asset", "saveCount": 1}
-    ]
+    assert night_save_deltas["overtimeSavedPrefabDeltas"] == []
     assert day_deltas["idleDeltaSeconds"] == 0
     assert day_deltas["hourlyActivityDelta"][2]["idleSeconds"] == 0
     assert all(daily["hourlyActivity"][hour]["idleSeconds"] == 0 for hour in range(2, 14))
@@ -3724,11 +3752,11 @@ def test_overtime_activity_summary_splits_mix_and_saved_files():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "telegramUsername": "dmitryshane"})
     base_event = {
-        "source": "ual",
+        "source": "vsc",
         "author": "Dmitry Shane",
         "authorEmail": "dmitry@example.com",
-        "projectId": "unity",
-        "sessionId": "unity-session",
+        "projectId": "AL",
+        "sessionId": "vscode-session",
         "date": "2026-04-29",
         "receivedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
     }
@@ -3740,10 +3768,10 @@ def test_overtime_activity_summary_splits_mix_and_saved_files():
     }
     normal_save = {
         **base_event,
-        "eventType": "prefab_saved",
+        "eventType": "file_saved",
         "occurredAtUtc": "2026-04-29T10:00:10Z",
         "occurredAtLocal": "2026-04-29T10:00:10+00:00",
-        "metadata": {"path": "Assets/Normal.prefab", "name": "Normal"},
+        "metadata": {"path": "src/normal.ts", "name": "normal.ts"},
     }
 
     repo._apply_raw_event_to_aggregates(normal_activity)
@@ -3771,11 +3799,11 @@ def test_overtime_activity_summary_splits_mix_and_saved_files():
     }
     overtime_save = {
         **base_event,
-        "eventType": "prefab_saved",
+        "eventType": "file_saved",
         "occurredAtUtc": "2026-04-29T19:00:10Z",
         "occurredAtLocal": "2026-04-29T19:00:10+00:00",
         "receivedAt": dt.datetime(2026, 4, 29, 19, 0, 10, tzinfo=dt.UTC),
-        "metadata": {"path": "Assets/Overtime.prefab", "name": "Overtime"},
+        "metadata": {"path": "src/overtime.ts", "name": "overtime.ts"},
     }
 
     repo._apply_raw_event_to_aggregates(overtime_activity)
@@ -3786,17 +3814,15 @@ def test_overtime_activity_summary_splits_mix_and_saved_files():
 
     assert author["activityMix"] == [
         {"type": "select", "count": 1, "percent": 50},
-        {"type": "prefab_saved", "count": 1, "percent": 50},
+        {"type": "file_saved", "count": 1, "percent": 50},
     ]
-    assert author["savedPrefabs"] == [{"path": "Assets/Normal.prefab", "name": "Normal", "saveCount": 1}]
+    assert author["savedPrefabs"] == [{"path": "src/normal.ts", "name": "normal.ts", "saveCount": 1}]
     assert author["overtimeActivityMix"] == [
-        {"type": "play_mode", "count": 1, "percent": 50},
-        {"type": "prefab_saved", "count": 1, "percent": 50},
+        {"type": "file_saved", "count": 1, "percent": 100},
     ]
-    assert author["overtimeSavedPrefabs"] == [{"path": "Assets/Overtime.prefab", "name": "Overtime", "saveCount": 1}]
+    assert author["overtimeSavedPrefabs"] == [{"path": "src/overtime.ts", "name": "overtime.ts", "saveCount": 1}]
     assert summary["overtimeActivityMix"] == [
-        {"type": "play_mode", "count": 1, "percent": 50},
-        {"type": "prefab_saved", "count": 1, "percent": 50},
+        {"type": "file_saved", "count": 1, "percent": 100},
     ]
 
 def test_night_overtime_activity_summary_keeps_mix_and_saved_files_out_of_regular_cards():
@@ -3857,34 +3883,20 @@ def test_night_overtime_activity_summary_keeps_mix_and_saved_files_out_of_regula
     assert author["savedPrefabsBySource"] == []
     assert author["overtimeActiveSeconds"] > 0
     assert author["overtimeActivityMix"] == [
-        {"type": "select", "count": 1, "percent": 33},
-        {"type": "play_mode", "count": 1, "percent": 33},
-        {"type": "prefab_saved", "count": 1, "percent": 33},
+        {"type": "play_mode", "count": 1, "percent": 100},
     ]
-    assert author["overtimeSavedPrefabs"] == [
-        {"path": "Assets/Project/Scenes/scene.garage/scene.garage.prefab", "name": "scene.garage", "saveCount": 1}
-    ]
+    assert author["overtimeSavedPrefabs"] == []
     assert author["overtimeActivityMixBySource"] == [
         {
             "source": "ual",
-            "totalCount": 3,
+            "totalCount": 1,
             "activeSeconds": author["overtimeActiveSeconds"],
             "activityMix": [
-                {"type": "select", "count": 1, "percent": 33},
-                {"type": "play_mode", "count": 1, "percent": 33},
-                {"type": "prefab_saved", "count": 1, "percent": 33},
+                {"type": "play_mode", "count": 1, "percent": 100},
             ],
         }
     ]
-    assert author["overtimeSavedPrefabsBySource"] == [
-        {
-            "source": "ual",
-            "totalSaveCount": 1,
-            "savedPrefabs": [
-                {"path": "Assets/Project/Scenes/scene.garage/scene.garage.prefab", "name": "scene.garage", "saveCount": 1}
-            ],
-        }
-    ]
+    assert author["overtimeSavedPrefabsBySource"] == []
 
 
 def test_night_overtime_codex_project_appears_in_overtime_worked_files_only():
@@ -3934,15 +3946,14 @@ def test_night_overtime_codex_project_appears_in_overtime_worked_files_only():
     assert author["savedPrefabs"] == []
     assert author["savedPrefabsBySource"] == []
     assert author["overtimeActivityMix"] == [
-        {"type": "codex_session_started", "count": 1, "percent": 50},
-        {"type": "codex_task_progress", "count": 1, "percent": 50},
+        {"type": "codex_task_progress", "count": 1, "percent": 100},
     ]
-    assert author["overtimeSavedPrefabs"] == [{"path": "codex:AL", "name": "AL", "projectId": "AL", "saveCount": 2}]
+    assert author["overtimeSavedPrefabs"] == [{"path": "codex:AL", "name": "AL", "projectId": "AL", "saveCount": 1}]
     assert author["overtimeSavedPrefabsBySource"] == [
         {
             "source": "codex",
-            "totalSaveCount": 2,
-            "savedPrefabs": [{"path": "codex:AL", "name": "AL", "projectId": "AL", "saveCount": 2}],
+            "totalSaveCount": 1,
+            "savedPrefabs": [{"path": "codex:AL", "name": "AL", "projectId": "AL", "saveCount": 1}],
         }
     ]
 

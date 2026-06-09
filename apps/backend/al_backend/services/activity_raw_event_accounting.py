@@ -603,19 +603,17 @@ class ActivityRawEventAccountingMixin:
         event_has_overtime_time_delta = _time_microseconds(
             deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds"
         ) > 0
-        event_counts_as_overtime_breakdown = event_has_overtime_time_delta or overtime_window_kind == "night" or (
-            overtime_window_kind in {"telegram", "vacation"}
-            and consumed_normal_microseconds >= DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND
-        )
+        event_counts_as_overtime_breakdown = event_has_overtime_time_delta
+        suppress_overtime_window_breakdown = overtime_window_kind is not None and not event_has_overtime_time_delta
 
         saved_prefab = None if is_inside_status_offline else _saved_prefab_delta(event)
         suppress_activity_count = (
             current_source == "ual"
-            and event_type in {"prefab_saved", "scene_saved"}
+            and event_type in {"asset_saved", "prefab_saved", "scene_saved"}
             and saved_prefab is None
         )
 
-        if is_activity and not suppress_activity_count:
+        if is_activity and not suppress_activity_count and not suppress_overtime_window_breakdown:
             activity_type = _codex_activity_count_type(event) if current_source == "codex" else _activity_count_type(event_type)
             activity_delta_key = "activityCountDeltas"
 
@@ -624,7 +622,7 @@ class ActivityRawEventAccountingMixin:
 
             deltas[activity_delta_key].append({"type": activity_type, "count": 1})
 
-        if saved_prefab:
+        if saved_prefab and not suppress_overtime_window_breakdown:
             saved_prefab_delta_key = "savedPrefabDeltas"
 
             if event_counts_as_overtime_breakdown:
@@ -634,7 +632,7 @@ class ActivityRawEventAccountingMixin:
 
         worked_file = None if is_inside_status_offline else _worked_file_delta(event)
 
-        if worked_file:
+        if worked_file and not suppress_overtime_window_breakdown:
             worked_file_delta_key = "savedPrefabDeltas"
 
             if event_counts_as_overtime_breakdown:
