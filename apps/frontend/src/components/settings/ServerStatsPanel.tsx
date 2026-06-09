@@ -7,25 +7,30 @@ import { Modal } from "../ui/Modal";
 const SERVER_STATS_CACHE_KEY = "al.serverStats.cache";
 let cachedServerStats: ServerStats | null = readCachedServerStats();
 type ReadyServerStats = ServerStats & { root: NonNullable<ServerStats["root"]> };
+type ServerStatsRefreshMode = "disk" | "services";
 
 export function ServerStatsPanel() {
   const [stats, setStats] = useState<ServerStats | null>(() => cachedServerStats);
   const [loading, setLoading] = useState(() => cachedServerStats === null);
-  const [refreshing, setRefreshing] = useState(false);
+  const [diskRefreshing, setDiskRefreshing] = useState(false);
+  const [servicesRefreshing, setServicesRefreshing] = useState(false);
   const [rebootModalOpen, setRebootModalOpen] = useState(false);
   const [rebooting, setRebooting] = useState(false);
   const [error, setError] = useState("");
   const [rebootMessage, setRebootMessage] = useState("");
 
-  async function loadStats(isRefresh = false, forceRefresh = false) {
-    if (isRefresh) {
-      setRefreshing(true);
+  async function loadStats(refreshMode?: ServerStatsRefreshMode) {
+    if (refreshMode === "disk") {
+      setDiskRefreshing(true);
+    } else if (refreshMode === "services") {
+      setServicesRefreshing(true);
     } else {
       setLoading(true);
     }
 
     try {
-      const response = await apiFetch(`/api/v1/settings/server-stats${forceRefresh ? "?refresh=true" : ""}`);
+      const params = refreshMode ? `?${new URLSearchParams({ refresh: refreshMode }).toString()}` : "";
+      const response = await apiFetch(`/api/v1/settings/server-stats${params}`);
 
       if (!response.ok) {
         throw new Error("Server stats request failed");
@@ -46,7 +51,11 @@ export function ServerStatsPanel() {
       setError("Could not load server statistics.");
     } finally {
       setLoading(false);
-      setRefreshing(false);
+      if (refreshMode === "disk") {
+        setDiskRefreshing(false);
+      } else if (refreshMode === "services") {
+        setServicesRefreshing(false);
+      }
     }
   }
 
@@ -78,7 +87,7 @@ export function ServerStatsPanel() {
   }
 
   useEffect(() => {
-    void loadStats(cachedServerStats !== null);
+    void loadStats();
   }, []);
 
   const categories = useMemo(() => {
@@ -90,7 +99,8 @@ export function ServerStatsPanel() {
   }, [stats]);
 
   const displayStats: ReadyServerStats | null = stats?.ready === false || !stats?.root ? null : stats as ReadyServerStats;
-  const isRefreshing = refreshing || stats?.refreshing === true;
+  const isDiskRefreshing = diskRefreshing || stats?.refreshing === true;
+  const isServicesRefreshing = servicesRefreshing;
   const usedPercent = Math.max(0, Math.min(100, displayStats?.root?.usedPercent ?? 0));
   const accentColor = serverStatsAccentColor(usedPercent);
   const panelStyle = {
@@ -108,9 +118,6 @@ export function ServerStatsPanel() {
           <p className="settings-caption">Read-only production disk usage overview.</p>
         </div>
         <div className="server-stats-actions">
-          <button className="server-stats-refresh-button" onClick={() => void loadStats(true, true)} disabled={refreshing || rebooting}>
-            {isRefreshing ? "Refreshing..." : "Refresh"}
-          </button>
           <button className="server-stats-reboot-button" onClick={() => setRebootModalOpen(true)} disabled={rebooting}>
             {rebooting ? "Rebooting..." : "Reboot"}
           </button>
@@ -126,6 +133,16 @@ export function ServerStatsPanel() {
         <>
           <div className="server-stats-grid">
             <div className="server-stats-disk-column">
+              <div className="server-stats-section-header">
+                <div>
+                  <h3>Disk Usage</h3>
+                  <p className="settings-caption">Filesystem capacity and application storage.</p>
+                </div>
+                <button className="server-stats-refresh-button" onClick={() => void loadStats("disk")} disabled={isDiskRefreshing || rebooting}>
+                  {isDiskRefreshing ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
+
               <div className="server-stats-summary">
                 <div className="server-stats-donut" style={donutStyle}>
                   <div>
@@ -161,9 +178,14 @@ export function ServerStatsPanel() {
             </div>
 
             <div className="server-stats-services-column">
-              <div>
-                <h3>Services</h3>
-                <p className="settings-caption">Runtime status of server processes.</p>
+              <div className="server-stats-section-header">
+                <div>
+                  <h3>Services</h3>
+                  <p className="settings-caption">Runtime status of server processes.</p>
+                </div>
+                <button className="server-stats-refresh-button" onClick={() => void loadStats("services")} disabled={isServicesRefreshing || rebooting}>
+                  {isServicesRefreshing ? "Refreshing..." : "Refresh"}
+                </button>
               </div>
               <div className="server-stats-services">
                 {(displayStats.services ?? []).map((service) => (
@@ -176,7 +198,7 @@ export function ServerStatsPanel() {
           <p className="server-stats-footnote">
             Last updated {formatDateTime(displayStats.generatedAt)}.
             {displayStats.nextScheduledRefreshAt ? ` Next automatic refresh ${formatDateTime(displayStats.nextScheduledRefreshAt)}.` : ""}
-            {isRefreshing ? " Refresh in progress." : ""}
+            {isDiskRefreshing ? " Disk refresh in progress." : ""}
             {displayStats.lastRefreshError ? ` Last refresh failed: ${displayStats.lastRefreshError}` : ""}
           </p>
         </>

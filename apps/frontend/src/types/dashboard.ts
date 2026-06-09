@@ -328,6 +328,7 @@ export type ServerStats = {
   lastRefreshError?: string | null;
   nextScheduledRefreshAt?: string;
   cacheExpiresAt?: string;
+  servicesGeneratedAt?: string;
   hostname: string;
   root: {
     path: string;

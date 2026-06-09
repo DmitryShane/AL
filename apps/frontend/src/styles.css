@@ -2664,7 +2664,14 @@ p {
   padding-left: 22px;
 }
 
-.server-stats-services-column h3 {
+.server-stats-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.server-stats-section-header h3 {
   margin: 0 0 4px;
   color: #202a36;
   font-size: 18px;
@@ -2929,6 +2936,11 @@ p {
 
   .server-stats-summary {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .server-stats-section-header {
+    align-items: stretch;
     flex-direction: column;
   }
 

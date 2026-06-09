@@ -160,6 +160,66 @@ def test_server_stats_refresh_returns_current_snapshot_immediately(monkeypatch) 
     assert calls["count"] == 1
 
 
+def test_server_stats_services_refresh_updates_services_without_disk_scan(monkeypatch) -> None:
+    repo = SettingsRepository.__new__(SettingsRepository)
+    repo._ensure_server_stats_runtime_state()
+    repo._server_stats_snapshot = {
+        "generatedAt": "2026-06-09T04:00:00+00:00",
+        "hostname": "server",
+        "root": {
+            "path": "/",
+            "totalBytes": 1000,
+            "usedBytes": 500,
+            "freeBytes": 500,
+            "usedPercent": 50.0,
+            "warningLevel": "ok",
+        },
+        "categories": [],
+        "services": [
+            {
+                "key": "backend",
+                "label": "AL Backend API",
+                "unit": "al-backend.service",
+                "status": "unknown",
+                "activeState": "unknown",
+                "loadState": "unknown",
+                "unitFileState": "unknown",
+            }
+        ],
+    }
+
+    def fail_disk_usage(_path):
+        raise AssertionError("services refresh must not scan disk")
+
+    monkeypatch.setattr(settings_repo.shutil, "disk_usage", fail_disk_usage)
+    monkeypatch.setattr(
+        settings_repo,
+        "SERVER_STATS_SERVICES",
+        (("backend", "AL Backend API", "al-backend.service"),),
+    )
+    monkeypatch.setattr(
+        settings_repo,
+        "_server_stats_service",
+        lambda key, label, unit: {
+            "key": key,
+            "label": label,
+            "unit": unit,
+            "status": "running",
+            "activeState": "active",
+            "subState": "running",
+            "loadState": "loaded",
+            "unitFileState": "enabled",
+            "activeEnteredAt": "Tue 2026-05-05 19:00:00 UTC",
+        },
+    )
+
+    stats = repo.get_server_stats(refresh="services")
+
+    assert stats["root"]["usedBytes"] == 500
+    assert stats["services"][0]["status"] == "running"
+    assert stats["servicesGeneratedAt"]
+
+
 def test_server_stats_single_flight_refresh(monkeypatch) -> None:
     repo = SettingsRepository.__new__(SettingsRepository)
     repo._ensure_server_stats_runtime_state()

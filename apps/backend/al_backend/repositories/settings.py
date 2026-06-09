@@ -185,6 +185,24 @@ def _next_server_stats_refresh_at(now: dt.datetime | None = None) -> dt.datetime
     return candidate
 
 
+def _normalize_server_stats_refresh_mode(value: str | bool | None) -> str | None:
+    if value is True:
+        return "all"
+
+    if value is False or value is None:
+        return None
+
+    normalized = str(value).strip().lower()
+
+    if normalized in {"1", "true", "yes", "all"}:
+        return "all"
+
+    if normalized in {"disk", "services"}:
+        return normalized
+
+    return None
+
+
 def _server_stats_service(key: str, label: str, unit: str) -> dict[str, Any]:
     try:
         result = subprocess.run(
@@ -1498,10 +1516,15 @@ class SettingsRepository(MongoComposableMixin):
             },
         }
 
-    def get_server_stats(self, *, refresh: bool = False, background_tasks: Any | None = None) -> dict[str, Any]:
+    def get_server_stats(self, *, refresh: str | bool | None = None, background_tasks: Any | None = None) -> dict[str, Any]:
         self._ensure_server_stats_runtime_state()
-        if refresh or getattr(self, "_server_stats_snapshot", None) is None:
+        refresh_mode = _normalize_server_stats_refresh_mode(refresh)
+
+        if refresh_mode == "services":
+            self.refresh_server_stats_services()
+        elif refresh_mode in {"all", "disk"} or getattr(self, "_server_stats_snapshot", None) is None:
             self.start_server_stats_refresh()
+
         return self._server_stats_response()
 
     def start_server_stats_daily_refresh(self) -> None:
@@ -1542,6 +1565,32 @@ class SettingsRepository(MongoComposableMixin):
         )
         thread.start()
         return True
+
+    def refresh_server_stats_services(self) -> None:
+        self._ensure_server_stats_runtime_state()
+        services = [
+            _server_stats_service(key, label, unit)
+            for key, label, unit in SERVER_STATS_SERVICES
+        ]
+        now = dt.datetime.now(dt.UTC).isoformat()
+
+        with self._server_stats_lock:
+            if self._server_stats_snapshot is None:
+                self._server_stats_snapshot = {
+                    "generatedAt": now,
+                    "hostname": socket.gethostname(),
+                    "root": None,
+                    "categories": [],
+                    "services": services,
+                    "cached": False,
+                    "cacheExpiresAt": _next_server_stats_refresh_at().isoformat(),
+                }
+            else:
+                self._server_stats_snapshot = {
+                    **self._server_stats_snapshot,
+                    "services": services,
+                    "servicesGeneratedAt": now,
+                }
 
     def _ensure_server_stats_runtime_state(self) -> None:
         if hasattr(self, "_server_stats_lock"):
