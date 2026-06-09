@@ -228,6 +228,7 @@ class FakeDb:
         self.report_rows = FakeCollection()
         self.report_security_events = FakeCollection()
         self.site_users = FakeCollection()
+        self.site_sessions = FakeCollection()
         self.status_events = FakeCollection()
         self.status_states = FakeCollection()
         self.system_settings = FakeCollection()

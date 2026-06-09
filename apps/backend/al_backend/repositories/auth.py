@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..api_security import SESSION_MAX_AGE_SECONDS
 from ..activity_math import *
 from ..mongo_composable import MongoComposableMixin
 
@@ -74,7 +75,7 @@ class AuthRepository(MongoComposableMixin):
     def create_site_session(self, email: str) -> str:
         token = new_session_token()
         now = dt.datetime.now(dt.UTC)
-        expires_at = now + dt.timedelta(days=7)
+        expires_at = now + dt.timedelta(seconds=SESSION_MAX_AGE_SECONDS)
         self.db.site_sessions.insert_one(
             {
                 "tokenHash": session_token_hash(token),
@@ -158,5 +159,4 @@ class AuthRepository(MongoComposableMixin):
         result = self.db.site_users.delete_one({"email": normalized_email})
         self.db.site_sessions.delete_many({"email": normalized_email})
         return {"ok": True, "deleted": result.deleted_count}
-
 

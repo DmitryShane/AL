@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException, Request, Response
 
 
 SESSION_COOKIE_NAME = "al_session"
-SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+SESSION_MAX_AGE_SECONDS = 90 * 24 * 60 * 60
 ROLE_PERMISSIONS = {
     "admin": {"viewDashboard", "manageSettings", "manageUsers"},
     "editor": {"viewDashboard", "manageSettings"},
