@@ -11,7 +11,7 @@ from .activity_summary_helpers import _is_device_profile_raw_author
 class ActivityDaySummarySnapshotsMixin:
     ACTIVITY_DAY_SUMMARY_SNAPSHOT_VIEW = "activity-day"
     ACTIVITY_AUTHOR_DAY_SUMMARY_MAINTENANCE_LIMIT = 3
-    ACTIVITY_DAY_SUMMARY_SNAPSHOT_VERSION_OFFSET = 3
+    ACTIVITY_DAY_SUMMARY_SNAPSHOT_VERSION_OFFSET = 4
     ACTIVITY_SNAPSHOT_STALE_LOCK_SECONDS = 15 * 60
     ACTIVITY_SNAPSHOT_BACKGROUND_DRAIN_LIMIT = 250
 
@@ -941,13 +941,17 @@ class ActivityDaySummarySnapshotsMixin:
         except ValueError:
             return None
 
-        live_dates = {now.astimezone(dt.UTC).date().isoformat()}
+        live_dates = set()
 
         for profile in composed(self)._profiles_by_raw_author().values():
+            profile_time_zone_id = _valid_time_zone_id(profile.get("timeZoneId"))
+            if not profile_time_zone_id:
+                continue
+
             live_dates.add(
                 _local_date_for_time_zone(
                     now,
-                    _author_time_zone_id(profile.get("rawAuthor"), {}, profile.get("timeZoneId")),
+                    profile_time_zone_id,
                 )
             )
 

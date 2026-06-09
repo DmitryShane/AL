@@ -861,6 +861,7 @@ def test_historical_hourly_summary_uses_day_snapshot_payload():
 
 def test_activity_day_summary_snapshot_is_ignored_for_live_and_ranges():
     repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Today Author", "displayName": "Today Author", "timeZoneId": "UTC"})
     today = dt.datetime.now(dt.UTC).date().isoformat()
     repo.db.activity_day_summary_snapshots.insert_one(
         {
@@ -911,6 +912,50 @@ def test_activity_day_summary_snapshot_is_ignored_for_live_and_ranges():
     assert current_day["totals"]["activeSeconds"] != 999
     assert "snapshot" not in range_summary
     assert range_summary["totals"]["activeSeconds"] != 999
+
+def test_activity_day_summary_snapshot_uses_author_timezone_without_utc_today_fallback():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "timeZoneId": "Europe/Madrid"})
+    version = repo.activity_day_summary_snapshot_version()
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "projectId": "unity",
+            "author": "Dmitry Shane",
+            "date": "2026-06-09",
+            "activeSeconds": 60,
+        }
+    )
+    repo.db.activity_author_day_summary_snapshots.insert_one(
+        {
+            "date": "2026-06-09",
+            "rawAuthor": "Dmitry Shane",
+            "snapshotVersion": version,
+            "payload": {"author": {"rawAuthor": "Dmitry Shane"}, "hourlyActivity": empty_hourly_activity()},
+        }
+    )
+    repo.db.activity_day_summary_snapshots.insert_one(
+        {
+            "date": "2026-06-09",
+            "view": "activity-day",
+            "snapshotVersion": version,
+            "payload": {"totals": {"activeSeconds": 999}, "authors": [], "hourlyActivityByAuthor": []},
+        }
+    )
+
+    snapshot_date, snapshot_doc = repo.activity_day_summary_snapshot_for_request(
+        view="activity",
+        start_date="2026-06-09",
+        end_date="2026-06-09",
+        date_mode=None,
+        include_profiles=False,
+        include_hourly=True,
+        include_breakdowns=True,
+        now=dt.datetime(2026, 6, 9, 23, 28, tzinfo=dt.UTC),
+    )
+
+    assert snapshot_date == "2026-06-09"
+    assert snapshot_doc is not None
 
 def test_activity_day_summary_snapshot_invalidation_removes_selected_dates():
     repo = fake_repository()

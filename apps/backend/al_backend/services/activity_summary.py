@@ -107,12 +107,16 @@ class ActivitySummaryService(
             except ValueError:
                 requested_date = None
 
-            live_dates = {now.astimezone(dt.UTC).date().isoformat()}
+            live_dates = set()
             for profile in profiles.values():
+                profile_time_zone_id = _valid_time_zone_id(profile.get("timeZoneId"))
+                if not profile_time_zone_id:
+                    continue
+
                 live_dates.add(
                     _local_date_for_time_zone(
                         now,
-                        _author_time_zone_id(profile.get("rawAuthor"), {}, profile.get("timeZoneId")),
+                        profile_time_zone_id,
                     )
                 )
 

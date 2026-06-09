@@ -58,7 +58,7 @@ from tests.activity_status_helpers import _author_from_summary, _author_status, 
 
 def test_fresh_normal_plugin_report_without_telegram_offline_keeps_author_online():
     repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
     _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 18, 0, tzinfo=dt.UTC))
 
     author = _author_from_summary(repo, dt.datetime(2026, 4, 28, 18, 1, tzinfo=dt.UTC))
@@ -90,7 +90,7 @@ def test_telegram_offline_after_fresh_plugin_report_marks_author_stale():
 
 def test_stale_presence_reports_when_unity_reports_stop_without_telegram_signoff():
     repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
     repo.db.day_sessions.insert_one(
         {
             "rawAuthor": "Future Artist",
@@ -142,6 +142,41 @@ def test_historical_activity_summary_never_marks_fresh_report_online():
     assert author["status"] == "stale"
     assert author["stalePresence"] == "telegram"
     assert repo.db.status_events.count_documents({"rawAuthor": "Future Artist", "reason": "reports_resumed"}) == 0
+
+def test_previous_local_day_is_historical_even_when_utc_date_matches():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "displayName": "Dmitry Shane",
+            "telegramUsername": "dmitry",
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Dmitry Shane",
+            "projectId": "unity",
+            "date": "2026-06-09",
+            "lastReceivedAt": dt.datetime(2026, 6, 9, 23, 20, tzinfo=dt.UTC),
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-06-09",
+        end_date="2026-06-09",
+        now=dt.datetime(2026, 6, 9, 23, 28, tzinfo=dt.UTC),
+    )
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Dmitry Shane")
+
+    assert author["status"] == "stale"
+    assert author["stalePresence"] == "telegram"
+    assert repo.db.status_events.count_documents({"rawAuthor": "Dmitry Shane", "reason": "reports_resumed"}) == 0
 
 def test_historical_activity_summary_keeps_selected_day_telegram_offline_gray():
     repo = fake_repository()
@@ -411,7 +446,7 @@ def test_with_author_presence_stale_presence_both_when_telegram_offline_and_repo
 
 def test_overtime_report_after_telegram_offline_keeps_author_online():
     repo = fake_repository()
-    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})
     _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC))
     repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
     repo.record_break_event("future_artist", "offline", "2026-04-28T18:05:00Z")
@@ -455,6 +490,7 @@ def test_fresh_heartbeat_liveness_prevents_red_offline_inside_workday():
             "rawAuthor": "Future Artist",
             "displayName": "Future Artist",
             "telegramUsername": "future_artist",
+            "timeZoneId": "UTC",
             "lastRawReportReceivedAt": dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC),
         }
     )
