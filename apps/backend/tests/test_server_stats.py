@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import namedtuple
 from pathlib import Path
+import datetime as dt
+import time
 from types import SimpleNamespace
 
 import al_backend.repositories.settings as settings_repo
@@ -68,7 +70,7 @@ def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> N
     )
 
     repo = SettingsRepository.__new__(SettingsRepository)
-    stats = repo.get_server_stats()
+    stats = repo._build_server_stats_payload()
 
     assert stats["root"]["totalBytes"] == 409600
     assert stats["root"]["usedBytes"] == 245760
@@ -92,30 +94,133 @@ def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> N
     assert stats["cached"] is False
 
 
-def test_server_stats_reuses_cache_until_refresh(monkeypatch) -> None:
-    disk_usage = namedtuple("usage", "total used free")
+def test_server_stats_returns_existing_snapshot_without_heavy_scan(monkeypatch) -> None:
+    repo = SettingsRepository.__new__(SettingsRepository)
+    repo._ensure_server_stats_runtime_state()
+    repo._server_stats_snapshot = {
+        "generatedAt": "2026-06-09T04:00:00+00:00",
+        "hostname": "server",
+        "root": {
+            "path": "/",
+            "totalBytes": 1000,
+            "usedBytes": 500,
+            "freeBytes": 500,
+            "usedPercent": 50.0,
+            "warningLevel": "ok",
+        },
+        "categories": [],
+        "services": [],
+    }
+    repo._server_stats_snapshot_at = dt.datetime(2026, 6, 9, 4, 0, tzinfo=dt.UTC)
+
+    def fail_disk_usage(_path):
+        raise AssertionError("server stats request must not scan disk when snapshot exists")
+
+    monkeypatch.setattr(settings_repo.shutil, "disk_usage", fail_disk_usage)
+    stats = repo.get_server_stats()
+
+    assert stats["ready"] is True
+    assert stats["cached"] is True
+    assert stats["root"]["usedBytes"] == 500
+
+
+def test_server_stats_refresh_returns_current_snapshot_immediately(monkeypatch) -> None:
+    repo = SettingsRepository.__new__(SettingsRepository)
+    repo._ensure_server_stats_runtime_state()
+    repo._server_stats_snapshot = {
+        "generatedAt": "2026-06-09T04:00:00+00:00",
+        "hostname": "server",
+        "root": {
+            "path": "/",
+            "totalBytes": 1000,
+            "usedBytes": 500,
+            "freeBytes": 500,
+            "usedPercent": 50.0,
+            "warningLevel": "ok",
+        },
+        "categories": [],
+        "services": [],
+    }
+
     calls = {"count": 0}
 
-    def fake_disk_usage(_path):
+    def fake_start_refresh():
         calls["count"] += 1
-        return disk_usage(1000, 500 + calls["count"], 499)
+        repo._server_stats_refreshing = True
+        repo._server_stats_refresh_started_at = dt.datetime(2026, 6, 9, 4, 1, tzinfo=dt.UTC)
+        return True
 
-    monkeypatch.setattr(settings_repo.shutil, "disk_usage", fake_disk_usage)
-    monkeypatch.setattr(settings_repo, "SERVER_STATS_PATHS", {})
-    monkeypatch.setattr(settings_repo, "SERVER_STATS_ACCOUNTING_PATHS", {})
-    monkeypatch.setattr(settings_repo, "SERVER_STATS_SERVICES", ())
+    monkeypatch.setattr(repo, "start_server_stats_refresh", fake_start_refresh)
 
+    stats = repo.get_server_stats(refresh=True)
+
+    assert stats["ready"] is True
+    assert stats["refreshing"] is True
+    assert stats["root"]["usedBytes"] == 500
+    assert calls["count"] == 1
+
+
+def test_server_stats_single_flight_refresh(monkeypatch) -> None:
     repo = SettingsRepository.__new__(SettingsRepository)
-    first = repo.get_server_stats()
-    second = repo.get_server_stats()
-    refreshed = repo.get_server_stats(refresh=True)
+    repo._ensure_server_stats_runtime_state()
 
-    assert first["cached"] is False
-    assert second["cached"] is True
-    assert second["root"]["usedBytes"] == first["root"]["usedBytes"]
-    assert refreshed["cached"] is False
-    assert refreshed["root"]["usedBytes"] != first["root"]["usedBytes"]
-    assert calls["count"] == 2
+    def slow_build():
+        time.sleep(0.05)
+        return {
+            "generatedAt": "2026-06-09T04:00:00+00:00",
+            "hostname": "server",
+            "root": {
+                "path": "/",
+                "totalBytes": 1000,
+                "usedBytes": 500,
+                "freeBytes": 500,
+                "usedPercent": 50.0,
+                "warningLevel": "ok",
+            },
+            "categories": [],
+            "services": [],
+        }
+
+    monkeypatch.setattr(repo, "_build_server_stats_payload", slow_build)
+
+    assert repo.start_server_stats_refresh() is True
+    assert repo.start_server_stats_refresh() is False
+
+    deadline = time.time() + 1
+    while repo._server_stats_refreshing and time.time() < deadline:
+        time.sleep(0.01)
+    assert repo._server_stats_snapshot is not None
+
+
+def test_server_stats_cold_start_returns_preparing_without_heavy_scan(monkeypatch) -> None:
+    repo = SettingsRepository.__new__(SettingsRepository)
+
+    def fake_start_refresh():
+        repo._ensure_server_stats_runtime_state()
+        repo._server_stats_refreshing = True
+        repo._server_stats_refresh_started_at = dt.datetime(2026, 6, 9, 4, 1, tzinfo=dt.UTC)
+        return True
+
+    def fail_disk_usage(_path):
+        raise AssertionError("cold server stats request must not scan disk")
+
+    monkeypatch.setattr(repo, "start_server_stats_refresh", fake_start_refresh)
+    monkeypatch.setattr(settings_repo.shutil, "disk_usage", fail_disk_usage)
+
+    stats = repo.get_server_stats()
+
+    assert stats["ready"] is False
+    assert stats["refreshing"] is True
+    assert stats["root"] is None
+    assert stats["categories"] == []
+
+
+def test_next_server_stats_refresh_at_uses_0400_utc() -> None:
+    before = dt.datetime(2026, 6, 9, 3, 30, tzinfo=dt.UTC)
+    after = dt.datetime(2026, 6, 9, 4, 30, tzinfo=dt.UTC)
+
+    assert settings_repo._next_server_stats_refresh_at(before) == dt.datetime(2026, 6, 9, 4, 0, tzinfo=dt.UTC)
+    assert settings_repo._next_server_stats_refresh_at(after) == dt.datetime(2026, 6, 10, 4, 0, tzinfo=dt.UTC)
 
 
 def test_settings_bootstrap_is_lightweight(monkeypatch) -> None:

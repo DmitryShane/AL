@@ -20,11 +20,12 @@ router = APIRouter()
 
 @router.get("/api/v1/settings/server-stats")
 def server_stats(
+    background_tasks: BackgroundTasks,
     refresh: bool = Query(False),
     _: dict = Depends(require_server_stats_permission),
     service: BackendServices = Depends(get_settings_service),
 ) -> dict:
-    return service.get_server_stats(refresh=refresh)
+    return service.get_server_stats(refresh=refresh, background_tasks=background_tasks)
 
 
 @router.get("/api/v1/settings/bootstrap")

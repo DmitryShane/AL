@@ -100,7 +100,15 @@ class BackendContainer:
             self.activity_summary.start_activity_snapshot_background_drain()
         except Exception:
             logger.exception("Activity snapshot maintenance failed during startup")
+        try:
+            self.settings_service.start_server_stats_daily_refresh()
+        except Exception:
+            logger.exception("Server stats scheduler failed during startup")
         self.auth.ensure_bootstrap_site_admin(self.settings.admin_email, self.settings.admin_password)
 
     def close(self) -> None:
+        try:
+            self.settings_service.stop_server_stats_daily_refresh()
+        except Exception:
+            logger.exception("Server stats scheduler shutdown failed")
         self.storage.client.close()

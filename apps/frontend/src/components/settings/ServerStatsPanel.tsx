@@ -3,9 +3,9 @@ import { apiFetch } from "../../api/client";
 import type { ServerStats, ServerStatsService } from "../../types/dashboard";
 import { Modal } from "../ui/Modal";
 
-const REFRESH_INTERVAL_MS = 60_000;
 const SERVER_STATS_CACHE_KEY = "al.serverStats.cache";
 let cachedServerStats: ServerStats | null = readCachedServerStats();
+type ReadyServerStats = ServerStats & { root: NonNullable<ServerStats["root"]> };
 
 export function ServerStatsPanel() {
   const [stats, setStats] = useState<ServerStats | null>(() => cachedServerStats);
@@ -31,9 +31,15 @@ export function ServerStatsPanel() {
       }
 
       const payload = (await response.json()) as ServerStats;
-      cachedServerStats = payload;
-      writeCachedServerStats(payload);
-      setStats(payload);
+      if (payload.ready === false && cachedServerStats) {
+        setStats({ ...cachedServerStats, ...serverStatsStatusFields(payload) });
+      } else {
+        setStats(payload);
+      }
+      if (payload.ready !== false && payload.root) {
+        cachedServerStats = payload;
+        writeCachedServerStats(payload);
+      }
       setError("");
     } catch {
       setError("Could not load server statistics.");
@@ -72,9 +78,6 @@ export function ServerStatsPanel() {
 
   useEffect(() => {
     void loadStats(cachedServerStats !== null);
-    const intervalId = window.setInterval(() => void loadStats(true), REFRESH_INTERVAL_MS);
-
-    return () => window.clearInterval(intervalId);
   }, []);
 
   const categories = useMemo(() => {
@@ -85,7 +88,9 @@ export function ServerStatsPanel() {
     return stats.categories.filter((category) => category.key !== "var").sort((left, right) => right.bytes - left.bytes);
   }, [stats]);
 
-  const usedPercent = Math.max(0, Math.min(100, stats?.root.usedPercent ?? 0));
+  const displayStats: ReadyServerStats | null = stats?.ready === false || !stats?.root ? null : stats as ReadyServerStats;
+  const isRefreshing = refreshing || stats?.refreshing === true;
+  const usedPercent = Math.max(0, Math.min(100, displayStats?.root?.usedPercent ?? 0));
   const accentColor = serverStatsAccentColor(usedPercent);
   const panelStyle = {
     "--server-stats-accent": accentColor
@@ -95,7 +100,7 @@ export function ServerStatsPanel() {
   };
 
   return (
-    <section className={`panel server-stats-panel server-stats-panel-${stats?.root.warningLevel ?? "ok"}`} style={panelStyle}>
+    <section className={`panel server-stats-panel server-stats-panel-${displayStats?.root?.warningLevel ?? "ok"}`} style={panelStyle}>
       <div className="server-stats-header">
         <div>
           <h2>Server Stats</h2>
@@ -103,7 +108,7 @@ export function ServerStatsPanel() {
         </div>
         <div className="server-stats-actions">
           <button className="server-stats-refresh-button" onClick={() => void loadStats(true, true)} disabled={refreshing || rebooting}>
-            {refreshing ? "Refreshing..." : "Refresh"}
+            {isRefreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button className="server-stats-reboot-button" onClick={() => setRebootModalOpen(true)} disabled={rebooting}>
             {rebooting ? "Rebooting..." : "Reboot"}
@@ -112,10 +117,11 @@ export function ServerStatsPanel() {
       </div>
 
       {loading && !stats ? <p className="notice">Loading server statistics...</p> : null}
+      {stats?.ready === false ? <p className="notice">Preparing server statistics...</p> : null}
       {error ? <p className="notice error">{error}</p> : null}
       {rebootMessage ? <p className="notice">{rebootMessage}</p> : null}
 
-      {stats ? (
+      {displayStats ? (
         <>
           <div className="server-stats-grid">
             <div className="server-stats-disk-column">
@@ -127,16 +133,16 @@ export function ServerStatsPanel() {
                   </div>
                 </div>
                 <div className="server-stats-metrics">
-                  <Metric label="Used" value={formatBytes(stats.root.usedBytes)} />
-                  <Metric label="Free" value={formatBytes(stats.root.freeBytes)} />
-                  <Metric label="Total" value={formatBytes(stats.root.totalBytes)} />
-                  <Metric label="Host" value={stats.hostname || "server"} />
+                  <Metric label="Used" value={formatBytes(displayStats.root.usedBytes)} />
+                  <Metric label="Free" value={formatBytes(displayStats.root.freeBytes)} />
+                  <Metric label="Total" value={formatBytes(displayStats.root.totalBytes)} />
+                  <Metric label="Host" value={displayStats.hostname || "server"} />
                 </div>
               </div>
 
               <div className="server-stats-categories">
                 {categories.map((category) => {
-                  const categoryPercent = stats.root.usedBytes > 0 ? Math.min(100, (category.bytes / stats.root.usedBytes) * 100) : 0;
+                  const categoryPercent = displayStats.root.usedBytes > 0 ? Math.min(100, (category.bytes / displayStats.root.usedBytes) * 100) : 0;
 
                   return (
                     <div className="server-stats-category" key={category.key}>
@@ -159,7 +165,7 @@ export function ServerStatsPanel() {
                 <p className="settings-caption">Runtime status of server processes.</p>
               </div>
               <div className="server-stats-services">
-                {(stats.services ?? []).map((service) => (
+                {(displayStats.services ?? []).map((service) => (
                   <ServiceStatus key={service.key} service={service} />
                 ))}
               </div>
@@ -167,7 +173,10 @@ export function ServerStatsPanel() {
           </div>
 
           <p className="server-stats-footnote">
-            Last updated {formatDateTime(stats.generatedAt)}. Auto-refreshes every 60 seconds while this tab is open.
+            Last updated {formatDateTime(displayStats.generatedAt)}.
+            {displayStats.nextScheduledRefreshAt ? ` Next automatic refresh ${formatDateTime(displayStats.nextScheduledRefreshAt)}.` : ""}
+            {isRefreshing ? " Refresh in progress." : ""}
+            {displayStats.lastRefreshError ? ` Last refresh failed: ${displayStats.lastRefreshError}` : ""}
           </p>
         </>
       ) : null}
@@ -340,7 +349,26 @@ function writeCachedServerStats(stats: ServerStats): void {
   }
 }
 
-function formatDateTime(value: string): string {
+function serverStatsStatusFields(stats: ServerStats): Pick<
+  ServerStats,
+  "ready" | "cached" | "refreshing" | "refreshStartedAt" | "lastRefreshError" | "nextScheduledRefreshAt" | "cacheExpiresAt"
+> {
+  return {
+    ready: stats.ready,
+    cached: stats.cached,
+    refreshing: stats.refreshing,
+    refreshStartedAt: stats.refreshStartedAt,
+    lastRefreshError: stats.lastRefreshError,
+    nextScheduledRefreshAt: stats.nextScheduledRefreshAt,
+    cacheExpiresAt: stats.cacheExpiresAt
+  };
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) {
+    return "just now";
+  }
+
   const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) {

@@ -5,6 +5,7 @@ import socket
 import subprocess
 import json
 import random
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -55,6 +56,7 @@ OPENAI_STATS_SYNC_STALE_SECONDS = 3600
 OPENAI_STATS_MONTH_REFRESH_SECONDS = 6 * 3600
 OPENAI_STATS_MAX_DAILY_BUCKETS = 31
 SERVER_STATS_CACHE_TTL_SECONDS = 60
+SERVER_STATS_DAILY_REFRESH_HOUR_UTC = 4
 DEFAULT_FAKE_ONLINE_SETTINGS = {
     "enabled": False,
     "daysOfWeek": [],
@@ -165,6 +167,22 @@ def _du_size_bytes(path: Path) -> int | None:
         return int(first_field)
     except ValueError:
         return None
+
+
+def _next_server_stats_refresh_at(now: dt.datetime | None = None) -> dt.datetime:
+    current = now or dt.datetime.now(dt.UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=dt.UTC)
+    current = current.astimezone(dt.UTC)
+    candidate = current.replace(
+        hour=SERVER_STATS_DAILY_REFRESH_HOUR_UTC,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    if current >= candidate:
+        candidate += dt.timedelta(days=1)
+    return candidate
 
 
 def _server_stats_service(key: str, label: str, unit: str) -> dict[str, Any]:
@@ -1480,22 +1498,124 @@ class SettingsRepository(MongoComposableMixin):
             },
         }
 
-    def get_server_stats(self, *, refresh: bool = False) -> dict[str, Any]:
+    def get_server_stats(self, *, refresh: bool = False, background_tasks: Any | None = None) -> dict[str, Any]:
+        self._ensure_server_stats_runtime_state()
+        if refresh or getattr(self, "_server_stats_snapshot", None) is None:
+            self.start_server_stats_refresh()
+        return self._server_stats_response()
+
+    def start_server_stats_daily_refresh(self) -> None:
+        self._ensure_server_stats_runtime_state()
+        if self._server_stats_daily_thread is not None and self._server_stats_daily_thread.is_alive():
+            return
+
+        self._server_stats_stop_event.clear()
+        self._server_stats_daily_thread = threading.Thread(
+            target=self._server_stats_daily_refresh_loop,
+            name="al-server-stats-daily-refresh",
+            daemon=True,
+        )
+        self._server_stats_daily_thread.start()
+
+        if self._server_stats_snapshot is None:
+            self.start_server_stats_refresh()
+
+    def stop_server_stats_daily_refresh(self) -> None:
+        stop_event = getattr(self, "_server_stats_stop_event", None)
+        if stop_event is not None:
+            stop_event.set()
+
+    def start_server_stats_refresh(self) -> bool:
+        self._ensure_server_stats_runtime_state()
+        with self._server_stats_lock:
+            if self._server_stats_refreshing:
+                return False
+            now = dt.datetime.now(dt.UTC)
+            self._server_stats_refreshing = True
+            self._server_stats_refresh_started_at = now
+            self._server_stats_last_refresh_error = None
+
+        thread = threading.Thread(
+            target=self._run_server_stats_refresh,
+            name="al-server-stats-refresh",
+            daemon=True,
+        )
+        thread.start()
+        return True
+
+    def _ensure_server_stats_runtime_state(self) -> None:
+        if hasattr(self, "_server_stats_lock"):
+            return
+        self._server_stats_lock = threading.Lock()
+        self._server_stats_snapshot = None
+        self._server_stats_snapshot_at = None
+        self._server_stats_refreshing = False
+        self._server_stats_refresh_started_at = None
+        self._server_stats_last_refresh_error = None
+        self._server_stats_stop_event = threading.Event()
+        self._server_stats_daily_thread = None
+
+    def _server_stats_daily_refresh_loop(self) -> None:
+        while not self._server_stats_stop_event.is_set():
+            next_refresh_at = _next_server_stats_refresh_at()
+            wait_seconds = max(1.0, (next_refresh_at - dt.datetime.now(dt.UTC)).total_seconds())
+            if self._server_stats_stop_event.wait(wait_seconds):
+                return
+            self.start_server_stats_refresh()
+
+    def _run_server_stats_refresh(self) -> None:
+        try:
+            payload = self._build_server_stats_payload()
+        except Exception as exc:
+            with self._server_stats_lock:
+                self._server_stats_last_refresh_error = str(exc)
+                self._server_stats_refreshing = False
+            return
+
+        with self._server_stats_lock:
+            self._server_stats_snapshot = dict(payload)
+            self._server_stats_snapshot_at = dt.datetime.now(dt.UTC)
+            self._server_stats_last_refresh_error = None
+            self._server_stats_refreshing = False
+
+    def _server_stats_response(self) -> dict[str, Any]:
+        self._ensure_server_stats_runtime_state()
+        with self._server_stats_lock:
+            snapshot = dict(self._server_stats_snapshot) if self._server_stats_snapshot else None
+            snapshot_at = self._server_stats_snapshot_at
+            refreshing = self._server_stats_refreshing
+            refresh_started_at = self._server_stats_refresh_started_at
+            last_refresh_error = self._server_stats_last_refresh_error
+
+        next_refresh_at = _next_server_stats_refresh_at()
+        if snapshot is None:
+            return {
+                "ready": False,
+                "cached": False,
+                "refreshing": refreshing,
+                "refreshStartedAt": refresh_started_at.isoformat() if refresh_started_at else None,
+                "lastRefreshError": last_refresh_error,
+                "nextScheduledRefreshAt": next_refresh_at.isoformat(),
+                "generatedAt": None,
+                "hostname": socket.gethostname(),
+                "root": None,
+                "categories": [],
+                "services": [],
+            }
+
+        snapshot["ready"] = True
+        snapshot["cached"] = True
+        snapshot["refreshing"] = refreshing
+        snapshot["refreshStartedAt"] = refresh_started_at.isoformat() if refresh_started_at else None
+        snapshot["lastRefreshError"] = last_refresh_error
+        snapshot["nextScheduledRefreshAt"] = next_refresh_at.isoformat()
+        snapshot["cacheExpiresAt"] = next_refresh_at.isoformat()
+        if snapshot_at is not None:
+            snapshot["snapshotAt"] = snapshot_at.isoformat()
+        return snapshot
+
+    def _build_server_stats_payload(self) -> dict[str, Any]:
         now = dt.datetime.now(dt.UTC)
-        cached_at = getattr(self, "_server_stats_cached_at", None)
-        cached_payload = getattr(self, "_server_stats_cache", None)
-
-        if (
-            not refresh
-            and cached_at is not None
-            and cached_payload is not None
-            and (now - cached_at).total_seconds() < SERVER_STATS_CACHE_TTL_SECONDS
-        ):
-            payload = dict(cached_payload)
-            payload["cached"] = True
-            payload["cacheExpiresAt"] = (cached_at + dt.timedelta(seconds=SERVER_STATS_CACHE_TTL_SECONDS)).isoformat()
-            return payload
-
         usage = shutil.disk_usage("/")
         total = int(usage.total)
         used = int(usage.used)
@@ -1546,10 +1666,8 @@ class SettingsRepository(MongoComposableMixin):
                 for key, label, unit in SERVER_STATS_SERVICES
             ],
             "cached": False,
-            "cacheExpiresAt": (now + dt.timedelta(seconds=SERVER_STATS_CACHE_TTL_SECONDS)).isoformat(),
+            "cacheExpiresAt": _next_server_stats_refresh_at(now).isoformat(),
         }
-        self._server_stats_cache = dict(payload)
-        self._server_stats_cached_at = now
         return payload
 
     def reboot_server(self) -> dict[str, Any]:

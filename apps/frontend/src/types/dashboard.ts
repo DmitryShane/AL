@@ -320,8 +320,13 @@ export type ServerStatsService = {
 };
 
 export type ServerStats = {
-  generatedAt: string;
+  ready?: boolean;
+  generatedAt: string | null;
   cached?: boolean;
+  refreshing?: boolean;
+  refreshStartedAt?: string | null;
+  lastRefreshError?: string | null;
+  nextScheduledRefreshAt?: string;
   cacheExpiresAt?: string;
   hostname: string;
   root: {
@@ -331,7 +336,7 @@ export type ServerStats = {
     freeBytes: number;
     usedPercent: number;
     warningLevel: ServerStatsWarningLevel;
-  };
+  } | null;
   categories: ServerStatsCategory[];
   services: ServerStatsService[];
 };
