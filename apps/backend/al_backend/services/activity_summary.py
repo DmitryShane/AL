@@ -873,8 +873,15 @@ class ActivitySummaryService(
 
             send_interval_seconds = composed(self).get_interval_for_author(raw_author)
             base_author = _with_source_breakdowns(_with_activity_mix(_with_productivity(author)))
+            historical_author_completed_day = historical_completed_single_day
+            if historical_author_completed_day and historical_single_day:
+                author_time_zone_id = _valid_time_zone_id(
+                    (profiles.get(raw_author) or {}).get("timeZoneId") or author.get("timeZoneId")
+                )
+                if author_time_zone_id and str(start_date) == _local_date_for_time_zone(now, author_time_zone_id):
+                    historical_author_completed_day = False
 
-            if historical_completed_single_day:
+            if historical_author_completed_day:
                 summary_author = {
                     **base_author,
                     "status": "stale",

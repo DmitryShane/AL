@@ -153,17 +153,46 @@ def test_previous_local_day_is_historical_even_when_utc_date_matches():
             "timeZoneId": "Europe/Madrid",
         }
     )
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Vancouver Author",
+            "displayName": "Vancouver Author",
+            "telegramUsername": "vancouver",
+            "timeZoneId": "America/Vancouver",
+        }
+    )
     repo.db.daily_author_activity.insert_one(
         {
             "source": "ual",
             "author": "Dmitry Shane",
             "projectId": "unity",
             "date": "2026-06-09",
-            "lastReceivedAt": dt.datetime(2026, 6, 9, 23, 20, tzinfo=dt.UTC),
+            "lastReceivedAt": dt.datetime(2026, 6, 9, 23, 27, tzinfo=dt.UTC),
             "activeSeconds": 60,
             "idleSeconds": 0,
             "workWindowSeconds": 32400,
             "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Vancouver Author",
+            "projectId": "unity",
+            "date": "2026-06-09",
+            "lastReceivedAt": dt.datetime(2026, 6, 9, 23, 27, tzinfo=dt.UTC),
+            "activeSeconds": 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Vancouver Author",
+            "telegramUsername": "vancouver",
+            "date": "2026-06-09",
+            "startedAt": dt.datetime(2026, 6, 9, 16, 0, tzinfo=dt.UTC),
         }
     )
 
@@ -173,10 +202,13 @@ def test_previous_local_day_is_historical_even_when_utc_date_matches():
         now=dt.datetime(2026, 6, 9, 23, 28, tzinfo=dt.UTC),
     )
     author = next(item for item in summary["authors"] if item["rawAuthor"] == "Dmitry Shane")
+    vancouver_author = next(item for item in summary["authors"] if item["rawAuthor"] == "Vancouver Author")
 
     assert author["status"] == "stale"
     assert author["stalePresence"] == "telegram"
     assert repo.db.status_events.count_documents({"rawAuthor": "Dmitry Shane", "reason": "reports_resumed"}) == 0
+    assert vancouver_author["status"] == "online"
+    assert "stalePresence" not in vancouver_author
 
 def test_historical_activity_summary_keeps_selected_day_telegram_offline_gray():
     repo = fake_repository()
