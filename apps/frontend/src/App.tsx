@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Activity, BarChart3, Bell, CalendarDays, LogOut, Settings, UsersRound } from "lucide-react";
 import { DateRangePicker } from "./components/layout/DateRangePicker";
 import { LoginPage } from "./pages/LoginPage";
@@ -16,7 +16,7 @@ import { useActivityAuthorSelection } from "./hooks/useActivityAuthorSelection";
 import { useAuthSession } from "./hooks/useAuthSession";
 import { useDashboardData } from "./hooks/useDashboardData";
 import { useDashboardNavigation } from "./hooks/useDashboardNavigation";
-import { formatSiteRole, formatSiteUserSidebarLabel, shouldHideInactiveOfflineAuthor } from "./pages/pageHelpers";
+import { compareAuthorCardStatus, formatSiteRole, formatSiteUserSidebarLabel, shouldHideInactiveOfflineAuthor } from "./pages/pageHelpers";
 import { emptyActivitySummary, loadSavedDateRange, pageUsesDashboardSummary } from "./utils/dashboardStorage";
 import type { AuthorRow, Page } from "./types/dashboard";
 
@@ -57,7 +57,7 @@ function App() {
     authLoading,
     clearAuthState
   });
-  const { selectedAuthor, setSelectedAuthor } = useActivityAuthorSelection(page);
+  const { selectedAuthor, lastSelectedActivityAuthor, setSelectedAuthor } = useActivityAuthorSelection(page);
 
   const hasKnownPage = page !== null;
   const activitySummary = canShowCachedDashboard ? (summary?.activitySummary ?? emptyActivitySummary) : emptyActivitySummary;
@@ -73,6 +73,10 @@ function App() {
       authors: activityDisplaySummary.authors.filter((author) => !shouldHideInactiveOfflineAuthor(author, new Date(), appliedDateRange))
     }),
     [activityDisplaySummary, appliedDateRange]
+  );
+  const firstVisibleActivityAuthor = useMemo(
+    () => [...visibleActivitySummary.authors].sort((left, right) => compareAuthorCardStatus(left, right, appliedDateRange))[0]?.rawAuthor ?? null,
+    [visibleActivitySummary.authors, appliedDateRange]
   );
   const settingsDisplaySummary = canShowCachedDashboard ? (summary ?? cachedSettingsSummary) : null;
   const isVisualLoading = canShowCachedDashboard && hasKnownPage && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
@@ -94,8 +98,19 @@ function App() {
     healthStatus === "online" ? "Backend online" : healthStatus === "offline" ? "Backend offline" : "Checking backend...";
   const backendStatusClassName = healthStatus === "online" ? "status-pill online" : `status-pill ${healthStatus}`;
 
+  useEffect(() => {
+    if (page !== "activity" || selectedAuthor || lastSelectedActivityAuthor || !firstVisibleActivityAuthor) {
+      return;
+    }
+
+    setSelectedAuthor(firstVisibleActivityAuthor);
+  }, [firstVisibleActivityAuthor, lastSelectedActivityAuthor, page, selectedAuthor, setSelectedAuthor]);
+
   function selectPage(nextPage: Page) {
-    selectNavigationPage(nextPage);
+    const search = nextPage === "activity" && lastSelectedActivityAuthor
+      ? `?${new URLSearchParams({ author: lastSelectedActivityAuthor }).toString()}`
+      : "";
+    selectNavigationPage(nextPage, search);
     showCachedSummaryForPage(nextPage);
   }
 

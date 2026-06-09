@@ -94,7 +94,7 @@ export function useDashboardNavigation({
     });
   }, [canRestoreScroll, page]);
 
-  function selectPage(nextPage: Page) {
+  function selectPage(nextPage: Page, search = "") {
     const shouldResetScroll = nextPage !== page;
 
     if (shouldResetScroll) {
@@ -104,7 +104,7 @@ export function useDashboardNavigation({
     }
 
     setPage(nextPage);
-    window.history.pushState(window.history.state, "", pageToPath(nextPage));
+    window.history.pushState(window.history.state, "", `${pageToPath(nextPage)}${search}`);
 
     if (shouldResetScroll) {
       window.requestAnimationFrame(() => {
