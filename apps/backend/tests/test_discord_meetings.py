@@ -492,7 +492,7 @@ def test_discord_voice_events_open_and_close_meeting_session():
     assert repo.db.report_rows.items[-1]["source"] == "discord"
     assert repo.db.report_rows.items[-1]["reportType"] == "meeting"
 
-def test_live_discord_meeting_reports_follow_send_interval():
+def test_open_discord_meeting_does_not_create_live_report_rows_but_counts_live_time():
     repo = fake_repository()
     repo.db.interval_settings.insert_one({"kind": "global", "sendIntervalSeconds": 300})
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
@@ -501,23 +501,22 @@ def test_live_discord_meeting_reports_follow_send_interval():
     inserted = repo.materialize_live_meeting_reports(dt.datetime(2026, 4, 29, 10, 12, tzinfo=dt.UTC))
 
     live_reports = [item for item in repo.db.report_rows.items if item.get("discordStatus") == "meeting_live"]
-    daily = repo.db.daily_author_activity.find_one({"source": "discord", "author": "Future Artist", "date": "2026-04-29"})
-    hour = daily["hourlyActivity"][10]
     session = repo.db.meeting_sessions.find_one({"discordUserId": "123"})
+    summary = repo.activity_summary(
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        now=dt.datetime(2026, 4, 29, 10, 12, tzinfo=dt.UTC),
+    )
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
 
-    assert inserted == 2
-    assert [_hour_metric(item, "meetingSeconds") for item in live_reports] == [300, 300]
-    assert [item["recordedAt"] for item in live_reports] == [
-        "2026-04-29T10:05:00+00:00",
-        "2026-04-29T10:10:00+00:00",
-    ]
-    assert all(item["activityType"] == "meeting_live" for item in live_reports)
-    assert _hour_metric(hour, "meetingSeconds") == 600
-    assert session["lastLiveReportAt"] == dt.datetime(2026, 4, 29, 10, 10, tzinfo=dt.UTC)
-    assert repo.db.meeting_events.count_documents({"eventType": "live"}) == 2
+    assert inserted == 0
+    assert live_reports == []
+    assert session.get("lastLiveReportAt") is None
+    assert repo.db.meeting_events.count_documents({"eventType": "live"}) == 0
+    assert author["meetingSeconds"] == 720
 
 
-def test_live_discord_meeting_reports_survive_scoped_rebuild():
+def test_open_discord_meeting_live_time_survives_scoped_rebuild_without_live_rows():
     repo = fake_repository()
     repo.db.interval_settings.insert_one({"kind": "global", "sendIntervalSeconds": 300})
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
@@ -527,17 +526,18 @@ def test_live_discord_meeting_reports_survive_scoped_rebuild():
     repo.rebuild_aggregates_for_dates("2026-04-29", dates=["2026-04-29"])
 
     live_reports = [item for item in repo.db.report_rows.items if item.get("discordStatus") == "meeting_live"]
-    daily = repo.db.daily_author_activity.find_one({"source": "discord", "author": "Future Artist", "date": "2026-04-29"})
+    summary = repo.activity_summary(
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        now=dt.datetime(2026, 4, 29, 10, 12, tzinfo=dt.UTC),
+    )
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
 
-    assert [_hour_metric(item, "meetingSeconds") for item in live_reports] == [300, 300]
-    assert [item["recordedAt"] for item in live_reports] == [
-        "2026-04-29T10:05:00+00:00",
-        "2026-04-29T10:10:00+00:00",
-    ]
-    assert _hour_metric(daily["hourlyActivity"][10], "meetingSeconds") == 600
+    assert live_reports == []
+    assert author["meetingSeconds"] == 720
 
 
-def test_scoped_rebuild_backfills_existing_live_discord_report_rows_as_source_events():
+def test_scoped_rebuild_ignores_existing_live_discord_report_rows():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
     repo.db.report_rows.insert_one(
@@ -575,10 +575,28 @@ def test_scoped_rebuild_backfills_existing_live_discord_report_rows_as_source_ev
     live_reports = [item for item in repo.db.report_rows.items if item.get("discordStatus") == "meeting_live"]
     daily = repo.db.daily_author_activity.find_one({"source": "discord", "author": "Future Artist", "date": "2026-04-29"})
 
-    assert result["backfilledLiveMeetingEvents"] == 1
-    assert len(live_events) == 1
-    assert [_hour_metric(item, "meetingSeconds") for item in live_reports] == [300]
-    assert _hour_metric(daily["hourlyActivity"][10], "meetingSeconds") == 300
+    assert result["backfilledLiveMeetingEvents"] == 0
+    assert live_events == []
+    assert live_reports == []
+    assert daily is None
+
+
+def test_plugin_reports_show_discord_start_and_end_without_live_rows():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+
+    repo.record_discord_voice_event("123", "future", "join", timestamp="2026-04-29T10:00:00+00:00")
+    open_page = repo.reports_page(start_date="2026-04-29", end_date="2026-04-29", author="Future Artist")
+
+    repo.record_discord_voice_event("123", "future", "leave", timestamp="2026-04-29T10:25:00+00:00")
+    closed_page = repo.reports_page(start_date="2026-04-29", end_date="2026-04-29", author="Future Artist")
+
+    open_statuses = [item.get("discordStatus") for item in open_page["reports"]]
+    closed_statuses = [item.get("discordStatus") for item in closed_page["reports"]]
+
+    assert open_statuses == ["meeting_started"]
+    assert closed_statuses == ["meeting_closed", "meeting_started"]
+    assert "meeting_live" not in closed_statuses
 
 
 def test_discord_meeting_schedules_telegram_online_prompt_before_day_start():

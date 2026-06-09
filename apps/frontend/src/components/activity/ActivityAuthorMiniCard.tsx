@@ -9,6 +9,8 @@ type ActivityAuthorMiniCardProps = {
 };
 
 export function ActivityAuthorMiniCard({ author, active, onSelect }: ActivityAuthorMiniCardProps) {
+  const productivity = Number.isFinite(author.productivity) ? author.productivity : 0;
+
   return (
     <button
       type="button"
@@ -21,7 +23,7 @@ export function ActivityAuthorMiniCard({ author, active, onSelect }: ActivityAut
       </span>
       <span className="author-mini-card-name">{author.displayName}</span>
       <span className={`productivity-badge author-mini-card-productivity ${authorCardProductivityTone(author)}`}>
-        <strong>{author.productivity.toFixed(0)}%</strong>
+        <strong>{productivity.toFixed(0)}%</strong>
       </span>
     </button>
   );

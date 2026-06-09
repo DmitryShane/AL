@@ -31,7 +31,6 @@ class ReportListingService(MongoComposableMixin):
         author: str | None = None,
         source: str | None = None,
     ) -> list[dict[str, Any]]:
-        composed(self).materialize_live_meeting_reports()
         reports = []
         projection = self._reports_projection()
 
@@ -96,7 +95,6 @@ class ReportListingService(MongoComposableMixin):
         limit = max(1, min(int(limit), 200))
         offset = max(0, int(offset))
         hour = _normalize_report_hour_filter(hour)
-        composed(self).materialize_live_meeting_reports()
         query, profiles, now = self._reports_query_context(start_date, end_date, date_mode, author, source)
         source_query, _, _ = self._reports_query_context(start_date, end_date, date_mode, author)
         status_rows = list(self.db.report_rows.find({**source_query, "source": "status"}, self._reports_projection()))

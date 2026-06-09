@@ -16,7 +16,6 @@ class ActivitySummaryCacheMixin:
         include_hourly: bool = True,
         include_breakdowns: bool = True,
     ) -> dict[str, Any]:
-        composed(self).materialize_live_meeting_reports()
         now = dt.datetime.now(dt.UTC)
         cache_key = self._activity_summary_cache_key(
             view,

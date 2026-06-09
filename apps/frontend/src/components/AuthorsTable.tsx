@@ -52,34 +52,42 @@ export function AuthorsTable({ authors, emptyMessage }: AuthorsTableProps) {
         <span>Last Report</span>
       </div>
       {authors.map((author) => (
-        <div className="authors-row" key={author.rawAuthor}>
-          <div className="author-cell" title={author.authorEmail || author.rawAuthor}>
-            <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
-            <div>
-              <strong>{author.displayName}</strong>
-              <small className="author-email" title={author.authorEmail || author.rawAuthor}>{author.authorEmail || author.rawAuthor}</small>
-            </div>
-          </div>
-          <span>{author.team || "-"}</span>
-          <span>{formatDuration(author.telegramDaySeconds ?? author.daySeconds)}</span>
-          <span>{formatDuration(author.rawPluginDaySeconds ?? author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds)}</span>
-          <span>{formatDuration(author.activeSeconds)}</span>
-          <span>{formatDuration(author.idleSeconds)}</span>
-          <span>{formatDuration(author.meetingSeconds ?? 0)}</span>
-          <span className={overtimeClassName(author.overtimeActiveSeconds)}>{formatDuration(author.overtimeActiveSeconds)}</span>
-          <span className={breakClassName(author.breakSeconds)}>{formatMinutes(author.breakSeconds)}</span>
-          <strong className={productivityClassName(author)}>{author.productivity.toFixed(2)}%</strong>
-          <span className="author-status-stack">
-            <span className={statusBadgeClassName(author.status, author.stalePresence)}>{formatStatus(author)}</span>
-          </span>
-          <span>{formatSource(author.source)}</span>
-          <span className="author-last-report" title={formatTimestamp(author.lastRecordedAt)}>
-            <span>{formatAuthorDate(author)}</span>
-            <span>{formatAuthorTime(author)}</span>
-          </span>
-        </div>
+        <AuthorTableRow author={author} key={author.rawAuthor} />
       ))}
       {!authors.length ? <p className="empty-table">{emptyMessage}</p> : null}
+    </div>
+  );
+}
+
+function AuthorTableRow({ author }: { author: AuthorsTableRow }) {
+  const productivity = Number.isFinite(author.productivity) ? author.productivity : 0;
+
+  return (
+    <div className="authors-row">
+      <div className="author-cell" title={author.authorEmail || author.rawAuthor}>
+        <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
+        <div>
+          <strong>{author.displayName}</strong>
+          <small className="author-email" title={author.authorEmail || author.rawAuthor}>{author.authorEmail || author.rawAuthor}</small>
+        </div>
+      </div>
+      <span>{author.team || "-"}</span>
+      <span>{formatDuration(author.telegramDaySeconds ?? author.daySeconds)}</span>
+      <span>{formatDuration(author.rawPluginDaySeconds ?? author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds)}</span>
+      <span>{formatDuration(author.activeSeconds)}</span>
+      <span>{formatDuration(author.idleSeconds)}</span>
+      <span>{formatDuration(author.meetingSeconds ?? 0)}</span>
+      <span className={overtimeClassName(author.overtimeActiveSeconds)}>{formatDuration(author.overtimeActiveSeconds)}</span>
+      <span className={breakClassName(author.breakSeconds)}>{formatMinutes(author.breakSeconds)}</span>
+      <strong className={productivityClassName({ ...author, productivity })}>{productivity.toFixed(2)}%</strong>
+      <span className="author-status-stack">
+        <span className={statusBadgeClassName(author.status, author.stalePresence)}>{formatStatus(author)}</span>
+      </span>
+      <span>{formatSource(author.source)}</span>
+      <span className="author-last-report" title={formatTimestamp(author.lastRecordedAt)}>
+        <span>{formatAuthorDate(author)}</span>
+        <span>{formatAuthorTime(author)}</span>
+      </span>
     </div>
   );
 }

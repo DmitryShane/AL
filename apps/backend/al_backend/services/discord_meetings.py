@@ -41,32 +41,7 @@ MEETING_RECORDING_SUCCESS_STATUSES = {
 
 class DiscordMeetingService(MongoComposableMixin):
     def materialize_live_meeting_reports(self, now: dt.datetime | None = None) -> int:
-        now = now or dt.datetime.now(dt.UTC)
-        inserted = 0
-
-        for session in self.db.meeting_sessions.find({}, {"_id": 0}):
-            raw_author = str(session.get("rawAuthor") or "Unknown User")
-            started_at = _coerce_datetime(session.get("startedAt"))
-
-            if not started_at:
-                continue
-
-            interval_seconds = max(1, int(composed(self).get_interval_for_author(raw_author)))
-            last_report_at = _coerce_datetime(session.get("lastLiveReportAt")) or started_at
-            next_report_at = last_report_at + dt.timedelta(seconds=interval_seconds)
-
-            while next_report_at <= now:
-                inserted += self._insert_discord_meeting_live_report_row(session, last_report_at, next_report_at)
-                last_report_at = next_report_at
-                next_report_at = last_report_at + dt.timedelta(seconds=interval_seconds)
-
-            if last_report_at != (_coerce_datetime(session.get("lastLiveReportAt")) or started_at):
-                self.db.meeting_sessions.update_one(
-                    {"discordUserId": session.get("discordUserId")},
-                    {"$set": {"lastLiveReportAt": last_report_at, "updatedAt": now}},
-                )
-
-        return inserted
+        return 0
 
     def _meeting_participant_telegram_usernames(
         self,

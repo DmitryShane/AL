@@ -302,6 +302,56 @@ class ActivityLiveSummaryService(MongoComposableMixin):
 
         return gaps
 
+    def _apply_live_meeting_sessions_to_summary(
+        self,
+        authors_by_raw: dict[str, dict[str, Any]],
+        profiles: dict[str, dict[str, Any]],
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        now: dt.datetime,
+        meeting_seconds_by_author_date: dict[tuple[str, str], int],
+        meeting_buckets: dict[tuple[str, str], list[dict[str, int]]],
+        raw_author_scope: str | None = None,
+        daily_author_dates_with_hourly: set[tuple[str, str]] | None = None,
+    ) -> None:
+        scoped_raw_author = str(raw_author_scope or "").strip()
+        daily_author_dates_with_hourly = daily_author_dates_with_hourly or set()
+
+        for session in self.db.meeting_sessions.find({}, {"_id": 0}):
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
+
+            if scoped_raw_author and raw_author != scoped_raw_author:
+                continue
+
+            started_at = _coerce_datetime(session.get("startedAt"))
+
+            if not started_at:
+                continue
+
+            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
+            meeting_date = str(session.get("date") or _telegram_event_date(started_at, time_zone_id))
+
+            if not _date_in_summary_scope(meeting_date, raw_author, profiles, session.get("timeZoneId"), now, start_date, end_date, date_mode):
+                continue
+
+            author_row = self._ensure_summary_author(authors_by_raw, raw_author, profiles)
+            author_row["activeMeeting"] = True
+            meeting_key = (raw_author, meeting_date)
+            session_bucket = {meeting_key: empty_hourly_activity()}
+            add_meeting_interval_to_buckets(session_bucket, raw_author, started_at, now, time_zone_id)
+            meeting_delta_seconds = sum(int(hour.get("meetingSeconds", 0)) for hour in session_bucket[meeting_key])
+
+            if meeting_delta_seconds <= 0:
+                continue
+
+            if meeting_key not in daily_author_dates_with_hourly:
+                meeting_seconds_by_author_date[meeting_key] = (
+                    int(meeting_seconds_by_author_date.get(meeting_key, 0)) + meeting_delta_seconds
+                )
+            meeting_bucket = meeting_buckets.setdefault(meeting_key, empty_hourly_activity())
+            merge_hourly_activity(meeting_bucket, session_bucket[meeting_key])
+
     def _apply_live_activity_summary(
         self,
         authors_by_raw: dict[str, dict[str, Any]],
@@ -420,13 +470,14 @@ class ActivityLiveSummaryService(MongoComposableMixin):
                 merge_hourly_activity(hourly_author["hourlyActivity"], interval_bucket[meeting_key])
 
         for session in self.db.meeting_sessions.find({}, {"_id": 0}):
-            raw_author = session.get("rawAuthor") or "Unknown User"
+            raw_author = str(session.get("rawAuthor") or "Unknown User")
             started_at = _coerce_datetime(session.get("startedAt"))
 
             if not started_at:
                 continue
 
-            meeting_date = str(session.get("date") or _telegram_event_date(started_at, _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))))
+            time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
+            meeting_date = str(session.get("date") or _telegram_event_date(started_at, time_zone_id))
 
             if not _date_in_summary_scope(meeting_date, raw_author, profiles, session.get("timeZoneId"), now, start_date, end_date, date_mode):
                 continue
@@ -524,6 +575,12 @@ class ActivityLiveSummaryService(MongoComposableMixin):
             "savedPrefabs": [],
             "overtimeActivityCounts": [],
             "overtimeSavedPrefabs": [],
+            "_activityCountsBySource": {},
+            "_activeSecondsBySource": {},
+            "_savedPrefabsBySource": {},
+            "_overtimeActivityCountsBySource": {},
+            "_overtimeActiveSecondsBySource": {},
+            "_overtimeSavedPrefabsBySource": {},
         }
         authors_by_raw[raw_author] = author_row
         return author_row

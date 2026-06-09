@@ -401,15 +401,17 @@ export function formatMinutes(seconds: number) {
 }
 
 export function productivityClassName(productivity: number) {
-  if (productivity > 100) {
+  const value = Number.isFinite(productivity) ? productivity : 0;
+
+  if (value > 100) {
     return "metric-value overdrive";
   }
 
-  if (productivity > 80) {
+  if (value > 80) {
     return "metric-value good";
   }
 
-  if (productivity >= 50) {
+  if (value >= 50) {
     return "metric-value warning";
   }
 
@@ -417,15 +419,17 @@ export function productivityClassName(productivity: number) {
 }
 
 export function productivityTone(productivity: number) {
-  if (productivity > 100) {
+  const value = Number.isFinite(productivity) ? productivity : 0;
+
+  if (value > 100) {
     return "overdrive";
   }
 
-  if (productivity > 80) {
+  if (value > 80) {
     return "good";
   }
 
-  if (productivity >= 50) {
+  if (value >= 50) {
     return "warning";
   }
 

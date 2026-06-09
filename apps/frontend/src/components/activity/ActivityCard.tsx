@@ -15,6 +15,7 @@ type ActivityCardProps = {
 
 export function ActivityCard({ author, active, onSelect }: ActivityCardProps) {
   const isVacationDay = author.dayOverride?.type === "vacation" || author.calendarDayMark?.reasonId === "vacation";
+  const productivity = Number.isFinite(author.productivity) ? author.productivity : 0;
 
   return (
     <button
@@ -24,7 +25,7 @@ export function ActivityCard({ author, active, onSelect }: ActivityCardProps) {
       <span className="author-card-status" aria-hidden="true" />
       <span className="author-card-identity">
         <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
-        {productivityTone(author.productivity) === "overdrive" ? <span className="overdrive-author-text">Are you human?</span> : null}
+        {productivityTone(productivity) === "overdrive" ? <span className="overdrive-author-text">Are you human?</span> : null}
       </span>
       <strong>{author.displayName}</strong>
       <small>{author.team || "No team"}</small>
@@ -45,7 +46,7 @@ export function ActivityCard({ author, active, onSelect }: ActivityCardProps) {
           )}
         </div>
         <div className={`productivity-badge ${authorCardProductivityTone(author)}`}>
-          <strong>{author.productivity.toFixed(0)}%</strong>
+          <strong>{productivity.toFixed(0)}%</strong>
         </div>
       </div>
     </button>

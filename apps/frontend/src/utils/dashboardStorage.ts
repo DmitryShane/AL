@@ -114,7 +114,7 @@ export function readCachedAuthors(dateRange: DateRange): AuthorRow[] {
       return [];
     }
 
-    return authors as AuthorRow[];
+    return sanitizeCachedAuthorRows(authors);
   } catch {
     return [];
   }
@@ -253,7 +253,59 @@ function sanitizeCachedActivitySummaryValue(summary: ActivitySummary): ActivityS
     return null;
   }
 
-  return summary;
+  return {
+    ...summary,
+    authors: sanitizeCachedAuthorRows(summary.authors)
+  };
+}
+
+function sanitizeCachedAuthorRows(authors: unknown[]): AuthorRow[] {
+  return authors.flatMap((item) => {
+    if (!item || typeof item !== "object") {
+      return [];
+    }
+
+    const author = item as Partial<AuthorRow>;
+    const rawAuthor = typeof author.rawAuthor === "string" ? author.rawAuthor : "";
+    const displayName = typeof author.displayName === "string" ? author.displayName : rawAuthor;
+
+    if (!rawAuthor || !displayName) {
+      return [];
+    }
+
+    return [{
+      ...author,
+      rawAuthor,
+      displayName,
+      daySeconds: numberOrZero(author.daySeconds),
+      telegramDaySeconds: numberOrZero(author.telegramDaySeconds),
+      pluginDaySeconds: numberOrZero(author.pluginDaySeconds),
+      rawPluginDaySeconds: numberOrUndefined(author.rawPluginDaySeconds),
+      telegramToFirstActivitySeconds: numberOrUndefined(author.telegramToFirstActivitySeconds),
+      activeSeconds: numberOrZero(author.activeSeconds),
+      idleSeconds: numberOrZero(author.idleSeconds),
+      meetingSeconds: numberOrZero(author.meetingSeconds),
+      breakSeconds: numberOrZero(author.breakSeconds),
+      overtimeActiveSeconds: numberOrZero(author.overtimeActiveSeconds),
+      productivity: numberOrZero(author.productivity),
+      activityMix: Array.isArray(author.activityMix) ? author.activityMix : [],
+      savedPrefabs: Array.isArray(author.savedPrefabs) ? author.savedPrefabs : [],
+      overtimeActivityMix: Array.isArray(author.overtimeActivityMix) ? author.overtimeActivityMix : [],
+      overtimeSavedPrefabs: Array.isArray(author.overtimeSavedPrefabs) ? author.overtimeSavedPrefabs : [],
+      activityMixBySource: Array.isArray(author.activityMixBySource) ? author.activityMixBySource : [],
+      savedPrefabsBySource: Array.isArray(author.savedPrefabsBySource) ? author.savedPrefabsBySource : [],
+      overtimeActivityMixBySource: Array.isArray(author.overtimeActivityMixBySource) ? author.overtimeActivityMixBySource : [],
+      overtimeSavedPrefabsBySource: Array.isArray(author.overtimeSavedPrefabsBySource) ? author.overtimeSavedPrefabsBySource : []
+    } as AuthorRow];
+  });
+}
+
+function numberOrZero(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function numberOrUndefined(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function canPersistDashboardSummary(page: Page, dateRange: DateRange, summary: Summary) {

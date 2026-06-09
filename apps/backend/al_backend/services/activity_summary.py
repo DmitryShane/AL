@@ -100,19 +100,6 @@ class ActivitySummaryService(
         now = now or dt.datetime.now(dt.UTC)
         historical_single_day = bool(start_date and start_date == end_date and not date_mode)
         profiles = composed(self)._profiles_by_raw_author()
-        selected_day_is_live = False
-        if historical_single_day and start_date:
-            live_dates = {now.astimezone(dt.UTC).date().isoformat()}
-            for profile in profiles.values():
-                live_dates.add(
-                    _local_date_for_time_zone(
-                        now,
-                        _author_time_zone_id(profile.get("rawAuthor"), {}, profile.get("timeZoneId")),
-                    )
-                )
-            selected_day_is_live = start_date in live_dates
-        if not historical_single_day or selected_day_is_live:
-            composed(self).materialize_live_meeting_reports(now)
         hidden_device_authors = self._hidden_device_authors()
         if historical_single_day:
             selected_daily_device_authors = {
@@ -214,6 +201,23 @@ class ActivitySummaryService(
         meeting_buckets = composed(self)._meeting_buckets_for_daily_items(daily_items, now)
         telegram_gaps = composed(self)._telegram_gaps_for_daily_items(daily_items)
         telegram_gap_counted: set[tuple[str, str]] = set()
+        daily_author_dates_with_hourly = {
+            (composed(self).resolve_author_alias(str(item.get("author") or "Unknown User")), str(item.get("date") or ""))
+            for item in daily_items
+            if item.get("date") and item.get("hourlyActivity")
+        }
+        composed(self)._apply_live_meeting_sessions_to_summary(
+            authors_by_raw,
+            profiles,
+            start_date,
+            end_date,
+            date_mode,
+            now,
+            meeting_seconds_by_author_date,
+            meeting_buckets,
+            scoped_raw_author,
+            daily_author_dates_with_hourly,
+        )
 
         for item in daily_items:
             source_raw_author = item.get("author") or "Unknown User"
