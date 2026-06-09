@@ -37,7 +37,7 @@ export function ActivityPage({
   refreshing: boolean;
   onRefreshAuthor: (author: string) => void;
 }) {
-  const author = summary.authors.find((item) => item.rawAuthor === selectedAuthor) ?? summary.authors[0];
+  const author = selectedAuthor ? summary.authors.find((item) => item.rawAuthor === selectedAuthor) ?? null : null;
   const snapshotPreparing = summary.snapshot?.status === "preparing";
   const isHistoricalSingleDay = dateRange.preset !== "live" && dateRange.startDate === dateRange.endDate;
   const hourlyCacheKey = useMemo(() => JSON.stringify({
@@ -458,8 +458,10 @@ export function ActivityPage({
               setHourFilter={setReportHourFilter}
             />
           </>
+        ) : selectedAuthor ? (
+          <p className="empty">Selected author is not available in the current activity data.</p>
         ) : loading ? null : (
-          <p className="empty">No author activity for this period.</p>
+          <p className="empty">Select an author.</p>
         )}
     </section>
     </>
