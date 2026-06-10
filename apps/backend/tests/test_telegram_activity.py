@@ -1154,6 +1154,50 @@ def test_post_offline_activity_schedules_one_prompt_and_counts_overtime():
     assert due[0]["reminderId"] == prompt["reminderId"]
     assert repo.claim_due_telegram_post_offline_prompts(dt.datetime(2026, 4, 28, 18, 2, tzinfo=dt.UTC)) == []
 
+def test_overtime_reminder_suppresses_post_offline_prompt_but_counts_overtime():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC))[0]
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "codex",
+            "author": "Future Artist",
+            "projectId": "AL",
+            "sessionId": "codex-session",
+            "date": "2026-04-28",
+            "eventType": "external",
+            "occurredAtUtc": "2026-04-28T19:05:00Z",
+            "occurredAtLocal": "2026-04-28T19:05:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 19, 5, tzinfo=dt.UTC),
+        }
+    )
+
+    close_result = repo.close_telegram_day_from_reminder(
+        reminder["reminderId"],
+        "overtime",
+        "2026-04-28T19:06:00Z",
+        "future_artist",
+    )
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "codex",
+            "author": "Future Artist",
+            "projectId": "AL",
+            "sessionId": "codex-session",
+            "date": "2026-04-28",
+            "eventType": "external",
+            "occurredAtUtc": "2026-04-28T19:30:00Z",
+            "occurredAtLocal": "2026-04-28T19:30:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 19, 30, tzinfo=dt.UTC),
+        }
+    )
+
+    assert close_result["status"] == "reminder_overtime"
+    assert repo.db.day_sessions.items[0]["reminderAction"] == "overtime"
+    assert deltas["overtimeActiveDeltaSeconds"] > 0
+    assert repo.db.telegram_post_offline_prompts.items == []
+
 def test_post_offline_prompt_actions_record_audit_rows_without_moving_offline_time():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})

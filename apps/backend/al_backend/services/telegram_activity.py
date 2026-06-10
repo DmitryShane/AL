@@ -900,6 +900,9 @@ class TelegramActivityService(MongoComposableMixin):
         session = self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": day_date}, {"_id": 0})
         last_offline_at = _coerce_datetime((session or {}).get("lastOfflineAt"))
 
+        if str((session or {}).get("reminderAction") or "") == "overtime":
+            return
+
         if not last_offline_at or report_time < last_offline_at:
             return
 
