@@ -1,22 +1,58 @@
-import { useMemo, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { apiFetch } from "../../api/client";
 import type { ServerStats } from "../../types/dashboard";
+import { readStorageItem, sessionBrowserStorage, writeStorageCache } from "../../utils/browserStorage";
 import { formatDateTime } from "./serverStatsFormatters";
+
+const DISK_USAGE_CACHE_KEY = "al.serverStats.cache";
+let cachedDiskStats: ServerStats | null = readCachedDiskStats();
 
 type ReadyServerStats = ServerStats & { root: NonNullable<ServerStats["root"]> };
 
-export function DiskUsageCard({
-  stats,
-  loading,
-  refreshing,
-  error,
-  onRefresh
-}: {
-  stats: ServerStats | null;
-  loading: boolean;
-  refreshing: boolean;
-  error: string;
-  onRefresh: () => void;
-}) {
+export function DiskUsageCard() {
+  const [stats, setStats] = useState<ServerStats | null>(() => cachedDiskStats);
+  const [loading, setLoading] = useState(() => cachedDiskStats === null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+
+  async function loadDiskUsage(refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+
+    try {
+      const params = refresh ? `?${new URLSearchParams({ refresh: "disk" }).toString()}` : "";
+      const response = await apiFetch(`/api/v1/settings/server-stats${params}`);
+
+      if (!response.ok) {
+        throw new Error("Server stats request failed");
+      }
+
+      const payload = (await response.json()) as ServerStats;
+      if (payload.ready === false && cachedDiskStats) {
+        setStats({ ...cachedDiskStats, ...diskStatusFields(payload) });
+      } else {
+        setStats(payload);
+      }
+      if (payload.ready !== false && payload.root) {
+        cachedDiskStats = payload;
+        writeCachedDiskStats(payload);
+      }
+      setError("");
+    } catch {
+      setError("Could not load server statistics.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadDiskUsage();
+  }, []);
+
   const categories = useMemo(() => {
     if (!stats) {
       return [];
@@ -42,7 +78,7 @@ export function DiskUsageCard({
           <h2>Disk Usage</h2>
           <p className="settings-caption">Filesystem capacity and application storage.</p>
         </div>
-        <button className="server-stats-refresh-button" onClick={onRefresh} disabled={refreshing}>
+        <button className="server-stats-refresh-button" onClick={() => void loadDiskUsage(true)} disabled={refreshing}>
           {refreshing ? "Refreshing..." : "Refresh"}
         </button>
       </div>
@@ -144,4 +180,45 @@ function serverStatsAccentColor(usedPercent: number): string {
   }
 
   return "#35a86b";
+}
+
+function readCachedDiskStats(): ServerStats | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const value = readStorageItem(sessionBrowserStorage(), DISK_USAGE_CACHE_KEY);
+
+    if (!value) {
+      return null;
+    }
+
+    return JSON.parse(value) as ServerStats;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedDiskStats(stats: ServerStats): void {
+  try {
+    writeStorageCache(sessionBrowserStorage(), DISK_USAGE_CACHE_KEY, JSON.stringify(stats));
+  } catch {
+    // Storage can be unavailable in private mode; in-memory cache still works.
+  }
+}
+
+function diskStatusFields(stats: ServerStats): Pick<
+  ServerStats,
+  "ready" | "cached" | "refreshing" | "refreshStartedAt" | "lastRefreshError" | "nextScheduledRefreshAt" | "cacheExpiresAt"
+> {
+  return {
+    ready: stats.ready,
+    cached: stats.cached,
+    refreshing: stats.refreshing,
+    refreshStartedAt: stats.refreshStartedAt,
+    lastRefreshError: stats.lastRefreshError,
+    nextScheduledRefreshAt: stats.nextScheduledRefreshAt,
+    cacheExpiresAt: stats.cacheExpiresAt
+  };
 }

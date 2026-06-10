@@ -1,36 +1,77 @@
-import { useState } from "react";
-import type { ServerStatsService } from "../../types/dashboard";
+import { useEffect, useState } from "react";
+import { apiFetch } from "../../api/client";
+import type { ServerStats, ServerStatsService } from "../../types/dashboard";
 import { Modal } from "../ui/Modal";
 import { formatDateTime } from "./serverStatsFormatters";
 
-export function ServicesStatusCard({
-  services,
-  loading,
-  ready,
-  refreshing,
-  rebooting,
-  rebootMessage,
-  onRefresh,
-  onReboot
-}: {
-  services: ServerStatsService[];
-  loading: boolean;
-  ready: boolean | undefined;
-  refreshing: boolean;
-  rebooting: boolean;
-  rebootMessage: string;
-  onRefresh: () => void;
-  onReboot: () => Promise<boolean>;
-}) {
+export function ServicesStatusCard() {
+  const [services, setServices] = useState<ServerStatsService[]>([]);
+  const [ready, setReady] = useState<boolean | undefined>(undefined);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [rebooting, setRebooting] = useState(false);
+  const [rebootMessage, setRebootMessage] = useState("");
   const [rebootModalOpen, setRebootModalOpen] = useState(false);
 
+  async function loadServices() {
+    setRefreshing(true);
+
+    try {
+      const params = new URLSearchParams({ refresh: "services" }).toString();
+      const response = await apiFetch(`/api/v1/settings/server-stats?${params}`);
+
+      if (!response.ok) {
+        throw new Error("Server stats request failed");
+      }
+
+      const payload = (await response.json()) as ServerStats;
+      setServices(payload.services ?? []);
+      setReady(payload.ready);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  async function requestReboot(): Promise<boolean> {
+    setRebooting(true);
+    setRebootMessage("");
+
+    try {
+      const response = await apiFetch("/api/v1/settings/server-reboot", { method: "POST" });
+
+      if (!response.ok) {
+        throw new Error("Server reboot request failed");
+      }
+
+      const payload = (await response.json()) as { ok?: boolean; error?: string };
+
+      if (!payload.ok) {
+        throw new Error(payload.error || "Server reboot request failed");
+      }
+
+      setRebootMessage("Server services restart requested. The dashboard may disconnect for a few moments.");
+      return true;
+    } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : "Server reboot request failed";
+      setRebootMessage(`Could not request server reboot: ${message}`);
+      return false;
+    } finally {
+      setRebooting(false);
+    }
+  }
+
   async function confirmReboot() {
-    const rebootRequested = await onReboot();
+    const rebootRequested = await requestReboot();
 
     if (rebootRequested) {
       setRebootModalOpen(false);
     }
   }
+
+  useEffect(() => {
+    void loadServices();
+  }, []);
 
   return (
     <section className="panel server-stats-panel server-stats-services-panel">
@@ -40,7 +81,7 @@ export function ServicesStatusCard({
           <p className="settings-caption">Runtime status of server processes.</p>
         </div>
         <div className="server-stats-actions">
-          <button className="server-stats-refresh-button" onClick={onRefresh} disabled={refreshing || rebooting}>
+          <button className="server-stats-refresh-button" onClick={() => void loadServices()} disabled={refreshing || rebooting}>
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button className="server-stats-reboot-button" onClick={() => setRebootModalOpen(true)} disabled={rebooting}>

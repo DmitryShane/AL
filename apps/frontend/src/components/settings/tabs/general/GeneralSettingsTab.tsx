@@ -1,4 +1,5 @@
-import { ServerStatsPanel } from "../../ServerStatsPanel";
+import { DiskUsageCard } from "../../DiskUsageCard";
+import { ServicesStatusCard } from "../../ServicesStatusCard";
 import { settingsSaveButtonClassName, settingsSaveButtonLabel } from "../../../../pages/pageHelpers";
 import type { Summary } from "../../../../types/dashboard";
 
@@ -95,7 +96,10 @@ export function GeneralSettingsTab({
           </p>
         </div>
       </div>
-      <ServerStatsPanel />
+      <div className="server-stats-card-row">
+        <DiskUsageCard />
+        <ServicesStatusCard />
+      </div>
     </>
   );
 }
