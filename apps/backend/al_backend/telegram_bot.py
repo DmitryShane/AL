@@ -145,12 +145,45 @@ def handle_update(config: BotConfig, update: dict[str, Any]) -> None:
             send_plain_message(config.token, config.allowed_chat_id, dup_text)
             return
 
+        if dup_status == "night_overtime_online_rejected":
+            send_plain_message(
+                config.token,
+                config.allowed_chat_id,
+                (
+                    f"Hi @{username}. 00:00-07:00 is overtime time, so I cannot open a new workday now. "
+                    "Keep working if you need to; activity before 07:00 will be counted as overtime. "
+                    "You can open a new workday after 07:00 local time."
+                ),
+            )
+            return
+
+        if dup_status == "online_after_offline_requires_overtime":
+            prompt_id = str(result.get("reminderId") or "")
+            since = str(result.get("sinceOfflineTimeLocal") or "unknown time")
+
+            if prompt_id:
+                text = (
+                    f"Hi @{username}. You already closed your workday offline at {since}. "
+                    "You can open a new workday only on the next local calendar day after 07:00. "
+                    "If you are working now, mark this as overtime."
+                )
+                prompt_send = send_blocked_online_prompt_message(config.token, config.allowed_chat_id, text, prompt_id)
+                prompt_message_id = (prompt_send.get("result") or {}).get("message_id") if isinstance(prompt_send, dict) else None
+                mark_reminder_sent(
+                    config.backend_url,
+                    config.bot_secret,
+                    prompt_id,
+                    prompt_message_id,
+                    kind="blocked_online_prompt",
+                )
+            return
+
         if dup_status == "duplicate_offline":
             since = str(result.get("sinceOfflineTimeLocal") or "unknown time")
             send_plain_message(
                 config.token,
                 config.allowed_chat_id,
-                f"Hi @{username}. You already closed your Telegram workday offline at {since}.",
+                f"Hi @{username}. You already closed your workday offline at {since}.",
             )
             return
 
@@ -205,6 +238,10 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
     family, reminder_id, action = parsed
     if family == "altm":
         reminder_kind = "online_prompt"
+    elif family == "alto":
+        reminder_kind = "blocked_online_prompt"
+    elif family == "altp":
+        reminder_kind = "post_offline_prompt"
     elif family == "altb":
         reminder_kind = "break_activity_prompt"
     elif family == "altf":
@@ -247,6 +284,16 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
                 answer_text = "Online."
             else:
                 answer_text = "Dismissed."
+        elif reminder_kind == "blocked_online_prompt":
+            if action == "overtime":
+                answer_text = "Overtime."
+            else:
+                answer_text = "Okay."
+        elif reminder_kind == "post_offline_prompt":
+            if action == "overtime":
+                answer_text = "Overtime."
+            else:
+                answer_text = "Still offline."
         elif reminder_kind == "break_activity_prompt":
             if action == "confirm_online":
                 answer_text = "Online."
@@ -260,7 +307,7 @@ def handle_callback_query(config: BotConfig, callback_query: dict[str, Any]) -> 
         elif reminder_expired:
             answer_text = "Reminder expired. Offline was not recorded."
         else:
-            answer_text = "Telegram day closed."
+            answer_text = "Day closed."
 
         answer_callback_query(config.token, callback_id, answer_text)
 
@@ -359,6 +406,18 @@ def parse_callback_data(data: str) -> tuple[str, str, str] | None:
 
         return family, reminder_id, action
 
+    if family == "alto":
+        if action not in {"okay", "overtime"}:
+            return None
+
+        return family, reminder_id, action
+
+    if family == "altp":
+        if action not in {"still_offline", "overtime"}:
+            return None
+
+        return family, reminder_id, action
+
     if family == "altb":
         if action not in {"confirm_online", "still_afk"}:
             return None
@@ -420,6 +479,22 @@ def send_due_reminders(config: BotConfig) -> None:
         result = send_online_prompt_message(config.token, config.allowed_chat_id, text, prompt_id)
         message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
         mark_reminder_sent(config.backend_url, config.bot_secret, prompt_id, message_id, kind="online_prompt")
+
+    for prompt in bundle.get("postOfflinePrompts", []):
+        prompt_id = str(prompt.get("reminderId") or "")
+        telegram_name = str(prompt.get("telegramUsername") or "").strip().lstrip("@")
+        offline_at = format_prompt_time(prompt.get("lastOfflineAt"), prompt.get("timeZoneId"))
+
+        if not prompt_id or not telegram_name:
+            continue
+
+        text = (
+            f"Hi @{telegram_name}. You closed your workday offline at {offline_at}, "
+            "but I now see activity from you. Are you still offline, or are you working overtime?"
+        )
+        result = send_post_offline_prompt_message(config.token, config.allowed_chat_id, text, prompt_id)
+        message_id = (result.get("result") or {}).get("message_id") if isinstance(result, dict) else None
+        mark_reminder_sent(config.backend_url, config.bot_secret, prompt_id, message_id, kind="post_offline_prompt")
 
     for prompt in bundle.get("fakeOnlinePrompts", []):
         prompt_id = str(prompt.get("reminderId") or "")
@@ -779,6 +854,46 @@ def send_online_prompt_message(token: str, chat_id: int, text: str, reminder_id:
     )
 
 
+def send_blocked_online_prompt_message(token: str, chat_id: int, text: str, reminder_id: str) -> dict[str, Any]:
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "Okay", "callback_data": f"alto:{reminder_id}:okay"},
+                {"text": "I want overtime", "callback_data": f"alto:{reminder_id}:overtime"},
+            ]
+        ]
+    }
+    return telegram_request(
+        token,
+        "sendMessage",
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": json.dumps(reply_markup),
+        },
+    )
+
+
+def send_post_offline_prompt_message(token: str, chat_id: int, text: str, reminder_id: str) -> dict[str, Any]:
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "Still offline", "callback_data": f"altp:{reminder_id}:still_offline"},
+                {"text": "Overtime", "callback_data": f"altp:{reminder_id}:overtime"},
+            ]
+        ]
+    }
+    return telegram_request(
+        token,
+        "sendMessage",
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": json.dumps(reply_markup),
+        },
+    )
+
+
 def send_break_activity_prompt_message(token: str, chat_id: int, text: str, reminder_id: str) -> dict[str, Any]:
     reply_markup = {
         "inline_keyboard": [
@@ -851,6 +966,16 @@ def edit_reminder_message(
             body = f"Done.{author} Online."
         else:
             body = f"Done.{author} Still offline."
+    elif reminder_kind == "blocked_online_prompt":
+        if action == "overtime":
+            body = f"Done.{author} Overtime."
+        else:
+            body = f"Done.{author} Okay."
+    elif reminder_kind == "post_offline_prompt":
+        if action == "overtime":
+            body = f"Done.{author} Overtime."
+        else:
+            body = f"Done.{author} Still offline."
     elif reminder_kind == "break_activity_prompt":
         if action == "confirm_online":
             body = f"Done.{author} Online."
@@ -866,7 +991,7 @@ def edit_reminder_message(
             body = "This reminder has expired because the local day has changed. Offline was not recorded."
         else:
             label = "Overtime" if action == "overtime" else "Offline"
-            body = f"Done.{author} Telegram day closed as {label}."
+            body = f"Done.{author} Day closed as {label}."
 
     return telegram_request(
         token,

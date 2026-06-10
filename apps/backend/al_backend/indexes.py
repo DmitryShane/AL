@@ -119,6 +119,10 @@ class IndexManager:
             name="telegram_online_prompts_open_day_unique",
             partialFilterExpression={"status": {"$in": ["pending", "claimed", "sent"]}},
         )
+        self.db.telegram_blocked_online_prompts.create_index("reminderId", unique=True)
+        self.db.telegram_blocked_online_prompts.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING), ("createdAt", DESCENDING)])
+        self.db.telegram_post_offline_prompts.create_index("reminderId", unique=True)
+        self.db.telegram_post_offline_prompts.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
         self.db.telegram_break_activity_prompts.create_index("reminderId", unique=True)
         self.db.telegram_break_activity_prompts.create_index([("rawAuthor", ASCENDING), ("breakStartedAt", ASCENDING)], unique=True)
         self.db.telegram_duplicate_afk_prompts.create_index("reminderId", unique=True)

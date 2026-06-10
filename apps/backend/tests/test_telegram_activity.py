@@ -45,8 +45,10 @@ from al_backend.telegram_bot import (
     format_meeting_summary_message,
     handle_update,
     send_break_activity_prompt_message,
+    send_blocked_online_prompt_message,
     send_duplicate_afk_prompt_message,
     send_online_prompt_message,
+    send_post_offline_prompt_message,
     send_plain_message,
     send_reminder_message,
     telegram_username,
@@ -86,6 +88,12 @@ def test_telegram_bot_parses_online_prompt_callbacks():
     assert parse_callback_data("altb:break1:dismiss") is None
     assert parse_callback_data("altf:d1:confirm_online") == ("altf", "d1", "confirm_online")
     assert parse_callback_data("altf:d1:still_afk") == ("altf", "d1", "still_afk")
+    assert parse_callback_data("alto:b1:okay") == ("alto", "b1", "okay")
+    assert parse_callback_data("alto:b1:overtime") == ("alto", "b1", "overtime")
+    assert parse_callback_data("alto:b1:confirm_online") is None
+    assert parse_callback_data("altp:p1:still_offline") == ("altp", "p1", "still_offline")
+    assert parse_callback_data("altp:p1:overtime") == ("altp", "p1", "overtime")
+    assert parse_callback_data("altp:p1:dismiss") is None
 
 def test_telegram_bot_update_polling_includes_callbacks(monkeypatch):
     captured = {}
@@ -158,6 +166,79 @@ def test_telegram_bot_warns_when_offline_has_no_online_today(monkeypatch):
     assert sent_messages[0]["chat_id"] == 123
     assert "not online today yet" in sent_messages[0]["text"]
 
+def test_telegram_bot_sends_night_overtime_online_notice(monkeypatch):
+    sent_messages = []
+
+    monkeypatch.setattr(
+        "al_backend.telegram_bot.submit_break_event",
+        lambda *args, **kwargs: {"ok": True, "status": "night_overtime_online_rejected"},
+    )
+    monkeypatch.setattr(
+        "al_backend.telegram_bot.send_plain_message",
+        lambda token, chat_id, text: sent_messages.append({"token": token, "chat_id": chat_id, "text": text}),
+    )
+
+    config = BotConfig(token="token", backend_url="http://backend", allowed_chat_id=123, bot_secret="secret")
+    handle_update(
+        config,
+        {
+            "message": {
+                "chat": {"id": 123, "type": "group"},
+                "from": {"username": "future_artist"},
+                "text": "online",
+                "date": 1_777_777_777,
+            }
+        },
+    )
+
+    assert len(sent_messages) == 1
+    assert "00:00-07:00 is overtime time" in sent_messages[0]["text"]
+    assert "after 07:00 local time" in sent_messages[0]["text"]
+
+def test_telegram_bot_sends_blocked_online_prompt(monkeypatch):
+    sent_prompts = []
+    marked = []
+
+    monkeypatch.setattr(
+        "al_backend.telegram_bot.submit_break_event",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "status": "online_after_offline_requires_overtime",
+            "reminderId": "blocked-1",
+            "sinceOfflineTimeLocal": "18:05",
+        },
+    )
+    monkeypatch.setattr(
+        "al_backend.telegram_bot.send_blocked_online_prompt_message",
+        lambda token, chat_id, text, reminder_id: sent_prompts.append(
+            {"token": token, "chat_id": chat_id, "text": text, "reminder_id": reminder_id}
+        )
+        or {"result": {"message_id": 77}},
+    )
+    monkeypatch.setattr(
+        "al_backend.telegram_bot.mark_reminder_sent",
+        lambda backend_url, bot_secret, reminder_id, message_id, kind="day_end": marked.append(
+            {"reminder_id": reminder_id, "message_id": message_id, "kind": kind}
+        ),
+    )
+
+    config = BotConfig(token="token", backend_url="http://backend", allowed_chat_id=123, bot_secret="secret")
+    handle_update(
+        config,
+        {
+            "message": {
+                "chat": {"id": 123, "type": "group"},
+                "from": {"username": "future_artist"},
+                "text": "online",
+                "date": 1_777_777_777,
+            }
+        },
+    )
+
+    assert sent_prompts[0]["reminder_id"] == "blocked-1"
+    assert "next local calendar day after 07:00" in sent_prompts[0]["text"]
+    assert marked == [{"reminder_id": "blocked-1", "message_id": 77, "kind": "blocked_online_prompt"}]
+
 def test_telegram_bot_reminder_message_mentions_author_and_has_buttons(monkeypatch):
     captured = {}
 
@@ -188,7 +269,7 @@ def test_telegram_bot_edit_message_names_author(monkeypatch):
     edit_reminder_message("token", 123, 42, "overtime", "dmitryshane")
 
     assert captured["method"] == "editMessageText"
-    assert captured["params"]["text"] == "Done. @dmitryshane Telegram day closed as Overtime."
+    assert captured["params"]["text"] == "Done. @dmitryshane Day closed as Overtime."
     assert '"inline_keyboard": []' in captured["params"]["reply_markup"]
 
 def test_telegram_bot_online_prompt_message_has_buttons(monkeypatch):
@@ -205,6 +286,36 @@ def test_telegram_bot_online_prompt_message_has_buttons(monkeypatch):
     assert "altm:prompt-1:confirm_online" in captured["params"]["reply_markup"]
     assert "altm:prompt-1:dismiss" in captured["params"]["reply_markup"]
     assert "I'm online" in captured["params"]["reply_markup"]
+
+def test_telegram_bot_blocked_online_prompt_message_has_buttons(monkeypatch):
+    captured = {}
+
+    def fake_request(token, method, params):
+        captured.update({"token": token, "method": method, "params": params})
+        return {"result": {"message_id": 101}}
+
+    monkeypatch.setattr("al_backend.telegram_bot.telegram_request", fake_request)
+    send_blocked_online_prompt_message("token", 123, "Hi @user. Test?", "blocked-1")
+
+    assert captured["method"] == "sendMessage"
+    assert "alto:blocked-1:okay" in captured["params"]["reply_markup"]
+    assert "alto:blocked-1:overtime" in captured["params"]["reply_markup"]
+    assert "I want overtime" in captured["params"]["reply_markup"]
+
+def test_telegram_bot_post_offline_prompt_message_has_buttons(monkeypatch):
+    captured = {}
+
+    def fake_request(token, method, params):
+        captured.update({"token": token, "method": method, "params": params})
+        return {"result": {"message_id": 102}}
+
+    monkeypatch.setattr("al_backend.telegram_bot.telegram_request", fake_request)
+    send_post_offline_prompt_message("token", 123, "Hi @user. Test?", "post-1")
+
+    assert captured["method"] == "sendMessage"
+    assert "altp:post-1:still_offline" in captured["params"]["reply_markup"]
+    assert "altp:post-1:overtime" in captured["params"]["reply_markup"]
+    assert "Still offline" in captured["params"]["reply_markup"]
 
 def test_telegram_bot_break_activity_prompt_message_has_buttons(monkeypatch):
     captured = {}
@@ -396,7 +507,7 @@ def test_telegram_bot_callback_edits_message_after_close(monkeypatch):
 
     assert ("close", "https://activity.mempic.com", "secret", "reminder-1", "overtime", "dmitryshane", "day_end") in calls
     assert ("edit", "token", 123, 42, "overtime", "dmitryshane", "day_end") in calls
-    assert ("answer", "token", "callback-1", "Telegram day closed.") in calls
+    assert ("answer", "token", "callback-1", "Day closed.") in calls
 
 def test_telegram_bot_expired_day_reminder_message(monkeypatch):
     captured = {}
@@ -682,15 +793,17 @@ def test_telegram_to_first_activity_falls_back_to_first_positive_report_row_with
 
     assert author["telegramToFirstActivitySeconds"] == 9 * 60 + 31
 
-def test_telegram_online_after_offline_restores_normal_presence():
+def test_telegram_online_after_offline_keeps_offline_presence_and_prompts_for_overtime():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
     _insert_presence_daily_activity(repo, dt.datetime(2026, 4, 28, 18, 10, tzinfo=dt.UTC))
     repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
     repo.record_break_event("future_artist", "offline", "2026-04-28T18:05:00Z")
-    repo.record_break_event("future_artist", "online", "2026-04-28T18:10:00Z")
+    result = repo.record_break_event("future_artist", "online", "2026-04-28T18:10:00Z")
 
-    assert _author_status(repo, dt.datetime(2026, 4, 28, 18, 11, tzinfo=dt.UTC)) == "online"
+    assert result["status"] == "online_after_offline_requires_overtime"
+    assert _author_status(repo, dt.datetime(2026, 4, 28, 18, 11, tzinfo=dt.UTC)) == "stale"
+    assert len(repo.db.telegram_blocked_online_prompts.items) == 1
 
 def test_telegram_meeting_auto_afk_notifications_can_be_claimed_and_marked_sent():
     repo = fake_repository()
@@ -905,6 +1018,187 @@ def test_telegram_reminder_does_not_repeat_after_activity_following_offline_clos
     )
 
     assert repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 31, tzinfo=dt.UTC)) == []
+
+def test_telegram_online_after_offline_requires_overtime_without_reopening_day():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-04-28T18:00:00Z")
+    session_before = repo.db.day_sessions.items[0].copy()
+
+    result = repo.record_break_event("future_artist", "online", "2026-04-28T20:00:00Z")
+
+    assert result["status"] == "online_after_offline_requires_overtime"
+    assert result["reminderId"]
+    session = repo.db.day_sessions.items[0]
+    assert session["startedAt"] == session_before["startedAt"]
+    assert session["lastOnlineAt"] == session_before["lastOnlineAt"]
+    assert session["lastOfflineAt"] == session_before["lastOfflineAt"]
+    assert session["daySeconds"] == session_before["daySeconds"]
+    assert len(repo.db.telegram_blocked_online_prompts.items) == 1
+    assert not [row for row in repo.db.report_rows.items if row.get("telegramStatus") == "blocked_online_overtime"]
+
+def test_telegram_blocked_online_okay_closes_without_report_row():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-04-28T18:00:00Z")
+    reminder_id = repo.record_break_event("future_artist", "online", "2026-04-28T20:00:00Z")["reminderId"]
+    before_reports = len(repo.db.report_rows.items)
+
+    result = repo.close_telegram_blocked_online_prompt(reminder_id, "okay", "2026-04-28T20:05:00Z", "future_artist")
+
+    assert result["status"] == "blocked_online_prompt_okay"
+    assert len(repo.db.report_rows.items) == before_reports
+    assert repo.db.telegram_blocked_online_prompts.items[0]["closeAction"] == "okay"
+
+def test_telegram_blocked_online_overtime_records_report_without_moving_offline_time():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-04-28T18:00:00Z")
+    session_before = repo.db.day_sessions.items[0].copy()
+    reminder_id = repo.record_break_event("future_artist", "online", "2026-04-28T20:00:00Z")["reminderId"]
+
+    result = repo.close_telegram_blocked_online_prompt(reminder_id, "overtime", "2026-04-28T20:05:00Z", "future_artist")
+
+    session = repo.db.day_sessions.items[0]
+    assert result["status"] == "blocked_online_prompt_overtime"
+    assert session["lastOfflineAt"] == session_before["lastOfflineAt"]
+    assert session["daySeconds"] == session_before["daySeconds"]
+    assert session["reminderAction"] == "overtime"
+    overtime_rows = [row for row in repo.db.report_rows.items if row.get("telegramStatus") == "blocked_online_overtime"]
+    assert len(overtime_rows) == 1
+    assert overtime_rows[0]["telegramEventType"] == "offline"
+    assert overtime_rows[0]["metadata"] == {"promptAction": "overtime", "source": "blocked_online_prompt"}
+
+def test_telegram_online_during_night_overtime_does_not_open_day():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "Europe/Madrid"}
+    )
+
+    result = repo.record_break_event("future_artist", "online", "2026-04-28T02:00:00Z")
+
+    assert result["status"] == "night_overtime_online_rejected"
+    assert repo.db.day_sessions.items == []
+    assert repo.db.break_events.items == []
+    assert repo.db.report_rows.items == []
+
+def test_telegram_online_after_next_local_day_seven_opens_new_day():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "Europe/Madrid"}
+    )
+    repo.record_break_event("future_artist", "online", "2026-04-28T08:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-04-28T16:00:00Z")
+
+    result = repo.record_break_event("future_artist", "online", "2026-04-29T05:05:00Z")
+
+    assert result["status"] == "online_recorded"
+    assert len(repo.db.day_sessions.items) == 2
+    assert repo.db.day_sessions.items[1]["date"] == "2026-04-29"
+
+def test_post_offline_activity_schedules_one_prompt_and_counts_overtime():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-04-28T17:59:00Z",
+            "occurredAtLocal": "2026-04-28T17:59:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 17, 59, tzinfo=dt.UTC),
+        }
+    )
+    repo.record_break_event("future_artist", "offline", "2026-04-28T18:00:00Z")
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-04-28T18:00:30Z",
+            "occurredAtLocal": "2026-04-28T18:00:30+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 0, 30, tzinfo=dt.UTC),
+        }
+    )
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "unity",
+            "sessionId": "unity-session",
+            "date": "2026-04-28",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-04-28T18:01:00Z",
+            "occurredAtLocal": "2026-04-28T18:01:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 28, 18, 1, tzinfo=dt.UTC),
+        }
+    )
+
+    assert deltas["overtimeActiveDeltaSeconds"] > 0
+    assert len(repo.db.telegram_post_offline_prompts.items) == 1
+    prompt = repo.db.telegram_post_offline_prompts.items[0]
+    assert prompt["status"] == "pending"
+    due = repo.claim_due_telegram_post_offline_prompts(dt.datetime(2026, 4, 28, 18, 1, tzinfo=dt.UTC))
+    assert len(due) == 1
+    assert due[0]["reminderId"] == prompt["reminderId"]
+    assert repo.claim_due_telegram_post_offline_prompts(dt.datetime(2026, 4, 28, 18, 2, tzinfo=dt.UTC)) == []
+
+def test_post_offline_prompt_actions_record_audit_rows_without_moving_offline_time():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "offline", "2026-04-28T18:00:00Z")
+    session_before = repo.db.day_sessions.items[0].copy()
+    repo._schedule_telegram_post_offline_prompt_if_needed(
+        "Future Artist",
+        "2026-04-28",
+        "ual",
+        dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC),
+    )
+    first_prompt = repo.db.telegram_post_offline_prompts.items[0]["reminderId"]
+
+    still = repo.close_telegram_post_offline_prompt(first_prompt, "still_offline", "2026-04-28T18:35:00Z", "future_artist")
+
+    assert still["status"] == "post_offline_still_offline"
+    assert repo.db.day_sessions.items[0]["lastOfflineAt"] == session_before["lastOfflineAt"]
+    assert repo.db.day_sessions.items[0]["daySeconds"] == session_before["daySeconds"]
+    assert repo.db.day_sessions.items[0]["reminderAction"] == "overtime"
+    still_rows = [row for row in repo.db.report_rows.items if row.get("telegramStatus") == "post_offline_still_offline"]
+    assert len(still_rows) == 1
+    assert still_rows[0]["metadata"] == {"promptAction": "still_offline", "source": "post_offline_prompt"}
+
+    repo2 = fake_repository()
+    repo2.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo2.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo2.record_break_event("future_artist", "offline", "2026-04-28T18:00:00Z")
+    session_before = repo2.db.day_sessions.items[0].copy()
+    repo2._schedule_telegram_post_offline_prompt_if_needed(
+        "Future Artist",
+        "2026-04-28",
+        "ual",
+        dt.datetime(2026, 4, 28, 18, 30, tzinfo=dt.UTC),
+    )
+    overtime_prompt = repo2.db.telegram_post_offline_prompts.items[0]["reminderId"]
+
+    overtime = repo2.close_telegram_post_offline_prompt(overtime_prompt, "overtime", "2026-04-28T18:35:00Z", "future_artist")
+
+    assert overtime["status"] == "post_offline_overtime"
+    assert repo2.db.day_sessions.items[0]["lastOfflineAt"] == session_before["lastOfflineAt"]
+    assert repo2.db.day_sessions.items[0]["daySeconds"] == session_before["daySeconds"]
+    overtime_rows = [row for row in repo2.db.report_rows.items if row.get("telegramStatus") == "post_offline_overtime"]
+    assert len(overtime_rows) == 1
+    assert overtime_rows[0]["metadata"] == {"promptAction": "overtime", "source": "post_offline_prompt"}
 
 def test_telegram_reminder_close_rejects_wrong_actor():
     repo = fake_repository()

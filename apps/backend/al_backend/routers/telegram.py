@@ -26,6 +26,7 @@ def telegram_due_reminders(request: Request, service: BackendServices = Depends(
     return {
         "reminders": service.claim_due_telegram_day_reminders(),
         "onlinePrompts": service.claim_due_telegram_online_prompts(),
+        "postOfflinePrompts": service.claim_due_telegram_post_offline_prompts(),
         "fakeOnlinePrompts": service.claim_due_fake_online_prompts(),
         "breakActivityPrompts": service.claim_due_telegram_break_activity_prompts(),
         "meetingAutoAfkNotifications": service.claim_due_telegram_meeting_auto_afk_notifications(),
@@ -54,6 +55,12 @@ def telegram_reminder_sent(
     require_telegram_bot_secret(request)
     if sent.kind == "online_prompt":
         return service.mark_telegram_online_prompt_sent(sent.reminder_id, sent.message_id)
+
+    if sent.kind == "blocked_online_prompt":
+        return service.mark_telegram_blocked_online_prompt_sent(sent.reminder_id, sent.message_id)
+
+    if sent.kind == "post_offline_prompt":
+        return service.mark_telegram_post_offline_prompt_sent(sent.reminder_id, sent.message_id)
 
     if sent.kind == "break_activity_prompt":
         return service.mark_telegram_break_activity_prompt_sent(sent.reminder_id, sent.message_id)
@@ -104,6 +111,22 @@ def telegram_reminder_close(
             raise HTTPException(status_code=422, detail="Invalid action for duplicate_afk_prompt")
 
         return service.close_telegram_duplicate_afk_prompt(
+            close.reminder_id, close.action, close.timestamp, close.actor_telegram_username
+        )
+
+    if close.kind == "blocked_online_prompt":
+        if close.action not in {"okay", "overtime"}:
+            raise HTTPException(status_code=422, detail="Invalid action for blocked_online_prompt")
+
+        return service.close_telegram_blocked_online_prompt(
+            close.reminder_id, close.action, close.timestamp, close.actor_telegram_username
+        )
+
+    if close.kind == "post_offline_prompt":
+        if close.action not in {"still_offline", "overtime"}:
+            raise HTTPException(status_code=422, detail="Invalid action for post_offline_prompt")
+
+        return service.close_telegram_post_offline_prompt(
             close.reminder_id, close.action, close.timestamp, close.actor_telegram_username
         )
 

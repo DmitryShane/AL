@@ -186,7 +186,7 @@ class TelegramReminderSentIn(ApiModel):
     kind: str = Field(
         default="day_end",
         alias="kind",
-        pattern="^(day_end|online_prompt|break_activity_prompt|duplicate_afk_prompt|meeting_auto_afk|meeting_recording|meeting_summary|meeting_notification)$",
+        pattern="^(day_end|online_prompt|blocked_online_prompt|post_offline_prompt|break_activity_prompt|duplicate_afk_prompt|meeting_auto_afk|meeting_recording|meeting_summary|meeting_notification)$",
     )
 
 
@@ -196,7 +196,7 @@ class TelegramReminderCloseIn(ApiModel):
     kind: str = Field(
         default="day_end",
         alias="kind",
-        pattern="^(day_end|online_prompt|break_activity_prompt|duplicate_afk_prompt)$",
+        pattern="^(day_end|online_prompt|blocked_online_prompt|post_offline_prompt|break_activity_prompt|duplicate_afk_prompt)$",
     )
     timestamp: str | None = None
     actor_telegram_username: str | None = Field(default=None, alias="actorTelegramUsername")

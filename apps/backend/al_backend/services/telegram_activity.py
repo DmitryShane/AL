@@ -242,6 +242,36 @@ class TelegramActivityService(MongoComposableMixin):
         if event_type == "online":
             day_probe_on = self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": event_date}, {"_id": 0})
             break_probe_on = self.db.break_sessions.find_one({"telegramUsername": normalized_telegram})
+            last_offline_at = _coerce_datetime((day_probe_on or {}).get("lastOfflineAt"))
+
+            if not break_probe_on and _is_night_overtime_prompt_time(event_time, time_zone_id):
+                return {
+                    "ok": True,
+                    "status": "night_overtime_online_rejected",
+                    "eventDate": event_date,
+                    "eventTimeLocal": _event_clock_local(event_time, time_zone_id),
+                    "timeZoneId": time_zone_id,
+                }
+
+            if day_probe_on and last_offline_at:
+                prompt = self._create_blocked_online_prompt(
+                    raw_author,
+                    normalized_telegram,
+                    event_date,
+                    time_zone_id,
+                    event_time,
+                    last_offline_at,
+                )
+                return {
+                    "ok": True,
+                    "status": "online_after_offline_requires_overtime",
+                    "eventDate": event_date,
+                    "eventTimeLocal": _event_clock_local(event_time, time_zone_id),
+                    "lastOfflineAt": last_offline_at.isoformat(),
+                    "sinceOfflineTimeLocal": _event_clock_local(last_offline_at, time_zone_id),
+                    "timeZoneId": time_zone_id,
+                    **prompt,
+                }
 
             if day_probe_on and not day_probe_on.get("lastOfflineAt") and not break_probe_on:
                 started_online = _coerce_datetime(day_probe_on.get("startedAt")) or event_time
@@ -608,6 +638,118 @@ class TelegramActivityService(MongoComposableMixin):
         )
         return {"ok": True, "status": f"reminder_{action}", **metadata}
 
+    def _create_blocked_online_prompt(
+        self,
+        raw_author: str,
+        telegram_username: str,
+        day_date: str,
+        time_zone_id: str,
+        attempted_online_at: dt.datetime,
+        last_offline_at: dt.datetime,
+    ) -> dict[str, Any]:
+        current = self.db.telegram_blocked_online_prompts.find_one(
+            {"rawAuthor": raw_author, "date": day_date, "status": {"$in": ["pending_send", "sent"]}},
+            {"_id": 0},
+        )
+
+        if current:
+            return {"reminderId": str(current.get("reminderId") or "")}
+
+        now = dt.datetime.now(dt.UTC)
+        reminder_id = _new_id()
+        self.db.telegram_blocked_online_prompts.insert_one(
+            {
+                "reminderId": reminder_id,
+                "rawAuthor": raw_author,
+                "date": day_date,
+                "telegramUsername": telegram_username,
+                "attemptedOnlineAt": attempted_online_at,
+                "lastOfflineAt": last_offline_at,
+                "timeZoneId": time_zone_id,
+                "status": "pending_send",
+                "createdAt": now,
+                "updatedAt": now,
+            }
+        )
+        return {"reminderId": reminder_id}
+
+    def mark_telegram_blocked_online_prompt_sent(self, reminder_id: str, message_id: int | None = None) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_blocked_online_prompts.update_one(
+            {"reminderId": reminder_id},
+            {"$set": {"status": "sent", "messageId": message_id, "sentAt": now, "updatedAt": now}},
+        )
+        return {"ok": True}
+
+    def close_telegram_blocked_online_prompt(
+        self,
+        reminder_id: str,
+        action: str,
+        timestamp: str | None = None,
+        actor_telegram_username: str | None = None,
+    ) -> dict[str, Any]:
+        action = action if action in {"okay", "overtime"} else "okay"
+        reminder = self.db.telegram_blocked_online_prompts.find_one({"reminderId": reminder_id}, {"_id": 0})
+
+        if not reminder:
+            return {"ok": False, "error": "Unknown reminder", "status": "unknown_reminder"}
+
+        if reminder.get("status") == "closed":
+            return {
+                "ok": True,
+                "status": "blocked_online_prompt_already_closed",
+                "reminderAction": reminder.get("closeAction") or action,
+            }
+
+        raw_author = str(reminder.get("rawAuthor") or "")
+        telegram_username = _normalize_telegram_username(reminder.get("telegramUsername"))
+        actor_telegram_username = _normalize_telegram_username(actor_telegram_username)
+        received_at = dt.datetime.now(dt.UTC)
+
+        if actor_telegram_username and telegram_username and actor_telegram_username != telegram_username:
+            return {"ok": False, "error": "Reminder belongs to another Telegram user", "status": "wrong_user"}
+
+        if action == "overtime":
+            event_time = _parse_timestamp(timestamp)
+            day_date = str(reminder.get("date") or _telegram_event_date(event_time, reminder.get("timeZoneId")))
+            time_zone_id = _valid_time_zone_id(reminder.get("timeZoneId")) or "UTC"
+            metadata = {"promptAction": "overtime", "source": "blocked_online_prompt"}
+            self.db.break_events.insert_one(
+                {
+                    "telegramUsername": telegram_username,
+                    "rawAuthor": raw_author,
+                    "eventType": "offline",
+                    "timestamp": event_time,
+                    "date": day_date,
+                    "timeZoneId": time_zone_id,
+                    "createdAt": received_at,
+                    "source": "telegram_blocked_online_prompt",
+                    "telegramStatus": "blocked_online_overtime",
+                    "metadata": metadata,
+                }
+            )
+            self.db.day_sessions.update_one(
+                {"rawAuthor": raw_author, "date": day_date},
+                {"$set": {"reminderAction": "overtime"}},
+            )
+            self._insert_telegram_report_row(
+                raw_author,
+                telegram_username,
+                "offline",
+                event_time,
+                day_date,
+                time_zone_id,
+                received_at,
+                "blocked_online_overtime",
+                metadata,
+            )
+
+        self.db.telegram_blocked_online_prompts.update_one(
+            {"reminderId": reminder_id},
+            {"$set": {"status": "closed", "closedAt": received_at, "closeAction": action, "updatedAt": received_at}},
+        )
+        return {"ok": True, "status": f"blocked_online_prompt_{action}", "reminderAction": action}
+
     def _schedule_telegram_online_prompt_if_needed(
         self, raw_author: str, day_date: str, source: str, received_at: dt.datetime
     ) -> None:
@@ -745,6 +887,47 @@ class TelegramActivityService(MongoComposableMixin):
             }
         )
 
+    def _schedule_telegram_post_offline_prompt_if_needed(
+        self,
+        raw_author: str,
+        day_date: str,
+        source: str,
+        report_time: dt.datetime,
+    ) -> None:
+        if source in {"telegram", "discord", "status"} or not raw_author or not day_date:
+            return
+
+        session = self.db.day_sessions.find_one({"rawAuthor": raw_author, "date": day_date}, {"_id": 0})
+        last_offline_at = _coerce_datetime((session or {}).get("lastOfflineAt"))
+
+        if not last_offline_at or report_time < last_offline_at:
+            return
+
+        if self.db.telegram_post_offline_prompts.find_one({"rawAuthor": raw_author, "date": day_date}, {"_id": 1}):
+            return
+
+        profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0, "telegramUsername": 1, "timeZoneId": 1}) or {}
+        telegram_username = _normalize_telegram_username((session or {}).get("telegramUsername") or profile.get("telegramUsername"))
+
+        if not telegram_username:
+            return
+
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_post_offline_prompts.insert_one(
+            {
+                "reminderId": _new_id(),
+                "rawAuthor": raw_author,
+                "date": day_date,
+                "telegramUsername": telegram_username,
+                "firstReportReceivedAt": report_time,
+                "lastOfflineAt": last_offline_at,
+                "timeZoneId": _valid_time_zone_id((session or {}).get("timeZoneId")) or _valid_time_zone_id(profile.get("timeZoneId")) or "UTC",
+                "status": "pending",
+                "createdAt": now,
+                "updatedAt": now,
+            }
+        )
+
     def claim_due_telegram_online_prompts(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
         now = now or dt.datetime.now(dt.UTC)
         due: list[dict[str, Any]] = []
@@ -823,6 +1006,112 @@ class TelegramActivityService(MongoComposableMixin):
             },
         )
         return {"ok": True}
+
+    def claim_due_telegram_post_offline_prompts(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
+        now = now or dt.datetime.now(dt.UTC)
+        due: list[dict[str, Any]] = []
+
+        for doc in list(self.db.telegram_post_offline_prompts.find({"status": "pending"}, {"_id": 0})):
+            reminder_id = str(doc.get("reminderId") or "")
+            raw_author = str(doc.get("rawAuthor") or "")
+            day_date = str(doc.get("date") or "")
+
+            if not reminder_id or not raw_author or not day_date:
+                continue
+
+            self.db.telegram_post_offline_prompts.update_one(
+                {"reminderId": reminder_id},
+                {"$set": {"status": "claimed", "lastClaimedAt": now, "updatedAt": now}},
+            )
+            due.append(
+                {
+                    "reminderId": reminder_id,
+                    "rawAuthor": raw_author,
+                    "telegramUsername": str(doc.get("telegramUsername") or ""),
+                    "date": day_date,
+                    "firstReportReceivedAt": _iso(doc.get("firstReportReceivedAt")),
+                    "lastOfflineAt": _iso(doc.get("lastOfflineAt")),
+                    "timeZoneId": doc.get("timeZoneId"),
+                }
+            )
+
+        return due
+
+    def mark_telegram_post_offline_prompt_sent(self, reminder_id: str, message_id: int | None = None) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        self.db.telegram_post_offline_prompts.update_one(
+            {"reminderId": reminder_id},
+            {"$set": {"status": "sent", "messageId": message_id, "sentAt": now, "updatedAt": now}},
+        )
+        return {"ok": True}
+
+    def close_telegram_post_offline_prompt(
+        self,
+        reminder_id: str,
+        action: str,
+        timestamp: str | None = None,
+        actor_telegram_username: str | None = None,
+    ) -> dict[str, Any]:
+        action = action if action in {"still_offline", "overtime"} else "still_offline"
+        reminder = self.db.telegram_post_offline_prompts.find_one({"reminderId": reminder_id}, {"_id": 0})
+
+        if not reminder:
+            return {"ok": False, "error": "Unknown reminder", "status": "unknown_reminder"}
+
+        if reminder.get("status") == "closed":
+            return {
+                "ok": True,
+                "status": "post_offline_prompt_already_closed",
+                "reminderAction": reminder.get("closeAction") or action,
+            }
+
+        raw_author = str(reminder.get("rawAuthor") or "")
+        telegram_username = _normalize_telegram_username(reminder.get("telegramUsername"))
+        actor_telegram_username = _normalize_telegram_username(actor_telegram_username)
+        received_at = dt.datetime.now(dt.UTC)
+
+        if actor_telegram_username and telegram_username and actor_telegram_username != telegram_username:
+            return {"ok": False, "error": "Reminder belongs to another Telegram user", "status": "wrong_user"}
+
+        event_time = _parse_timestamp(timestamp)
+        day_date = str(reminder.get("date") or _telegram_event_date(event_time, reminder.get("timeZoneId")))
+        time_zone_id = _valid_time_zone_id(reminder.get("timeZoneId")) or "UTC"
+        status = f"post_offline_{action}"
+        metadata = {"promptAction": action, "source": "post_offline_prompt"}
+        self.db.break_events.insert_one(
+            {
+                "telegramUsername": telegram_username,
+                "rawAuthor": raw_author,
+                "eventType": "offline",
+                "timestamp": event_time,
+                "date": day_date,
+                "timeZoneId": time_zone_id,
+                "createdAt": received_at,
+                "source": "telegram_post_offline_prompt",
+                "telegramStatus": status,
+                "metadata": metadata,
+            }
+        )
+        self.db.day_sessions.update_one(
+            {"rawAuthor": raw_author, "date": day_date},
+            {"$set": {"reminderAction": "overtime"}},
+        )
+        self._insert_telegram_report_row(
+            raw_author,
+            telegram_username,
+            "offline",
+            event_time,
+            day_date,
+            time_zone_id,
+            received_at,
+            status,
+            metadata,
+        )
+        self.db.telegram_post_offline_prompts.update_one(
+            {"reminderId": reminder_id},
+            {"$set": {"status": "closed", "closedAt": received_at, "closeAction": action, "updatedAt": received_at}},
+        )
+        return {"ok": True, "status": status, "reminderAction": action}
 
     def claim_due_telegram_break_activity_prompts(self, now: dt.datetime | None = None) -> list[dict[str, Any]]:
         now = now or dt.datetime.now(dt.UTC)

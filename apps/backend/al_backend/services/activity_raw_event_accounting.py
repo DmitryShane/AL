@@ -146,6 +146,12 @@ class ActivityRawEventAccountingMixin:
                 str(snapshot.get("source") or ""),
                 report_time,
             )
+            composed(self)._schedule_telegram_post_offline_prompt_if_needed(
+                str(snapshot.get("author") or "Unknown User"),
+                str(snapshot.get("date") or ""),
+                str(snapshot.get("source") or ""),
+                report_time,
+            )
 
         if materialize and not suppress_rebuild_notifications and _has_active_or_overtime_delta(deltas) and not suppress_vacation_prompt:
             composed(self)._schedule_telegram_online_prompt_if_needed(
@@ -232,6 +238,7 @@ class ActivityRawEventAccountingMixin:
         first_activity_at = _coerce_datetime(state.get("firstActivityAt"))
         last_activity_at = _coerce_datetime(state.get("lastActivityAt"))
         last_accounting_at = _coerce_datetime(state.get("lastAccountingAt"))
+        previous_last_activity_at = last_activity_at
         last_activity_local_at = _parse_local_datetime(state.get("lastActivityLocalAt"))
         last_accounting_local_at = _parse_local_datetime(state.get("lastAccountingLocalAt"))
         last_activity_source = str(state.get("lastActivitySource") or "")
@@ -601,17 +608,30 @@ class ActivityRawEventAccountingMixin:
                     author_last_accounting_local_at = heartbeat_local_end
                     author_last_accounting_scope = current_scope
 
+        suppress_rebuild_notifications = self._notifications_suppressed_for_rebuild()
+        saved_like_event = event_type in {"asset_saved", "prefab_saved", "scene_saved", "file_saved"}
+        late_overtime_breakdown_event = bool(
+            overtime_window_kind is not None
+            and not saved_like_event
+            and previous_last_activity_at
+            and occurred_at <= previous_last_activity_at
+        )
         event_has_overtime_time_delta = _time_microseconds(
             deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds"
         ) > 0
-        event_counts_as_overtime_breakdown = event_has_overtime_time_delta
-        suppress_overtime_window_breakdown = overtime_window_kind is not None and not event_has_overtime_time_delta
+        event_counts_as_overtime_breakdown = event_has_overtime_time_delta or late_overtime_breakdown_event
+        suppress_overtime_window_breakdown = (
+            overtime_window_kind is not None
+            and not event_has_overtime_time_delta
+            and not late_overtime_breakdown_event
+        )
 
         saved_prefab = None if is_inside_status_offline else _saved_prefab_delta(event)
         suppress_activity_count = (
             current_source == "ual"
             and event_type in {"asset_saved", "prefab_saved", "scene_saved"}
             and saved_prefab is None
+            and not suppress_rebuild_notifications
         )
 
         if is_activity and not suppress_activity_count and not suppress_overtime_window_breakdown:
@@ -696,6 +716,14 @@ class ActivityRawEventAccountingMixin:
                         DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND,
                         max(0, consumed_microseconds),
                     )
+
+        if not suppress_deltas and materialize and not suppress_rebuild_notifications and _has_presence_delta(deltas):
+            composed(self)._schedule_telegram_post_offline_prompt_if_needed(
+                str(snapshot.get("author") or "Unknown User"),
+                str(snapshot.get("date") or ""),
+                str(snapshot.get("source") or ""),
+                occurred_at,
+            )
 
         self.db.aggregate_session_state.update_one(
             {"_id": state_key},

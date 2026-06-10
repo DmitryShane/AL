@@ -138,6 +138,7 @@ When debugging summaries, `status_events`, or idle accounting:
 - The owner may write in Russian in chat; **repository and product text stay English** per the rule above. **Russian in chat is not an implicit request for Russian in the product** — if the owner describes desired wording in Russian (alerts, bot copy, UI labels, emails), implement it in **English** unless they clearly ask for a **Russian-language deliverable** (for example: “пусть в боте будет по-русски”, “Russian locale for Telegram”).
 - If the owner is chatting in Russian, keep chat replies in Russian even when the immediate task text, pasted plan, command, or implementation request is written in English (for example, “PLEASE IMPLEMENT THIS PLAN”). English task phrasing is not a request to switch chat responses to English.
 - Write implementation plans for the owner in Russian, because plans are part of chat communication. Keep repository and product text in English unless explicitly asked otherwise.
+- When the owner asks to create a plan, fix plan, change plan, or similar (for example: “создай план правок”, “создай план”, “создай план фикса”), first analyze the relevant code/data thoroughly, ask all material clarifying questions needed for a correct plan, then produce a decision-complete plan. The plan must include an explicit final self-check step requiring the implementer to reread the changed files, verify every plan requirement against the implementation/tests, confirm nothing was missed, and report any exceptions.
 
 ## MongoDB Data Layout (backend)
 
