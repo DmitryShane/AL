@@ -15,6 +15,7 @@ from ..hourly_fill_rules import (
     hourly_activity_has_workday_signal,
     public_hourly_activity,
     transfer_summary_idle_to_auto_break,
+    _to_local_datetime,
 )
 from ..backend_composable_host import composed
 from .activity_summary_helpers import _is_device_profile_raw_author
@@ -361,10 +362,17 @@ class ActivitySummaryHourlyMixin:
                 continue
 
             hourly_activity = hourly_author.get("hourlyActivity", [])
+            fill_ended_at = self._workday_idle_fill_ended_at(
+                _coerce_datetime(session.get("lastOfflineAt")) or latest_signal_by_author_date.get((raw_author, day_date)),
+                session.get("lastOfflineAt"),
+                time_zone_id,
+                date_mode,
+                now,
+            )
             added_idle_seconds = apply_workday_idle_fill(
                 hourly_activity,
                 _coerce_datetime(session.get("startedAt")),
-                _coerce_datetime(session.get("lastOfflineAt")) or latest_signal_by_author_date.get((raw_author, day_date)),
+                fill_ended_at,
                 time_zone_id,
                 hourly_activity_has_workday_signal(hourly_activity),
             )
@@ -383,6 +391,26 @@ class ActivitySummaryHourlyMixin:
             totals["idleSeconds"] = int(totals.get("idleSeconds", 0)) + added_idle_seconds
             totals["pluginDaySeconds"] = int(totals.get("pluginDaySeconds", 0)) + added_idle_seconds
             totals["rawPluginDaySeconds"] = int(totals.get("rawPluginDaySeconds", 0)) + added_idle_seconds
+
+    def _workday_idle_fill_ended_at(
+        self,
+        ended_at: dt.datetime | None,
+        last_offline_at: Any,
+        time_zone_id: str,
+        date_mode: str | None,
+        now: dt.datetime,
+    ) -> dt.datetime | None:
+        if date_mode != "authorLocalToday" or last_offline_at or not ended_at:
+            return ended_at
+
+        local_now = _to_local_datetime(now, time_zone_id)
+        local_hour_start = local_now.replace(minute=0, second=0, microsecond=0)
+        local_ended_at = _to_local_datetime(ended_at, time_zone_id)
+
+        if local_ended_at < local_hour_start:
+            return ended_at
+
+        return local_hour_start
 
     def _apply_visible_workday_idle_reconciliation(
         self,

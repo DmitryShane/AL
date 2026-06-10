@@ -4311,6 +4311,66 @@ def test_open_workday_idle_fill_uses_later_discord_meeting_as_gap_boundary():
     assert author["idleSeconds"] >= 5 * 3600
 
 
+def test_live_workday_idle_fill_skips_current_hour_but_keeps_completed_hours():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-08",
+            "startedAt": dt.datetime(2026, 5, 8, 16, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[16]["activeSeconds"] = 1200
+    hourly_activity[16]["activeMicroseconds"] = 1_200_000_000
+    hourly_activity[16]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 1200}]
+    hourly_activity[17]["activeSeconds"] = 600
+    hourly_activity[17]["activeMicroseconds"] = 600_000_000
+    hourly_activity[17]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 600}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "bike-rush-2",
+            "date": "2026-05-08",
+            "activeSeconds": 1800,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "date": "2026-05-08",
+            "recordedAt": "2026-05-08T17:19:00+00:00",
+            "receivedAt": dt.datetime(2026, 5, 8, 17, 19, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 600,
+            "idleDeltaSeconds": 0,
+            "reportType": "auto",
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-05-08",
+        end_date="2026-05-08",
+        date_mode="authorLocalToday",
+        now=dt.datetime(2026, 5, 8, 17, 30, tzinfo=dt.UTC),
+    )
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+
+    assert _hour_metric(hourly[16], "activeSeconds") == 1200
+    assert _hour_metric(hourly[16], "idleSeconds") == 2400
+    assert _hour_metric(hourly[17], "activeSeconds") == 600
+    assert _hour_metric(hourly[17], "idleSeconds") == 0
+    assert author["idleSeconds"] == 2400
+
+
 def test_meeting_overlay_visible_tail_is_reconciled_as_idle():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
@@ -4671,6 +4731,42 @@ def test_public_hourly_caps_visible_active_to_fact_seconds():
     assert _hour_metric(public[12], "idleSeconds") == 1038
     assert _hour_segments(public[12], "active") == [{"startSecond": 0, "endSecond": 1652}]
     assert _hour_segments(public[12], "idle") == [{"startSecond": 1652, "endSecond": 2690}]
+
+
+def test_public_hourly_active_cap_does_not_double_count_overlaps():
+    hourly = empty_hourly_activity()
+    hourly[16]["activeSeconds"] = 150
+    hourly[16]["activeMicroseconds"] = 150_000_000
+    hourly[16]["fillSegments"] = [
+        {"kind": "active", "startSecond": 0, "endSecond": 100},
+        {"kind": "active", "startSecond": 50, "endSecond": 150},
+    ]
+
+    public = public_hourly_activity(hourly)
+
+    assert _hour_metric(public[16], "activeSeconds") == 150
+    assert _hour_segments(public[16], "active") == [{"startSecond": 0, "endSecond": 150}]
+
+
+def test_public_hourly_active_cap_keeps_later_unique_seconds_after_overlap():
+    hourly = empty_hourly_activity()
+    hourly[16]["activeSeconds"] = 1747
+    hourly[16]["activeMicroseconds"] = 1_747_000_000
+    hourly[16]["idleSeconds"] = 1853
+    hourly[16]["idleMicroseconds"] = 1_853_000_000
+    hourly[16]["fillSegments"] = [
+        {"kind": "active", "startSecond": 0, "endSecond": 1121},
+        {"kind": "active", "startSecond": 0, "endSecond": 626},
+        {"kind": "active", "startSecond": 1121, "endSecond": 1747},
+        {"kind": "idle", "startSecond": 1747, "endSecond": 3600},
+    ]
+
+    public = public_hourly_activity(hourly)
+
+    assert _hour_metric(public[16], "activeSeconds") == 1747
+    assert _hour_metric(public[16], "idleSeconds") == 1853
+    assert _hour_segments(public[16], "active") == [{"startSecond": 0, "endSecond": 1747}]
+    assert _hour_segments(public[16], "idle") == [{"startSecond": 1747, "endSecond": 3600}]
 
 
 def test_public_hourly_active_day_total_matches_fact_seconds():

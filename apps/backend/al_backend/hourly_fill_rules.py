@@ -117,25 +117,61 @@ def _cap_fill_segments_kind(
     max_seconds: int,
 ) -> list[dict[str, Any]]:
     remaining_seconds = max(0, int(max_seconds))
-    capped = []
+    capped_segments = []
+    kept_seconds_by_index = [False] * 3600
 
     for segment in fill_segments:
         if segment.get("kind") != kind:
-            capped.append(segment)
+            capped_segments.append(segment)
             continue
 
         start_second = int(segment.get("startSecond", 0))
         end_second = int(segment.get("endSecond", 0))
-        segment_seconds = max(0, end_second - start_second)
+        kept_indexes = []
 
-        if segment_seconds <= 0 or remaining_seconds <= 0:
+        if end_second <= start_second or remaining_seconds <= 0:
             continue
 
-        kept_seconds = min(segment_seconds, remaining_seconds)
-        capped.append({**segment, "endSecond": start_second + kept_seconds})
-        remaining_seconds -= kept_seconds
+        for second in range(start_second, end_second):
+            if kept_seconds_by_index[second]:
+                kept_indexes.append(second)
+                continue
 
-    return capped
+            if remaining_seconds <= 0:
+                continue
+
+            kept_seconds_by_index[second] = True
+            kept_indexes.append(second)
+            remaining_seconds -= 1
+
+        capped_segments.extend(
+            {"kind": kind, "startSecond": start, "endSecond": end}
+            for start, end in _ranges_from_indexes(kept_indexes)
+        )
+
+    return capped_segments
+
+
+def _ranges_from_indexes(indexes: list[int]) -> list[tuple[int, int]]:
+    if not indexes:
+        return []
+
+    ranges = []
+    sorted_indexes = sorted(set(indexes))
+    start = sorted_indexes[0]
+    previous = start
+
+    for index in sorted_indexes[1:]:
+        if index == previous + 1:
+            previous = index
+            continue
+
+        ranges.append((start, previous + 1))
+        start = index
+        previous = index
+
+    ranges.append((start, previous + 1))
+    return ranges
 
 
 def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
