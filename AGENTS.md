@@ -67,6 +67,8 @@ Continue working on the server and website in this AL repository:
 
 All user-facing website text and code literals must be in English. Do not add Russian text to the website UI, source code, comments, constants, fixtures, or generated artifacts unless the user explicitly asks for a Russian-language deliverable. Russian is only used in chat with the user.
 
+Every standalone UI card must live in its own frontend module/component file. Keep private subcomponents inside the card module only when they are small implementation details of that card; move them out only when they are deliberately reused elsewhere.
+
 Use these commands for local development:
 
 ```bash

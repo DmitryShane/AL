@@ -6,7 +6,7 @@ import datetime as dt
 import time
 from types import SimpleNamespace
 
-import al_backend.repositories.settings as settings_repo
+import al_backend.services.server_stats as server_stats_service
 from al_backend.repositories.settings import SettingsRepository
 from tests.fakes import fake_repository
 
@@ -24,10 +24,10 @@ def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> N
         (path / "sample.bin").write_bytes(b"abc")
 
     disk_usage = namedtuple("usage", "total used free")
-    monkeypatch.setattr(settings_repo.shutil, "disk_usage", lambda _path: disk_usage(409600, 245760, 163840))
-    monkeypatch.setattr(settings_repo, "_du_size_bytes", lambda _path: None)
+    monkeypatch.setattr(server_stats_service.shutil, "disk_usage", lambda _path: disk_usage(409600, 245760, 163840))
+    monkeypatch.setattr(server_stats_service, "_du_size_bytes", lambda _path: None)
     monkeypatch.setattr(
-        settings_repo,
+        server_stats_service,
         "SERVER_STATS_PATHS",
         {
             "system": usr,
@@ -39,7 +39,7 @@ def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> N
         },
     )
     monkeypatch.setattr(
-        settings_repo,
+        server_stats_service,
         "SERVER_STATS_ACCOUNTING_PATHS",
         {
             "system": usr,
@@ -49,12 +49,12 @@ def test_server_stats_shape_uses_read_only_disk_data(monkeypatch, tmp_path) -> N
         },
     )
     monkeypatch.setattr(
-        settings_repo,
+        server_stats_service,
         "SERVER_STATS_SERVICES",
         (("backend", "AL Backend API", "al-backend.service"),),
     )
     monkeypatch.setattr(
-        settings_repo,
+        server_stats_service,
         "_server_stats_service",
         lambda key, label, unit: {
             "key": key,
@@ -116,7 +116,7 @@ def test_server_stats_returns_existing_snapshot_without_heavy_scan(monkeypatch) 
     def fail_disk_usage(_path):
         raise AssertionError("server stats request must not scan disk when snapshot exists")
 
-    monkeypatch.setattr(settings_repo.shutil, "disk_usage", fail_disk_usage)
+    monkeypatch.setattr(server_stats_service.shutil, "disk_usage", fail_disk_usage)
     stats = repo.get_server_stats()
 
     assert stats["ready"] is True
@@ -191,14 +191,14 @@ def test_server_stats_services_refresh_updates_services_without_disk_scan(monkey
     def fail_disk_usage(_path):
         raise AssertionError("services refresh must not scan disk")
 
-    monkeypatch.setattr(settings_repo.shutil, "disk_usage", fail_disk_usage)
+    monkeypatch.setattr(server_stats_service.shutil, "disk_usage", fail_disk_usage)
     monkeypatch.setattr(
-        settings_repo,
+        server_stats_service,
         "SERVER_STATS_SERVICES",
         (("backend", "AL Backend API", "al-backend.service"),),
     )
     monkeypatch.setattr(
-        settings_repo,
+        server_stats_service,
         "_server_stats_service",
         lambda key, label, unit: {
             "key": key,
@@ -266,9 +266,9 @@ def test_server_stats_cold_start_returns_fast_snapshot_without_heavy_scan(monkey
         raise AssertionError("cold server stats request must not scan category paths")
 
     monkeypatch.setattr(repo, "start_server_stats_refresh", fake_start_refresh)
-    monkeypatch.setattr(settings_repo.shutil, "disk_usage", lambda _path: disk_usage(1000, 250, 750))
-    monkeypatch.setattr(settings_repo, "_path_size_bytes", fail_path_size)
-    monkeypatch.setattr(settings_repo, "SERVER_STATS_SERVICES", ())
+    monkeypatch.setattr(server_stats_service.shutil, "disk_usage", lambda _path: disk_usage(1000, 250, 750))
+    monkeypatch.setattr(server_stats_service, "_path_size_bytes", fail_path_size)
+    monkeypatch.setattr(server_stats_service, "SERVER_STATS_SERVICES", ())
 
     stats = repo.get_server_stats()
 
@@ -282,7 +282,7 @@ def test_server_stats_loads_persisted_snapshot_after_restart(monkeypatch) -> Non
     repo = fake_repository()
     repo.db.system_settings.insert_one(
         {
-            "kind": settings_repo.SERVER_STATS_SNAPSHOT_CACHE_KIND,
+            "kind": server_stats_service.SERVER_STATS_SNAPSHOT_CACHE_KIND,
             "payload": {
                 "generatedAt": "2026-06-09T04:00:00+00:00",
                 "hostname": "server",
@@ -304,7 +304,7 @@ def test_server_stats_loads_persisted_snapshot_after_restart(monkeypatch) -> Non
     def fail_disk_usage(_path):
         raise AssertionError("server stats request must use persisted snapshot after restart")
 
-    monkeypatch.setattr(settings_repo.shutil, "disk_usage", fail_disk_usage)
+    monkeypatch.setattr(server_stats_service.shutil, "disk_usage", fail_disk_usage)
     stats = repo.get_server_stats()
 
     assert stats["ready"] is True
@@ -316,8 +316,8 @@ def test_next_server_stats_refresh_at_uses_0400_utc() -> None:
     before = dt.datetime(2026, 6, 9, 3, 30, tzinfo=dt.UTC)
     after = dt.datetime(2026, 6, 9, 4, 30, tzinfo=dt.UTC)
 
-    assert settings_repo._next_server_stats_refresh_at(before) == dt.datetime(2026, 6, 9, 4, 0, tzinfo=dt.UTC)
-    assert settings_repo._next_server_stats_refresh_at(after) == dt.datetime(2026, 6, 10, 4, 0, tzinfo=dt.UTC)
+    assert server_stats_service._next_server_stats_refresh_at(before) == dt.datetime(2026, 6, 9, 4, 0, tzinfo=dt.UTC)
+    assert server_stats_service._next_server_stats_refresh_at(after) == dt.datetime(2026, 6, 10, 4, 0, tzinfo=dt.UTC)
 
 
 def test_settings_bootstrap_is_lightweight(monkeypatch) -> None:
@@ -343,18 +343,18 @@ def test_server_stats_path_size_prefers_privileged_du(monkeypatch, tmp_path) -> 
     path.mkdir()
     (path / "visible.bin").write_bytes(b"abc")
 
-    monkeypatch.setattr(settings_repo, "_du_size_bytes", lambda _path: 370009988)
+    monkeypatch.setattr(server_stats_service, "_du_size_bytes", lambda _path: 370009988)
 
-    assert settings_repo._path_size_bytes(path) == 370009988
+    assert server_stats_service._path_size_bytes(path) == 370009988
 
 
 def test_server_stats_service_falls_back_when_systemd_is_unavailable(monkeypatch) -> None:
     def raise_systemctl_error(*_args, **_kwargs):
         raise FileNotFoundError()
 
-    monkeypatch.setattr(settings_repo.subprocess, "run", raise_systemctl_error)
+    monkeypatch.setattr(server_stats_service.subprocess, "run", raise_systemctl_error)
 
-    service = settings_repo._server_stats_service("backend", "AL Backend API", "al-backend.service")
+    service = server_stats_service._server_stats_service("backend", "AL Backend API", "al-backend.service")
 
     assert service == {
         "key": "backend",
@@ -381,9 +381,9 @@ def test_server_stats_service_parses_named_systemd_fields(monkeypatch) -> None:
             )
         )
 
-    monkeypatch.setattr(settings_repo.subprocess, "run", fake_systemctl)
+    monkeypatch.setattr(server_stats_service.subprocess, "run", fake_systemctl)
 
-    service = settings_repo._server_stats_service("backend", "AL Backend API", "al-backend.service")
+    service = server_stats_service._server_stats_service("backend", "AL Backend API", "al-backend.service")
 
     assert service["status"] == "running"
     assert service["activeState"] == "active"
@@ -400,7 +400,7 @@ def test_server_reboot_schedules_delayed_systemd_restart(monkeypatch) -> None:
         calls.append((args, kwargs))
         return SimpleNamespace()
 
-    monkeypatch.setattr(settings_repo.subprocess, "run", fake_run)
+    monkeypatch.setattr(server_stats_service.subprocess, "run", fake_run)
 
     repo = SettingsRepository.__new__(SettingsRepository)
     result = repo.reboot_server()
