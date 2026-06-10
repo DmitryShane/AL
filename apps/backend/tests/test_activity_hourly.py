@@ -4517,6 +4517,29 @@ def test_workday_idle_fill_preserves_existing_missed_and_active_segments():
     assert _hour_metric(public[9], "activeSeconds") == 1200
     assert _hour_segments(public[9], "missed") == [{"startSecond": 3000, "endSecond": 3600}]
 
+
+def test_workday_idle_fill_uses_factual_active_for_raw_occupied_gaps():
+    hourly = empty_hourly_activity()
+    hourly[11]["activeSeconds"] = 1200
+    hourly[11]["activeMicroseconds"] = 1_200_000_000
+    hourly[11]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 2700}]
+
+    apply_workday_idle_fill(
+        hourly,
+        dt.datetime(2026, 5, 7, 11, 0, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 7, 12, 0, tzinfo=dt.UTC),
+        "UTC",
+        hourly_activity_has_workday_signal(hourly),
+    )
+    public = public_hourly_activity(hourly)
+
+    assert hourly[11]["workdayHourGapIdleSeconds"] == 2400
+    assert _hour_metric(public[11], "activeSeconds") == 1200
+    assert _hour_metric(public[11], "idleSeconds") == 2400
+    assert _hour_segments(public[11], "active") == [{"startSecond": 0, "endSecond": 1200}]
+    assert _hour_segments(public[11], "idle") == [{"startSecond": 1200, "endSecond": 3600}]
+
+
 def test_workday_idle_fill_extends_plugin_gap_to_latest_workday_signal():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
@@ -4600,10 +4623,12 @@ def test_workday_idle_fill_extends_plugin_gap_to_latest_workday_signal():
     ]
 
     assert _hour_metric(hourly_summary[13], "activeSeconds") == 540
-    assert sum(hourly_summary[13]["totals"].values()) == 3598
-    assert _hour_segments(hourly_summary[13], "idle") == [{"startSecond": 1140, "endSecond": 3598}]
+    assert sum(hourly_summary[13]["totals"].values()) == 3600
+    assert _hour_segments(hourly_summary[13], "idle") == [{"startSecond": 1140, "endSecond": 3600}]
     assert _hour_segments(hourly_summary[14], "idle") == [{"startSecond": 0, "endSecond": 8 * 60 + 1}]
     assert _hour_segments(hourly_summary[14], "afk") == [{"startSecond": 8 * 60 + 1, "endSecond": 3600}]
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    assert author["idleSeconds"] == 2941
 
 def test_public_hourly_collapses_tiny_active_noise_to_idle_visually_only():
     hourly = empty_hourly_activity()

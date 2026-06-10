@@ -160,7 +160,7 @@ def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
         cursor = max(cursor, max(segment["endSecond"] for segment in meeting_segments))
     telegram_idle_segments = _telegram_idle_segments(hour)
     generated.extend(telegram_idle_segments)
-    active_segments = _segments_for_kind(hour, "active")
+    active_segments = _active_segments_for_hour(hour)
     if active_segments:
         generated.extend(active_segments)
     else:
@@ -1543,7 +1543,12 @@ def _raw_occupied_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
         ("idle", "idleSeconds", "idleMicroseconds"),
         ("overtime", "overtimeActiveSeconds", "overtimeActiveMicroseconds"),
     ):
-        positioned_seconds = _segments_total_seconds(_segments_for_kind(hour, kind))
+        positioned_segments = (
+            _active_segments_for_hour(hour)
+            if kind == "active"
+            else _segments_for_kind(hour, kind)
+        )
+        positioned_seconds = _segments_total_seconds(positioned_segments)
         _append_available_seconds(generated, kind, max(0, time_seconds(hour, seconds_key, microseconds_key) - positioned_seconds))
 
     meeting_positioned_seconds = _segments_total_seconds(_segments_for_kind(hour, "meeting"))
@@ -1557,7 +1562,13 @@ def _raw_occupied_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:
     auto_afk_positioned_seconds = _segments_total_seconds(_segments_for_kind(hour, "auto-afk"))
     _append_available_seconds(generated, "auto-afk", max(0, int(hour.get("autoBreakSeconds", 0)) - auto_afk_positioned_seconds))
 
-    generated.extend(_sanitize_fill_segments(hour.get("fillSegments", [])))
+    generated.extend(
+        _cap_fill_segments_kind(
+            _sanitize_fill_segments(hour.get("fillSegments", [])),
+            "active",
+            time_seconds(hour, "activeSeconds", "activeMicroseconds"),
+        )
+    )
     return normalize_hour_fill(generated, apply_stack_rules=False)
 
 
@@ -2291,6 +2302,14 @@ def _stacked_segments(kind: str, seconds: int, cursor: int) -> list[dict[str, An
         return []
 
     return [{"kind": kind, "startSecond": cursor, "endSecond": min(3600, cursor + seconds)}]
+
+
+def _active_segments_for_hour(hour: dict[str, Any]) -> list[dict[str, Any]]:
+    return _cap_fill_segments_kind(
+        _segments_for_kind(hour, "active"),
+        "active",
+        time_seconds(hour, "activeSeconds", "activeMicroseconds"),
+    )
 
 
 def _segments_for_kind(hour: dict[str, Any], kind: str) -> list[dict[str, Any]]:
