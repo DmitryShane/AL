@@ -73,6 +73,11 @@ def public_hourly_activity(source: list[dict[str, Any]]) -> list[dict[str, Any]]
 def public_hour(item: dict[str, Any]) -> dict[str, Any]:
     hour = int(item.get("hour", 0))
     fill_segments = _collapse_visual_active_noise(normalized_fill_segments(item))
+    fill_segments = _cap_fill_segments_kind(
+        fill_segments,
+        "active",
+        time_seconds(item, "activeSeconds", "activeMicroseconds"),
+    )
     visible_totals = _totals_from_segments(fill_segments)
     totals = {
         "activeSeconds": visible_totals["active"],
@@ -95,6 +100,33 @@ def _collapse_visual_active_noise(fill_segments: list[dict[str, Any]]) -> list[d
             collapsed.append(segment)
 
     return normalize_hour_fill(collapsed, apply_stack_rules=False)
+
+
+def _cap_fill_segments_kind(
+    fill_segments: list[dict[str, Any]],
+    kind: str,
+    max_seconds: int,
+) -> list[dict[str, Any]]:
+    remaining_seconds = max(0, int(max_seconds))
+    capped = []
+
+    for segment in fill_segments:
+        if segment.get("kind") != kind:
+            capped.append(segment)
+            continue
+
+        start_second = int(segment.get("startSecond", 0))
+        end_second = int(segment.get("endSecond", 0))
+        segment_seconds = max(0, end_second - start_second)
+
+        if segment_seconds <= 0 or remaining_seconds <= 0:
+            continue
+
+        kept_seconds = min(segment_seconds, remaining_seconds)
+        capped.append({**segment, "endSecond": start_second + kept_seconds})
+        remaining_seconds -= kept_seconds
+
+    return capped
 
 
 def normalized_fill_segments(hour: dict[str, Any]) -> list[dict[str, Any]]:

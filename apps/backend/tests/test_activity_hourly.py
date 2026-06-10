@@ -3503,7 +3503,7 @@ def test_overtime_hourly_graph_fills_normal_to_overtime_transition_gap():
     hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Igor Mats")["hourlyActivity"]
     hour_13 = next(item for item in hourly if item["hour"] == 13)
 
-    assert _hour_metric(hour_13, "activeSeconds") == 153
+    assert _hour_metric(hour_13, "activeSeconds") == 125
     assert _hour_metric(hour_13, "overtimeActiveSeconds") == 3250
 
 
@@ -4599,7 +4599,8 @@ def test_workday_idle_fill_extends_plugin_gap_to_latest_workday_signal():
         "hourlyActivity"
     ]
 
-    assert sum(hourly_summary[13]["totals"].values()) == 3600
+    assert _hour_metric(hourly_summary[13], "activeSeconds") == 540
+    assert sum(hourly_summary[13]["totals"].values()) == 3598
     assert _hour_segments(hourly_summary[14], "idle") == [{"startSecond": 0, "endSecond": 8 * 60 + 1}]
     assert _hour_segments(hourly_summary[14], "afk") == [{"startSecond": 8 * 60 + 1, "endSecond": 3600}]
 
@@ -4625,3 +4626,35 @@ def test_public_hourly_collapses_tiny_active_noise_to_idle_visually_only():
     assert _hour_metric(public[11], "activeSeconds") == 0
     assert _hour_metric(public[11], "idleSeconds") == 2217
     assert _hour_segments(public[11], "idle") == [{"startSecond": 3361, "endSecond": 3600}]
+
+
+def test_public_hourly_caps_visible_active_to_fact_seconds():
+    hourly = empty_hourly_activity()
+    hourly[12]["activeSeconds"] = 1652
+    hourly[12]["activeMicroseconds"] = 1_652_000_000
+    hourly[12]["idleSeconds"] = 1038
+    hourly[12]["idleMicroseconds"] = 1_038_000_000
+    hourly[12]["fillSegments"] = [
+        {"kind": "active", "startSecond": 0, "endSecond": 2562},
+        {"kind": "idle", "startSecond": 2562, "endSecond": 3600},
+    ]
+
+    public = public_hourly_activity(hourly)
+
+    assert _hour_metric(public[12], "activeSeconds") == 1652
+    assert _hour_metric(public[12], "idleSeconds") == 1038
+    assert _hour_segments(public[12], "active") == [{"startSecond": 0, "endSecond": 1652}]
+
+
+def test_public_hourly_active_day_total_matches_fact_seconds():
+    hourly = empty_hourly_activity()
+    hourly[11]["activeSeconds"] = 60
+    hourly[11]["activeMicroseconds"] = 60_000_000
+    hourly[11]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 300}]
+    hourly[12]["activeSeconds"] = 120
+    hourly[12]["activeMicroseconds"] = 120_000_000
+    hourly[12]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 200}]
+
+    public = public_hourly_activity(hourly)
+
+    assert sum(_hour_metric(hour, "activeSeconds") for hour in public) == 180
