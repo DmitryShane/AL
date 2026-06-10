@@ -434,6 +434,15 @@ class ActivityRawEventAccountingMixin:
                     interval_activity_at = author_last_activity_at
 
                 if accounting_start_at < occurred_at:
+                    workday_started_at = self._workday_started_at_for_event_interval(event, accounting_start_at, occurred_at)
+
+                    if workday_started_at and accounting_start_at < workday_started_at < occurred_at:
+                        accounting_start_at = workday_started_at
+                        accounting_start_local_at = _to_local_datetime(
+                            workday_started_at,
+                            _valid_time_zone_id(event.get("timeZoneId")) or "UTC",
+                        )
+
                     if current_source == "codex":
                         interval_end_at = min(
                             occurred_at,
@@ -445,14 +454,6 @@ class ActivityRawEventAccountingMixin:
                         interval_end_at = occurred_at
                         interval_end_local_at = occurred_local_at
                         interval_is_active = (occurred_at - interval_activity_at).total_seconds() < idle_threshold_seconds
-                    workday_started_at = self._workday_started_at_for_event_interval(event, accounting_start_at, interval_end_at)
-
-                    if not interval_is_active and workday_started_at and accounting_start_at < workday_started_at < interval_end_at:
-                        accounting_start_at = workday_started_at
-                        accounting_start_local_at = _to_local_datetime(
-                            workday_started_at,
-                            _valid_time_zone_id(event.get("timeZoneId")) or "UTC",
-                        )
 
                     if not interval_is_active and count_idle_as_overtime:
                         interval_end_at = min(

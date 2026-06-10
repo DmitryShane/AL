@@ -1698,6 +1698,51 @@ def test_codex_activity_caps_active_time_without_idle_tail():
     assert second_deltas["idleDeltaSeconds"] == 0
 
 
+def test_codex_deferred_night_interval_after_telegram_online_counts_as_active_time():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "displayName": "Dmitry Shane",
+            "telegramUsername": "dmitryshane",
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    night_event = {
+        "eventId": "codex-night-progress",
+        "source": "codex",
+        "author": "Dmitry Shane",
+        "projectId": "AL",
+        "deviceId": "mac-mini",
+        "date": "2026-06-10",
+        "eventType": "external",
+        "occurredAtUtc": dt.datetime(2026, 6, 10, 1, 14, 56, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-06-10T03:14:56+02:00",
+        "receivedAt": dt.datetime(2026, 6, 10, 1, 14, 57, tzinfo=dt.UTC),
+        "timeZoneId": "Europe/Madrid",
+        "metadata": {"codexEventType": "task_progress"},
+    }
+    day_event = {
+        **night_event,
+        "eventId": "codex-day-start",
+        "occurredAtUtc": dt.datetime(2026, 6, 10, 10, 9, 18, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-06-10T12:09:18+02:00",
+        "receivedAt": dt.datetime(2026, 6, 10, 10, 9, 19, tzinfo=dt.UTC),
+        "metadata": {"codexEventType": "session_started"},
+    }
+
+    repo._apply_raw_event_to_aggregates(night_event)
+    repo.record_break_event("dmitryshane", "online", "2026-06-10T09:04:18Z")
+    day_deltas = repo._apply_raw_event_to_aggregates(day_event)
+
+    assert day_deltas["activeDeltaSeconds"] == 300
+    assert day_deltas["overtimeActiveDeltaSeconds"] == 0
+    daily = repo.db.daily_author_activity.find_one({"source": "codex", "author": "Dmitry Shane", "date": "2026-06-10"})
+    assert daily["activeSeconds"] == 300
+    assert daily["overtimeActiveSeconds"] == 0
+
+
 def test_non_codex_external_activity_keeps_external_type():
     repo = fake_repository()
     event = {
