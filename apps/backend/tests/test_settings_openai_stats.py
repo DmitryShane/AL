@@ -1,6 +1,6 @@
 import datetime as dt
 
-import al_backend.repositories.settings as settings_repo
+import al_backend.services.openai_usage_stats as settings_repo
 from tests.fakes import fake_repository
 
 

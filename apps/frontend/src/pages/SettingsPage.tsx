@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { apiFetch } from "../api/client";
 import { SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
-import type { AuthorProfile, MeetingActivityItem, MeetingNotificationSettings, OpenAIStats, SettingsTab, SiteUser, Summary } from "../types/dashboard";
-import { localBrowserStorage, readStorageItem, sessionBrowserStorage, writeStorageCache, writeStorageState } from "../utils/browserStorage";
+import type { AuthorProfile, SettingsTab, SiteUser, Summary } from "../types/dashboard";
+import { localBrowserStorage, writeStorageState } from "../utils/browserStorage";
 import {
   authorProfilePayload,
   emptyAuthorProfile,
@@ -51,17 +51,6 @@ type ActivityRebuildProgress = {
   error?: string;
 };
 
-const OPENAI_STATS_CACHE_KEY = "al.openAIStats.cache";
-const DEFAULT_MEETING_NOTIFICATION_SETTINGS: MeetingNotificationSettings = {
-  configured: false,
-  enabled: false,
-  authorRawAuthors: [],
-  time: "10:00",
-  timeZoneId: browserTimeZoneId(),
-  daysOfWeek: [0, 1, 2, 3, 4]
-};
-let cachedOpenAIStats: OpenAIStats | null = readCachedOpenAIStats();
-
 async function apiErrorDetail(response: Response, fallback: string): Promise<string> {
   try {
     const payload = (await response.json()) as { detail?: unknown };
@@ -99,34 +88,6 @@ export function SettingsPage({
   const avatarSettingsLockedTitle = "Only editors and admins can change GitHub avatar cache settings.";
   const [settingsTab, setSettingsTabState] = useState<SettingsTab>(() => loadSavedSettingsTab());
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
-  const [globalInterval, setGlobalInterval] = useState(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
-  const [deviceInterval, setDeviceInterval] = useState(String(intervalSettingsDeviceInterval(summary)));
-  const [idleThreshold, setIdleThreshold] = useState(String(intervalSettingsIdleThreshold(summary)));
-  const [deviceIdleThreshold, setDeviceIdleThreshold] = useState(String(intervalSettingsDeviceIdleThreshold(summary)));
-  const [pluginIngestEnabled, setPluginIngestEnabled] = useState(summary?.intervalSettings.pluginIngestEnabled ?? true);
-  const [discordAutoAfkTimeout, setDiscordAutoAfkTimeout] = useState(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
-  const [telegramOnlinePromptDelayMinutes, setTelegramOnlinePromptDelayMinutes] = useState(
-    String(intervalSettingsTelegramOnlinePromptMinutes(summary))
-  );
-  const [meetingNotificationEnabled, setMeetingNotificationEnabled] = useState(meetingNotificationSettingsForUi(summary).enabled);
-  const [meetingNotificationTime, setMeetingNotificationTime] = useState(meetingNotificationSettingsForUi(summary).time);
-  const [meetingNotificationTimeZoneId, setMeetingNotificationTimeZoneId] = useState(
-    meetingNotificationSettingsForUi(summary).timeZoneId
-  );
-  const [meetingNotificationDaysOfWeek, setMeetingNotificationDaysOfWeek] = useState(
-    meetingNotificationSettingsForUi(summary).daysOfWeek
-  );
-  const [meetingNotificationAuthorRawAuthors, setMeetingNotificationAuthorRawAuthors] = useState(
-    meetingNotificationSettingsForUi(summary).authorRawAuthors
-  );
-  const [meetingSummariesEnabled, setMeetingSummariesEnabled] = useState(Boolean(summary?.discordSettings.meetingSummariesEnabled));
-  const [meetingSummaryMinParticipants, setMeetingSummaryMinParticipants] = useState(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
-  const [meetingSummaryMinDuration, setMeetingSummaryMinDuration] = useState(String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120));
-  const [meetingSummaryLanguage, setMeetingSummaryLanguage] = useState(summary?.discordSettings.meetingSummaryLanguage ?? "English");
-  const [meetingSummaryRecipient, setMeetingSummaryRecipient] = useState(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
-  const [meetingAudioRetention, setMeetingAudioRetention] = useState(String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0));
-  const [meetingSummaryPrompt, setMeetingSummaryPrompt] = useState(summary?.discordSettings.meetingSummaryPrompt ?? "");
-  const [meetingSummaryTelegramTemplate, setMeetingSummaryTelegramTemplate] = useState(summary?.discordSettings.meetingSummaryTelegramTemplate ?? "");
   const [avatarRefreshCadence, setAvatarRefreshCadence] = useState<"week" | "month">(
     summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month"
   );
@@ -145,50 +106,6 @@ export function SettingsPage({
   const [newProfile, setNewProfile] = useState<AuthorProfile>(() => emptyAuthorProfile());
   const [aliasSource, setAliasSource] = useState("");
   const [aliasTarget, setAliasTarget] = useState("");
-  const [meetingActivityItems, setMeetingActivityItems] = useState<MeetingActivityItem[]>([]);
-  const [meetingRecordingsError, setMeetingRecordingsError] = useState("");
-  const [openAIStats, setOpenAIStats] = useState<OpenAIStats | null>(() => cachedOpenAIStats);
-  const [openAIStatsError, setOpenAIStatsError] = useState("");
-  const [openAIStatsLoading, setOpenAIStatsLoading] = useState(() => cachedOpenAIStats === null);
-  const [openAIStatsRefreshMode, setOpenAIStatsRefreshMode] = useState<"month" | "totals" | null>(null);
-  const openAIStatsAutoLoadStartedRef = useRef(cachedOpenAIStats !== null);
-  const meetingSummaryWorkspaceRef = useRef<HTMLDivElement>(null);
-  const meetingSummaryPromptPanelRef = useRef<HTMLDivElement>(null);
-
-  useLayoutEffect(() => {
-    if (settingsTab !== "meetingSummaries") {
-      return;
-    }
-
-    function syncPromptPanelHeight() {
-      const workspaceEl = meetingSummaryWorkspaceRef.current;
-      const promptPanelEl = meetingSummaryPromptPanelRef.current;
-
-      if (!workspaceEl || !promptPanelEl) {
-        return;
-      }
-
-      const height = promptPanelEl.getBoundingClientRect().height;
-      workspaceEl.style.setProperty("--meeting-summary-prompt-panel-height", `${Math.round(height)}px`);
-    }
-
-    const workspaceEl = meetingSummaryWorkspaceRef.current;
-    const promptPanelEl = meetingSummaryPromptPanelRef.current;
-
-    if (!workspaceEl || !promptPanelEl) {
-      return;
-    }
-
-    syncPromptPanelHeight();
-
-    const observer = new ResizeObserver(syncPromptPanelHeight);
-    observer.observe(promptPanelEl);
-
-    return () => {
-      observer.disconnect();
-      meetingSummaryWorkspaceRef.current?.style.removeProperty("--meeting-summary-prompt-panel-height");
-    };
-  }, [settingsTab]);
 
   useEffect(() => {
     if (settingsTab === "fakeOnline" && !canManageUsers) {
@@ -208,27 +125,6 @@ export function SettingsPage({
     }
 
     setDrafts(nextDrafts);
-    setGlobalInterval(String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300));
-    setDeviceInterval(String(intervalSettingsDeviceInterval(summary)));
-    setIdleThreshold(String(intervalSettingsIdleThreshold(summary)));
-    setDeviceIdleThreshold(String(intervalSettingsDeviceIdleThreshold(summary)));
-    setPluginIngestEnabled(summary?.intervalSettings.pluginIngestEnabled ?? true);
-    setDiscordAutoAfkTimeout(String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600));
-    setTelegramOnlinePromptDelayMinutes(String(intervalSettingsTelegramOnlinePromptMinutes(summary)));
-    const meetingNotificationSettings = meetingNotificationSettingsForUi(summary);
-    setMeetingNotificationEnabled(meetingNotificationSettings.enabled);
-    setMeetingNotificationTime(meetingNotificationSettings.time);
-    setMeetingNotificationTimeZoneId(meetingNotificationSettings.timeZoneId);
-    setMeetingNotificationDaysOfWeek(meetingNotificationSettings.daysOfWeek);
-    setMeetingNotificationAuthorRawAuthors(meetingNotificationSettings.authorRawAuthors);
-    setMeetingSummariesEnabled(Boolean(summary?.discordSettings.meetingSummariesEnabled));
-    setMeetingSummaryMinParticipants(String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2));
-    setMeetingSummaryMinDuration(String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120));
-    setMeetingSummaryLanguage(summary?.discordSettings.meetingSummaryLanguage ?? "English");
-    setMeetingSummaryRecipient(summary?.discordSettings.meetingSummaryRecipient ?? "work_chat");
-    setMeetingAudioRetention(String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0));
-    setMeetingSummaryPrompt(summary?.discordSettings.meetingSummaryPrompt ?? "");
-    setMeetingSummaryTelegramTemplate(summary?.discordSettings.meetingSummaryTelegramTemplate ?? "");
     setAvatarRefreshCadence(summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month");
   }, [summary]);
 
@@ -251,43 +147,6 @@ export function SettingsPage({
       return next;
     });
   }, [profiles]);
-
-  useEffect(() => {
-    if (settingsTab !== "meetingSummaries") {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadMeetingRecordings() {
-      try {
-        const response = await apiFetch("/api/v1/discord/meeting-recordings/recent");
-
-        if (!response.ok) {
-          throw new Error("Meeting recording status load failed");
-        }
-
-        const data = await response.json() as { items?: MeetingActivityItem[] };
-
-        if (!cancelled) {
-          setMeetingActivityItems(data.items ?? []);
-          setMeetingRecordingsError("");
-        }
-      } catch {
-        if (!cancelled) {
-          setMeetingRecordingsError("Could not load meeting summary status.");
-        }
-      }
-    }
-
-    void loadMeetingRecordings();
-    const intervalId = window.setInterval(() => void loadMeetingRecordings(), 5000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [settingsTab]);
 
   useEffect(() => {
     if (!activityRebuildProgress?.jobId || activityRebuildProgress.status !== "running") {
@@ -340,90 +199,10 @@ export function SettingsPage({
     };
   }, [activityRebuildProgress?.jobId, activityRebuildProgress?.status, onSaved]);
 
-  useEffect(() => {
-    if (settingsTab !== "meetingSummaries") {
-      return;
-    }
-
-    if (openAIStatsAutoLoadStartedRef.current) {
-      return;
-    }
-
-    openAIStatsAutoLoadStartedRef.current = true;
-    void loadOpenAIStats();
-  }, [settingsTab]);
-
-  useEffect(() => {
-    if (settingsTab !== "meetingSummaries") {
-      return;
-    }
-
-    if (openAIStats?.syncStatus !== "syncingTotals" && openAIStats?.syncStatus !== "syncingMonth") {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      void loadOpenAIStats();
-    }, 5000);
-
-    return () => window.clearTimeout(timer);
-  }, [openAIStats?.syncStatus, openAIStats?.syncProgressCurrent, settingsTab]);
-
   function setSettingsTab(tab: SettingsTab) {
     setSettingsTabState(tab);
     writeStorageState(localBrowserStorage(), SETTINGS_TAB_STORAGE_KEY, tab);
   }
-
-  async function loadOpenAIStats(refresh: "month" | "totals" | null = null) {
-    if (refresh) {
-      setOpenAIStatsRefreshMode(refresh);
-    } else {
-      setOpenAIStatsLoading(true);
-    }
-
-    try {
-      const response = await apiFetch(`/api/v1/settings/openai-stats${refresh ? `?refresh=${refresh}` : ""}`);
-
-      if (!response.ok) {
-        throw new Error(await apiErrorDetail(response, "OpenAI stats load failed"));
-      }
-
-      const data = await response.json() as OpenAIStats;
-      cachedOpenAIStats = data;
-      writeCachedOpenAIStats(data);
-      setOpenAIStats(data);
-      setOpenAIStatsError(data.error || "");
-    } catch (error) {
-      setOpenAIStatsError(error instanceof Error ? error.message : "OpenAI stats load failed");
-    } finally {
-      if (refresh) {
-        setOpenAIStatsRefreshMode(null);
-      } else {
-        setOpenAIStatsLoading(false);
-      }
-    }
-  }
-
-  const meetingSummarySettingsDirty =
-    meetingSummariesEnabled !== Boolean(summary?.discordSettings.meetingSummariesEnabled) ||
-    meetingSummaryMinParticipants !== String(summary?.discordSettings.meetingSummaryMinParticipants ?? 2) ||
-    meetingSummaryMinDuration !== String(summary?.discordSettings.meetingSummaryMinDurationSeconds ?? 120) ||
-    meetingSummaryLanguage !== (summary?.discordSettings.meetingSummaryLanguage ?? "English") ||
-    meetingSummaryRecipient !== (summary?.discordSettings.meetingSummaryRecipient ?? "work_chat") ||
-    meetingAudioRetention !== String(summary?.discordSettings.meetingAudioRetentionSeconds ?? 0);
-  const meetingSummaryPromptDirty = meetingSummaryPrompt !== (summary?.discordSettings.meetingSummaryPrompt ?? "");
-  const meetingSummaryTelegramTemplateDirty = meetingSummaryTelegramTemplate !== (summary?.discordSettings.meetingSummaryTelegramTemplate ?? "");
-  const discordSettingsDirty = discordAutoAfkTimeout !== String(summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? 600);
-  const telegramPromptSettingsDirty =
-    telegramOnlinePromptDelayMinutes !== String(intervalSettingsTelegramOnlinePromptMinutes(summary));
-  const meetingNotificationSettingsDirty =
-    JSON.stringify(normalizeMeetingNotificationSettingsDraft({
-      enabled: meetingNotificationEnabled,
-      authorRawAuthors: meetingNotificationAuthorRawAuthors,
-      time: meetingNotificationTime,
-      timeZoneId: meetingNotificationTimeZoneId,
-      daysOfWeek: meetingNotificationDaysOfWeek
-    })) !== JSON.stringify(normalizeMeetingNotificationSettingsDraft(meetingNotificationSettingsForUi(summary)));
 
   async function saveProfile(rawAuthor: string) {
     if (settingsReadOnly) {
@@ -597,292 +376,6 @@ export function SettingsPage({
       setSaving(null);
       window.setTimeout(() => {
         setSaveStatus((items) => ({ ...items, [key]: undefined }));
-      }, 2500);
-    }
-  }
-
-  async function saveInterval() {
-    if (settingsReadOnly) {
-      return;
-    }
-
-    setSaving("interval");
-    setSaveStatus((items) => ({ ...items, interval: undefined }));
-
-    try {
-      const response = await apiFetch(`/api/v1/settings/intervals`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          defaultSendIntervalSeconds: Number(globalInterval),
-          deviceSendIntervalSeconds: Number(deviceInterval),
-          idleThresholdSeconds: Number(idleThreshold),
-          deviceIdleThresholdSeconds: Number(deviceIdleThreshold),
-          pluginIngestEnabled
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error("Interval save failed");
-      }
-
-      setSaveStatus((items) => ({ ...items, interval: "saved" }));
-      onSaved();
-    } catch {
-      setSaveStatus((items) => ({ ...items, interval: "error" }));
-    } finally {
-      setSaving(null);
-      window.setTimeout(() => {
-        setSaveStatus((items) => ({ ...items, interval: undefined }));
-      }, 2500);
-    }
-  }
-
-  async function saveTelegramPromptSettings() {
-    if (settingsReadOnly) {
-      return;
-    }
-
-    setSaving("telegramPrompt");
-    setSaveStatus((items) => ({ ...items, telegramPrompt: undefined }));
-
-    try {
-      const minutes = Number(telegramOnlinePromptDelayMinutes);
-
-      if (!Number.isFinite(minutes)) {
-        throw new Error("Invalid minutes");
-      }
-
-      const response = await apiFetch(`/api/v1/settings/intervals`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          telegramOnlinePromptDelayMinutes: minutes,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Telegram prompt settings save failed");
-      }
-
-      setSaveStatus((items) => ({ ...items, telegramPrompt: "saved" }));
-      onSaved();
-    } catch {
-      setSaveStatus((items) => ({ ...items, telegramPrompt: "error" }));
-    } finally {
-      setSaving(null);
-      window.setTimeout(() => {
-        setSaveStatus((items) => ({ ...items, telegramPrompt: undefined }));
-      }, 2500);
-    }
-  }
-
-  async function saveMeetingNotificationSettings() {
-    if (settingsReadOnly) {
-      return;
-    }
-
-    setSaving("meetingNotification");
-    setSaveStatus((items) => ({ ...items, meetingNotification: undefined }));
-
-    try {
-      const payload = normalizeMeetingNotificationSettingsDraft({
-        enabled: meetingNotificationEnabled,
-        authorRawAuthors: meetingNotificationAuthorRawAuthors,
-        time: meetingNotificationTime,
-        timeZoneId: meetingNotificationTimeZoneId || browserTimeZoneId(),
-        daysOfWeek: meetingNotificationDaysOfWeek
-      });
-      const response = await apiFetch(`/api/v1/settings/meeting-notification`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        throw new Error(await apiErrorDetail(response, "Meeting notification settings save failed"));
-      }
-
-      const data = await response.json() as MeetingNotificationSettings & { ok?: boolean };
-      setMeetingNotificationEnabled(data.enabled ?? payload.enabled);
-      setMeetingNotificationTime(data.time ?? payload.time);
-      setMeetingNotificationTimeZoneId(data.timeZoneId ?? payload.timeZoneId);
-      setMeetingNotificationDaysOfWeek(data.daysOfWeek ?? payload.daysOfWeek);
-      setMeetingNotificationAuthorRawAuthors(data.authorRawAuthors ?? payload.authorRawAuthors);
-      setSaveStatus((items) => ({ ...items, meetingNotification: "saved" }));
-      onSaved();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Meeting notification settings save failed";
-      window.alert(message);
-      setSaveStatus((items) => ({ ...items, meetingNotification: "error" }));
-    } finally {
-      setSaving(null);
-      window.setTimeout(() => {
-        setSaveStatus((items) => ({ ...items, meetingNotification: undefined }));
-      }, 2500);
-    }
-  }
-
-  async function saveDiscordSettings() {
-    if (settingsReadOnly) {
-      return;
-    }
-
-    setSaving("discord");
-    setSaveStatus((items) => ({ ...items, discord: undefined }));
-
-    try {
-      const response = await apiFetch(`/api/v1/settings/discord`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          meetingAutoAfkTimeoutSeconds: Number(discordAutoAfkTimeout),
-          meetingSummariesEnabled,
-          meetingSummaryMinParticipants: Number(meetingSummaryMinParticipants),
-          meetingSummaryMinDurationSeconds: Number(meetingSummaryMinDuration),
-          meetingSummaryLanguage,
-          meetingSummaryRecipient,
-          meetingAudioRetentionSeconds: Number(meetingAudioRetention),
-          meetingSummaryPrompt,
-          meetingSummaryTelegramTemplate
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error("Discord settings save failed");
-      }
-
-      setSaveStatus((items) => ({ ...items, discord: "saved" }));
-      onSaved();
-    } catch {
-      setSaveStatus((items) => ({ ...items, discord: "error" }));
-    } finally {
-      setSaving(null);
-      window.setTimeout(() => {
-        setSaveStatus((items) => ({ ...items, discord: undefined }));
-      }, 2500);
-    }
-  }
-
-  async function saveMeetingSummarySettings() {
-    if (settingsReadOnly) {
-      return;
-    }
-
-    setSaving("meetingSummarySettings");
-    setSaveStatus((items) => ({ ...items, meetingSummarySettings: undefined }));
-
-    try {
-      const response = await apiFetch(`/api/v1/settings/discord`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          meetingAutoAfkTimeoutSeconds: summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? Number(discordAutoAfkTimeout),
-          meetingSummariesEnabled,
-          meetingSummaryMinParticipants: Number(meetingSummaryMinParticipants),
-          meetingSummaryMinDurationSeconds: Number(meetingSummaryMinDuration),
-          meetingSummaryLanguage,
-          meetingSummaryRecipient,
-          meetingAudioRetentionSeconds: Number(meetingAudioRetention),
-          meetingSummaryPrompt: summary?.discordSettings.meetingSummaryPrompt ?? meetingSummaryPrompt,
-          meetingSummaryTelegramTemplate: summary?.discordSettings.meetingSummaryTelegramTemplate ?? meetingSummaryTelegramTemplate
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error("Meeting summary settings save failed");
-      }
-
-      setSaveStatus((items) => ({ ...items, meetingSummarySettings: "saved" }));
-      onSaved();
-    } catch {
-      setSaveStatus((items) => ({ ...items, meetingSummarySettings: "error" }));
-    } finally {
-      setSaving(null);
-      window.setTimeout(() => {
-        setSaveStatus((items) => ({ ...items, meetingSummarySettings: undefined }));
-      }, 2500);
-    }
-  }
-
-  async function saveMeetingSummaryPrompt() {
-    if (settingsReadOnly) {
-      return;
-    }
-
-    setSaving("meetingSummaryPrompt");
-    setSaveStatus((items) => ({ ...items, meetingSummaryPrompt: undefined }));
-
-    try {
-      const response = await apiFetch(`/api/v1/settings/discord`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          meetingAutoAfkTimeoutSeconds: summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? Number(discordAutoAfkTimeout),
-          meetingSummariesEnabled: Boolean(summary?.discordSettings.meetingSummariesEnabled),
-          meetingSummaryMinParticipants: summary?.discordSettings.meetingSummaryMinParticipants ?? Number(meetingSummaryMinParticipants),
-          meetingSummaryMinDurationSeconds: summary?.discordSettings.meetingSummaryMinDurationSeconds ?? Number(meetingSummaryMinDuration),
-          meetingSummaryLanguage: summary?.discordSettings.meetingSummaryLanguage ?? meetingSummaryLanguage,
-          meetingSummaryRecipient: summary?.discordSettings.meetingSummaryRecipient ?? meetingSummaryRecipient,
-          meetingAudioRetentionSeconds: summary?.discordSettings.meetingAudioRetentionSeconds ?? Number(meetingAudioRetention),
-          meetingSummaryPrompt,
-          meetingSummaryTelegramTemplate: summary?.discordSettings.meetingSummaryTelegramTemplate ?? meetingSummaryTelegramTemplate
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error("Meeting summary prompt save failed");
-      }
-
-      setSaveStatus((items) => ({ ...items, meetingSummaryPrompt: "saved" }));
-      onSaved();
-    } catch {
-      setSaveStatus((items) => ({ ...items, meetingSummaryPrompt: "error" }));
-    } finally {
-      setSaving(null);
-      window.setTimeout(() => {
-        setSaveStatus((items) => ({ ...items, meetingSummaryPrompt: undefined }));
-      }, 2500);
-    }
-  }
-
-  async function saveMeetingSummaryTelegramTemplate() {
-    if (settingsReadOnly) {
-      return;
-    }
-
-    setSaving("meetingSummaryTelegramTemplate");
-    setSaveStatus((items) => ({ ...items, meetingSummaryTelegramTemplate: undefined }));
-
-    try {
-      const response = await apiFetch(`/api/v1/settings/discord`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          meetingAutoAfkTimeoutSeconds: summary?.discordSettings.meetingAutoAfkTimeoutSeconds ?? Number(discordAutoAfkTimeout),
-          meetingSummariesEnabled: Boolean(summary?.discordSettings.meetingSummariesEnabled),
-          meetingSummaryMinParticipants: summary?.discordSettings.meetingSummaryMinParticipants ?? Number(meetingSummaryMinParticipants),
-          meetingSummaryMinDurationSeconds: summary?.discordSettings.meetingSummaryMinDurationSeconds ?? Number(meetingSummaryMinDuration),
-          meetingSummaryLanguage: summary?.discordSettings.meetingSummaryLanguage ?? meetingSummaryLanguage,
-          meetingSummaryRecipient: summary?.discordSettings.meetingSummaryRecipient ?? meetingSummaryRecipient,
-          meetingAudioRetentionSeconds: summary?.discordSettings.meetingAudioRetentionSeconds ?? Number(meetingAudioRetention),
-          meetingSummaryPrompt: summary?.discordSettings.meetingSummaryPrompt ?? meetingSummaryPrompt,
-          meetingSummaryTelegramTemplate
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error("Meeting summary Telegram template save failed");
-      }
-
-      setSaveStatus((items) => ({ ...items, meetingSummaryTelegramTemplate: "saved" }));
-      onSaved();
-    } catch {
-      setSaveStatus((items) => ({ ...items, meetingSummaryTelegramTemplate: "error" }));
-    } finally {
-      setSaving(null);
-      window.setTimeout(() => {
-        setSaveStatus((items) => ({ ...items, meetingSummaryTelegramTemplate: undefined }));
       }, 2500);
     }
   }
@@ -1296,17 +789,6 @@ export function SettingsPage({
     );
   }
 
-  const savedGlobalInterval = String(summary?.intervalSettings.defaultSendIntervalSeconds ?? 300);
-  const savedDeviceInterval = String(intervalSettingsDeviceInterval(summary));
-  const savedIdleThreshold = String(intervalSettingsIdleThreshold(summary));
-  const savedDeviceIdleThreshold = String(intervalSettingsDeviceIdleThreshold(summary));
-  const savedPluginIngestEnabled = summary?.intervalSettings.pluginIngestEnabled ?? true;
-  const isIntervalSettingsDirty =
-    globalInterval !== savedGlobalInterval ||
-    deviceInterval !== savedDeviceInterval ||
-    idleThreshold !== savedIdleThreshold ||
-    deviceIdleThreshold !== savedDeviceIdleThreshold ||
-    pluginIngestEnabled !== savedPluginIngestEnabled;
   const savedAvatarRefreshCadence: "week" | "month" =
     summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month";
   const isAvatarCadenceDirty = avatarRefreshCadence !== savedAvatarRefreshCadence;
@@ -1323,22 +805,9 @@ export function SettingsPage({
       </div>
       {settingsTab === "general" ? (
         <GeneralSettingsTab
-          intervalSettings={summary?.intervalSettings}
-          globalInterval={globalInterval}
-          deviceInterval={deviceInterval}
-          idleThreshold={idleThreshold}
-          deviceIdleThreshold={deviceIdleThreshold}
-          pluginIngestEnabled={pluginIngestEnabled}
+          summary={summary}
           settingsReadOnly={settingsReadOnly}
-          saving={saving}
-          saveStatus={saveStatus}
-          isIntervalSettingsDirty={isIntervalSettingsDirty}
-          onGlobalIntervalChange={setGlobalInterval}
-          onDeviceIntervalChange={setDeviceInterval}
-          onIdleThresholdChange={setIdleThreshold}
-          onDeviceIdleThresholdChange={setDeviceIdleThreshold}
-          onPluginIngestEnabledChange={setPluginIngestEnabled}
-          onSaveInterval={() => void saveInterval()}
+          onSaved={onSaved}
         />
       ) : settingsTab === "autoBreak" ? (
         <AutoBreakTab
@@ -1418,80 +887,28 @@ export function SettingsPage({
         />
       ) : settingsTab === "discord" ? (
         <DiscordSettingsTab
-          discordAutoAfkTimeout={discordAutoAfkTimeout}
+          summary={summary}
           settingsReadOnly={settingsReadOnly}
-          saving={saving}
-          saveStatus={saveStatus}
-          discordSettingsDirty={discordSettingsDirty}
-          onDiscordAutoAfkTimeoutChange={setDiscordAutoAfkTimeout}
-          onSaveDiscordSettings={() => void saveDiscordSettings()}
+          onSaved={onSaved}
         />
       ) : settingsTab === "telegram" ? (
         <TelegramSettingsTab
-          telegramOnlinePromptDelayMinutes={telegramOnlinePromptDelayMinutes}
+          summary={summary}
           settingsReadOnly={settingsReadOnly}
-          saving={saving}
-          saveStatus={saveStatus}
-          telegramPromptSettingsDirty={telegramPromptSettingsDirty}
-          onTelegramOnlinePromptDelayMinutesChange={setTelegramOnlinePromptDelayMinutes}
-          onSaveTelegramPromptSettings={() => void saveTelegramPromptSettings()}
+          onSaved={onSaved}
         />
       ) : settingsTab === "meetingNotification" ? (
         <MeetingNotificationTab
           profiles={personProfiles}
-          enabled={meetingNotificationEnabled}
-          time={meetingNotificationTime}
-          timeZoneId={meetingNotificationTimeZoneId}
-          daysOfWeek={meetingNotificationDaysOfWeek}
-          authorRawAuthors={meetingNotificationAuthorRawAuthors}
+          summary={summary}
           settingsReadOnly={settingsReadOnly}
-          saving={saving}
-          saveStatus={saveStatus}
-          dirty={meetingNotificationSettingsDirty}
-          onEnabledChange={setMeetingNotificationEnabled}
-          onTimeChange={setMeetingNotificationTime}
-          onDaysOfWeekChange={setMeetingNotificationDaysOfWeek}
-          onAuthorRawAuthorsChange={setMeetingNotificationAuthorRawAuthors}
-          onSave={() => void saveMeetingNotificationSettings()}
+          onSaved={onSaved}
         />
       ) : settingsTab === "meetingSummaries" ? (
         <MeetingSummariesTab
-          workspaceRef={meetingSummaryWorkspaceRef}
-          promptPanelRef={meetingSummaryPromptPanelRef}
-          profiles={profiles}
-          meetingSummariesEnabled={meetingSummariesEnabled}
-          meetingSummaryMinParticipants={meetingSummaryMinParticipants}
-          meetingSummaryMinDuration={meetingSummaryMinDuration}
-          meetingSummaryLanguage={meetingSummaryLanguage}
-          meetingSummaryRecipient={meetingSummaryRecipient}
-          meetingAudioRetention={meetingAudioRetention}
-          meetingSummaryPrompt={meetingSummaryPrompt}
-          meetingSummaryTelegramTemplate={meetingSummaryTelegramTemplate}
-          meetingActivityItems={meetingActivityItems}
-          meetingRecordingsError={meetingRecordingsError}
-          openAIStats={openAIStats}
-          openAIStatsError={openAIStatsError}
-          openAIStatsLoading={openAIStatsLoading}
-          openAIStatsRefreshMode={openAIStatsRefreshMode}
+          summary={summary}
           settingsReadOnly={settingsReadOnly}
-          saving={saving}
-          saveStatus={saveStatus}
-          meetingSummarySettingsDirty={meetingSummarySettingsDirty}
-          meetingSummaryPromptDirty={meetingSummaryPromptDirty}
-          meetingSummaryTelegramTemplateDirty={meetingSummaryTelegramTemplateDirty}
-          onMeetingSummariesEnabledChange={setMeetingSummariesEnabled}
-          onMeetingSummaryMinParticipantsChange={setMeetingSummaryMinParticipants}
-          onMeetingSummaryMinDurationChange={setMeetingSummaryMinDuration}
-          onMeetingSummaryLanguageChange={setMeetingSummaryLanguage}
-          onMeetingSummaryRecipientChange={setMeetingSummaryRecipient}
-          onMeetingAudioRetentionChange={setMeetingAudioRetention}
-          onMeetingSummaryPromptChange={setMeetingSummaryPrompt}
-          onMeetingSummaryTelegramTemplateChange={setMeetingSummaryTelegramTemplate}
-          onSaveMeetingSummarySettings={() => void saveMeetingSummarySettings()}
-          onSaveMeetingSummaryPrompt={() => void saveMeetingSummaryPrompt()}
-          onSaveMeetingSummaryTelegramTemplate={() => void saveMeetingSummaryTelegramTemplate()}
-          onRefreshOpenAIStats={() => void loadOpenAIStats("month")}
-          onRefreshOpenAIStatsTotals={() => void loadOpenAIStats("totals")}
+          onSaved={onSaved}
         />
       ) : settingsTab === "snapshots" ? (
         <ActivitySnapshotsTab />
@@ -1502,78 +919,4 @@ export function SettingsPage({
       )}
     </section>
   );
-}
-
-function intervalSettingsIdleThreshold(summary: Summary | null) {
-  const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { idleThresholdSeconds?: number }) | undefined;
-  return intervalSettings?.idleThresholdSeconds ?? 300;
-}
-
-function intervalSettingsDeviceInterval(summary: Summary | null) {
-  const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { deviceSendIntervalSeconds?: number }) | undefined;
-  return intervalSettings?.deviceSendIntervalSeconds ?? summary?.intervalSettings.defaultSendIntervalSeconds ?? 300;
-}
-
-function intervalSettingsDeviceIdleThreshold(summary: Summary | null) {
-  const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { deviceIdleThresholdSeconds?: number }) | undefined;
-  return intervalSettings?.deviceIdleThresholdSeconds ?? 300;
-}
-
-function intervalSettingsTelegramOnlinePromptMinutes(summary: Summary | null) {
-  const intervalSettings = summary?.intervalSettings as (Summary["intervalSettings"] & { telegramOnlinePromptDelayMinutes?: number }) | undefined;
-  return intervalSettings?.telegramOnlinePromptDelayMinutes ?? 15;
-}
-
-function browserTimeZoneId() {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-}
-
-function meetingNotificationSettingsForUi(summary: Summary | null): MeetingNotificationSettings {
-  const settings = summary?.meetingNotificationSettings;
-
-  if (settings?.configured) {
-    return settings;
-  }
-
-  return {
-    ...DEFAULT_MEETING_NOTIFICATION_SETTINGS,
-    ...settings,
-    timeZoneId: browserTimeZoneId()
-  };
-}
-
-function normalizeMeetingNotificationSettingsDraft(settings: MeetingNotificationSettings): MeetingNotificationSettings {
-  return {
-    enabled: Boolean(settings.enabled),
-    authorRawAuthors: Array.from(new Set(settings.authorRawAuthors.map((author) => author.trim()).filter(Boolean))),
-    time: settings.time || "10:00",
-    timeZoneId: settings.timeZoneId || browserTimeZoneId(),
-    daysOfWeek: Array.from(new Set(settings.daysOfWeek.filter((day) => day >= 0 && day <= 6))).sort((left, right) => left - right)
-  };
-}
-
-function readCachedOpenAIStats(): OpenAIStats | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  try {
-    const value = readStorageItem(sessionBrowserStorage(), OPENAI_STATS_CACHE_KEY);
-
-    if (!value) {
-      return null;
-    }
-
-    return JSON.parse(value) as OpenAIStats;
-  } catch {
-    return null;
-  }
-}
-
-function writeCachedOpenAIStats(stats: OpenAIStats): void {
-  try {
-    writeStorageCache(sessionBrowserStorage(), OPENAI_STATS_CACHE_KEY, JSON.stringify(stats));
-  } catch {
-    // Storage can be unavailable in private mode; in-memory cache still keeps the card populated.
-  }
 }

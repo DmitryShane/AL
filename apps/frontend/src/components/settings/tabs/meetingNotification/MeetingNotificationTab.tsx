@@ -1,5 +1,8 @@
+import { useEffect, useState } from "react";
+import { apiFetch } from "../../../../api/client";
 import type { AuthorProfile } from "../../../../types/dashboard";
-import { settingsSaveButtonClassName, settingsSaveButtonLabel } from "../../../../pages/pageHelpers";
+import type { MeetingNotificationSettings, Summary } from "../../../../types/dashboard";
+import { settingsSaveButtonClassName } from "../../../../pages/pageHelpers";
 import { AuthorAvatar } from "../../../AuthorAvatar";
 
 const WEEKDAYS = [
@@ -12,51 +15,100 @@ const WEEKDAYS = [
 
 type MeetingNotificationTabProps = {
   profiles: AuthorProfile[];
-  enabled: boolean;
-  time: string;
-  timeZoneId: string;
-  daysOfWeek: number[];
-  authorRawAuthors: string[];
+  summary: Summary | null;
   settingsReadOnly: boolean;
-  saving: string | null;
-  saveStatus: Record<string, "saved" | "error" | undefined>;
-  dirty: boolean;
-  onEnabledChange: (value: boolean) => void;
-  onTimeChange: (value: string) => void;
-  onDaysOfWeekChange: (value: number[]) => void;
-  onAuthorRawAuthorsChange: (value: string[]) => void;
-  onSave: () => void;
+  onSaved: () => void;
 };
 
 export function MeetingNotificationTab({
   profiles,
-  enabled,
-  time,
-  timeZoneId,
-  daysOfWeek,
-  authorRawAuthors,
+  summary,
   settingsReadOnly,
-  saving,
-  saveStatus,
-  dirty,
-  onEnabledChange,
-  onTimeChange,
-  onDaysOfWeekChange,
-  onAuthorRawAuthorsChange,
-  onSave
+  onSaved
 }: MeetingNotificationTabProps) {
+  const settings = meetingNotificationSettingsForUi(summary);
+  const [enabled, setEnabled] = useState(settings.enabled);
+  const [time, setTime] = useState(settings.time);
+  const [timeZoneId, setTimeZoneId] = useState(settings.timeZoneId);
+  const [daysOfWeek, setDaysOfWeek] = useState(settings.daysOfWeek);
+  const [authorRawAuthors, setAuthorRawAuthors] = useState(settings.authorRawAuthors);
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"saved" | "error" | undefined>();
+
+  useEffect(() => {
+    const nextSettings = meetingNotificationSettingsForUi(summary);
+    setEnabled(nextSettings.enabled);
+    setTime(nextSettings.time);
+    setTimeZoneId(nextSettings.timeZoneId);
+    setDaysOfWeek(nextSettings.daysOfWeek);
+    setAuthorRawAuthors(nextSettings.authorRawAuthors);
+  }, [summary]);
+
+  const dirty =
+    JSON.stringify(normalizeMeetingNotificationSettingsDraft({
+      enabled,
+      authorRawAuthors,
+      time,
+      timeZoneId,
+      daysOfWeek
+    })) !== JSON.stringify(normalizeMeetingNotificationSettingsDraft(settings));
+
+  async function saveMeetingNotificationSettings() {
+    if (settingsReadOnly) {
+      return;
+    }
+
+    setSaving(true);
+    setSaveStatus(undefined);
+
+    try {
+      const payload = normalizeMeetingNotificationSettingsDraft({
+        enabled,
+        authorRawAuthors,
+        time,
+        timeZoneId: timeZoneId || browserTimeZoneId(),
+        daysOfWeek
+      });
+      const response = await apiFetch("/api/v1/settings/meeting-notification", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(await apiErrorDetail(response, "Meeting notification settings save failed"));
+      }
+
+      const data = await response.json() as MeetingNotificationSettings & { ok?: boolean };
+      setEnabled(data.enabled ?? payload.enabled);
+      setTime(data.time ?? payload.time);
+      setTimeZoneId(data.timeZoneId ?? payload.timeZoneId);
+      setDaysOfWeek(data.daysOfWeek ?? payload.daysOfWeek);
+      setAuthorRawAuthors(data.authorRawAuthors ?? payload.authorRawAuthors);
+      setSaveStatus("saved");
+      onSaved();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Meeting notification settings save failed";
+      window.alert(message);
+      setSaveStatus("error");
+    } finally {
+      setSaving(false);
+      window.setTimeout(() => setSaveStatus(undefined), 2500);
+    }
+  }
+
   function toggleWeekday(day: number) {
     const nextDays = daysOfWeek.includes(day)
       ? daysOfWeek.filter((item) => item !== day)
       : [...daysOfWeek, day].sort((left, right) => left - right);
-    onDaysOfWeekChange(nextDays);
+    setDaysOfWeek(nextDays);
   }
 
   function toggleAuthor(rawAuthor: string) {
     const nextAuthors = authorRawAuthors.includes(rawAuthor)
       ? authorRawAuthors.filter((item) => item !== rawAuthor)
       : [...authorRawAuthors, rawAuthor];
-    onAuthorRawAuthorsChange(nextAuthors);
+    setAuthorRawAuthors(nextAuthors);
   }
 
   return (
@@ -72,7 +124,7 @@ export function MeetingNotificationTab({
             type="checkbox"
             checked={enabled}
             disabled={settingsReadOnly}
-            onChange={(event) => onEnabledChange(event.target.checked)}
+            onChange={(event) => setEnabled(event.target.checked)}
           />
           Enabled
         </label>
@@ -82,7 +134,7 @@ export function MeetingNotificationTab({
             type="time"
             value={time}
             disabled={settingsReadOnly}
-            onChange={(event) => onTimeChange(event.target.value)}
+            onChange={(event) => setTime(event.target.value)}
           />
         </label>
         <label>
@@ -90,11 +142,11 @@ export function MeetingNotificationTab({
           <span className="meeting-notification-timezone-value">{timeZoneId}</span>
         </label>
         <button
-          className={settingsSaveButtonClassName(saveStatus.meetingNotification)}
-          onClick={onSave}
-          disabled={settingsReadOnly || saving === "meetingNotification" || !dirty}
+          className={settingsSaveButtonClassName(saveStatus)}
+          onClick={() => void saveMeetingNotificationSettings()}
+          disabled={settingsReadOnly || saving || !dirty}
         >
-          {settingsSaveButtonLabel("meetingNotification", saving, saveStatus)}
+          {saving ? "Saving..." : saveStatus === "saved" ? "Saved" : saveStatus === "error" ? "Error" : "Save"}
         </button>
       </div>
 
@@ -154,4 +206,63 @@ export function MeetingNotificationTab({
       </div>
     </div>
   );
+}
+
+const DEFAULT_MEETING_NOTIFICATION_SETTINGS: MeetingNotificationSettings = {
+  configured: false,
+  enabled: false,
+  authorRawAuthors: [],
+  time: "10:00",
+  timeZoneId: browserTimeZoneId(),
+  daysOfWeek: [0, 1, 2, 3, 4]
+};
+
+async function apiErrorDetail(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = (await response.json()) as { detail?: unknown };
+    const detail = payload.detail;
+
+    if (typeof detail === "string") {
+      return detail;
+    }
+
+    if (Array.isArray(detail) && detail[0] && typeof detail[0] === "object" && detail[0] !== null && "msg" in detail[0]) {
+      return String((detail[0] as { msg: string }).msg);
+    }
+  } catch {
+    //
+  }
+
+  return `${fallback} (HTTP ${response.status})`;
+}
+
+function browserTimeZoneId(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+function meetingNotificationSettingsForUi(summary: Summary | null): MeetingNotificationSettings {
+  const source = summary?.meetingNotificationSettings ?? DEFAULT_MEETING_NOTIFICATION_SETTINGS;
+  return normalizeMeetingNotificationSettingsDraft(source);
+}
+
+function normalizeMeetingNotificationSettingsDraft(settings: MeetingNotificationSettings): MeetingNotificationSettings {
+  const time = /^\d{2}:\d{2}$/.test(settings.time) ? settings.time : "10:00";
+  const timeZoneId = (settings.timeZoneId || browserTimeZoneId()).trim() || "UTC";
+  const daysOfWeek = Array.from(new Set(settings.daysOfWeek.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))).sort(
+    (left, right) => left - right
+  );
+  const authorRawAuthors = Array.from(new Set(settings.authorRawAuthors.map((author) => author.trim()).filter(Boolean)));
+
+  return {
+    configured: settings.configured,
+    enabled: Boolean(settings.enabled),
+    authorRawAuthors,
+    time,
+    timeZoneId,
+    daysOfWeek: daysOfWeek.length ? daysOfWeek : [0, 1, 2, 3, 4]
+  };
 }
