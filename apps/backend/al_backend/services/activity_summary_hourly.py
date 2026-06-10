@@ -37,17 +37,11 @@ class ActivitySummaryHourlyMixin:
                 continue
 
             public_hours = public_hourly_activity(hourly_author.get("hourlyActivity", []))
-            source_hours = hourly_author.get("hourlyActivity", [])
             idle_seconds = 0
 
-            for public_hour, source_hour in zip(public_hours, source_hours, strict=False):
+            for public_hour in public_hours:
                 public_idle_seconds = int(public_hour.get("totals", {}).get("idleSeconds", 0))
-                visual_idle_seconds = 0
-
-                if int(author_row.get("breakSeconds", 0)) <= 0:
-                    visual_idle_seconds += int(source_hour.get("pluginHourGapIdleSeconds", 0))
-
-                idle_seconds += max(0, public_idle_seconds - visual_idle_seconds)
+                idle_seconds += max(0, public_idle_seconds)
 
             previous_idle_seconds = int(author_row.get("idleSeconds", 0))
             if (

@@ -282,7 +282,7 @@ def test_activity_summary_current_plugin_hour_gap_is_not_filled():
     assert _hour_metric(summary["totals"], "idleSeconds") == 0
     assert summary["totals"]["pluginDaySeconds"] == 60
 
-def test_activity_summary_previous_plugin_hour_gap_is_visual_only_after_next_hour_report():
+def test_activity_summary_previous_plugin_hour_gap_counts_toward_author_idle_after_next_hour_report():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "timeZoneId": "UTC"})
     hourly_activity = empty_hourly_activity()
@@ -323,10 +323,11 @@ def test_activity_summary_previous_plugin_hour_gap_is_visual_only_after_next_hou
     assert _hour_metric(hour_10, "idleSeconds") == 3540
     assert _hour_metric(hour_10, "activeSeconds") + _hour_metric(hour_10, "idleSeconds") == 3600
     assert _hour_metric(hour_11, "idleSeconds") == 0
-    assert _hour_metric(author, "idleSeconds") == 0
-    assert author["pluginDaySeconds"] == 90
-    assert _hour_metric(summary["totals"], "idleSeconds") == 0
-    assert summary["totals"]["pluginDaySeconds"] == 90
+    assert _hour_metric(author, "idleSeconds") == 3540
+    assert author["pluginDaySeconds"] == 3630
+    assert author["productivity"] == 2.48
+    assert _hour_metric(summary["totals"], "idleSeconds") == 3540
+    assert summary["totals"]["pluginDaySeconds"] == 3630
 
 def test_activity_summary_previous_plugin_hour_gap_is_not_limited_by_day_budget():
     repo = fake_repository()
@@ -1717,7 +1718,7 @@ def test_activity_summary_visual_missed_end_uses_one_next_empty_hour_when_offlin
     assert _missed_end_seconds(hourly_by_hour[21]) == 3600
     assert _hour_metric(hourly_by_hour[22], "missedSeconds") == 0
     assert _hour_metric(author, "activeSeconds") == 146
-    assert _hour_metric(author, "idleSeconds") == 1016
+    assert _hour_metric(author, "idleSeconds") == 32033
 
 def test_activity_summary_does_not_mark_visual_end_missed_before_offline():
     repo = fake_repository()
