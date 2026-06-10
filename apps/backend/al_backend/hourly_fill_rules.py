@@ -72,12 +72,7 @@ def public_hourly_activity(source: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 def public_hour(item: dict[str, Any]) -> dict[str, Any]:
     hour = int(item.get("hour", 0))
-    fill_segments = _collapse_visual_active_noise(normalized_fill_segments(item))
-    fill_segments = _cap_fill_segments_kind(
-        fill_segments,
-        "active",
-        time_seconds(item, "activeSeconds", "activeMicroseconds"),
-    )
+    fill_segments = _public_fill_segments(item)
     visible_totals = _totals_from_segments(fill_segments)
     totals = {
         "activeSeconds": visible_totals["active"],
@@ -88,6 +83,20 @@ def public_hour(item: dict[str, Any]) -> dict[str, Any]:
         "missedSeconds": visible_totals["missed"],
     }
     return {"hour": hour, "totals": totals, "fillSegments": fill_segments}
+
+
+def _public_fill_segments(item: dict[str, Any]) -> list[dict[str, Any]]:
+    fill_segments = _collapse_visual_active_noise(normalized_fill_segments(item))
+    fill_segments = _cap_fill_segments_kind(
+        fill_segments,
+        "active",
+        time_seconds(item, "activeSeconds", "activeMicroseconds"),
+    )
+    return normalize_hour_fill(
+        fill_segments,
+        post_activity_start_second=_effective_overtime_start_second(item),
+        auto_afk_start_second=item.get(INTERNAL_AUTO_BREAK_START_SECOND),
+    )
 
 
 def _collapse_visual_active_noise(fill_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:

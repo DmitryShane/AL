@@ -4601,6 +4601,7 @@ def test_workday_idle_fill_extends_plugin_gap_to_latest_workday_signal():
 
     assert _hour_metric(hourly_summary[13], "activeSeconds") == 540
     assert sum(hourly_summary[13]["totals"].values()) == 3598
+    assert _hour_segments(hourly_summary[13], "idle") == [{"startSecond": 1140, "endSecond": 3598}]
     assert _hour_segments(hourly_summary[14], "idle") == [{"startSecond": 0, "endSecond": 8 * 60 + 1}]
     assert _hour_segments(hourly_summary[14], "afk") == [{"startSecond": 8 * 60 + 1, "endSecond": 3600}]
 
@@ -4644,17 +4645,29 @@ def test_public_hourly_caps_visible_active_to_fact_seconds():
     assert _hour_metric(public[12], "activeSeconds") == 1652
     assert _hour_metric(public[12], "idleSeconds") == 1038
     assert _hour_segments(public[12], "active") == [{"startSecond": 0, "endSecond": 1652}]
+    assert _hour_segments(public[12], "idle") == [{"startSecond": 1652, "endSecond": 2690}]
 
 
 def test_public_hourly_active_day_total_matches_fact_seconds():
     hourly = empty_hourly_activity()
     hourly[11]["activeSeconds"] = 60
     hourly[11]["activeMicroseconds"] = 60_000_000
-    hourly[11]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 300}]
+    hourly[11]["idleSeconds"] = 30
+    hourly[11]["idleMicroseconds"] = 30_000_000
+    hourly[11]["fillSegments"] = [
+        {"kind": "active", "startSecond": 0, "endSecond": 300},
+        {"kind": "idle", "startSecond": 300, "endSecond": 330},
+    ]
     hourly[12]["activeSeconds"] = 120
     hourly[12]["activeMicroseconds"] = 120_000_000
-    hourly[12]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 200}]
+    hourly[12]["idleSeconds"] = 40
+    hourly[12]["idleMicroseconds"] = 40_000_000
+    hourly[12]["fillSegments"] = [
+        {"kind": "active", "startSecond": 0, "endSecond": 200},
+        {"kind": "idle", "startSecond": 200, "endSecond": 240},
+    ]
 
     public = public_hourly_activity(hourly)
 
     assert sum(_hour_metric(hour, "activeSeconds") for hour in public) == 180
+    assert sum(_hour_metric(hour, "idleSeconds") for hour in public) == 70
