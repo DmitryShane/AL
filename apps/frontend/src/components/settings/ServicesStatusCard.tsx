@@ -74,7 +74,7 @@ export function ServicesStatusCard() {
   }, []);
 
   return (
-    <section className="panel server-stats-panel server-stats-services-panel">
+    <section className="panel server-stats-panel server-stats-services-panel" data-doc-target="settings-services">
       <div className="server-stats-header">
         <div>
           <h2>Services</h2>
@@ -124,6 +124,7 @@ function ServerRebootConfirmModal({
 }) {
   return (
     <Modal
+      data-doc-target="settings-server-reboot-modal"
       onBackdropClose={onCancel}
       backdropDisabled={saving}
       panelClassName="calendar-modal--scoped-activity-delete"

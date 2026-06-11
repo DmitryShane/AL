@@ -264,7 +264,7 @@ export function SiteUsersPanel({
 
   if (!canManageUsers) {
     return (
-      <div className="panel">
+      <div className="panel" data-doc-target="settings-site-users-panel">
         <h2>Site Users</h2>
         <p className="settings-caption">Only admins can create users, reset passwords, and change access rights.</p>
       </div>
@@ -272,7 +272,7 @@ export function SiteUsersPanel({
   }
 
   return (
-    <div className="panel">
+    <div className="panel" data-doc-target="settings-site-users-panel">
       <h2>Site Users</h2>
       <p className="settings-caption">
         Create dashboard logins, issue temporary passwords, and choose what each person can do on the site.
@@ -647,4 +647,3 @@ function autoBreakScheduleLabel(profile: AuthorProfile) {
 function normalizeAuthorInput(value: string) {
   return value.trim().normalize("NFC");
 }
-

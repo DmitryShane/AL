@@ -30,6 +30,7 @@ export function DeviceProfileDeleteModal({
 
   return (
     <Modal
+      data-doc-target="settings-device-delete-modal"
       onBackdropClose={onCancel}
       backdropDisabled={saving}
       panelClassName="calendar-modal--danger-delete-profile"

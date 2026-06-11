@@ -181,7 +181,7 @@ export function FakeOnlineTab({ profiles }: FakeOnlineTabProps) {
   }
 
   return (
-    <div className="panel">
+    <div className="panel" data-doc-target="settings-fake-online-panel">
       <h2>Fake Online</h2>
       <p className="settings-caption">
         Send a scheduled Telegram online prompt for selected author profiles, then auto-confirm it after a randomized delay.

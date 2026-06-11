@@ -191,7 +191,7 @@ export function CalendarPage() {
   }
 
   return (
-    <section className="page-section calendar-page">
+    <section className="page-section calendar-page" data-doc-target="calendar-overview" id="calendar-overview">
       {error ? <p className="notice error">{error}</p> : null}
       {calendar ? (
         <>
@@ -206,7 +206,7 @@ export function CalendarPage() {
             </div>
           </div>
 
-          <div className="author-card-strip calendar-author-strip">
+          <div className="author-card-strip calendar-author-strip" data-doc-target="calendar-author-filter">
             <button className={selectedAuthor === "all" ? "author-card active" : "author-card"} onClick={() => setSelectedAuthor("all")}>
               <span className="avatar-stack" aria-hidden="true">
                 {calendar.authors.slice(0, 5).map((author) => (
@@ -234,13 +234,14 @@ export function CalendarPage() {
           <div className="calendar-workspace">
             <div className="calendar-sidebar">
               <div className="calendar-management">
-                <div className="calendar-toolbar">
+                <div className="calendar-toolbar" data-doc-target="calendar-toolbar">
                   <strong>{selectedDates.length} selected days</strong>
                   <button className={rangeMode ? "primary-button" : "primary-outline-button"} onClick={() => setRangeMode((value) => !value)}>Range select</button>
                   <button className="primary-outline-button" onClick={() => { setSelectedDates([]); setRangeStart(null); }}>Clear selection</button>
                   <button className="primary-button" onClick={openMarkEditor} disabled={!selectedDates.length}>Mark days</button>
                   <button className="primary-outline-button danger-button" onClick={openClearEditor} disabled={!selectedDates.length}>Clear marks</button>
                 </div>
+                <div data-doc-target="calendar-reasons">
                 <ReasonEditor
                   reasons={calendar.reasons}
                   reasonLabel={reasonLabel}
@@ -249,12 +250,15 @@ export function CalendarPage() {
                   onPickReason={openMarkEditorForReason}
                   onSave={() => void saveReason()}
                 />
+                </div>
               </div>
 
-              <CalendarStats stats={visibleStats} reasons={calendar.reasons} />
+              <div data-doc-target="calendar-stats">
+                <CalendarStats stats={visibleStats} reasons={calendar.reasons} />
+              </div>
             </div>
 
-            <div className="year-calendar-panel">
+            <div className="year-calendar-panel" data-doc-target="calendar-month-grid">
               <div className="year-calendar">
                 {monthIndexes().map((month) => (
                   <MonthCalendar
@@ -273,6 +277,7 @@ export function CalendarPage() {
           </div>
 
           {showMarkEditor ? (
+            <div data-doc-target="calendar-mark-modal">
             <CalendarMarkEditor
               authors={calendar.authors}
               selectedAuthor={selectedAuthor}
@@ -287,8 +292,10 @@ export function CalendarPage() {
               onCancel={() => setShowMarkEditor(false)}
               onSave={() => void saveMarks()}
             />
+            </div>
           ) : null}
           {showClearEditor ? (
+            <div data-doc-target="calendar-clear-modal">
             <CalendarClearEditor
               authors={calendar.authors}
               selectedAuthor={selectedAuthor}
@@ -298,12 +305,13 @@ export function CalendarPage() {
               onCancel={() => setShowClearEditor(false)}
               onClear={() => void clearMarks()}
             />
+            </div>
           ) : null}
         </>
       ) : loading ? (
         <p className="notice">Loading calendar...</p>
       ) : (
-        <p className="empty">No calendar data yet.</p>
+        <p className="empty" data-doc-target="calendar-empty-state">No calendar data yet.</p>
       )}
     </section>
   );

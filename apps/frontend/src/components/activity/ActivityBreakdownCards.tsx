@@ -38,7 +38,7 @@ export function ActivityBreakdownCards({ author }: ActivityBreakdownCardsProps) 
   }));
 
   return (
-    <>
+    <div className="activity-breakdown-card-set" data-doc-target="activity-breakdowns" id="activity-breakdowns">
       <BreakdownPanel
         key={`${author.rawAuthor}-activity-mix`}
         title="Activity Mix"
@@ -59,7 +59,7 @@ export function ActivityBreakdownCards({ author }: ActivityBreakdownCardsProps) 
         activityGroups={overtimeActivityMixGroups}
         savedGroups={overtimeSavedPrefabGroups}
       />
-    </>
+    </div>
   );
 }
 

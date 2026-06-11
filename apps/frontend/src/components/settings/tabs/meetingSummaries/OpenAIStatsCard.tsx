@@ -25,7 +25,7 @@ export function OpenAIStatsCard({
   const isSyncing = openAIStats?.syncStatus === "syncingTotals" || openAIStats?.syncStatus === "syncingMonth";
 
   return (
-    <div className="panel meeting-summary-openai-panel">
+    <div className="panel meeting-summary-openai-panel" data-doc-target="settings-openai-stats">
       <div className="meeting-summary-panel-header">
         <div className="openai-stats-title">
           <h3>OpenAI Stats</h3>

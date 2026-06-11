@@ -1,4 +1,4 @@
-export type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings";
+export type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings" | "documentation";
 export type SettingsTab = "general" | "authors" | "publisherProfiles" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingNotification" | "meetingSummaries" | "snapshots" | "fakeOnline" | "users";
 
 export type Health = {

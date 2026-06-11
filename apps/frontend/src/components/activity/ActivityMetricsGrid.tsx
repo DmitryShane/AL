@@ -9,7 +9,7 @@ type ActivityMetricsGridProps = {
 
 export function ActivityMetricsGrid({ author }: ActivityMetricsGridProps) {
   return (
-    <div className="activity-grid">
+    <div className="activity-grid" data-doc-target="activity-metrics" id="activity-metrics">
       <DurationCard variant="telegram" label="Day Time (Telegram)" seconds={author.telegramDaySeconds ?? author.daySeconds} />
       <DurationCard variant="telegram-delta" label="Telegram vs FirstActivity" seconds={author.telegramToFirstActivitySeconds ?? 0} />
       <DurationCard variant="plugin" label="Day Time (Plugin)" seconds={author.rawPluginDaySeconds ?? author.pluginDaySeconds ?? author.activeSeconds + author.idleSeconds} />

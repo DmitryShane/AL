@@ -24,7 +24,7 @@ export function AutoBreakTab({
   onSaveProfile
 }: AutoBreakTabProps) {
   return (
-    <div className="panel">
+    <div className="panel" data-doc-target="settings-auto-break-panel">
       <h2>Auto Break</h2>
       <p className="settings-caption">
         Assign authors whose first idle time during a work day should count as break time, up to 60 minutes per day.

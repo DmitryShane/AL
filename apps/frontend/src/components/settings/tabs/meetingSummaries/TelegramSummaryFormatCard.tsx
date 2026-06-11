@@ -20,7 +20,7 @@ export function TelegramSummaryFormatCard({
   onSaveMeetingSummaryTelegramTemplate
 }: TelegramSummaryFormatCardProps) {
   return (
-    <div className="panel meeting-summary-prompt-panel">
+    <div className="panel meeting-summary-prompt-panel" data-doc-target="settings-telegram-summary-format">
       <h3>Telegram summary format</h3>
       <p className="settings-caption">
         Template for the Telegram message sent after OpenAI creates the meeting summary. Available placeholders: {"{date}"}, {"{duration}"}, {"{participants}"}, {"{summary}"}.

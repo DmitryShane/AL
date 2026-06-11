@@ -33,6 +33,7 @@ export function SiteUserDeleteModal({
 
   return (
     <Modal
+      data-doc-target="settings-site-user-delete-modal"
       onBackdropClose={onCancel}
       backdropDisabled={saving}
       panelClassName="calendar-modal--danger-delete-profile"

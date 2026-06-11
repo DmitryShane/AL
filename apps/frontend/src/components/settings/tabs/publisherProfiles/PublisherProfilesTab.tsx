@@ -124,7 +124,7 @@ export function PublisherProfilesTab() {
   const availableDevices = devices.filter((device) => !linkedDevices.has(device.rawDevice));
 
   return (
-    <div className="panel">
+    <div className="panel" data-doc-target="settings-publisher-profiles-panel">
       <div className="device-profiles-panel-head">
         <div>
           <h2>Publisher Profiles</h2>

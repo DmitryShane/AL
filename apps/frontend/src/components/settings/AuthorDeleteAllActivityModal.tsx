@@ -28,6 +28,7 @@ export function AuthorDeleteAllActivityModal({
 
   return (
     <Modal
+      data-doc-target="settings-author-delete-all-modal"
       onBackdropClose={onCancel}
       backdropDisabled={saving}
       panelClassName="calendar-modal--danger-delete-all"

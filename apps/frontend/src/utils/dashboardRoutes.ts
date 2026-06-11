@@ -6,7 +6,8 @@ const PAGE_PATHS: Record<Page, string> = {
   analytics: "/analytics",
   calendar: "/calendar",
   alerts: "/alerts",
-  settings: "/settings"
+  settings: "/settings",
+  documentation: "/documentation"
 };
 
 export function pageToPath(page: Page) {

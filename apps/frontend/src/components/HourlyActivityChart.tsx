@@ -39,7 +39,7 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
   const authorCharts = authors.map(toAuthorHourlyActivity);
 
   return (
-    <section className="panel table-panel">
+    <section className="panel table-panel" data-doc-target="hourly-activity" id="hourly-activity">
       <h2>Hourly Activity</h2>
       {authorCharts.length ? (
         <div className="hourly-chart-list">

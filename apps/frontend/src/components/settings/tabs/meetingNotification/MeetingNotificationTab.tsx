@@ -112,7 +112,7 @@ export function MeetingNotificationTab({
   }
 
   return (
-    <div className="panel meeting-notification-panel">
+    <div className="panel meeting-notification-panel" data-doc-target="settings-meeting-notification-panel">
       <h2>Meeting Notification</h2>
       <p className="settings-caption">
         Send one scheduled Telegram work chat message that mentions selected authors and asks them to join the Discord meeting channel.

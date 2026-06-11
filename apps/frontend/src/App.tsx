@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, BarChart3, Bell, CalendarDays, LogOut, Settings, UsersRound } from "lucide-react";
+import { Activity, BarChart3, Bell, BookOpen, CalendarDays, LogOut, Settings, UsersRound } from "lucide-react";
 import { DateRangePicker } from "./components/layout/DateRangePicker";
 import { LoginPage } from "./pages/LoginPage";
 import { NavButton } from "./components/layout/NavButton";
@@ -8,6 +8,7 @@ import { AlertsPage } from "./pages/AlertsPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { AuthorsPage } from "./pages/AuthorsPage";
 import { CalendarPage } from "./pages/CalendarPage";
+import { DocumentationPage } from "./pages/DocumentationPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import "./styles.css";
 
@@ -126,6 +127,56 @@ function App() {
     setSelectedAuthor
   ]);
 
+  useEffect(() => {
+    if (!page) {
+      return;
+    }
+
+    const targetId = new URLSearchParams(window.location.search).get("docTarget");
+
+    if (!targetId) {
+      return;
+    }
+
+    const safeTargetId = targetId;
+    let cancelled = false;
+    let attempt = 0;
+    let timeoutId: number | null = null;
+
+    function highlightTarget() {
+      if (cancelled) {
+        return;
+      }
+
+      const selector = `[data-doc-target="${CSS.escape(safeTargetId)}"], #${CSS.escape(safeTargetId)}`;
+      const target = document.querySelector<HTMLElement>(selector);
+
+      if (!target && attempt < 12) {
+        attempt += 1;
+        timeoutId = window.setTimeout(highlightTarget, 120);
+        return;
+      }
+
+      if (!target) {
+        return;
+      }
+
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.add("doc-target-highlight");
+      window.setTimeout(() => target.classList.remove("doc-target-highlight"), 2600);
+    }
+
+    timeoutId = window.setTimeout(highlightTarget, 80);
+
+    return () => {
+      cancelled = true;
+
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [page, settingsDisplaySummary, selectedAuthor]);
+
   function selectPage(nextPage: Page) {
     const search = nextPage === "activity" && lastSelectedActivityAuthorSlug
       ? `?${new URLSearchParams({ author: lastSelectedActivityAuthorSlug }).toString()}`
@@ -161,6 +212,7 @@ function App() {
           <NavButton icon={<CalendarDays size={20} />} label="Calendar" active={page === "calendar"} onClick={() => selectPage("calendar")} />
           <NavButton icon={<Bell size={20} />} label="Alerts" active={page === "alerts"} onClick={() => selectPage("alerts")} />
           <NavButton icon={<Settings size={20} />} label="Settings" active={page === "settings"} onClick={() => selectPage("settings")} />
+          <NavButton icon={<BookOpen size={20} />} label="Documentation" active={page === "documentation"} onClick={() => selectPage("documentation")} />
         </nav>
         <div className="session-card sidebar-session-card">
           {displaySessionUser ? (
@@ -211,7 +263,7 @@ function App() {
             <p>{pageSubtitle(page)}</p>
           </div>
           {page === "authors" || page === "activity" ? (
-            <div className="topbar-actions">
+            <div className="topbar-actions" data-doc-target="date-range-picker">
               <DateRangePicker value={dateRange} onChange={setDateRange} />
             </div>
           ) : page === "settings" ? (
@@ -251,6 +303,7 @@ function App() {
         {page === "analytics" ? <AnalyticsPage /> : null}
         {page === "calendar" ? <CalendarPage /> : null}
         {page === "alerts" ? <AlertsPage /> : null}
+        {page === "documentation" ? <DocumentationPage /> : null}
         {page === "settings" && displaySessionUser ? (
           <SettingsPage summary={settingsDisplaySummary} currentUser={displaySessionUser} onSaved={() => void load(false)} />
         ) : null}
@@ -297,6 +350,10 @@ function pageTitle(page: Page | null) {
     return "Settings";
   }
 
+  if (page === "documentation") {
+    return "Documentation";
+  }
+
   return "Authors";
 }
 
@@ -323,6 +380,10 @@ function pageSubtitle(page: Page | null) {
 
   if (page === "settings") {
     return "Manage workspace configuration, integrations, and dashboard behavior.";
+  }
+
+  if (page === "documentation") {
+    return "Operational guide to AL pages, cards, rules, settings, and chart semantics.";
   }
 
   return "Team activity overview for the selected period.";

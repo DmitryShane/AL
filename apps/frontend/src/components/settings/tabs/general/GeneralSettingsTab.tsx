@@ -83,7 +83,7 @@ export function GeneralSettingsTab({
 
   return (
     <>
-      <div className="panel">
+      <div className="panel" data-doc-target="settings-general-intervals">
         <h2>Send Interval</h2>
         <div className="settings-row">
           <label>

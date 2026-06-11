@@ -163,13 +163,13 @@ export function ActivitySnapshotsTab() {
   }
 
   return (
-    <div className="panel activity-snapshots-panel">
+    <div className="panel activity-snapshots-panel" data-doc-target="settings-snapshots-panel">
       <div className="settings-panel-header">
         <div>
           <h2>Activity Snapshots</h2>
           <p className="settings-caption">Historical Activity snapshot materialization progress by date and author.</p>
         </div>
-        <div className="activity-snapshot-header-actions">
+        <div className="activity-snapshot-header-actions" data-doc-target="settings-snapshot-actions">
           <DateRangePicker value={remakeRange} onChange={setRemakeRange} showPresets={false} />
           <button className="primary-outline-button" onClick={() => void remakeSnapshots()} disabled={remaking || remakingAll || loading}>
             <RotateCcw size={16} />
@@ -187,7 +187,7 @@ export function ActivitySnapshotsTab() {
       </div>
 
       {status ? (
-        <div className="snapshot-summary-grid">
+        <div className="snapshot-summary-grid" data-doc-target="settings-snapshot-status">
           <SnapshotMetric label="Ready" value={status.totals.ready} />
           <SnapshotMetric label="Processing" value={status.totals.processing} />
           <SnapshotMetric label="Next" value={status.totals.next} />

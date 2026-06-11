@@ -71,6 +71,7 @@ export function AuthorDeleteConfirm({
 
   return (
     <Modal
+      data-doc-target="settings-author-period-modal"
       onBackdropClose={onCancel}
       backdropDisabled={saving}
       panelClassName="calendar-modal--scoped-activity-delete"

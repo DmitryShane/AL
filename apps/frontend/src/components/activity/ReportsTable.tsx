@@ -65,7 +65,7 @@ export function ReportsTable({
   }, [sourceOptions, sourceFilter, setSourceFilter]);
 
   return (
-    <section className="panel table-panel">
+    <section className="panel table-panel" data-doc-target="plugin-reports" id="plugin-reports">
       <div className="table-panel-header">
         <h2>Plugin Reports</h2>
         <div className="table-panel-filters">

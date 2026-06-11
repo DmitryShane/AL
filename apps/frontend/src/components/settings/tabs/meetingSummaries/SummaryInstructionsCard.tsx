@@ -23,7 +23,7 @@ export function SummaryInstructionsCard({
   onSaveMeetingSummaryPrompt
 }: SummaryInstructionsCardProps) {
   return (
-    <div className="panel meeting-summary-prompt-panel" ref={refCallback}>
+    <div className="panel meeting-summary-prompt-panel" data-doc-target="settings-summary-instructions" ref={refCallback}>
       <h3>Summary instructions</h3>
       <p className="settings-caption">
         Prompt text used before the backend adds participants, required sections, language, and transcript automatically.

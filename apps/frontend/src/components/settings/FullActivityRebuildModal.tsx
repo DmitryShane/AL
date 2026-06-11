@@ -21,6 +21,7 @@ export function FullActivityRebuildModal({
 
   return (
     <Modal
+      data-doc-target="settings-full-rebuild-modal"
       onBackdropClose={onCancel}
       backdropDisabled={saving}
       panelClassName="calendar-modal--danger-delete-all"

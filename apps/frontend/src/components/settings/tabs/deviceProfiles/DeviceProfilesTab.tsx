@@ -138,7 +138,7 @@ export function DeviceProfilesTab() {
   }
 
   return (
-    <div className="panel">
+    <div className="panel" data-doc-target="settings-device-profiles-panel">
       <div className="device-profiles-panel-head">
         <div>
           <h2>Device Profiles</h2>

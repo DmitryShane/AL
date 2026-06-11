@@ -14,7 +14,7 @@ import {
 import { SiteUsersPanel } from "../components/settings/SettingsComponents";
 import { AuthorProfilesTab } from "../components/settings/tabs/authors/AuthorProfilesTab";
 import { AutoBreakTab } from "../components/settings/tabs/autoBreak/AutoBreakTab";
-import { SETTINGS_TABS } from "../components/settings/settingsTabs";
+import { SETTINGS_TABS, isSettingsTab } from "../components/settings/settingsTabs";
 import { DeviceProfilesTab } from "../components/settings/tabs/deviceProfiles/DeviceProfilesTab";
 import { PublisherProfilesTab } from "../components/settings/tabs/publisherProfiles/PublisherProfilesTab";
 import { DiscordSettingsTab } from "../components/settings/tabs/discord/DiscordSettingsTab";
@@ -86,7 +86,7 @@ export function SettingsPage({
   const canManageUsers = currentUser.role === "admin";
   const settingsReadOnly = !canManageSettings;
   const avatarSettingsLockedTitle = "Only editors and admins can change GitHub avatar cache settings.";
-  const [settingsTab, setSettingsTabState] = useState<SettingsTab>(() => loadSavedSettingsTab());
+  const [settingsTab, setSettingsTabState] = useState<SettingsTab>(() => readSettingsTabFromUrl() ?? loadSavedSettingsTab());
   const [drafts, setDrafts] = useState<Record<string, AuthorProfile>>({});
   const [avatarRefreshCadence, setAvatarRefreshCadence] = useState<"week" | "month">(
     summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month"
@@ -199,9 +199,23 @@ export function SettingsPage({
     };
   }, [activityRebuildProgress?.jobId, activityRebuildProgress?.status, onSaved]);
 
+  useEffect(() => {
+    const tab = readSettingsTabFromUrl();
+
+    if (tab) {
+      setSettingsTabState(tab);
+      writeStorageState(localBrowserStorage(), SETTINGS_TAB_STORAGE_KEY, tab);
+    }
+  }, []);
+
   function setSettingsTab(tab: SettingsTab) {
     setSettingsTabState(tab);
     writeStorageState(localBrowserStorage(), SETTINGS_TAB_STORAGE_KEY, tab);
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", tab);
+    url.searchParams.delete("docTarget");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   }
 
   async function saveProfile(rawAuthor: string) {
@@ -803,120 +817,132 @@ export function SettingsPage({
           </button>
         ))}
       </div>
-      {settingsTab === "general" ? (
-        <GeneralSettingsTab
-          summary={summary}
-          settingsReadOnly={settingsReadOnly}
-          onSaved={onSaved}
-        />
-      ) : settingsTab === "autoBreak" ? (
-        <AutoBreakTab
-          profiles={personProfiles}
-          drafts={drafts}
-          settingsReadOnly={settingsReadOnly}
-          saving={saving}
-          saveStatus={saveStatus}
-          isProfileDirty={isProfileDirty}
-          onDraftChange={(rawAuthor, draft) => setDrafts((items) => ({ ...items, [rawAuthor]: draft }))}
-          onSaveProfile={(rawAuthor) => void saveProfile(rawAuthor)}
-        />
-      ) : settingsTab === "deviceProfiles" ? (
-        <DeviceProfilesTab />
-      ) : settingsTab === "publisherProfiles" ? (
-        <PublisherProfilesTab />
-      ) : settingsTab === "redirects" ? (
-        <AuthorRedirectsTab
-          profiles={personProfiles}
-          aliases={aliases}
-          aliasSource={aliasSource}
-          aliasTarget={aliasTarget}
-          aliasError={aliasError}
-          settingsReadOnly={settingsReadOnly}
-          saving={saving}
-          saveStatus={saveStatus}
-          onAliasSourceChange={setAliasSource}
-          onAliasTargetChange={setAliasTarget}
-          onSaveAuthorAlias={() => void saveAuthorAlias()}
-          onDeleteAuthorAlias={(sourceRawAuthor) => void deleteAuthorAlias(sourceRawAuthor)}
-        />
-      ) : settingsTab === "authors" ? (
-        <AuthorProfilesTab
-          profiles={personProfiles}
-          drafts={drafts}
-          newProfile={newProfile}
-          avatarRefreshCadence={avatarRefreshCadence}
-          deleteActivityDrafts={deleteActivityDrafts}
-          pendingAuthorActivityDelete={pendingAuthorActivityDelete}
-          pendingAuthorActivityRebuild={pendingAuthorActivityRebuild}
-          deleteActivityFieldError={deleteActivityFieldError}
-          deleteProfileTarget={deleteProfileTarget}
-          bulkActivityDeletePreset={bulkActivityDeletePreset}
-          bulkActivityDeleteModalOpen={bulkActivityDeleteModalOpen}
-          fullActivityRebuildModalOpen={fullActivityRebuildModalOpen}
-          activityRebuildProgress={activityRebuildProgress}
-          canManageSettings={canManageSettings}
-          settingsReadOnly={settingsReadOnly}
-          avatarSettingsLockedTitle={avatarSettingsLockedTitle}
-          saving={saving}
-          saveStatus={saveStatus}
-          isAvatarCadenceDirty={isAvatarCadenceDirty}
-          isProfileDirty={isProfileDirty}
-          onDraftChange={(rawAuthor, draft) => setDrafts((items) => ({ ...items, [rawAuthor]: draft }))}
-          onNewProfileChange={setNewProfile}
-          onAvatarRefreshCadenceChange={setAvatarRefreshCadence}
-          onDeleteActivityDraftChange={(rawAuthor, draft) => setDeleteActivityDrafts((items) => ({ ...items, [rawAuthor]: draft }))}
-          onBulkActivityDeletePresetChange={setBulkActivityDeletePreset}
-          onBulkActivityDeleteModalOpenChange={setBulkActivityDeleteModalOpen}
-          onFullActivityRebuildModalOpenChange={setFullActivityRebuildModalOpen}
-          onPendingAuthorActivityDeleteChange={setPendingAuthorActivityDelete}
-          onPendingAuthorActivityRebuildChange={setPendingAuthorActivityRebuild}
-          onDeleteProfileTargetChange={setDeleteProfileTarget}
-          onCreateProfile={() => void createProfile()}
-          onSaveProfile={(rawAuthor) => void saveProfile(rawAuthor)}
-          onSaveAvatarRefreshCadence={() => void saveAvatarRefreshCadence()}
-          onRefreshAllGitHubAvatars={() => void refreshAllGitHubAvatars()}
-          onRefreshAuthorGitHubAvatar={(rawAuthor) => void refreshAuthorGitHubAvatar(rawAuthor)}
-          onRequestAuthorActivityDelete={requestAuthorActivityDelete}
-          onRequestAuthorActivityRebuild={requestAuthorActivityRebuild}
-          onRequestAuthorDeleteAllActivity={requestAuthorDeleteAllActivity}
-          onExecuteBulkActivityDeleteAllAuthors={(confirmPhrase) => void executeBulkActivityDeleteAllAuthors(confirmPhrase)}
-          onExecuteFullActivityRebuild={(confirmPhrase) => void executeFullActivityRebuild(confirmPhrase)}
-          onExecuteAuthorActivityDelete={(pending) => void executeAuthorActivityDelete(pending)}
-          onExecuteAuthorActivityRebuild={(pending) => void executeAuthorActivityRebuild(pending)}
-          onDeleteAuthorProfile={(rawAuthor) => void deleteAuthorProfile(rawAuthor)}
-        />
-      ) : settingsTab === "discord" ? (
-        <DiscordSettingsTab
-          summary={summary}
-          settingsReadOnly={settingsReadOnly}
-          onSaved={onSaved}
-        />
-      ) : settingsTab === "telegram" ? (
-        <TelegramSettingsTab
-          summary={summary}
-          settingsReadOnly={settingsReadOnly}
-          onSaved={onSaved}
-        />
-      ) : settingsTab === "meetingNotification" ? (
-        <MeetingNotificationTab
-          profiles={personProfiles}
-          summary={summary}
-          settingsReadOnly={settingsReadOnly}
-          onSaved={onSaved}
-        />
-      ) : settingsTab === "meetingSummaries" ? (
-        <MeetingSummariesTab
-          summary={summary}
-          settingsReadOnly={settingsReadOnly}
-          onSaved={onSaved}
-        />
-      ) : settingsTab === "snapshots" ? (
-        <ActivitySnapshotsTab />
-      ) : settingsTab === "fakeOnline" && canManageUsers ? (
-        <FakeOnlineTab profiles={personProfiles} />
-      ) : (
-        <SiteUsersPanel currentUser={currentUser} authorProfiles={profiles} authorProfileDrafts={drafts} />
-      )}
+      <div className="settings-tab-panel" data-doc-target={`settings-${settingsTab}`} id={`settings-${settingsTab}`}>
+        {settingsTab === "general" ? (
+          <GeneralSettingsTab
+            summary={summary}
+            settingsReadOnly={settingsReadOnly}
+            onSaved={onSaved}
+          />
+        ) : settingsTab === "autoBreak" ? (
+          <AutoBreakTab
+            profiles={personProfiles}
+            drafts={drafts}
+            settingsReadOnly={settingsReadOnly}
+            saving={saving}
+            saveStatus={saveStatus}
+            isProfileDirty={isProfileDirty}
+            onDraftChange={(rawAuthor, draft) => setDrafts((items) => ({ ...items, [rawAuthor]: draft }))}
+            onSaveProfile={(rawAuthor) => void saveProfile(rawAuthor)}
+          />
+        ) : settingsTab === "deviceProfiles" ? (
+          <DeviceProfilesTab />
+        ) : settingsTab === "publisherProfiles" ? (
+          <PublisherProfilesTab />
+        ) : settingsTab === "redirects" ? (
+          <AuthorRedirectsTab
+            profiles={personProfiles}
+            aliases={aliases}
+            aliasSource={aliasSource}
+            aliasTarget={aliasTarget}
+            aliasError={aliasError}
+            settingsReadOnly={settingsReadOnly}
+            saving={saving}
+            saveStatus={saveStatus}
+            onAliasSourceChange={setAliasSource}
+            onAliasTargetChange={setAliasTarget}
+            onSaveAuthorAlias={() => void saveAuthorAlias()}
+            onDeleteAuthorAlias={(sourceRawAuthor) => void deleteAuthorAlias(sourceRawAuthor)}
+          />
+        ) : settingsTab === "authors" ? (
+          <AuthorProfilesTab
+            profiles={personProfiles}
+            drafts={drafts}
+            newProfile={newProfile}
+            avatarRefreshCadence={avatarRefreshCadence}
+            deleteActivityDrafts={deleteActivityDrafts}
+            pendingAuthorActivityDelete={pendingAuthorActivityDelete}
+            pendingAuthorActivityRebuild={pendingAuthorActivityRebuild}
+            deleteActivityFieldError={deleteActivityFieldError}
+            deleteProfileTarget={deleteProfileTarget}
+            bulkActivityDeletePreset={bulkActivityDeletePreset}
+            bulkActivityDeleteModalOpen={bulkActivityDeleteModalOpen}
+            fullActivityRebuildModalOpen={fullActivityRebuildModalOpen}
+            activityRebuildProgress={activityRebuildProgress}
+            canManageSettings={canManageSettings}
+            settingsReadOnly={settingsReadOnly}
+            avatarSettingsLockedTitle={avatarSettingsLockedTitle}
+            saving={saving}
+            saveStatus={saveStatus}
+            isAvatarCadenceDirty={isAvatarCadenceDirty}
+            isProfileDirty={isProfileDirty}
+            onDraftChange={(rawAuthor, draft) => setDrafts((items) => ({ ...items, [rawAuthor]: draft }))}
+            onNewProfileChange={setNewProfile}
+            onAvatarRefreshCadenceChange={setAvatarRefreshCadence}
+            onDeleteActivityDraftChange={(rawAuthor, draft) => setDeleteActivityDrafts((items) => ({ ...items, [rawAuthor]: draft }))}
+            onBulkActivityDeletePresetChange={setBulkActivityDeletePreset}
+            onBulkActivityDeleteModalOpenChange={setBulkActivityDeleteModalOpen}
+            onFullActivityRebuildModalOpenChange={setFullActivityRebuildModalOpen}
+            onPendingAuthorActivityDeleteChange={setPendingAuthorActivityDelete}
+            onPendingAuthorActivityRebuildChange={setPendingAuthorActivityRebuild}
+            onDeleteProfileTargetChange={setDeleteProfileTarget}
+            onCreateProfile={() => void createProfile()}
+            onSaveProfile={(rawAuthor) => void saveProfile(rawAuthor)}
+            onSaveAvatarRefreshCadence={() => void saveAvatarRefreshCadence()}
+            onRefreshAllGitHubAvatars={() => void refreshAllGitHubAvatars()}
+            onRefreshAuthorGitHubAvatar={(rawAuthor) => void refreshAuthorGitHubAvatar(rawAuthor)}
+            onRequestAuthorActivityDelete={requestAuthorActivityDelete}
+            onRequestAuthorActivityRebuild={requestAuthorActivityRebuild}
+            onRequestAuthorDeleteAllActivity={requestAuthorDeleteAllActivity}
+            onExecuteBulkActivityDeleteAllAuthors={(confirmPhrase) => void executeBulkActivityDeleteAllAuthors(confirmPhrase)}
+            onExecuteFullActivityRebuild={(confirmPhrase) => void executeFullActivityRebuild(confirmPhrase)}
+            onExecuteAuthorActivityDelete={(pending) => void executeAuthorActivityDelete(pending)}
+            onExecuteAuthorActivityRebuild={(pending) => void executeAuthorActivityRebuild(pending)}
+            onDeleteAuthorProfile={(rawAuthor) => void deleteAuthorProfile(rawAuthor)}
+          />
+        ) : settingsTab === "discord" ? (
+          <DiscordSettingsTab
+            summary={summary}
+            settingsReadOnly={settingsReadOnly}
+            onSaved={onSaved}
+          />
+        ) : settingsTab === "telegram" ? (
+          <TelegramSettingsTab
+            summary={summary}
+            settingsReadOnly={settingsReadOnly}
+            onSaved={onSaved}
+          />
+        ) : settingsTab === "meetingNotification" ? (
+          <MeetingNotificationTab
+            profiles={personProfiles}
+            summary={summary}
+            settingsReadOnly={settingsReadOnly}
+            onSaved={onSaved}
+          />
+        ) : settingsTab === "meetingSummaries" ? (
+          <MeetingSummariesTab
+            summary={summary}
+            settingsReadOnly={settingsReadOnly}
+            onSaved={onSaved}
+          />
+        ) : settingsTab === "snapshots" ? (
+          <ActivitySnapshotsTab />
+        ) : settingsTab === "fakeOnline" && canManageUsers ? (
+          <FakeOnlineTab profiles={personProfiles} />
+        ) : (
+          <SiteUsersPanel currentUser={currentUser} authorProfiles={profiles} authorProfileDrafts={drafts} />
+        )}
+      </div>
     </section>
   );
+}
+
+function readSettingsTabFromUrl(): SettingsTab | null {
+  const tab = new URLSearchParams(window.location.search).get("tab");
+
+  if (isSettingsTab(tab)) {
+    return tab;
+  }
+
+  return null;
 }

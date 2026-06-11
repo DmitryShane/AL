@@ -8,6 +8,7 @@ export type ModalProps = {
   panelClassName?: string;
   ariaLabelledBy?: string;
   ariaDescribedBy?: string;
+  "data-doc-target"?: string;
 };
 
 export function Modal({
@@ -17,6 +18,7 @@ export function Modal({
   panelClassName = "",
   ariaLabelledBy,
   ariaDescribedBy,
+  "data-doc-target": docTarget,
 }: ModalProps) {
   const panelClasses = ["calendar-modal", panelClassName.trim()].filter(Boolean).join(" ");
 
@@ -36,6 +38,7 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={ariaLabelledBy}
         aria-describedby={ariaDescribedBy}
+        data-doc-target={docTarget}
         onClick={(event) => event.stopPropagation()}
       >
         {children}

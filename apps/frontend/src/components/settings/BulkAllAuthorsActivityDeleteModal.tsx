@@ -33,6 +33,7 @@ export function BulkAllAuthorsActivityDeleteModal({
 
   return (
     <Modal
+      data-doc-target="settings-bulk-delete-modal"
       onBackdropClose={onCancel}
       backdropDisabled={saving}
       panelClassName="calendar-modal--danger-delete-all"

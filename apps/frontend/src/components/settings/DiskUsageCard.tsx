@@ -72,7 +72,7 @@ export function DiskUsageCard() {
   };
 
   return (
-    <section className={`panel server-stats-panel server-stats-panel-${displayStats?.root?.warningLevel ?? "ok"}`} style={panelStyle}>
+    <section className={`panel server-stats-panel server-stats-panel-${displayStats?.root?.warningLevel ?? "ok"}`} data-doc-target="settings-disk-usage" style={panelStyle}>
       <div className="server-stats-header">
         <div>
           <h2>Disk Usage</h2>

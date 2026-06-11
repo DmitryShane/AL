@@ -16,7 +16,7 @@ export function AuthorsPage({
   const sortedAuthors = [...authors].sort(compareAuthorsByStatusAndProductivity);
 
   return (
-    <section className="page-section">
+    <section className="page-section" data-doc-target="authors-overview" id="authors-overview">
       <div className="toolbar">
         <div className="search-box">
           <Search size={18} />
@@ -29,4 +29,3 @@ export function AuthorsPage({
     </section>
   );
 }
-

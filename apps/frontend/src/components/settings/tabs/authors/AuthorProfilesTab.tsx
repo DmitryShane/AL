@@ -134,7 +134,7 @@ export function AuthorProfilesTab({
 
   return (
 <>
-      <div className="panel">
+      <div className="panel" data-doc-target="settings-author-profiles-editor">
 <h2>Author Profiles</h2>
 <p className="settings-caption">
   Telegram and Discord mappings link chat and meeting events to the author.
@@ -394,7 +394,7 @@ export function AuthorProfilesTab({
 </div>
       </div>
       <div className="settings-card-row settings-author-avatars-delete-row">
-<div className="panel github-avatars-panel">
+<div className="panel github-avatars-panel" data-doc-target="settings-github-avatars">
 <h2>GitHub avatars</h2>
 <p className="settings-caption">
   Profile pictures are cached from GitHub when a login is set. Use the buttons below to fetch the latest image immediately.
@@ -490,7 +490,7 @@ export function AuthorProfilesTab({
   </div>
 </div>
       </div>
-      <div className="panel delete-activity-data-panel">
+      <div className="panel delete-activity-data-panel" data-doc-target="settings-database-maintenance">
 <h2>Data Base</h2>
 <p className="settings-caption">
   Manage the activity database for all authors: rebuild derived aggregates for a selected period, delete scoped activity data, or wipe an author&apos;s full activity history. To wipe everything for an author, use <strong>Delete all data</strong> — that opens a separate confirmation step (you must type <strong>delete</strong>). The profile row stays unchanged unless you delete the profile above.

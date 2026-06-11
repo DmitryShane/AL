@@ -64,7 +64,7 @@ export function TelegramSettingsTab({
   }
 
   return (
-    <div className="panel">
+    <div className="panel" data-doc-target="settings-telegram-panel">
       <h2>Telegram</h2>
       <p className="settings-caption">
         Minutes to wait after the first plugin activity on a day before the bot asks in the work chat whether you are online or whether activity was a mistake (requires Telegram username on the profile).

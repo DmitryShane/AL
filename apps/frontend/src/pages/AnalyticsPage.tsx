@@ -50,46 +50,48 @@ export function AnalyticsPage() {
   const selected = analytics?.authors.find((author) => author.rawAuthor === selectedAuthor) ?? analytics?.authors[0] ?? null;
 
   return (
-    <section className="page-section analytics-page">
+    <section className="page-section analytics-page" data-doc-target="analytics-overview" id="analytics-overview">
       {error ? <p className="notice error">{error}</p> : null}
 
-      {analytics ? (
-        <>
-          <div className="author-card-strip analytics-author-strip">
-            {analytics.authors.map((author) => (
-              <button
-                className={selectedAuthor === author.rawAuthor ? "author-card active" : "author-card"}
-                key={author.rawAuthor}
-                onClick={() => setSelectedAuthor(author.rawAuthor)}
-              >
-                <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
-                <strong>{author.displayName}</strong>
-                <small>{author.team || "No team"}</small>
-                <div className="mini-metrics">
-                  <span>{analytics.year}</span>
-                  <span>{author.months.length} months</span>
-                </div>
-              </button>
-            ))}
-          </div>
+      <div data-doc-target="analytics-charts">
+        {analytics ? (
+          <>
+            <div className="author-card-strip analytics-author-strip" data-doc-target="analytics-author-strip">
+              {analytics.authors.map((author) => (
+                <button
+                  className={selectedAuthor === author.rawAuthor ? "author-card active" : "author-card"}
+                  key={author.rawAuthor}
+                  onClick={() => setSelectedAuthor(author.rawAuthor)}
+                >
+                  <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
+                  <strong>{author.displayName}</strong>
+                  <small>{author.team || "No team"}</small>
+                  <div className="mini-metrics">
+                    <span>{analytics.year}</span>
+                    <span>{author.months.length} months</span>
+                  </div>
+                </button>
+              ))}
+            </div>
 
-          {selected ? (
-            <AnalyticsActivityOverview
-              author={selected}
-              year={analytics.year}
-              avatar={
-                <AuthorAvatar displayName={selected.displayName} authorColor={selected.authorColor} avatarUrl={selected.avatarUrl} />
-              }
-            />
-          ) : (
-            <p className="empty">No analytics authors yet.</p>
-          )}
-        </>
-      ) : loading ? (
-        <p className="notice">Loading analytics...</p>
-      ) : (
-        <p className="empty">No analytics data yet.</p>
-      )}
+            {selected ? (
+              <AnalyticsActivityOverview
+                author={selected}
+                year={analytics.year}
+                avatar={
+                  <AuthorAvatar displayName={selected.displayName} authorColor={selected.authorColor} avatarUrl={selected.avatarUrl} />
+                }
+              />
+            ) : (
+              <p className="empty">No analytics authors yet.</p>
+            )}
+          </>
+        ) : loading ? (
+          <p className="notice">Loading analytics...</p>
+        ) : (
+          <p className="empty" data-doc-target="analytics-empty-state">No analytics data yet.</p>
+        )}
+      </div>
     </section>
   );
 }

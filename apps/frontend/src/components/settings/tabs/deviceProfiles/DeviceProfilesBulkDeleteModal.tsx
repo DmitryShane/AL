@@ -29,6 +29,7 @@ export function DeviceProfilesBulkDeleteModal({
 
   return (
     <Modal
+      data-doc-target="settings-device-bulk-delete-modal"
       onBackdropClose={onCancel}
       backdropDisabled={saving}
       panelClassName="calendar-modal--danger-delete-all"

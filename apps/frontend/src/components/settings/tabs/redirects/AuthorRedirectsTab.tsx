@@ -42,7 +42,7 @@ export function AuthorRedirectsTab({
   onDeleteAuthorAlias
 }: AuthorRedirectsTabProps) {
   return (
-    <div className="panel">
+    <div className="panel" data-doc-target="settings-author-redirects-panel">
       <h2>Author Redirects</h2>
       <p className="settings-caption">
         Redirect a trash raw author from plugin reports to the correct author profile. The source profile is removed and future reports aggregate into the target profile.

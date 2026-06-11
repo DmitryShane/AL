@@ -64,7 +64,7 @@ export function DiscordSettingsTab({
   }
 
   return (
-    <div className="panel">
+    <div className="panel" data-doc-target="settings-discord-panel">
       <h2>Discord</h2>
       <p className="settings-caption">
         Configure meeting channel automation. The Discord bot refreshes this value from the backend while it is running.

@@ -398,6 +398,7 @@ export function ActivityPage({
     <>
       <div
         className={`activity-author-floating-strip${showFloatingAuthorStrip ? " is-visible" : ""}`}
+        data-doc-target="activity-floating-author-strip"
         role="region"
         aria-label="Authors and date range"
         aria-hidden={!showFloatingAuthorStrip}
@@ -418,8 +419,8 @@ export function ActivityPage({
           </div>
         </div>
       </div>
-      <section className="page-section">
-        <div ref={authorCardStripRef} className="author-card-strip">
+      <section className="page-section" data-doc-target="activity-overview" id="activity-overview">
+        <div ref={authorCardStripRef} className="author-card-strip" data-doc-target="activity-author-cards" id="activity-author-cards">
           {cardAuthors.map((item) => (
             <ActivityCard
               key={item.rawAuthor}
@@ -431,9 +432,9 @@ export function ActivityPage({
         </div>
 
         {snapshotPreparing ? (
-          <p className="empty">Preparing historical activity snapshot for {summary.snapshot?.date ?? dateRange.startDate}...</p>
+          <p className="empty" data-doc-target="activity-snapshot-preparing">Preparing historical activity snapshot for {summary.snapshot?.date ?? dateRange.startDate}...</p>
         ) : snapshotEmpty ? (
-          <div className="activity-empty-day-state">
+          <div className="activity-empty-day-state" data-doc-target="activity-empty-day">
             <div className="activity-empty-day-illustration" aria-hidden="true">
               <Coffee size={42} strokeWidth={1.8} />
             </div>
@@ -442,13 +443,13 @@ export function ActivityPage({
           </div>
         ) : author ? (
           <>
-            <div className="toolbar">
+            <div className="toolbar" data-doc-target="activity-selected-author" id="activity-selected-author">
               <div>
                 <strong>{author.displayName}</strong>
                 <p className="toolbar-caption">Request a fresh Unity report for this author.</p>
               </div>
               <div className="toolbar-spacer" />
-              <button className="primary-outline-button" onClick={() => onRefreshAuthor(author.rawAuthor)} disabled={refreshing}>
+              <button className="primary-outline-button" data-doc-target="activity-refresh-author" onClick={() => onRefreshAuthor(author.rawAuthor)} disabled={refreshing}>
                 <RefreshCw size={16} />
                 {refreshing ? "Requesting..." : "Refresh"}
               </button>

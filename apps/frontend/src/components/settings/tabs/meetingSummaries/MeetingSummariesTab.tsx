@@ -306,7 +306,7 @@ export function MeetingSummariesTab({
 
   return (
     <>
-      <div className="panel">
+      <div className="panel" data-doc-target="settings-meeting-summary-controls">
         <h2>Meeting Summaries</h2>
         <p className="settings-caption">
           Configure automatic Discord meeting summaries sent to the work Telegram chat.
@@ -384,7 +384,7 @@ export function MeetingSummariesTab({
           </button>
         </div>
       </div>
-      <div className="meeting-summary-workspace" ref={workspaceRef}>
+      <div className="meeting-summary-workspace" data-doc-target="settings-meeting-summary-workspace" ref={workspaceRef}>
         <OpenAIStatsCard
           openAIStats={openAIStats}
           openAIStatsError={openAIStatsError}
@@ -394,7 +394,9 @@ export function MeetingSummariesTab({
           onRefreshTotals={() => void loadOpenAIStats("totals")}
         />
         <div className="meeting-summary-row">
-          <RecentMeetingSummaryActivityCard meetingActivityItems={meetingActivityItems} meetingRecordingsError={meetingRecordingsError} period="today" />
+          <div data-doc-target="settings-meeting-summary-today">
+            <RecentMeetingSummaryActivityCard meetingActivityItems={meetingActivityItems} meetingRecordingsError={meetingRecordingsError} period="today" />
+          </div>
           <SummaryInstructionsCard
             refCallback={promptPanelRef}
             meetingSummaryPrompt={meetingSummaryPrompt}
@@ -407,7 +409,9 @@ export function MeetingSummariesTab({
           />
         </div>
         <div className="meeting-summary-row">
-          <RecentMeetingSummaryActivityCard meetingActivityItems={meetingActivityItems} meetingRecordingsError={meetingRecordingsError} period="archive" />
+          <div data-doc-target="settings-meeting-summary-archive">
+            <RecentMeetingSummaryActivityCard meetingActivityItems={meetingActivityItems} meetingRecordingsError={meetingRecordingsError} period="archive" />
+          </div>
           <TelegramSummaryFormatCard
             meetingSummaryTelegramTemplate={meetingSummaryTelegramTemplate}
             settingsReadOnly={settingsReadOnly}
