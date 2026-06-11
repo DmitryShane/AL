@@ -2537,12 +2537,25 @@ p {
   top: 22px;
   display: grid;
   gap: 10px;
+  max-height: calc(100vh - 44px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 12px 32px rgb(15 23 42 / 7%);
   padding: 12px;
   animation: documentationNavIn 560ms ease both;
+}
+
+.documentation-category-nav::-webkit-scrollbar {
+  width: 8px;
+}
+
+.documentation-category-nav::-webkit-scrollbar-thumb {
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: #cbd9df;
 }
 
 .documentation-nav-title {
@@ -6171,6 +6184,8 @@ p {
 
   .documentation-category-nav {
     position: static;
+    max-height: none;
+    overflow-y: visible;
   }
 
   .documentation-nav-subitems {

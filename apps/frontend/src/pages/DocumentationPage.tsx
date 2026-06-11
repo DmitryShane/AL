@@ -77,7 +77,7 @@ const DOCUMENTATION_NAV_GROUPS: DocumentationNavGroup[] = [
 export function DocumentationPage() {
   const [language, setLanguage] = useState<DocumentationLanguage>(() => loadDocumentationLanguage());
   const [activeCategory, setActiveCategory] = useState(DOCUMENTATION_CATEGORIES[0]?.id ?? "overview");
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set(DOCUMENTATION_NAV_GROUPS.map((group) => group.id)));
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     writeStorageState(localBrowserStorage(), DOCUMENTATION_LANGUAGE_STORAGE_KEY, language);
@@ -110,24 +110,6 @@ export function DocumentationPage() {
     () => DOCUMENTATION_CATEGORIES.reduce((total, category) => total + category.rules.length, 0),
     []
   );
-  const activeGroupId = useMemo(() => activeDocumentationGroupId(activeCategory), [activeCategory]);
-
-  useEffect(() => {
-    if (!activeGroupId) {
-      return;
-    }
-
-    setExpandedGroups((current) => {
-      if (current.has(activeGroupId)) {
-        return current;
-      }
-
-      const next = new Set(current);
-      next.add(activeGroupId);
-      return next;
-    });
-  }, [activeGroupId]);
-
   return (
     <section className="page-section documentation-page" data-doc-target="documentation-overview" id="documentation-overview">
       <div className="documentation-hero">
@@ -368,10 +350,6 @@ function loadDocumentationLanguage(): DocumentationLanguage {
   }
 
   return "en";
-}
-
-function activeDocumentationGroupId(categoryId: string) {
-  return DOCUMENTATION_NAV_GROUPS.find((group) => group.items.some((item) => item.categoryId === categoryId))?.id ?? null;
 }
 
 function currentActiveCategory() {
