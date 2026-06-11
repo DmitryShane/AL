@@ -671,7 +671,7 @@ export function formatTelegramEvent(eventType?: string, status?: string) {
   }
 
   if (normalizedEventType === "offline") {
-    if (status === "reminder_overtime") {
+    if (status === "reminder_overtime" || status === "post_offline_overtime") {
       return "offline/overtime";
     }
 

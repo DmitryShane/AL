@@ -1095,21 +1095,22 @@ class TelegramActivityService(MongoComposableMixin):
                 "metadata": metadata,
             }
         )
-        self.db.day_sessions.update_one(
-            {"rawAuthor": raw_author, "date": day_date},
-            {"$set": {"reminderAction": "overtime"}},
-        )
-        self._insert_telegram_report_row(
-            raw_author,
-            telegram_username,
-            "offline",
-            event_time,
-            day_date,
-            time_zone_id,
-            received_at,
-            status,
-            metadata,
-        )
+        if action == "overtime":
+            self.db.day_sessions.update_one(
+                {"rawAuthor": raw_author, "date": day_date},
+                {"$set": {"reminderAction": "overtime"}},
+            )
+            self._insert_telegram_report_row(
+                raw_author,
+                telegram_username,
+                "offline",
+                event_time,
+                day_date,
+                time_zone_id,
+                received_at,
+                status,
+                metadata,
+            )
         self.db.telegram_post_offline_prompts.update_one(
             {"reminderId": reminder_id},
             {"$set": {"status": "closed", "closedAt": received_at, "closeAction": action, "updatedAt": received_at}},

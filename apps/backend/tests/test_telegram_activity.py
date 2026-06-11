@@ -1217,10 +1217,11 @@ def test_post_offline_prompt_actions_record_audit_rows_without_moving_offline_ti
     assert still["status"] == "post_offline_still_offline"
     assert repo.db.day_sessions.items[0]["lastOfflineAt"] == session_before["lastOfflineAt"]
     assert repo.db.day_sessions.items[0]["daySeconds"] == session_before["daySeconds"]
-    assert repo.db.day_sessions.items[0]["reminderAction"] == "overtime"
+    assert "reminderAction" not in repo.db.day_sessions.items[0]
     still_rows = [row for row in repo.db.report_rows.items if row.get("telegramStatus") == "post_offline_still_offline"]
-    assert len(still_rows) == 1
-    assert still_rows[0]["metadata"] == {"promptAction": "still_offline", "source": "post_offline_prompt"}
+    assert still_rows == []
+    assert repo.db.break_events.items[-1]["telegramStatus"] == "post_offline_still_offline"
+    assert repo.db.break_events.items[-1]["metadata"] == {"promptAction": "still_offline", "source": "post_offline_prompt"}
 
     repo2 = fake_repository()
     repo2.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
@@ -1240,6 +1241,7 @@ def test_post_offline_prompt_actions_record_audit_rows_without_moving_offline_ti
     assert overtime["status"] == "post_offline_overtime"
     assert repo2.db.day_sessions.items[0]["lastOfflineAt"] == session_before["lastOfflineAt"]
     assert repo2.db.day_sessions.items[0]["daySeconds"] == session_before["daySeconds"]
+    assert repo2.db.day_sessions.items[0]["reminderAction"] == "overtime"
     overtime_rows = [row for row in repo2.db.report_rows.items if row.get("telegramStatus") == "post_offline_overtime"]
     assert len(overtime_rows) == 1
     assert overtime_rows[0]["metadata"] == {"promptAction": "overtime", "source": "post_offline_prompt"}
