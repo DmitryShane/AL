@@ -1460,11 +1460,19 @@ def apply_visible_workday_idle_reconciliation(
         if not hour:
             continue
 
-        public_segments = public_hour(hour).get("fillSegments", [])
-        if not any(segment.get("kind") in {"afk", "auto-afk", "meeting"} for segment in public_segments):
+        visible_gap_ranges = _visible_empty_second_ranges(hour, start_second, end_second)
+
+        if not visible_gap_ranges:
             continue
 
-        for gap_start, gap_end in _visible_empty_second_ranges(hour, start_second, end_second):
+        public_segments = public_hour(hour).get("fillSegments", [])
+        has_overlay_segments = any(segment.get("kind") in {"afk", "auto-afk", "meeting"} for segment in public_segments)
+        if not has_overlay_segments:
+            has_visible_activity = any(segment.get("kind") in {"active", "overtime"} for segment in public_segments)
+            if not has_visible_activity or _empty_second_ranges(hour, start_second, end_second):
+                continue
+
+        for gap_start, gap_end in visible_gap_ranges:
             idle_seconds = gap_end - gap_start
 
             if idle_seconds <= 0:

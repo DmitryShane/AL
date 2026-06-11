@@ -33,6 +33,7 @@ from al_backend.hourly_fill_rules import (
     add_visual_missed_seconds,
     apply_overtime_start_boundary,
     apply_workday_idle_fill,
+    apply_visible_workday_idle_reconciliation,
     apply_breaks_to_hourly_activity,
     empty_hourly_activity,
     hourly_activity_has_workday_signal,
@@ -4537,6 +4538,95 @@ def test_visible_reconciliation_respects_session_start_and_offline_bounds():
     assert _hour_metric(hourly[7], "missedSeconds") == 43 * 60 + 43
     assert sum(hourly[8]["totals"].values()) == 3600
     assert _hour_metric(hourly[9], "idleSeconds") == 0
+
+
+def test_visible_reconciliation_fills_public_active_cap_gap_without_overlay():
+    hourly = empty_hourly_activity()
+    hourly[19]["activeSeconds"] = 2315
+    hourly[19]["activeMicroseconds"] = 2_315_000_000
+    hourly[19]["idleSeconds"] = 1285
+    hourly[19]["idleMicroseconds"] = 1_285_000_000
+    hourly[19]["fillSegments"] = [
+        {"kind": "active", "startSecond": 0, "endSecond": 2068},
+        {"kind": "active", "startSecond": 0, "endSecond": 247},
+        {"kind": "idle", "startSecond": 2068, "endSecond": 3600},
+    ]
+
+    public_before = public_hourly_activity(hourly)
+    assert _hour_metric(public_before[19], "activeSeconds") == 2068
+    assert _hour_metric(public_before[19], "idleSeconds") == 1285
+    assert sum(public_before[19]["totals"].values()) == 3353
+
+    added_seconds = apply_visible_workday_idle_reconciliation(
+        hourly,
+        dt.datetime(2026, 6, 11, 16, tzinfo=dt.UTC),
+        dt.datetime(2026, 6, 11, 17, tzinfo=dt.UTC),
+        "Europe/Sofia",
+        hourly_activity_has_workday_signal(hourly),
+    )
+    public_after = public_hourly_activity(hourly)
+
+    assert added_seconds == 247
+    assert _hour_metric(public_after[19], "activeSeconds") == 2068
+    assert _hour_metric(public_after[19], "idleSeconds") == 1532
+    assert _hour_metric(public_after[19], "missedSeconds") == 0
+    assert sum(public_after[19]["totals"].values()) == 3600
+
+
+def test_activity_summary_reconciles_visible_active_cap_gap_as_idle():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Evgeniy Dotsenko",
+            "displayName": "Evgeniy Dotsenko",
+            "timeZoneId": "Europe/Sofia",
+            "telegramUsername": "ama_deus",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Evgeniy Dotsenko",
+            "date": "2026-06-11",
+            "startedAt": dt.datetime(2026, 6, 11, 8, 34, 47, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 6, 11, 18, 25, 45, tzinfo=dt.UTC),
+            "timeZoneId": "Europe/Sofia",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[19]["activeSeconds"] = 2315
+    hourly_activity[19]["activeMicroseconds"] = 2_315_000_000
+    hourly_activity[19]["idleSeconds"] = 1285
+    hourly_activity[19]["idleMicroseconds"] = 1_285_000_000
+    hourly_activity[19]["fillSegments"] = [
+        {"kind": "active", "startSecond": 0, "endSecond": 2068},
+        {"kind": "active", "startSecond": 0, "endSecond": 247},
+        {"kind": "idle", "startSecond": 2068, "endSecond": 3600},
+    ]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "ual",
+            "author": "Evgeniy Dotsenko",
+            "projectId": "bike-rush-2",
+            "date": "2026-06-11",
+            "activeSeconds": 2315,
+            "idleSeconds": 1285,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+            "timeZoneId": "Europe/Sofia",
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-06-11", end_date="2026-06-11")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Evgeniy Dotsenko")[
+        "hourlyActivity"
+    ]
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Evgeniy Dotsenko")
+
+    assert _hour_metric(hourly[19], "activeSeconds") == 2068
+    assert _hour_metric(hourly[19], "idleSeconds") == 1532
+    assert _hour_metric(hourly[19], "missedSeconds") == 0
+    assert sum(hourly[19]["totals"].values()) == 3600
+    assert author["idleSeconds"] >= 1532
 
 
 def test_workday_idle_fill_requires_real_activity_signal():
