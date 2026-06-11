@@ -293,6 +293,25 @@ def test_delete_device_profile_removes_identity_alias_and_duplicate_profile_only
     assert repo.db.raw_activity_events.find_one({"eventId": "event-1"}) is not None
 
 
+def test_delete_device_profile_invalidates_activity_summary_cache():
+    repo = fake_repository()
+    repo.db.device_report_identities.insert_one(
+        {"source": "dev", "deviceIdHash": "hash-1", "rawAuthor": "Device1"}
+    )
+    called = False
+
+    def invalidate(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    repo.invalidate_activity_summary_cache = invalidate
+
+    result = repo.delete_device_profile("Device1")
+
+    assert result["ok"] is True
+    assert called is True
+
+
 def test_delete_all_device_profiles_removes_identities_aliases_and_duplicates_only():
     repo = fake_repository()
     for raw_device in ["Device1", "Device2"]:

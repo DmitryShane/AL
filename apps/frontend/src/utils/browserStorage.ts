@@ -31,6 +31,7 @@ const DASHBOARD_CACHE_PREFIXES = [
 
 const DASHBOARD_CACHE_KEYS = [
   "AL.Dashboard.SettingsSummary",
+  "AL.Dashboard.DeviceProfiles",
   "al.serverStats.cache",
   "al.openAIStats.cache"
 ];

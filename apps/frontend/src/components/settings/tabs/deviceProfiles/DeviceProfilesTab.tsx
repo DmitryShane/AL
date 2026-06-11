@@ -3,8 +3,11 @@ import { deleteAllDeviceProfiles, deleteDeviceProfile, loadDeviceProfileAuthorOp
 import { DeviceProfileDeleteModal } from "./DeviceProfileDeleteModal";
 import { DeviceProfilesBulkDeleteModal } from "./DeviceProfilesBulkDeleteModal";
 import { DeviceProfilesTable } from "./DeviceProfilesTable";
+import { clearDashboardCaches, localBrowserStorage, readStorageItem, writeStorageCache } from "../../../../utils/browserStorage";
 import type { DeviceProfile, DeviceProfileAuthorOption } from "./types";
 import "./DeviceProfilesTab.css";
+
+const DEVICE_PROFILES_CACHE_KEY = "AL.Dashboard.DeviceProfiles";
 
 let cachedDeviceProfiles: DeviceProfile[] | null = null;
 let cachedAuthorOptions: DeviceProfileAuthorOption[] | null = null;
@@ -12,13 +15,55 @@ let cachedDeviceProfilesCursor: string | null = null;
 let deviceProfilesLoadPromise: Promise<{ profiles: DeviceProfile[]; authors: DeviceProfileAuthorOption[] }> | null = null;
 let deviceProfilesChangesPromise: Promise<DeviceProfile[]> | null = null;
 
+function hydrateDeviceProfilesCache() {
+  if (cachedDeviceProfiles && cachedAuthorOptions) {
+    return;
+  }
+
+  try {
+    const raw = readStorageItem(localBrowserStorage(), DEVICE_PROFILES_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) as { profiles?: unknown; authors?: unknown } : null;
+
+    if (!parsed || !Array.isArray(parsed.profiles) || !Array.isArray(parsed.authors)) {
+      return;
+    }
+
+    cachedDeviceProfiles = sortDeviceProfiles(parsed.profiles.flatMap((item) => sanitizeDeviceProfile(item)));
+    cachedAuthorOptions = parsed.authors.flatMap((item) => sanitizeAuthorOption(item));
+    cachedDeviceProfilesCursor = deviceProfilesCursor(cachedDeviceProfiles);
+  } catch {
+    //
+  }
+}
+
 function setCachedDeviceProfiles(profiles: DeviceProfile[]) {
   cachedDeviceProfiles = sortDeviceProfiles(profiles);
   cachedDeviceProfilesCursor = deviceProfilesCursor(cachedDeviceProfiles);
+  writeDeviceProfilesCache();
   return cachedDeviceProfiles;
 }
 
+function setCachedAuthorOptions(authors: DeviceProfileAuthorOption[]) {
+  cachedAuthorOptions = authors;
+  writeDeviceProfilesCache();
+  return cachedAuthorOptions;
+}
+
+function writeDeviceProfilesCache() {
+  if (!cachedDeviceProfiles || !cachedAuthorOptions) {
+    return;
+  }
+
+  writeStorageCache(
+    localBrowserStorage(),
+    DEVICE_PROFILES_CACHE_KEY,
+    JSON.stringify({ profiles: cachedDeviceProfiles, authors: cachedAuthorOptions })
+  );
+}
+
 function loadCachedDeviceProfileData() {
+  hydrateDeviceProfilesCache();
+
   if (cachedDeviceProfiles && cachedAuthorOptions) {
     return Promise.resolve({ profiles: cachedDeviceProfiles, authors: cachedAuthorOptions });
   }
@@ -29,7 +74,7 @@ function loadCachedDeviceProfileData() {
       loadDeviceProfileAuthorOptions()
     ]).then(([profiles, authors]) => {
       setCachedDeviceProfiles(profiles);
-      cachedAuthorOptions = authors;
+      setCachedAuthorOptions(authors);
       return { profiles: cachedDeviceProfiles ?? [], authors };
     }).finally(() => {
       deviceProfilesLoadPromise = null;
@@ -111,8 +156,9 @@ function deviceProfilesCursor(profiles: DeviceProfile[]) {
 }
 
 export function DeviceProfilesTab() {
-  const [deviceProfiles, setDeviceProfiles] = useState<DeviceProfile[]>([]);
-  const [authorOptions, setAuthorOptions] = useState<DeviceProfileAuthorOption[]>([]);
+  hydrateDeviceProfilesCache();
+  const [deviceProfiles, setDeviceProfiles] = useState<DeviceProfile[]>(() => cachedDeviceProfiles ?? []);
+  const [authorOptions, setAuthorOptions] = useState<DeviceProfileAuthorOption[]>(() => cachedAuthorOptions ?? []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [savingRawDevice, setSavingRawDevice] = useState("");
@@ -200,6 +246,7 @@ export function DeviceProfilesTab() {
 
     try {
       await saveDeviceProfileAlias(rawDevice, targetRawAuthor);
+      clearDashboardCaches();
       await reloadDeviceProfiles();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Could not save device profile alias.");
@@ -219,6 +266,7 @@ export function DeviceProfilesTab() {
 
     try {
       await deleteDeviceProfile(deleteTarget.rawDevice);
+      clearDashboardCaches();
       await reloadDeviceProfiles();
       setDeleteTarget(null);
     } catch (deleteError) {
@@ -236,6 +284,7 @@ export function DeviceProfilesTab() {
 
     try {
       await deleteAllDeviceProfiles();
+      clearDashboardCaches();
       await reloadDeviceProfiles();
       setBulkDeleteOpen(false);
     } catch (deleteError) {
@@ -299,4 +348,60 @@ export function DeviceProfilesTab() {
       ) : null}
     </div>
   );
+}
+
+function sanitizeDeviceProfile(value: unknown): DeviceProfile[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  const item = value as Partial<Record<keyof DeviceProfile, unknown>>;
+  const rawDevice = typeof item.rawDevice === "string" ? item.rawDevice : "";
+
+  if (!rawDevice) {
+    return [];
+  }
+
+  return [{
+    rawDevice,
+    source: optionalString(item.source),
+    runtime: optionalString(item.runtime),
+    linkedAuthor: optionalString(item.linkedAuthor),
+    linkedAuthorDisplayName: optionalString(item.linkedAuthorDisplayName),
+    idfa: optionalString(item.idfa),
+    gaid: optionalString(item.gaid),
+    projectId: optionalString(item.projectId),
+    pluginVersion: optionalString(item.pluginVersion),
+    trackingAuthorizationStatus: optionalString(item.trackingAuthorizationStatus),
+    timeZoneId: optionalString(item.timeZoneId),
+    timeZoneDisplayName: optionalString(item.timeZoneDisplayName),
+    createdTimeZoneId: optionalString(item.createdTimeZoneId),
+    createdTimeZoneDisplayName: optionalString(item.createdTimeZoneDisplayName),
+    createdAt: optionalString(item.createdAt),
+    lastSeenAt: optionalString(item.lastSeenAt),
+    deviceCreatedAt: optionalString(item.deviceCreatedAt),
+    deviceLastSeenAt: optionalString(item.deviceLastSeenAt),
+  }];
+}
+
+function sanitizeAuthorOption(value: unknown): DeviceProfileAuthorOption[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  const item = value as Partial<Record<keyof DeviceProfileAuthorOption, unknown>>;
+  const rawAuthor = typeof item.rawAuthor === "string" ? item.rawAuthor : "";
+
+  if (!rawAuthor) {
+    return [];
+  }
+
+  return [{
+    rawAuthor,
+    displayName: typeof item.displayName === "string" && item.displayName ? item.displayName : rawAuthor,
+  }];
+}
+
+function optionalString(value: unknown) {
+  return typeof value === "string" ? value : undefined;
 }

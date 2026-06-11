@@ -99,6 +99,7 @@ class DeviceProfileRepository(MongoComposableMixin):
             "authorAliases": self.db.author_aliases.delete_many({"sourceRawAuthor": normalized}).deleted_count,
             "authorProfiles": self.db.author_profiles.delete_many({"rawAuthor": normalized}).deleted_count,
         }
+        composed(self).invalidate_activity_summary_cache()
         return {"ok": True, "deleted": counts}
 
     def delete_all_device_profiles(self) -> dict[str, Any]:
@@ -125,6 +126,7 @@ class DeviceProfileRepository(MongoComposableMixin):
             "authorAliases": self.db.author_aliases.delete_many({"sourceRawAuthor": {"$in": raw_devices}}).deleted_count,
             "authorProfiles": self.db.author_profiles.delete_many({"rawAuthor": {"$in": raw_devices}}).deleted_count,
         }
+        composed(self).invalidate_activity_summary_cache()
         return {"ok": True, "rawDeviceCount": len(raw_devices), "rawDevices": raw_devices, "deleted": counts}
 
 
