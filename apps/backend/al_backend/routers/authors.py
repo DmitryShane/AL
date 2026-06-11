@@ -5,10 +5,10 @@ import traceback
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from ..api_security import require_permission
-from ..author_avatar_cache import ensure_author_avatar_cached
+from ..author_avatar_cache import ensure_author_avatar_cached, generated_device_avatar_svg
 from ..repositories.authors import utc_inclusive_range_for_bulk_activity_preset
 from ..container import BackendServices
 from ..dependencies import get_author_service
@@ -115,7 +115,7 @@ def author_avatar_file(
     raw_author: str = Query(..., alias="rawAuthor", min_length=1),
     _: dict = Depends(require_permission("viewDashboard")),
     service: BackendServices = Depends(get_author_service),
-) -> FileResponse:
+) -> Response:
     cadence = service.get_avatar_refresh_cadence()
     path, media_type = ensure_author_avatar_cached(
         service.db,
@@ -126,6 +126,14 @@ def author_avatar_file(
     )
 
     if not path:
+        device_avatar = generated_device_avatar_svg(raw_author)
+        if device_avatar is not None:
+            return Response(
+                content=device_avatar,
+                media_type="image/svg+xml",
+                headers={"Cache-Control": "private, no-cache"},
+            )
+
         raise HTTPException(status_code=404, detail="Avatar not available")
 
     return FileResponse(

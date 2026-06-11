@@ -1331,27 +1331,23 @@ def _github_login_from_profile_doc(doc: dict[str, Any] | None) -> str:
 
 
 def _github_username_ui_default(raw_author: str, profile: dict[str, Any] | None) -> str:
-    """Value for dashboard GitHub field: stored login, else GitHub-safe rawAuthor, else raw author string."""
-    stored = _github_login_from_profile_doc(profile)
-    if stored:
-        return stored
-    as_login = _normalize_github_username(raw_author)
-    if as_login:
-        return as_login
-    ra = str(raw_author or "").strip()
-
-    if ra and ra != "Unknown User":
-        return ra
-
-    return ""
+    """Value for dashboard GitHub field: only the explicitly stored login."""
+    return _github_login_from_profile_doc(profile)
 
 
 def _github_username_for_avatar_fetch(raw_author: str, profile: dict[str, Any] | None) -> str:
-    """Login for https://github.com/{{login}}.png — valid GitHub usernames only (never arbitrary display names)."""
-    stored = _github_login_from_profile_doc(profile)
-    if stored:
-        return stored
-    return _normalize_github_username(raw_author)
+    """Login for https://github.com/{{login}}.png, only when explicitly configured."""
+    return _github_login_from_profile_doc(profile)
+
+
+def _device_avatar_label(raw_author: Any) -> str:
+    value = str(raw_author or "").strip()
+    if not value.startswith("Device"):
+        return ""
+    suffix = value[6:]
+    if not suffix or not suffix.isdigit():
+        return ""
+    return suffix
 
 
 def _cached_author_avatar_api_url(raw_author: Any, github_username: Any, profile: dict[str, Any] | None = None) -> str:
@@ -1359,7 +1355,9 @@ def _cached_author_avatar_api_url(raw_author: Any, github_username: Any, profile
 
     has_manual_avatar = bool(profile and str(profile.get("avatarSource") or "") == "manual")
 
-    if not login and not has_manual_avatar:
+    has_device_avatar = bool(_device_avatar_label(raw_author))
+
+    if not login and not has_manual_avatar and not has_device_avatar:
         return ""
 
     author = _normalize_author(raw_author)

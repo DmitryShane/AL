@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import html
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -9,12 +10,22 @@ from typing import Any
 
 from pymongo.database import Database
 
-from .activity_math import _coerce_datetime, _github_username_for_avatar_fetch, _normalize_author
+from .activity_math import _coerce_datetime, _device_avatar_label, _github_username_for_avatar_fetch, _normalize_author
 
 DOWNLOAD_TIMEOUT_SECONDS = 20
 DEFAULT_AVATAR_MIME = "image/png"
 USER_AGENT = "AL-ActivityLogger-AvatarCache/1.0"
 DEFAULT_AVATAR_REFRESH_CADENCE = "month"
+DEVICE_AVATAR_COLORS = [
+    "#2563eb",
+    "#059669",
+    "#dc2626",
+    "#7c3aed",
+    "#c2410c",
+    "#0891b2",
+    "#be123c",
+    "#4f46e5",
+]
 
 
 def normalize_avatar_refresh_cadence(value: Any) -> str:
@@ -61,6 +72,28 @@ def remove_author_avatar_cache_file(cache_dir: Path | None, raw_author: str) -> 
             path.unlink()
     except OSError:
         pass
+
+
+def generated_device_avatar_svg(raw_author: str) -> str | None:
+    label = _device_avatar_label(raw_author)
+
+    if not label:
+        return None
+
+    normalized = _normalize_author(raw_author)
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    color_index = int(digest[:8], 16) % len(DEVICE_AVATAR_COLORS)
+    fill = DEVICE_AVATAR_COLORS[color_index]
+    escaped_label = html.escape(label)
+    font_size = 30 if len(label) <= 2 else 24 if len(label) <= 3 else 18
+
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img">'
+        f'<circle cx="48" cy="48" r="48" fill="{fill}"/>'
+        f'<text x="48" y="52" text-anchor="middle" dominant-baseline="middle" '
+        f'font-family="Inter, Arial, sans-serif" font-size="{font_size}" font-weight="800" fill="#ffffff">{escaped_label}</text>'
+        "</svg>"
+    )
 
 
 def download_github_avatar(login: str) -> tuple[bytes, str]:

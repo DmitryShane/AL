@@ -9,7 +9,8 @@ import pytest
 
 from pymongo.database import Database
 
-from al_backend.author_avatar_cache import _avatar_cache_stale, ensure_author_avatar_cached
+from al_backend.activity_math import _cached_author_avatar_api_url
+from al_backend.author_avatar_cache import _avatar_cache_stale, ensure_author_avatar_cached, generated_device_avatar_svg
 
 
 UTC = dt.UTC
@@ -77,3 +78,37 @@ def test_ensure_author_avatar_cached_force_calls_download(monkeypatch: pytest.Mo
     assert mime == "image/png"
     assert calls == [("alice", True)]
 
+
+def test_ensure_author_avatar_cached_does_not_use_raw_author_as_github(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    calls: list[str] = []
+
+    def fake_download(login: str) -> tuple[bytes, str]:
+        calls.append(login)
+        return b"\x89PNG\r\n\x1a\n", "image/png"
+
+    monkeypatch.setattr("al_backend.author_avatar_cache.download_github_avatar", fake_download)
+
+    class FakeProfiles:
+        def find_one(self, _filter, _proj=None):
+            return {"rawAuthor": "Device17"}
+
+    class FakeDb:
+        author_profiles = FakeProfiles()
+
+    path, mime = ensure_author_avatar_cached(cast(Database, FakeDb()), tmp_path, "Device17", cadence="month")
+
+    assert path is None
+    assert mime is None
+    assert calls == []
+
+
+def test_generated_device_avatar_svg_uses_device_number() -> None:
+    svg = generated_device_avatar_svg("Device17")
+
+    assert svg is not None
+    assert ">17</text>" in svg
+    assert "<circle" in svg
+
+
+def test_device_avatar_api_url_is_available_without_github_username() -> None:
+    assert _cached_author_avatar_api_url("Device17", "", {}) == "/api/v1/avatars/author?rawAuthor=Device17"
