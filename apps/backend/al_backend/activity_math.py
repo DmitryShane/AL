@@ -75,6 +75,10 @@ RAW_ACTIVITY_EVENT_TYPES = {
     "undo_redo",
     "play_mode",
     "scene_view_navigation",
+    "editor_input",
+    "scene_object_created",
+    "scene_object_destroyed",
+    "scene_object_changed",
     "scene_changed",
     "file_saved",
     "file_loaded",
@@ -591,6 +595,15 @@ def _is_activity_event(event: dict[str, Any] | str) -> bool:
 def _activity_count_type(event_type: str) -> str:
     if event_type == "selection":
         return "select"
+
+    if event_type == "scene_object_created":
+        return "object_created"
+
+    if event_type == "scene_object_destroyed":
+        return "object_destroyed"
+
+    if event_type == "scene_object_changed":
+        return "object_changed"
 
     return event_type
 

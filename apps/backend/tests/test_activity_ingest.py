@@ -767,6 +767,73 @@ def test_unity_scene_view_navigation_heartbeat_keeps_navigation_time_active():
     assert daily["idleSeconds"] == 70
 
 
+def test_unity_editor_input_and_scene_object_events_keep_gspawn_workflow_active():
+    repo = fake_repository()
+    received_at = dt.datetime(2026, 6, 3, 10, 10, tzinfo=dt.UTC)
+    payload = {
+        "author": "Dmitry Shane",
+        "authorEmail": "dmitry@example.com",
+        "projectId": "bike-rush-2",
+        "sessionId": "unity-session",
+        "deviceId": "unity-device",
+        "timeZoneId": "UTC",
+        "timeZoneDisplayName": "UTC",
+        "events": [
+            {
+                "eventId": "editor-input-1",
+                "eventType": "editor_input",
+                "date": "2026-06-03",
+                "occurredAtUtc": "2026-06-03T10:00:00Z",
+                "occurredAtLocal": "2026-06-03T10:00:00+00:00",
+                "metadata": {"name": "GSpawn", "state": "MouseDown", "isGSpawnContext": True},
+            },
+            {
+                "eventId": "object-created-1",
+                "eventType": "scene_object_created",
+                "date": "2026-06-03",
+                "occurredAtUtc": "2026-06-03T10:04:30Z",
+                "occurredAtLocal": "2026-06-03T10:04:30+00:00",
+                "metadata": {
+                    "name": "GSpawn",
+                    "state": "CreateGameObjectHierarchy",
+                    "isGSpawnContext": True,
+                },
+            },
+            {
+                "eventId": "object-changed-1",
+                "eventType": "scene_object_changed",
+                "date": "2026-06-03",
+                "occurredAtUtc": "2026-06-03T10:09:00Z",
+                "occurredAtLocal": "2026-06-03T10:09:00+00:00",
+                "metadata": {
+                    "name": "GSpawn",
+                    "state": "ChangeGameObjectOrComponentProperties",
+                    "isGSpawnContext": True,
+                },
+            },
+            {
+                "eventId": "heartbeat-1",
+                "eventType": "heartbeat",
+                "date": "2026-06-03",
+                "occurredAtUtc": "2026-06-03T10:10:00Z",
+                "occurredAtLocal": "2026-06-03T10:10:00+00:00",
+            },
+        ],
+    }
+
+    repo._save_event_batch("ual", "0.1.10", payload, "raw-1", "auto", received_at, "challenge-1", None)
+
+    assert repo.db.report_rows.items
+    row = repo.db.report_rows.items[0]
+    assert row["activeDeltaSeconds"] == 540
+    assert row["idleDeltaSeconds"] == 0
+    assert {item["type"]: item["count"] for item in row["activityCountDeltas"]} == {
+        "editor_input": 1,
+        "object_created": 1,
+        "object_changed": 1,
+    }
+
+
 def test_unity_scene_view_navigation_accounts_idle_gap_before_navigation():
     repo = fake_repository()
     repo.db.interval_settings.insert_one({"kind": "global", "idleThresholdSeconds": 60})
