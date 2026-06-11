@@ -286,6 +286,15 @@ def device_profiles(
     return {"deviceProfiles": service.device_profiles()}
 
 
+@router.get("/api/v1/authors/device-profiles/changes")
+def device_profile_changes(
+    since: dt.datetime = Query(...),
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    return {"deviceProfiles": service.device_profile_changes(since)}
+
+
 @router.post("/api/v1/authors/device-profiles/migrate-author-profiles")
 def migrate_device_author_profiles(
     _: dict = Depends(require_permission("manageSettings")),

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { deleteAllDeviceProfiles, deleteDeviceProfile, loadDeviceProfileAuthorOptions, loadDeviceProfiles, saveDeviceProfileAlias } from "./api";
+import { deleteAllDeviceProfiles, deleteDeviceProfile, loadDeviceProfileAuthorOptions, loadDeviceProfileChanges, loadDeviceProfiles, saveDeviceProfileAlias } from "./api";
 import { DeviceProfileDeleteModal } from "./DeviceProfileDeleteModal";
 import { DeviceProfilesBulkDeleteModal } from "./DeviceProfilesBulkDeleteModal";
 import { DeviceProfilesTable } from "./DeviceProfilesTable";
@@ -8,6 +8,107 @@ import "./DeviceProfilesTab.css";
 
 let cachedDeviceProfiles: DeviceProfile[] | null = null;
 let cachedAuthorOptions: DeviceProfileAuthorOption[] | null = null;
+let cachedDeviceProfilesCursor: string | null = null;
+let deviceProfilesLoadPromise: Promise<{ profiles: DeviceProfile[]; authors: DeviceProfileAuthorOption[] }> | null = null;
+let deviceProfilesChangesPromise: Promise<DeviceProfile[]> | null = null;
+
+function setCachedDeviceProfiles(profiles: DeviceProfile[]) {
+  cachedDeviceProfiles = sortDeviceProfiles(profiles);
+  cachedDeviceProfilesCursor = deviceProfilesCursor(cachedDeviceProfiles);
+  return cachedDeviceProfiles;
+}
+
+function loadCachedDeviceProfileData() {
+  if (cachedDeviceProfiles && cachedAuthorOptions) {
+    return Promise.resolve({ profiles: cachedDeviceProfiles, authors: cachedAuthorOptions });
+  }
+
+  if (!deviceProfilesLoadPromise) {
+    deviceProfilesLoadPromise = Promise.all([
+      loadDeviceProfiles(),
+      loadDeviceProfileAuthorOptions()
+    ]).then(([profiles, authors]) => {
+      setCachedDeviceProfiles(profiles);
+      cachedAuthorOptions = authors;
+      return { profiles: cachedDeviceProfiles ?? [], authors };
+    }).finally(() => {
+      deviceProfilesLoadPromise = null;
+    });
+  }
+
+  return deviceProfilesLoadPromise;
+}
+
+function loadCachedDeviceProfileChanges() {
+  if (!cachedDeviceProfilesCursor) {
+    return Promise.resolve([]);
+  }
+
+  if (!deviceProfilesChangesPromise) {
+    deviceProfilesChangesPromise = loadDeviceProfileChanges(cachedDeviceProfilesCursor)
+      .then((changes) => {
+        if (changes.length && cachedDeviceProfiles) {
+          setCachedDeviceProfiles(mergeDeviceProfiles(cachedDeviceProfiles, changes));
+        }
+
+        return changes;
+      })
+      .finally(() => {
+        deviceProfilesChangesPromise = null;
+      });
+  }
+
+  return deviceProfilesChangesPromise;
+}
+
+function mergeDeviceProfiles(current: DeviceProfile[], changes: DeviceProfile[]) {
+  const byKey = new Map(current.map((profile) => [deviceProfileKey(profile), profile]));
+
+  for (const profile of changes) {
+    byKey.set(deviceProfileKey(profile), profile);
+  }
+
+  return Array.from(byKey.values());
+}
+
+function sortDeviceProfiles(profiles: DeviceProfile[]) {
+  return [...profiles].sort((left, right) => {
+    const sourceCompare = (left.source ?? "").localeCompare(right.source ?? "");
+    if (sourceCompare !== 0) {
+      return sourceCompare;
+    }
+
+    return naturalDeviceKey(left.rawDevice).localeCompare(naturalDeviceKey(right.rawDevice));
+  });
+}
+
+function naturalDeviceKey(value: string) {
+  const match = /^(.*?)(\d+)$/.exec(value);
+  if (!match) {
+    return `${value.toLowerCase()}\u0000-1`;
+  }
+
+  return `${match[1].toLowerCase()}\u0000${match[2].padStart(12, "0")}`;
+}
+
+function deviceProfileKey(profile: DeviceProfile) {
+  return `${profile.source ?? ""}:${profile.rawDevice}`;
+}
+
+function deviceProfilesCursor(profiles: DeviceProfile[]) {
+  let latest = 0;
+
+  for (const profile of profiles) {
+    for (const value of [profile.lastSeenAt, profile.createdAt, profile.deviceLastSeenAt, profile.deviceCreatedAt]) {
+      const timestamp = Date.parse(value ?? "");
+      if (Number.isFinite(timestamp)) {
+        latest = Math.max(latest, timestamp);
+      }
+    }
+  }
+
+  return latest > 0 ? new Date(latest).toISOString() : null;
+}
 
 export function DeviceProfilesTab() {
   const [deviceProfiles, setDeviceProfiles] = useState<DeviceProfile[]>([]);
@@ -31,21 +132,30 @@ export function DeviceProfilesTab() {
         setDeviceProfiles(cachedDeviceProfiles);
         setAuthorOptions(cachedAuthorOptions);
         setAliasDrafts({});
+        setLoading(false);
+        setError("");
+
+        try {
+          await loadCachedDeviceProfileChanges();
+          if (!cancelled && cachedDeviceProfiles) {
+            setDeviceProfiles(cachedDeviceProfiles);
+          }
+        } catch (loadError) {
+          if (!cancelled) {
+            setError(loadError instanceof Error ? loadError.message : "Could not load device profile changes.");
+          }
+        }
+
         return;
       }
 
-      setLoading(true);
+      setLoading(!cachedDeviceProfiles || !cachedAuthorOptions);
       setError("");
 
       try {
-        const [profiles, authors] = await Promise.all([
-          loadDeviceProfiles(),
-          loadDeviceProfileAuthorOptions()
-        ]);
+        const { profiles, authors } = await loadCachedDeviceProfileData();
 
         if (!cancelled) {
-          cachedDeviceProfiles = profiles;
-          cachedAuthorOptions = authors;
           setDeviceProfiles(profiles);
           setAuthorOptions(authors);
           setAliasDrafts({});
@@ -70,8 +180,7 @@ export function DeviceProfilesTab() {
 
   async function reloadDeviceProfiles() {
     const profiles = await loadDeviceProfiles();
-    cachedDeviceProfiles = profiles;
-    setDeviceProfiles(profiles);
+    setDeviceProfiles(setCachedDeviceProfiles(profiles));
     setAliasDrafts({});
   }
 

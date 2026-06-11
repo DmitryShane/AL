@@ -22,6 +22,23 @@ def utc_inclusive_range_for_bulk_activity_preset(preset: str) -> tuple[str, str]
     return start, today.isoformat()
 
 
+def _latest_author_activity_by_author(collection: Any, authors: list[str]) -> dict[str, dict[str, Any]]:
+    if not authors:
+        return {}
+
+    latest: dict[str, dict[str, Any]] = {}
+
+    for item in collection.find(
+        {"author": {"$in": authors}},
+        {"_id": 0, "author": 1, "authorEmail": 1, "timeZoneId": 1, "timeZoneDisplayName": 1, "lastReceivedAt": 1},
+    ).sort([("lastReceivedAt", DESCENDING)]):
+        author = str(item.get("author") or "")
+        if author and author not in latest:
+            latest[author] = item
+
+    return latest
+
+
 class AuthorRepository(MongoComposableMixin):
     def list_authors(self) -> list[str]:
         alias_sources = {item.get("sourceRawAuthor") for item in composed(self).author_aliases()}
@@ -54,6 +71,7 @@ class AuthorRepository(MongoComposableMixin):
         }
         profiles = composed(self)._profiles_by_raw_author()
         profiles_by_normalized_key = {_normalize_author(k): v for k, v in profiles.items() if k}
+        latest_activity_by_author = _latest_author_activity_by_author(self.db.daily_author_activity, known_authors)
         result = []
 
         for raw_author in known_authors:
@@ -63,11 +81,7 @@ class AuthorRepository(MongoComposableMixin):
             profile = profiles.get(raw_author)
             if profile is None:
                 profile = profiles_by_normalized_key.get(_normalize_author(raw_author), {})
-            author_activity = self.db.daily_author_activity.find_one(
-                {"author": raw_author},
-                {"_id": 0, "authorEmail": 1, "timeZoneId": 1, "timeZoneDisplayName": 1},
-                sort=[("lastReceivedAt", DESCENDING)],
-            )
+            author_activity = latest_activity_by_author.get(raw_author, {})
             gh_ui = _github_username_ui_default(raw_author, profile)
             gh_fetch = _github_username_for_avatar_fetch(raw_author, profile)
             result.append(

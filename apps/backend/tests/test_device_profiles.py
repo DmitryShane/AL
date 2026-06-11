@@ -126,6 +126,71 @@ def test_device_profiles_prefer_identity_latest_metadata():
     assert profile["deviceLastSeenAt"] == "2026-05-04T10:55:00.0000000Z"
 
 
+def test_device_profiles_skip_raw_event_queries_when_identity_has_latest_metadata():
+    repo = fake_repository()
+    repo.db.device_report_identities.insert_one(
+        {
+            "source": "dev",
+            "deviceIdHash": "hash-android",
+            "rawAuthor": "Device1",
+            "lastProjectId": "Bike Rush 2",
+            "lastPluginVersion": "0.1.0",
+            "lastSeenAt": dt.datetime(2026, 5, 4, 10, 0, tzinfo=dt.UTC),
+            "lastDeviceSentAt": "2026-05-04T10:55:00.0000000Z",
+            "lastTimeZoneId": "America/Vancouver",
+            "lastMetadata": {
+                "deviceAdvertisingId": "gaid-1",
+                "platform": "Android",
+            },
+        }
+    )
+
+    def fail_find(*_args, **_kwargs):
+        raise AssertionError("complete device identities must not query raw activity collections")
+
+    repo.db.raw_event_batches.find = fail_find
+    repo.db.raw_activity_events.find = fail_find
+
+    assert repo.device_profiles()[0]["rawDevice"] == "Device1"
+
+
+def test_device_profile_changes_returns_only_identities_after_cursor():
+    repo = fake_repository()
+    since = dt.datetime(2026, 5, 4, 10, 0, tzinfo=dt.UTC)
+    repo.db.device_report_identities.insert_one(
+        {
+            "source": "dev-ios",
+            "deviceIdHash": "hash-old",
+            "rawAuthor": "Device1",
+            "createdAt": dt.datetime(2026, 5, 4, 9, 0, tzinfo=dt.UTC),
+            "lastSeenAt": dt.datetime(2026, 5, 4, 9, 30, tzinfo=dt.UTC),
+            "lastMetadata": {"platform": "IPhonePlayer"},
+            "lastProjectId": "Bike Rush 2",
+            "lastPluginVersion": "0.1.0",
+            "lastDeviceSentAt": "2026-05-04T09:30:00.0000000Z",
+            "lastTimeZoneId": "UTC",
+        }
+    )
+    repo.db.device_report_identities.insert_one(
+        {
+            "source": "dev-ios",
+            "deviceIdHash": "hash-new",
+            "rawAuthor": "Device2",
+            "createdAt": dt.datetime(2026, 5, 4, 9, 0, tzinfo=dt.UTC),
+            "lastSeenAt": dt.datetime(2026, 5, 4, 10, 30, tzinfo=dt.UTC),
+            "lastMetadata": {"platform": "IPhonePlayer"},
+            "lastProjectId": "Bike Rush 2",
+            "lastPluginVersion": "0.1.0",
+            "lastDeviceSentAt": "2026-05-04T10:30:00.0000000Z",
+            "lastTimeZoneId": "UTC",
+        }
+    )
+
+    changes = repo.device_profile_changes(since)
+
+    assert [profile["rawDevice"] for profile in changes] == ["Device2"]
+
+
 def test_device_profiles_mark_editor_runtime():
     repo = fake_repository()
     repo.db.device_report_identities.insert_one(

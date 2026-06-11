@@ -13,6 +13,17 @@ export async function loadDeviceProfiles(): Promise<DeviceProfile[]> {
   return Array.isArray(data.deviceProfiles) ? data.deviceProfiles : [];
 }
 
+export async function loadDeviceProfileChanges(since: string): Promise<DeviceProfile[]> {
+  const response = await apiFetch(`/api/v1/authors/device-profiles/changes?since=${encodeURIComponent(since)}`);
+
+  if (!response.ok) {
+    throw new Error(await apiErrorDetail(response, "Could not load device profile changes"));
+  }
+
+  const data = await response.json() as { deviceProfiles?: DeviceProfile[] };
+  return Array.isArray(data.deviceProfiles) ? data.deviceProfiles : [];
+}
+
 export async function loadDeviceProfileAuthorOptions(): Promise<DeviceProfileAuthorOption[]> {
   const response = await apiFetch("/api/v1/authors/profiles");
 

@@ -10,84 +10,25 @@ from ..mongo_composable import MongoComposableMixin
 
 class DeviceProfileRepository(MongoComposableMixin):
     def device_profiles(self) -> list[dict[str, Any]]:
-        result = []
+        identities = list(self.db.device_report_identities.find({}, {"_id": 0}))
+        return _device_profiles_from_identities(self, identities)
 
-        for identity in self.db.device_report_identities.find({}, {"_id": 0}):
-            raw_author = str(identity.get("rawAuthor") or "")
-            source = str(identity.get("source") or "")
-            query = {"author": raw_author, "source": source}
-            latest_batch = self.db.raw_event_batches.find_one(
-                query,
-                {"_id": 0},
-                sort=[("receivedAt", DESCENDING)],
-            ) or {}
-            latest_event = self.db.raw_activity_events.find_one(
-                query,
-                {"_id": 0},
-                sort=[("receivedAt", DESCENDING)],
-            ) or {}
-            latest = latest_batch or latest_event or {}
-            latest_event_metadata = latest_event.get("metadata") if isinstance((latest_event or {}).get("metadata"), dict) else {}
-            latest_batch_metadata = latest_batch.get("metadata") if isinstance((latest_batch or {}).get("metadata"), dict) else {}
-            identity_metadata = identity.get("lastMetadata") if isinstance(identity.get("lastMetadata"), dict) else {}
-            latest_metadata = identity_metadata or latest_event_metadata or latest_batch_metadata
-            time_zone_id = str(
-                identity.get("lastTimeZoneId")
-                or latest_event.get("timeZoneId")
-                or latest_batch.get("timeZoneId")
-                or ""
-            ).strip()
-            time_zone_display_name = str(
-                identity.get("lastTimeZoneDisplayName")
-                or latest_event.get("timeZoneDisplayName")
-                or latest_batch.get("timeZoneDisplayName")
-                or ""
-            ).strip()
-            first_time_zone_id = str(identity.get("firstSeenTimeZoneId") or time_zone_id).strip()
-            first_time_zone_display_name = str(identity.get("firstSeenTimeZoneDisplayName") or time_zone_display_name).strip()
-            alias = self.db.author_aliases.find_one({"sourceRawAuthor": raw_author}, {"_id": 0, "targetRawAuthor": 1}) or {}
-            linked_author = str(alias.get("targetRawAuthor") or "")
-            linked_profile = self.db.author_profiles.find_one({"rawAuthor": linked_author}, {"_id": 0}) if linked_author else None
-            platform = str(
-                latest_event_metadata.get("platform")
-                or latest_metadata.get("platform")
-                or latest_event_metadata.get("runtimePlatform")
-                or latest_metadata.get("runtimePlatform")
-                or ""
-            )
-            platform_key = platform.lower()
-            advertising_id = str(latest_metadata.get("deviceAdvertisingId") or "")
+    def device_profile_changes(self, since: dt.datetime) -> list[dict[str, Any]]:
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=dt.UTC)
 
-            result.append(
+        identities = list(
+            self.db.device_report_identities.find(
                 {
-                    "rawDevice": raw_author,
-                    "source": source,
-                    "runtime": _device_runtime_label(platform),
-                    "linkedAuthor": linked_author,
-                    "linkedAuthorDisplayName": _display_name(linked_author, linked_profile or {}) if linked_author else "",
-                    "idfa": advertising_id if "iphone" in platform_key or "ios" in platform_key else "",
-                    "gaid": advertising_id if "android" in platform_key else "",
-                    "projectId": str(identity.get("lastProjectId") or latest.get("projectId") or ""),
-                    "pluginVersion": str(identity.get("lastPluginVersion") or latest.get("pluginVersion") or ""),
-                    "trackingAuthorizationStatus": str(latest_metadata.get("trackingAuthorizationStatus") or ""),
-                    "timeZoneId": time_zone_id,
-                    "timeZoneDisplayName": time_zone_display_name,
-                    "createdTimeZoneId": first_time_zone_id,
-                    "createdTimeZoneDisplayName": first_time_zone_display_name,
-                    "createdAt": identity.get("createdAt"),
-                    "lastSeenAt": identity.get("lastSeenAt") or latest.get("receivedAt") or latest.get("recordedAt") or latest.get("occurredAtUtc") or latest.get("sentAt"),
-                    "deviceCreatedAt": identity.get("firstSeenDeviceSentAt") or identity.get("createdAt"),
-                    "deviceLastSeenAt": identity.get("lastDeviceSentAt") or latest.get("sentAt") or identity.get("lastSeenAt") or latest.get("receivedAt") or latest.get("recordedAt") or latest.get("occurredAtUtc"),
-                }
+                    "$or": [
+                        {"createdAt": {"$gt": since}},
+                        {"lastSeenAt": {"$gt": since}},
+                    ]
+                },
+                {"_id": 0},
             )
-
-        return sorted(
-            result,
-            key=lambda item: (
-                str(item.get("source") or ""),
-                _natural_device_key(str(item.get("rawDevice") or "")),
-            ),
         )
+        return _device_profiles_from_identities(self, identities)
 
     def upsert_device_profile_alias(self, raw_device: str, target_raw_author: str) -> dict[str, Any]:
         source = _normalize_author(raw_device)
@@ -122,6 +63,7 @@ class DeviceProfileRepository(MongoComposableMixin):
         )
         self.db.author_profiles.delete_many({"rawAuthor": source})
         return {"ok": True, "alias": {"sourceRawAuthor": source, "targetRawAuthor": target}}
+
 
     def migrate_device_author_profiles(self) -> dict[str, Any]:
         raw_devices = [
@@ -186,10 +128,145 @@ class DeviceProfileRepository(MongoComposableMixin):
         return {"ok": True, "rawDeviceCount": len(raw_devices), "rawDevices": raw_devices, "deleted": counts}
 
 
+def _device_profiles_from_identities(repo: DeviceProfileRepository, identities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    raw_authors = [str(identity.get("rawAuthor") or "") for identity in identities if identity.get("rawAuthor")]
+    aliases = {
+        str(alias.get("sourceRawAuthor") or ""): str(alias.get("targetRawAuthor") or "")
+        for alias in repo.db.author_aliases.find(
+            {"sourceRawAuthor": {"$in": raw_authors}},
+            {"_id": 0, "sourceRawAuthor": 1, "targetRawAuthor": 1},
+        )
+    }
+    linked_authors = [target for target in aliases.values() if target]
+    linked_profiles = {
+        str(profile.get("rawAuthor") or ""): profile
+        for profile in repo.db.author_profiles.find({"rawAuthor": {"$in": linked_authors}}, {"_id": 0})
+    }
+    fallback_keys = {
+        (str(identity.get("rawAuthor") or ""), str(identity.get("source") or ""))
+        for identity in identities
+        if _needs_raw_latest_fallback(identity)
+    }
+    latest_batches = _latest_docs_by_author_source(repo.db.raw_event_batches, fallback_keys)
+    latest_events = _latest_docs_by_author_source(repo.db.raw_activity_events, fallback_keys)
+    result = []
+
+    for identity in identities:
+        raw_author = str(identity.get("rawAuthor") or "")
+        source = str(identity.get("source") or "")
+        key = (raw_author, source)
+        latest_batch = latest_batches.get(key, {})
+        latest_event = latest_events.get(key, {})
+        latest = latest_batch or latest_event or {}
+        latest_event_metadata = latest_event.get("metadata") if isinstance((latest_event or {}).get("metadata"), dict) else {}
+        latest_batch_metadata = latest_batch.get("metadata") if isinstance((latest_batch or {}).get("metadata"), dict) else {}
+        identity_metadata = identity.get("lastMetadata") if isinstance(identity.get("lastMetadata"), dict) else {}
+        latest_metadata = identity_metadata or latest_event_metadata or latest_batch_metadata
+        time_zone_id = str(
+            identity.get("lastTimeZoneId")
+            or latest_event.get("timeZoneId")
+            or latest_batch.get("timeZoneId")
+            or ""
+        ).strip()
+        time_zone_display_name = str(
+            identity.get("lastTimeZoneDisplayName")
+            or latest_event.get("timeZoneDisplayName")
+            or latest_batch.get("timeZoneDisplayName")
+            or ""
+        ).strip()
+        first_time_zone_id = str(identity.get("firstSeenTimeZoneId") or time_zone_id).strip()
+        first_time_zone_display_name = str(identity.get("firstSeenTimeZoneDisplayName") or time_zone_display_name).strip()
+        linked_author = aliases.get(raw_author, "")
+        linked_profile = linked_profiles.get(linked_author)
+        platform = str(
+            latest_event_metadata.get("platform")
+            or latest_metadata.get("platform")
+            or latest_event_metadata.get("runtimePlatform")
+            or latest_metadata.get("runtimePlatform")
+            or ""
+        )
+        platform_key = platform.lower()
+        advertising_id = str(latest_metadata.get("deviceAdvertisingId") or "")
+
+        result.append(
+            {
+                "rawDevice": raw_author,
+                "source": source,
+                "runtime": _device_runtime_label(platform),
+                "linkedAuthor": linked_author,
+                "linkedAuthorDisplayName": _display_name(linked_author, linked_profile or {}) if linked_author else "",
+                "idfa": advertising_id if "iphone" in platform_key or "ios" in platform_key else "",
+                "gaid": advertising_id if "android" in platform_key else "",
+                "projectId": str(identity.get("lastProjectId") or latest.get("projectId") or ""),
+                "pluginVersion": str(identity.get("lastPluginVersion") or latest.get("pluginVersion") or ""),
+                "trackingAuthorizationStatus": str(latest_metadata.get("trackingAuthorizationStatus") or ""),
+                "timeZoneId": time_zone_id,
+                "timeZoneDisplayName": time_zone_display_name,
+                "createdTimeZoneId": first_time_zone_id,
+                "createdTimeZoneDisplayName": first_time_zone_display_name,
+                "createdAt": identity.get("createdAt"),
+                "lastSeenAt": identity.get("lastSeenAt") or latest.get("receivedAt") or latest.get("recordedAt") or latest.get("occurredAtUtc") or latest.get("sentAt"),
+                "deviceCreatedAt": identity.get("firstSeenDeviceSentAt") or identity.get("createdAt"),
+                "deviceLastSeenAt": identity.get("lastDeviceSentAt")
+                or latest.get("sentAt")
+                or identity.get("lastSeenAt")
+                or latest.get("receivedAt")
+                or latest.get("recordedAt")
+                or latest.get("occurredAtUtc"),
+            }
+        )
+
+    return sorted(
+        result,
+        key=lambda item: (
+            str(item.get("source") or ""),
+            _natural_device_key(str(item.get("rawDevice") or "")),
+        ),
+    )
+
+
 def _natural_device_key(value: str) -> tuple[str, int, str]:
     prefix = value.rstrip("0123456789")
     suffix = value[len(prefix):]
     return (prefix.lower(), int(suffix) if suffix else -1, value.lower())
+
+
+def _needs_raw_latest_fallback(identity: dict[str, Any]) -> bool:
+    metadata = identity.get("lastMetadata")
+
+    if not isinstance(metadata, dict) or not metadata:
+        return True
+
+    return not all(
+        identity.get(field)
+        for field in (
+            "lastProjectId",
+            "lastPluginVersion",
+            "lastSeenAt",
+            "lastDeviceSentAt",
+            "lastTimeZoneId",
+        )
+    )
+
+
+def _latest_docs_by_author_source(collection: Any, keys: set[tuple[str, str]]) -> dict[tuple[str, str], dict[str, Any]]:
+    if not keys:
+        return {}
+
+    authors = sorted({author for author, _source in keys if author})
+    sources = sorted({source for _author, source in keys if source})
+
+    if not authors or not sources:
+        return {}
+
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for doc in collection.find({"author": {"$in": authors}, "source": {"$in": sources}}, {"_id": 0}).sort([("receivedAt", DESCENDING)]):
+        key = (str(doc.get("author") or ""), str(doc.get("source") or ""))
+        if key in keys and key not in latest:
+            latest[key] = doc
+
+    return latest
 
 
 def _device_runtime_label(value: str) -> str:

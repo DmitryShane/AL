@@ -487,6 +487,39 @@ def test_author_profile_github_username_sets_avatar_url():
     base = f"/api/v1/avatars/author?rawAuthor={quote('Test Dev', safe='')}"
     assert profiles[0]["avatarUrl"].startswith(f"{base}&v=")
 
+
+def test_author_profiles_load_latest_activity_in_bulk():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Alice Dev", "displayName": "Alice Dev"})
+    repo.db.author_profiles.insert_one({"rawAuthor": "Bob Dev", "displayName": "Bob Dev"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Alice Dev",
+            "authorEmail": "alice@example.com",
+            "timeZoneId": "UTC",
+            "lastReceivedAt": dt.datetime(2026, 5, 4, 10, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Bob Dev",
+            "authorEmail": "bob@example.com",
+            "timeZoneId": "Europe/Madrid",
+            "lastReceivedAt": dt.datetime(2026, 5, 4, 11, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    def fail_find_one(*_args, **_kwargs):
+        raise AssertionError("author_profiles must not query daily activity once per author")
+
+    repo.db.daily_author_activity.find_one = fail_find_one
+
+    profiles = {profile["rawAuthor"]: profile for profile in repo.author_profiles()}
+
+    assert profiles["Alice Dev"]["authorEmail"] == "alice@example.com"
+    assert profiles["Bob Dev"]["timeZoneId"] == "Europe/Madrid"
+
+
 def test_cyrillic_author_names_are_unicode_normalized_for_profile_matching():
     repo = fake_repository()
     decomposed_author = "Але\u0308на Иванова"

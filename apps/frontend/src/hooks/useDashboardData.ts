@@ -200,6 +200,10 @@ export function useDashboardData({
       return;
     }
 
+    if (page === "settings") {
+      return;
+    }
+
     const intervalId = window.setInterval(() => {
       void load(false);
     }, dashboardRefreshMs);
