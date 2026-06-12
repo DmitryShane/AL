@@ -11,6 +11,8 @@ class IndexManager:
         self.db.raw_reports.create_index([("source", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.raw_reports.create_index([("status", ASCENDING), ("leaseExpiresAt", ASCENDING), ("receivedAt", ASCENDING)])
         self.db.raw_reports.create_index([("status", ASCENDING), ("queuedAt", ASCENDING)])
+        self.db.raw_reports.create_index([("status", ASCENDING), ("processedAt", DESCENDING)])
+        self.db.raw_reports.create_index([("receivedAt", DESCENDING)])
         self.db.raw_event_batches.create_index([("source", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.raw_activity_events.create_index("eventId", unique=True)
         self.db.raw_activity_events.create_index(

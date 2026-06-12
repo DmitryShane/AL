@@ -28,6 +28,14 @@ def server_stats(
     return service.get_server_stats(refresh=refresh, background_tasks=background_tasks)
 
 
+@router.get("/api/v1/settings/reports-queue")
+def reports_queue(
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_settings_service),
+) -> dict:
+    return service.get_reports_queue_status()
+
+
 @router.get("/api/v1/settings/bootstrap")
 def settings_bootstrap(
     _: dict = Depends(require_permission("viewDashboard")),

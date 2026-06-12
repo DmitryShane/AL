@@ -1,5 +1,5 @@
 export type Page = "authors" | "activity" | "analytics" | "calendar" | "alerts" | "settings" | "documentation";
-export type SettingsTab = "general" | "authors" | "publisherProfiles" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingNotification" | "meetingSummaries" | "snapshots" | "fakeOnline" | "users";
+export type SettingsTab = "general" | "authors" | "publisherProfiles" | "deviceProfiles" | "autoBreak" | "redirects" | "discord" | "telegram" | "meetingNotification" | "meetingSummaries" | "snapshots" | "reportsQueue" | "fakeOnline" | "users";
 
 export type Health = {
   ok: boolean;
@@ -340,6 +340,46 @@ export type ServerStats = {
   } | null;
   categories: ServerStatsCategory[];
   services: ServerStatsService[];
+};
+
+export type ReportsQueueCounts = {
+  queued: number;
+  processing: number;
+  failed: number;
+  processedLastHour: number;
+};
+
+export type ReportsQueueOldestQueued = {
+  receivedAt?: string | null;
+  queuedAt: string;
+  ageSeconds: number;
+};
+
+export type ReportsQueueReport = {
+  id: string;
+  receivedAt?: string | null;
+  queuedAt?: string | null;
+  processingStartedAt?: string | null;
+  processedAt?: string | null;
+  failedAt?: string | null;
+  source: string;
+  author: string;
+  projectId: string;
+  status: string;
+  attempts: number;
+  processingSeconds?: number | null;
+  lastError: string;
+};
+
+export type ReportsQueueStatus = {
+  generatedAt: string;
+  worker: ServerStatsService & {
+    lastProcessedAt?: string | null;
+  };
+  counts: ReportsQueueCounts;
+  oldestQueued?: ReportsQueueOldestQueued | null;
+  recentReports: ReportsQueueReport[];
+  failedReports: ReportsQueueReport[];
 };
 
 export type SiteUserRole = "admin" | "editor" | "viewer";

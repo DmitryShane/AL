@@ -1667,8 +1667,8 @@ export const DOCUMENTATION_CATEGORIES: DocumentationCategory[] = [
     title: { en: "Settings Complete", ru: "Settings полностью" },
     kicker: { en: "Every tab and control group", ru: "Каждая tab и control group" },
     intro: {
-      en: "Settings is the operational control room for intervals, server state, identities, integrations, summaries, snapshots, fake online, users, and maintenance.",
-      ru: "Settings — operational control room для intervals, server state, identities, integrations, summaries, snapshots, fake online, users и maintenance."
+      en: "Settings is the operational control room for intervals, server state, reports queue, identities, integrations, summaries, snapshots, fake online, users, and maintenance.",
+      ru: "Settings — operational control room для intervals, server state, reports queue, identities, integrations, summaries, snapshots, fake online, users и maintenance."
     },
     rules: [
       {
@@ -1751,15 +1751,16 @@ export const DOCUMENTATION_CATEGORIES: DocumentationCategory[] = [
         ]
       },
       {
-        title: { en: "Snapshots, Fake Online, and Site Users are admin operations", ru: "Snapshots, Fake Online и Site Users — admin operations" },
+        title: { en: "Reports Queue, Snapshots, Fake Online, and Site Users are admin operations", ru: "Reports Queue, Snapshots, Fake Online и Site Users — admin operations" },
         summary: {
-          en: "Snapshots rebuild historical dashboard views, Fake Online schedules controlled online prompts, and Site Users manages login accounts, roles, status, passwords, and server stats permission.",
-          ru: "Snapshots rebuild historical dashboard views, Fake Online планирует controlled online prompts, Site Users управляет login accounts, roles, status, passwords и server stats permission."
+          en: "Reports Queue monitors async ingest health, Snapshots rebuild historical dashboard views, Fake Online schedules controlled online prompts, and Site Users manages login accounts, roles, status, passwords, and server stats permission.",
+          ru: "Reports Queue monitors async ingest health, Snapshots rebuild historical dashboard views, Fake Online планирует controlled online prompts, Site Users управляет login accounts, roles, status, passwords и server stats permission."
         },
         details: [
           { en: "Fake Online and user management can be hidden depending on the current user's permissions.", ru: "Fake Online и user management могут быть скрыты в зависимости от permissions текущего user." }
         ],
         references: [
+          { label: { en: "Reports Queue", ru: "Reports Queue" }, href: "/settings?tab=reportsQueue&docTarget=settings-reportsQueue" },
           { label: { en: "Snapshots", ru: "Snapshots" }, href: "/settings?tab=snapshots&docTarget=settings-snapshots-panel" },
           { label: { en: "Fake Online", ru: "Fake Online" }, href: "/settings?tab=fakeOnline&docTarget=settings-fake-online-panel" },
           { label: { en: "Site Users", ru: "Site Users" }, href: "/settings?tab=users&docTarget=settings-site-users-panel" }
@@ -1772,8 +1773,8 @@ export const DOCUMENTATION_CATEGORIES: DocumentationCategory[] = [
     title: { en: "Settings & Maintenance", ru: "Settings и Maintenance" },
     kicker: { en: "Controls that change behavior", ru: "Настройки, меняющие поведение" },
     intro: {
-      en: "Settings define reporting cadence, idle thresholds, author identity, integrations, snapshots, fake online behavior, user access, and maintenance operations.",
-      ru: "Settings определяют reporting cadence, idle thresholds, identity авторов, integrations, snapshots, fake online behavior, доступ пользователей и maintenance operations."
+      en: "Settings define reporting cadence, idle thresholds, reports queue visibility, author identity, integrations, snapshots, fake online behavior, user access, and maintenance operations.",
+      ru: "Settings определяют reporting cadence, idle thresholds, reports queue visibility, identity авторов, integrations, snapshots, fake online behavior, доступ пользователей и maintenance operations."
     },
     rules: [
       {

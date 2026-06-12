@@ -67,7 +67,7 @@ const DOCUMENTATION_NAV_GROUPS: DocumentationNavGroup[] = [
     id: "settings",
     title: { en: "Settings", ru: "Settings" },
     items: [
-      { categoryId: "settings-complete", label: { en: "All 13 Settings tabs", ru: "Все 13 Settings tabs" } },
+      { categoryId: "settings-complete", label: { en: "All 14 Settings tabs", ru: "Все 14 Settings tabs" } },
       { categoryId: "settings-maintenance", label: { en: "Control groups and maintenance", ru: "Control groups и maintenance" } },
       { categoryId: "maintenance-dangerous-actions", label: { en: "Dangerous actions and modals", ru: "Dangerous actions и modals" } }
     ]

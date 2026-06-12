@@ -1,0 +1,269 @@
+import { useCallback, useEffect, useState } from "react";
+import { apiFetch } from "../../../../api/client";
+import { SourceIcon } from "../../../icons/SourceIcon";
+import type { ReportsQueueReport, ReportsQueueStatus, ServerStatsServiceStatus } from "../../../../types/dashboard";
+import { formatSource } from "../../../../utils/format";
+import { formatDateTime } from "../../serverStatsFormatters";
+
+const REPORTS_QUEUE_REFRESH_MS = 5000;
+
+export function ReportsQueueTab() {
+  const [status, setStatus] = useState<ReportsQueueStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadStatus = useCallback(async () => {
+    setRefreshing(true);
+
+    try {
+      const response = await apiFetch("/api/v1/settings/reports-queue");
+
+      if (!response.ok) {
+        throw new Error("Reports queue request failed");
+      }
+
+      const payload = (await response.json()) as ReportsQueueStatus;
+      setStatus(payload);
+      setError("");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Reports queue request failed");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadStatus();
+    const intervalId = window.setInterval(() => void loadStatus(), REPORTS_QUEUE_REFRESH_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadStatus]);
+
+  return (
+    <section className="panel reports-queue-panel" data-doc-target="settings-reportsQueue">
+      <div className="reports-queue-header">
+        <div>
+          <h2>Reports Queue</h2>
+          <p className="settings-caption">Async report ingest worker and queue health.</p>
+        </div>
+        <div className="reports-queue-actions">
+          {status?.generatedAt ? <span>Updated {formatDateTime(status.generatedAt)}</span> : null}
+          <button className="server-stats-refresh-button" onClick={() => void loadStatus()} disabled={refreshing}>
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
+      </div>
+
+      {loading ? <p className="notice">Loading reports queue...</p> : null}
+      {error ? <p className="notice">Could not load reports queue: {error}</p> : null}
+
+      {status ? (
+        <>
+          <div className="reports-queue-overview">
+            <WorkerStatusCard status={status} />
+            <QueueMetric label="Queued" value={status.counts.queued} tone={status.counts.queued > 0 ? "warning" : "ok"} />
+            <QueueMetric label="Processing" value={status.counts.processing} tone="neutral" />
+            <QueueMetric label="Processed last hour" value={status.counts.processedLastHour} tone="ok" />
+            <QueueMetric label="Failed" value={status.counts.failed} tone={status.counts.failed > 0 ? "danger" : "ok"} />
+            <QueueMetric label="Oldest queued" value={formatOldestQueuedAge(status.oldestQueued?.ageSeconds)} tone={status.oldestQueued ? "warning" : "ok"} />
+          </div>
+
+          <ReportsQueueTable title="Recent reports" reports={status.recentReports} emptyLabel="No reports have been queued yet." />
+
+          {status.failedReports.length > 0 ? (
+            <ReportsQueueTable title="Failed reports" reports={status.failedReports} emptyLabel="No failed reports." isFailedTable />
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function WorkerStatusCard({ status }: { status: ReportsQueueStatus }) {
+  return (
+    <div className={`reports-queue-worker reports-queue-worker-${status.worker.status}`}>
+      <div>
+        <span>Worker</span>
+        <strong>{formatWorkerStatus(status.worker.status)}</strong>
+      </div>
+      <small>{status.worker.unit}</small>
+      <small>{formatWorkerDetail(status.worker)}</small>
+      <small>Last processed: {status.worker.lastProcessedAt ? formatDateTime(status.worker.lastProcessedAt) : "none"}</small>
+    </div>
+  );
+}
+
+function QueueMetric({
+  label,
+  value,
+  tone
+}: {
+  label: string;
+  value: number | string;
+  tone: "ok" | "warning" | "danger" | "neutral";
+}) {
+  return (
+    <div className={`reports-queue-metric reports-queue-metric-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ReportsQueueTable({
+  title,
+  reports,
+  emptyLabel,
+  isFailedTable = false
+}: {
+  title: string;
+  reports: ReportsQueueReport[];
+  emptyLabel: string;
+  isFailedTable?: boolean;
+}) {
+  const pageSizeOptions = [10, 25, 50];
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSizeState] = useState(10);
+  const total = reports.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = total > 0 ? (currentPage - 1) * pageSize : 0;
+  const pageEnd = Math.min(pageStart + pageSize, total);
+  const visibleReports = reports.slice(pageStart, pageEnd);
+
+  useEffect(() => {
+    setPage((value) => Math.min(value, totalPages));
+  }, [totalPages]);
+
+  function setPageSize(value: number) {
+    setPageSizeState(value);
+    setPage(1);
+  }
+
+  return (
+    <section className="reports-queue-table-panel">
+      <div className="reports-queue-section-header">
+        <h3>{title}</h3>
+        <span>{total} available</span>
+      </div>
+      <div className="reports-queue-table-shell">
+        <div className="reports-queue-table">
+          <div className="reports-queue-table-head">
+            <span>Source</span>
+            <span>Author</span>
+            <span>Received</span>
+            <span>Status</span>
+            <span>Attempts</span>
+            <span>Processing</span>
+            <span>Error</span>
+          </div>
+          {visibleReports.length > 0 ? (
+            visibleReports.map((report) => (
+              <ReportQueueRow key={report.id} report={report} isFailedTable={isFailedTable} />
+            ))
+          ) : (
+            <p className="reports-queue-empty">{emptyLabel}</p>
+          )}
+        </div>
+      </div>
+      <div className="table-pagination reports-queue-pagination">
+        {total > 0 ? <span>Rows {pageStart + 1}-{pageEnd} of {total}</span> : null}
+        <label>
+          Rows per page
+          <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+            {pageSizeOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <div className="pagination-buttons">
+          <button className="primary-outline-button" onClick={() => setPage(1)} disabled={currentPage === 1}>First</button>
+          <button className="primary-outline-button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>Prev</button>
+          <span className="pagination-counter">{currentPage} / {totalPages}</span>
+          <button className="primary-outline-button" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={currentPage === totalPages}>Next</button>
+          <button className="primary-outline-button" onClick={() => setPage(totalPages)} disabled={currentPage === totalPages}>Last</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ReportQueueRow({ report, isFailedTable }: { report: ReportsQueueReport; isFailedTable: boolean }) {
+  return (
+    <div className={`reports-queue-row reports-queue-row-${statusClassName(report.status)}`}>
+      <span className="source-cell" title={report.source || undefined}>
+        <SourceIcon source={report.source} />
+        {formatSource(report.source)}
+      </span>
+      <span title={report.author || undefined}>{report.author || "unknown"}</span>
+      <span title={report.receivedAt || undefined}>{formatDateTime(report.receivedAt)}</span>
+      <span>
+        <StatusBadge status={report.status} />
+      </span>
+      <span>{report.attempts}</span>
+      <span>{formatDuration(report.processingSeconds)}</span>
+      <span title={report.lastError || undefined}>{report.lastError || (isFailedTable ? "No error recorded" : "")}</span>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  return <span className={`reports-queue-status reports-queue-status-${statusClassName(status)}`}>{status || "unknown"}</span>;
+}
+
+function formatWorkerStatus(status: ServerStatsServiceStatus): string {
+  if (status === "running") {
+    return "Running";
+  }
+
+  if (status === "stopped") {
+    return "Stopped";
+  }
+
+  return "Unknown";
+}
+
+function formatWorkerDetail(worker: ReportsQueueStatus["worker"]): string {
+  const state = worker.subState ? `${worker.activeState} / ${worker.subState}` : worker.activeState;
+
+  if (worker.status === "running" && worker.activeEnteredAt) {
+    return `${state}, since ${formatDateTime(worker.activeEnteredAt)}`;
+  }
+
+  return state || "unknown";
+}
+
+function formatOldestQueuedAge(ageSeconds: number | null | undefined): string {
+  if (ageSeconds === null || ageSeconds === undefined) {
+    return "none";
+  }
+
+  return formatDuration(ageSeconds);
+}
+
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) {
+    return "none";
+  }
+
+  if (seconds < 60) {
+    return `${Math.round(seconds)}s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+
+  if (minutes < 60) {
+    return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function statusClassName(status: string): string {
+  return (status || "unknown").replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "unknown";
+}

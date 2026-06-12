@@ -393,6 +393,103 @@ def test_server_stats_service_parses_named_systemd_fields(monkeypatch) -> None:
     assert service["activeEnteredAt"] == "Tue 2026-05-05 19:00:00 UTC"
 
 
+def test_reports_queue_status_summarizes_queue_without_raw_payload(monkeypatch) -> None:
+    repo = fake_repository()
+    now = dt.datetime.now(dt.UTC)
+
+    monkeypatch.setattr(
+        server_stats_service,
+        "_server_stats_service",
+        lambda key, label, unit: {
+            "key": key,
+            "label": label,
+            "unit": unit,
+            "status": "running",
+            "activeState": "active",
+            "subState": "running",
+            "loadState": "loaded",
+            "unitFileState": "enabled",
+            "activeEnteredAt": "Fri 2026-06-12 12:25:20 UTC",
+        },
+    )
+
+    repo.db.raw_reports.insert_one(
+        {
+            "_id": "queued-old",
+            "source": "ual",
+            "payload": {"author": "Evgeniy Dotsenko", "events": [{"projectId": "Bike Rush 2"}]},
+            "encryptedPacket": "secret",
+            "receivedAt": now - dt.timedelta(minutes=12),
+            "queuedAt": now - dt.timedelta(minutes=10),
+            "status": "queued",
+            "attempts": 0,
+        }
+    )
+    repo.db.raw_reports.insert_one(
+        {
+            "_id": "processing",
+            "source": "codex",
+            "payload": {"author": "Dmitry Shane", "projectId": "AL"},
+            "receivedAt": now - dt.timedelta(minutes=4),
+            "queuedAt": now - dt.timedelta(minutes=4),
+            "processingStartedAt": now - dt.timedelta(minutes=3),
+            "status": "processing",
+            "attempts": 1,
+        }
+    )
+    repo.db.raw_reports.insert_one(
+        {
+            "_id": "processed",
+            "source": "ual",
+            "payload": {"author": "Evgeniy Dotsenko", "projectId": "Bike Rush 2"},
+            "receivedAt": now - dt.timedelta(minutes=2),
+            "queuedAt": now - dt.timedelta(minutes=2),
+            "processingStartedAt": now - dt.timedelta(seconds=90),
+            "processedAt": now - dt.timedelta(seconds=30),
+            "status": "processed",
+            "attempts": 1,
+        }
+    )
+    repo.db.raw_reports.insert_one(
+        {
+            "_id": "failed",
+            "source": "dev-ios",
+            "payload": {"author": "Device Author", "projectId": "Mobile"},
+            "receivedAt": now - dt.timedelta(minutes=1),
+            "queuedAt": now - dt.timedelta(minutes=1),
+            "processingStartedAt": now - dt.timedelta(seconds=50),
+            "failedAt": now - dt.timedelta(seconds=20),
+            "status": "failed",
+            "attempts": 5,
+            "lastError": "ValueError: bad payload",
+        }
+    )
+
+    payload = repo.get_reports_queue_status()
+
+    assert payload["worker"]["unit"] == "al-report-worker.service"
+    assert payload["worker"]["status"] == "running"
+    assert payload["worker"]["lastProcessedAt"] == (now - dt.timedelta(seconds=30)).isoformat()
+    assert payload["counts"] == {"queued": 1, "processing": 1, "failed": 1, "processedLastHour": 1}
+    assert payload["oldestQueued"]["receivedAt"] == (now - dt.timedelta(minutes=12)).isoformat()
+    assert payload["oldestQueued"]["queuedAt"] == (now - dt.timedelta(minutes=10)).isoformat()
+    assert payload["oldestQueued"]["ageSeconds"] >= 0
+    assert len(payload["recentReports"]) == 4
+    assert len(payload["failedReports"]) == 1
+
+    queued_row = next(row for row in payload["recentReports"] if row["id"] == "queued-old")
+    assert queued_row["author"] == "Evgeniy Dotsenko"
+    assert queued_row["projectId"] == "Bike Rush 2"
+    assert "payload" not in queued_row
+    assert "encryptedPacket" not in queued_row
+
+    failed_row = payload["failedReports"][0]
+    assert failed_row["status"] == "failed"
+    assert failed_row["attempts"] == 5
+    assert failed_row["processingSeconds"] == 30
+    assert failed_row["lastError"] == "ValueError: bad payload"
+
+
 def test_server_reboot_schedules_delayed_systemd_restart(monkeypatch) -> None:
     calls = []
 
@@ -418,5 +515,13 @@ def test_server_reboot_schedules_delayed_systemd_restart(monkeypatch) -> None:
         "/usr/bin/systemctl",
     ]
     assert args[4].startswith("al-dashboard-reboot-")
-    assert args[7:] == ["restart", "mongod", "nginx", "al-backend", "al-telegram-bot", "al-discord-bot"]
+    assert args[7:] == [
+        "restart",
+        "mongod",
+        "nginx",
+        "al-backend",
+        "al-report-worker",
+        "al-telegram-bot",
+        "al-discord-bot",
+    ]
     assert kwargs["check"] is True

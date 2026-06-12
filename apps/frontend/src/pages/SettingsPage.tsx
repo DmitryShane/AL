@@ -22,6 +22,7 @@ import { FakeOnlineTab } from "../components/settings/tabs/fakeOnline/FakeOnline
 import { GeneralSettingsTab } from "../components/settings/tabs/general/GeneralSettingsTab";
 import { MeetingNotificationTab } from "../components/settings/tabs/meetingNotification/MeetingNotificationTab";
 import { MeetingSummariesTab } from "../components/settings/tabs/meetingSummaries/MeetingSummariesTab";
+import { ReportsQueueTab } from "../components/settings/tabs/reportsQueue/ReportsQueueTab";
 import { AuthorRedirectsTab } from "../components/settings/tabs/redirects/AuthorRedirectsTab";
 import { TelegramSettingsTab } from "../components/settings/tabs/telegram/TelegramSettingsTab";
 import { ActivitySnapshotsTab } from "../components/settings/tabs/snapshots/ActivitySnapshotsTab";
@@ -108,10 +109,10 @@ export function SettingsPage({
   const [aliasTarget, setAliasTarget] = useState("");
 
   useEffect(() => {
-    if (settingsTab === "fakeOnline" && !canManageUsers) {
+    if ((settingsTab === "fakeOnline" && !canManageUsers) || (settingsTab === "reportsQueue" && !canManageSettings)) {
       setSettingsTab("general");
     }
-  }, [canManageUsers, settingsTab]);
+  }, [canManageSettings, canManageUsers, settingsTab]);
 
   useEffect(() => {
     if (!summary) {
@@ -806,7 +807,17 @@ export function SettingsPage({
   const savedAvatarRefreshCadence: "week" | "month" =
     summary?.intervalSettings.avatarRefreshCadence === "week" ? "week" : "month";
   const isAvatarCadenceDirty = avatarRefreshCadence !== savedAvatarRefreshCadence;
-  const visibleSettingsTabs = SETTINGS_TABS.filter((tab) => tab.key !== "fakeOnline" || canManageUsers);
+  const visibleSettingsTabs = SETTINGS_TABS.filter((tab) => {
+    if (tab.key === "fakeOnline") {
+      return canManageUsers;
+    }
+
+    if (tab.key === "reportsQueue") {
+      return canManageSettings;
+    }
+
+    return true;
+  });
 
   return (
     <section className="page-section settings-layout">
@@ -927,6 +938,8 @@ export function SettingsPage({
           />
         ) : settingsTab === "snapshots" ? (
           <ActivitySnapshotsTab />
+        ) : settingsTab === "reportsQueue" && canManageSettings ? (
+          <ReportsQueueTab />
         ) : settingsTab === "fakeOnline" && canManageUsers ? (
           <FakeOnlineTab profiles={personProfiles} />
         ) : (

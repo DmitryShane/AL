@@ -32,6 +32,7 @@ SERVER_STATS_ACCOUNTING_PATHS = {
 }
 SERVER_STATS_SERVICES = (
     ("backend", "AL Backend API", "al-backend.service"),
+    ("reportWorker", "AL Report Worker", "al-report-worker.service"),
     ("telegram", "AL Telegram Bot", "al-telegram-bot.service"),
     ("discord", "AL Discord Bot", "al-discord-bot.service"),
     ("mongo", "MongoDB", "mongod.service"),
@@ -210,6 +211,55 @@ def _unknown_server_stats_service(key: str, label: str, unit: str) -> dict[str, 
         "loadState": "unknown",
         "unitFileState": "unknown",
         "activeEnteredAt": None,
+    }
+
+
+def _first_payload_event_project_id(payload: dict[str, Any]) -> str:
+    events = payload.get("events")
+
+    if not isinstance(events, list):
+        return ""
+
+    for event in events:
+        if isinstance(event, dict) and str(event.get("projectId") or "").strip():
+            return str(event.get("projectId") or "").strip()
+
+    return ""
+
+
+def _isoformat_datetime(value: Any) -> str | None:
+    parsed = _coerce_datetime(value)
+    return parsed.isoformat() if parsed else None
+
+
+def _processing_seconds(report: dict[str, Any]) -> float | None:
+    started_at = _coerce_datetime(report.get("processingStartedAt"))
+    finished_at = _coerce_datetime(report.get("processedAt")) or _coerce_datetime(report.get("failedAt"))
+
+    if not started_at or not finished_at:
+        return None
+
+    return max(0.0, round((finished_at - started_at).total_seconds(), 3))
+
+
+def _reports_queue_row(report: dict[str, Any]) -> dict[str, Any]:
+    payload = report.get("payload") if isinstance(report.get("payload"), dict) else {}
+    project_id = str(payload.get("projectId") or "").strip() or _first_payload_event_project_id(payload)
+
+    return {
+        "id": str(report.get("_id") or ""),
+        "receivedAt": _isoformat_datetime(report.get("receivedAt")),
+        "queuedAt": _isoformat_datetime(report.get("queuedAt")),
+        "processingStartedAt": _isoformat_datetime(report.get("processingStartedAt")),
+        "processedAt": _isoformat_datetime(report.get("processedAt")),
+        "failedAt": _isoformat_datetime(report.get("failedAt")),
+        "source": str(report.get("source") or ""),
+        "author": str(payload.get("author") or ""),
+        "projectId": project_id,
+        "status": str(report.get("status") or "unknown"),
+        "attempts": int(report.get("attempts") or 0),
+        "processingSeconds": _processing_seconds(report),
+        "lastError": str(report.get("lastError") or ""),
     }
 
 
@@ -500,9 +550,87 @@ class ServerStatsServiceMixin:
             "cacheExpiresAt": _next_server_stats_refresh_at(now).isoformat(),
         }
 
+    def get_reports_queue_status(self) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        processed_since = now - dt.timedelta(hours=1)
+        worker = _server_stats_service("reportWorker", "AL Report Worker", "al-report-worker.service")
+        latest_processed = self.db.raw_reports.find_one(
+            {"status": "processed", "processedAt": {"$exists": True}},
+            sort=[("processedAt", -1)],
+        )
+        oldest_queued = self.db.raw_reports.find_one(
+            {"status": "queued"},
+            sort=[("queuedAt", 1), ("receivedAt", 1)],
+        )
+        recent_reports = list(
+            self.db.raw_reports.find(
+                {},
+                {
+                    "payload.author": 1,
+                    "payload.projectId": 1,
+                    "payload.events.projectId": 1,
+                    "source": 1,
+                    "receivedAt": 1,
+                    "queuedAt": 1,
+                    "processingStartedAt": 1,
+                    "processedAt": 1,
+                    "failedAt": 1,
+                    "status": 1,
+                    "attempts": 1,
+                    "lastError": 1,
+                },
+            ).sort([("receivedAt", -1)]).limit(50)
+        )
+        failed_reports = list(
+            self.db.raw_reports.find(
+                {"status": "failed"},
+                {
+                    "payload.author": 1,
+                    "payload.projectId": 1,
+                    "payload.events.projectId": 1,
+                    "source": 1,
+                    "receivedAt": 1,
+                    "queuedAt": 1,
+                    "processingStartedAt": 1,
+                    "processedAt": 1,
+                    "failedAt": 1,
+                    "status": 1,
+                    "attempts": 1,
+                    "lastError": 1,
+                },
+            ).sort([("failedAt", -1), ("receivedAt", -1)]).limit(20)
+        )
+
+        queued_at = _coerce_datetime(oldest_queued.get("queuedAt")) if oldest_queued else None
+        oldest_queued_payload = None
+
+        if oldest_queued and queued_at:
+            oldest_queued_payload = {
+                "receivedAt": _isoformat_datetime(oldest_queued.get("receivedAt")),
+                "queuedAt": queued_at.isoformat(),
+                "ageSeconds": max(0, int((now - queued_at).total_seconds())),
+            }
+
+        return {
+            "generatedAt": now.isoformat(),
+            "worker": {
+                **worker,
+                "lastProcessedAt": _isoformat_datetime(latest_processed.get("processedAt")) if latest_processed else None,
+            },
+            "counts": {
+                "queued": self.db.raw_reports.count_documents({"status": "queued"}),
+                "processing": self.db.raw_reports.count_documents({"status": "processing"}),
+                "failed": self.db.raw_reports.count_documents({"status": "failed"}),
+                "processedLastHour": self.db.raw_reports.count_documents({"status": "processed", "processedAt": {"$gte": processed_since}}),
+            },
+            "oldestQueued": oldest_queued_payload,
+            "recentReports": [_reports_queue_row(report) for report in recent_reports],
+            "failedReports": [_reports_queue_row(report) for report in failed_reports],
+        }
+
     def reboot_server(self) -> dict[str, Any]:
         requested_at = dt.datetime.now(dt.UTC)
-        services = ["mongod", "nginx", "al-backend", "al-telegram-bot", "al-discord-bot"]
+        services = ["mongod", "nginx", "al-backend", "al-report-worker", "al-telegram-bot", "al-discord-bot"]
         unit_name = f"al-dashboard-reboot-{requested_at.strftime('%Y%m%d%H%M%S')}"
 
         try:

@@ -54,7 +54,19 @@ class FakeCollection:
         self.items = []
 
     def find_one(self, query, projection=None, sort=None):
-        for item in self.items:
+        items = self.items
+
+        if sort:
+            items = sorted(
+                self.items,
+                key=lambda item: tuple(self._sort_value(item.get(key)) for key, _direction in sort),
+            )
+
+            for key, direction in reversed(sort):
+                if direction < 0:
+                    items = sorted(items, key=lambda item: self._sort_value(item.get(key)), reverse=True)
+
+        for item in items:
             if self._matches(item, query):
                 return item.copy()
 

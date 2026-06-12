@@ -12,6 +12,7 @@ export const SETTINGS_TABS: { key: SettingsTab; label: string }[] = [
   { key: "meetingNotification", label: "Meeting Notification" },
   { key: "meetingSummaries", label: "Meeting Summaries" },
   { key: "snapshots", label: "Activity Snapshots" },
+  { key: "reportsQueue", label: "Reports Queue" },
   { key: "fakeOnline", label: "Fake Online" },
   { key: "users", label: "Site Users" }
 ];
