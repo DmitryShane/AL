@@ -3,8 +3,10 @@ set -euo pipefail
 
 UID_VALUE="$(id -u)"
 BACKEND_LABEL="com.al.backend"
+REPORT_WORKER_LABEL="com.al.report-worker"
 FRONTEND_LABEL="com.al.frontend"
 BACKEND_PLIST="$HOME/Library/LaunchAgents/$BACKEND_LABEL.plist"
+REPORT_WORKER_PLIST="$HOME/Library/LaunchAgents/$REPORT_WORKER_LABEL.plist"
 FRONTEND_PLIST="$HOME/Library/LaunchAgents/$FRONTEND_LABEL.plist"
 RUNTIME_DIR="/tmp/al-runtime"
 
@@ -35,12 +37,13 @@ stop_port_processes() {
 }
 
 stop_service "Frontend" "$FRONTEND_LABEL"
+stop_service "Report worker" "$REPORT_WORKER_LABEL"
 stop_service "Backend" "$BACKEND_LABEL"
 
 stop_port_processes "Frontend" 5173
 stop_port_processes "Backend" 8000
 
-rm -f "$FRONTEND_PLIST" "$BACKEND_PLIST"
+rm -f "$FRONTEND_PLIST" "$REPORT_WORKER_PLIST" "$BACKEND_PLIST"
 rm -rf "$RUNTIME_DIR"
 
 echo "Stopped AL backend and frontend."

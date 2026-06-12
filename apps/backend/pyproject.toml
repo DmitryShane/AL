@@ -17,6 +17,7 @@ dependencies = [
 al-telegram-bot = "al_backend.telegram_bot:main"
 al-discord-bot = "al_backend.discord_bot:main"
 al-apply-discord-author-mappings = "al_backend.discord_author_mappings:main"
+al-report-worker = "al_backend.report_worker:main"
 
 [dependency-groups]
 dev = [

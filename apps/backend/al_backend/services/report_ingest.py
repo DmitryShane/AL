@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import traceback
 
 from ..activity_math import *
 from ..backend_composable_host import composed
@@ -93,7 +94,33 @@ def _is_legacy_device_editor_payload(payload: dict[str, Any]) -> bool:
 
 
 class ReportIngestService(MongoComposableMixin):
+    REPORT_QUEUE_LEASE_SECONDS = 300
+    REPORT_QUEUE_MAX_ATTEMPTS = 5
+
     def save_report(
+        self,
+        source: str,
+        plugin_version: str,
+        encrypted_packet: str,
+        payload: dict[str, Any],
+        challenge_id: str,
+        device_id: str | None = None,
+    ) -> str:
+        report_id = self.queue_decoded_report(
+            source=source,
+            plugin_version=plugin_version,
+            encrypted_packet=encrypted_packet,
+            payload=payload,
+            challenge_id=challenge_id,
+            device_id=device_id,
+        )
+
+        if report_id:
+            self.process_queued_report(report_id)
+
+        return report_id
+
+    def queue_decoded_report(
         self,
         source: str,
         plugin_version: str,
@@ -139,54 +166,169 @@ class ReportIngestService(MongoComposableMixin):
         if not self._is_unassigned_device_report_author(effective_source, payload.get("author")):
             composed(self).update_author_time_zone(str(payload.get("author") or "Unknown User"), payload.get("timeZoneId"), payload.get("timeZoneDisplayName"))
         report_type = self.consume_expected_report_type(payload.get("author"))
+        raw_report_id = _new_id()
         raw_result = self.db.raw_reports.insert_one(
             {
+                "_id": raw_report_id,
                 "source": effective_source,
                 "pluginVersion": plugin_version,
                 "challengeId": challenge_id,
                 "deviceId": resolved_device_id,
                 "encryptedPacket": encrypted_packet,
+                "payload": payload,
                 "receivedAt": now,
-                "status": "decoded",
+                "queuedAt": now,
+                "status": "queued",
+                "attempts": 0,
                 "reportType": report_type,
             }
         )
+        return str(raw_result.inserted_id)
+
+    def claim_next_queued_report(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int | None = None,
+        max_attempts: int | None = None,
+    ) -> dict[str, Any] | None:
+        now = dt.datetime.now(dt.UTC)
+        lease_delta = dt.timedelta(seconds=lease_seconds or self.REPORT_QUEUE_LEASE_SECONDS)
+        max_attempt_count = max_attempts or self.REPORT_QUEUE_MAX_ATTEMPTS
+        query = {
+            "$or": [
+                {"status": "queued"},
+                {"status": "processing", "leaseExpiresAt": {"$lte": now}},
+            ],
+            "attempts": {"$lt": max_attempt_count},
+        }
+        return self.db.raw_reports.find_one_and_update(
+            query,
+            {
+                "$set": {
+                    "status": "processing",
+                    "processingStartedAt": now,
+                    "leaseOwner": worker_id,
+                    "leaseExpiresAt": now + lease_delta,
+                },
+                "$inc": {"attempts": 1},
+                "$unset": {"lastError": ""},
+            },
+            sort=[("queuedAt", ASCENDING), ("receivedAt", ASCENDING)],
+            return_document=ReturnDocument.AFTER,
+        )
+
+    def process_claimed_report(self, report: dict[str, Any], *, max_attempts: int | None = None) -> bool:
+        try:
+            self._process_raw_report_doc(report)
+        except Exception as exc:
+            self.mark_queued_report_failed(report, exc, max_attempts=max_attempts)
+            return False
+
+        return True
+
+    def process_queued_report(self, raw_report_id: Any) -> bool:
+        report = self.db.raw_reports.find_one({"_id": raw_report_id})
+
+        if not report and isinstance(raw_report_id, str):
+            report = self.db.raw_reports.find_one({"_id": raw_report_id})
+
+        if not report or report.get("status") == "processed":
+            return False
+
+        self._process_raw_report_doc(report)
+        return True
+
+    def mark_queued_report_failed(
+        self,
+        report: dict[str, Any],
+        exc: Exception,
+        *,
+        max_attempts: int | None = None,
+    ) -> None:
+        now = dt.datetime.now(dt.UTC)
+        raw_report_id = report.get("_id")
+        attempts = int(report.get("attempts") or 0)
+        max_attempt_count = max_attempts or self.REPORT_QUEUE_MAX_ATTEMPTS
+        status = "failed" if attempts >= max_attempt_count else "queued"
+        update: dict[str, Any] = {
+            "status": status,
+            "lastError": "".join(traceback.format_exception_only(type(exc), exc)).strip(),
+            "lastFailedAt": now,
+        }
+
+        if status == "failed":
+            update["failedAt"] = now
+
+        self.db.raw_reports.update_one(
+            {"_id": raw_report_id, "status": {"$ne": "processed"}},
+            {
+                "$set": update,
+                "$unset": {"leaseOwner": "", "leaseExpiresAt": ""},
+            },
+        )
+
+    def _process_raw_report_doc(self, report: dict[str, Any]) -> None:
+        if report.get("status") == "processed":
+            return
+
+        payload = dict(report.get("payload") or {})
+        raw_report_id = report.get("_id")
+        source = str(report.get("source") or "")
+        plugin_version = str(report.get("pluginVersion") or "")
+        challenge_id = str(report.get("challengeId") or "")
+        device_id = str(report.get("deviceId") or "")
+        report_type = str(report.get("reportType") or "auto")
+        received_at = _coerce_datetime(report.get("receivedAt")) or dt.datetime.now(dt.UTC)
         author_for_stale_touch = str(payload.get("author") or "Unknown User")
+        affected_dates: list[str] = []
 
         if isinstance(payload.get("events"), list):
             affected_dates = self._save_event_batch(
-                source=effective_source,
+                source=source,
                 plugin_version=plugin_version,
                 payload=payload,
-                raw_report_id=raw_result.inserted_id,
+                raw_report_id=raw_report_id,
                 report_type=report_type,
-                received_at=now,
+                received_at=received_at,
                 challenge_id=challenge_id,
-                device_id=resolved_device_id,
+                device_id=device_id,
             )
-            if not self._is_unassigned_device_report_author(effective_source, author_for_stale_touch):
-                composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
+            if not self._is_unassigned_device_report_author(source, author_for_stale_touch):
+                composed(self).touch_last_raw_report_received_at(author_for_stale_touch, received_at)
             composed(self).invalidate_activity_summary_cache(affected_dates)
-            return str(raw_result.inserted_id)
+        else:
+            snapshot = dict(payload)
+            snapshot.update(
+                {
+                    "source": source,
+                    "pluginVersion": plugin_version,
+                    "rawReportId": raw_report_id,
+                    "receivedAt": received_at,
+                    "reportType": report_type,
+                    "challengeId": challenge_id,
+                    "deviceId": device_id,
+                }
+            )
+            self.db.activity_snapshots.insert_one(snapshot)
+            composed(self)._apply_snapshot_to_aggregates(snapshot)
+            if not self._is_unassigned_device_report_author(source, author_for_stale_touch):
+                composed(self).touch_last_raw_report_received_at(author_for_stale_touch, received_at)
+            affected_dates = [str(snapshot.get("date") or "")]
+            composed(self).invalidate_activity_summary_cache(affected_dates)
 
-        snapshot = dict(payload)
-        snapshot.update(
+        now = dt.datetime.now(dt.UTC)
+        self.db.raw_reports.update_one(
+            {"_id": raw_report_id, "status": {"$ne": "processed"}},
             {
-                "source": effective_source,
-                "pluginVersion": plugin_version,
-                "rawReportId": raw_result.inserted_id,
-                "receivedAt": now,
-                "reportType": report_type,
-                "challengeId": challenge_id,
-                "deviceId": resolved_device_id,
-            }
+                "$set": {
+                    "status": "processed",
+                    "processedAt": now,
+                    "affectedDates": sorted({date for date in affected_dates if str(date).strip()}),
+                },
+                "$unset": {"leaseOwner": "", "leaseExpiresAt": "", "lastError": ""},
+            },
         )
-        self.db.activity_snapshots.insert_one(snapshot)
-        composed(self)._apply_snapshot_to_aggregates(snapshot)
-        if not self._is_unassigned_device_report_author(effective_source, author_for_stale_touch):
-            composed(self).touch_last_raw_report_received_at(author_for_stale_touch, now)
-        composed(self).invalidate_activity_summary_cache([str(snapshot.get("date") or "")])
-        return str(raw_result.inserted_id)
 
     def _is_unassigned_device_report_author(self, source: str, author: Any) -> bool:
         if not is_device_source(source):
@@ -398,11 +540,12 @@ class ReportIngestService(MongoComposableMixin):
         project_id = str(payload.get("projectId") or "")
         session_id = str(payload.get("sessionId") or "")
         resolved_device_id = str(device_id or payload.get("deviceId") or "")
-        batch_id = _new_id()
+        existing_batch = self.db.raw_event_batches.find_one({"rawReportId": raw_report_id})
+        batch_id = str((existing_batch or {}).get("batchId") or _new_id())
         batch_delta_items: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
         composed(self).update_author_email(author, author_email)
-        batch = {
+        batch = existing_batch or {
             "batchId": batch_id,
             "rawReportId": raw_report_id,
             "challengeId": challenge_id,
@@ -420,7 +563,9 @@ class ReportIngestService(MongoComposableMixin):
             "eventCount": len(payload.get("events") or []),
             "reportType": report_type,
         }
-        self.db.raw_event_batches.insert_one(batch)
+
+        if not existing_batch:
+            self.db.raw_event_batches.insert_one(batch)
 
         events = sorted(payload.get("events") or [], key=lambda item: str(item.get("occurredAtUtc") or item.get("occurredAtLocal") or ""))
         resume_cutoff = composed(self).get_effective_plugin_ingest_resume_cutoff_utc(author)

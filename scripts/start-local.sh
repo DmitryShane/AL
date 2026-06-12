@@ -10,12 +10,17 @@ BACKEND_LOG="$RUNTIME_DIR/backend.log"
 BACKEND_ERR="$RUNTIME_DIR/backend.err.log"
 BACKEND_RUNNER="$RUNTIME_DIR/backend-runner.sh"
 BACKEND_LOCAL_ENV="$RUNTIME_DIR/backend.env"
+REPORT_WORKER_LOG="$RUNTIME_DIR/report-worker.log"
+REPORT_WORKER_ERR="$RUNTIME_DIR/report-worker.err.log"
+REPORT_WORKER_RUNNER="$RUNTIME_DIR/report-worker-runner.sh"
 FRONTEND_LOG="$RUNTIME_DIR/frontend.log"
 FRONTEND_ERR="$RUNTIME_DIR/frontend.err.log"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 BACKEND_LABEL="com.al.backend"
+REPORT_WORKER_LABEL="com.al.report-worker"
 FRONTEND_LABEL="com.al.frontend"
 BACKEND_PLIST="$LAUNCH_AGENTS_DIR/$BACKEND_LABEL.plist"
+REPORT_WORKER_PLIST="$LAUNCH_AGENTS_DIR/$REPORT_WORKER_LABEL.plist"
 FRONTEND_PLIST="$LAUNCH_AGENTS_DIR/$FRONTEND_LABEL.plist"
 UID_VALUE="$(id -u)"
 UV_BIN="$(command -v uv)"
@@ -115,6 +120,48 @@ write_frontend_plist() {
 XML
 }
 
+write_report_worker_plist() {
+  cat >"$REPORT_WORKER_RUNNER" <<SH
+#!/usr/bin/env zsh
+set -e
+
+cd "$BACKEND_DIR"
+
+if [ -f "$BACKEND_LOCAL_ENV" ]; then
+  while IFS='=' read -r key value; do
+    [[ -z "\$key" || "\$key" == \#* ]] && continue
+    export "\$key=\$value"
+  done < "$BACKEND_LOCAL_ENV"
+fi
+
+exec "$UV_BIN" run python -m al_backend.report_worker
+SH
+  chmod +x "$REPORT_WORKER_RUNNER"
+
+  cat >"$REPORT_WORKER_PLIST" <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$REPORT_WORKER_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$REPORT_WORKER_RUNNER</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>$REPORT_WORKER_LOG</string>
+  <key>StandardErrorPath</key>
+  <string>$REPORT_WORKER_ERR</string>
+</dict>
+</plist>
+XML
+}
+
 start_service() {
   local name="$1"
   local label="$2"
@@ -156,8 +203,16 @@ wait_for_url() {
 
 ensure_mongo
 write_backend_plist
+write_report_worker_plist
 write_frontend_plist
 start_service "Backend" "$BACKEND_LABEL" "$BACKEND_PLIST" 8000
+if is_loaded "$REPORT_WORKER_LABEL"; then
+  echo "Report worker: already loaded"
+else
+  echo "Report worker: starting"
+  launchctl bootstrap "gui/$UID_VALUE" "$REPORT_WORKER_PLIST"
+  launchctl enable "gui/$UID_VALUE/$REPORT_WORKER_LABEL"
+fi
 start_service "Frontend" "$FRONTEND_LABEL" "$FRONTEND_PLIST" 5173
 
 wait_for_url "Backend" "http://127.0.0.1:8000/api/v1/health" || true

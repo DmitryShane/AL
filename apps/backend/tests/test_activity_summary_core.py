@@ -1824,7 +1824,7 @@ def test_telegram_online_uses_madrid_author_time_zone_for_date():
         {"rawAuthor": "Dmitry Shane", "displayName": "Dmitry Shane", "telegramUsername": "dmitryshane", "timeZoneId": "Europe/Madrid"}
     )
 
-    repo.record_break_event("dmitryshane", "online", "2026-04-29T00:06:17+02:00")
+    repo.record_break_event("dmitryshane", "online", "2026-04-29T07:06:17+02:00")
 
     assert repo.db.day_sessions.items[0]["date"] == "2026-04-29"
     assert repo.db.report_rows.items[0]["date"] == "2026-04-29"

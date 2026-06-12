@@ -1,0 +1,20 @@
+[Unit]
+Description=AL Report Ingest Worker
+After=network-online.target mongod.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_DIR__/apps/backend
+EnvironmentFile=/etc/al/backend.env
+Environment=HOME=__APP_ROOT__
+Environment=UV_PYTHON_INSTALL_DIR=__APP_ROOT__/python
+Environment=AL_AGGREGATE_VERSION_REBUILD_SCOPE=today
+ExecStart=__APP_DIR__/apps/backend/.venv/bin/python -m al_backend.report_worker
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

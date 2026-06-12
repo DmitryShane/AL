@@ -102,7 +102,7 @@ chmod 0440 /etc/sudoers.d/al-server-stats-du
 visudo -cf /etc/sudoers.d/al-server-stats-du
 
 cat > /etc/sudoers.d/al-server-reboot <<EOF
-${APP_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit al-dashboard-reboot-* --on-active=2s /usr/bin/systemctl restart mongod nginx al-backend al-telegram-bot al-discord-bot
+${APP_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit al-dashboard-reboot-* --on-active=2s /usr/bin/systemctl restart mongod nginx al-backend al-report-worker al-telegram-bot al-discord-bot
 EOF
 chmod 0440 /etc/sudoers.d/al-server-reboot
 visudo -cf /etc/sudoers.d/al-server-reboot
@@ -112,6 +112,12 @@ sed \
   -e "s#__APP_USER__#${APP_USER}#g" \
   -e "s#__APP_ROOT__#${APP_ROOT}#g" \
   "${APP_DIR}/deploy/systemd/al-backend.service" > /etc/systemd/system/al-backend.service
+
+sed \
+  -e "s#__APP_DIR__#${APP_DIR}#g" \
+  -e "s#__APP_USER__#${APP_USER}#g" \
+  -e "s#__APP_ROOT__#${APP_ROOT}#g" \
+  "${APP_DIR}/deploy/systemd/al-report-worker.service" > /etc/systemd/system/al-report-worker.service
 
 sed \
   -e "s#__APP_DIR__#${APP_DIR}#g" \
@@ -189,7 +195,7 @@ rm -f /etc/nginx/sites-enabled/default
 systemctl daemon-reload
 systemctl restart systemd-journald
 logrotate -d /etc/logrotate.conf >/dev/null
-systemctl enable mongod nginx al-backend al-telegram-bot al-discord-bot al-apt-cache-clean.timer
+systemctl enable mongod nginx al-backend al-report-worker al-telegram-bot al-discord-bot al-apt-cache-clean.timer
 systemctl start al-apt-cache-clean.timer
 systemctl start mongod
 for attempt in {1..30}; do
@@ -205,6 +211,7 @@ for attempt in {1..30}; do
   sleep 1
 done
 systemctl restart al-backend
+systemctl restart al-report-worker
 systemctl restart al-telegram-bot
 systemctl restart al-discord-bot
 nginx -t

@@ -105,6 +105,30 @@ class FakeCollection:
 
         return None
 
+    def find_one_and_update(self, query, operation, sort=None, return_document=None):
+        items = self.items
+
+        if sort:
+            items = sorted(
+                self.items,
+                key=lambda item: tuple(self._sort_value(item.get(key)) for key, _direction in sort),
+            )
+
+            for key, direction in reversed(sort):
+                if direction < 0:
+                    items = sorted(items, key=lambda item: self._sort_value(item.get(key)), reverse=True)
+
+        for candidate in items:
+            if not self._matches(candidate, query):
+                continue
+
+            for item in self.items:
+                if item is candidate:
+                    self._apply_operation(item, operation, inserting=False)
+                    return item.copy()
+
+        return None
+
     def delete_many(self, query):
         matching = [item for item in self.items if self._matches(item, query)]
         self.items = [item for item in self.items if not self._matches(item, query)]
@@ -121,6 +145,12 @@ class FakeCollection:
 
     def count_documents(self, query):
         return len([item for item in self.items if self._matches(item, query)])
+
+    def _sort_value(self, value):
+        if isinstance(value, dt.datetime):
+            return value.isoformat()
+
+        return str(value or "")
 
     def _matches(self, item, query):
         for key, value in query.items():
@@ -140,6 +170,9 @@ class FakeCollection:
                     return False
 
                 if "$nin" in value and item_value in value["$nin"]:
+                    return False
+
+                if "$exists" in value and (key in item) is not bool(value["$exists"]):
                     return False
 
                 if "$regex" in value and not re.search(value["$regex"], str(item_value or "")):

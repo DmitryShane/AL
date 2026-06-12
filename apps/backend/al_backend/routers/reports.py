@@ -107,7 +107,7 @@ def submit_report(report: ReportIn, service: BackendServices = Depends(get_repor
         )
         raise HTTPException(status_code=400, detail="Report source does not match encrypted payload source")
 
-    report_id = service.save_report(
+    report_id = service.queue_decoded_report(
         source=report.source,
         plugin_version=report.plugin_version,
         encrypted_packet=report.encrypted_packet,

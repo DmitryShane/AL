@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import al_backend.discord_bot as discord_bot_module
+from fastapi import HTTPException
 from al_backend.app import PUBLIC_API_PATHS
 from al_backend.discord_author_mappings import apply_discord_author_mappings
 from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSession, UserPcmTrack, cleanup_old_retained_recordings, retain_recording_recovery_files
@@ -50,6 +51,8 @@ from al_backend.telegram_bot import (
     send_reminder_message,
     telegram_username,
 )
+from al_backend.report_worker import ReportWorker, ReportWorkerConfig
+from test_protocol import PRIVATE_KEY, _encode
 from tests.fakes import fake_repository, set_idle_threshold
 
 
@@ -274,6 +277,256 @@ def test_submit_report_ignores_without_writes_when_global_plugin_ingest_disabled
     assert repo.db.raw_activity_events.items == []
     assert repo.db.activity_snapshots.items == []
     assert repo.db.report_rows.items == []
+
+def test_submit_report_queues_decoded_payload_without_materializing_events():
+    from al_backend.models import ReportIn
+    from al_backend.routers.reports import submit_report
+
+    repo = fake_repository()
+    payload = _event_payload(event_count=1000)
+    repo.db.report_challenges.insert_one(
+        {
+            "challengeId": "challenge-queued",
+            "source": "ual",
+            "author": "Queue Author",
+            "authorEmail": "queue@example.com",
+            "projectId": "bike-rush-2",
+            "sessionId": "session-queue",
+            "deviceId": "device-queue",
+            "privateKeyPem": PRIVATE_KEY,
+            "expiresAt": dt.datetime(2099, 6, 12, 12, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    result = submit_report(
+        ReportIn(
+            source="ual",
+            pluginVersion="0.1.10",
+            challengeId="challenge-queued",
+            deviceId="device-queue",
+            encryptedPacket=_encode(payload),
+        ),
+        service=repo,
+    )
+
+    assert result.ok
+    assert result.report_id
+    assert len(repo.db.raw_reports.items) == 1
+    raw_report = repo.db.raw_reports.items[0]
+    assert raw_report["status"] == "queued"
+    assert raw_report["payload"]["events"][999]["eventId"] == "queued-999"
+    assert raw_report["attempts"] == 0
+    assert repo.db.raw_event_batches.items == []
+    assert repo.db.raw_activity_events.items == []
+    assert repo.db.report_rows.items == []
+
+def test_process_queued_report_materializes_event_batch_and_marks_processed():
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    report_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.10",
+        encrypted_packet="packet",
+        challenge_id="challenge-process",
+        device_id="device-process",
+        payload=_event_payload(event_count=3),
+    )
+
+    assert repo.db.raw_reports.items[0]["status"] == "queued"
+    assert repo.db.raw_event_batches.items == []
+
+    assert repo.process_queued_report(report_id)
+
+    raw_report = repo.db.raw_reports.find_one({"_id": report_id})
+    assert raw_report["status"] == "processed"
+    assert raw_report["processedAt"]
+    assert len(repo.db.raw_event_batches.items) == 1
+    assert len(repo.db.raw_activity_events.items) == 3
+    assert repo.db.report_rows.items
+
+def test_queued_report_failure_retries_then_fails_at_attempt_limit():
+    repo = fake_repository()
+    report_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.10",
+        encrypted_packet="packet",
+        challenge_id="challenge-fail",
+        device_id="device-fail",
+        payload=_event_payload(event_count=1),
+    )
+
+    def fail_save_event_batch(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    repo._save_event_batch = fail_save_event_batch
+
+    first = repo.claim_next_queued_report(worker_id="worker-1", max_attempts=2)
+    assert first is not None
+    assert first["attempts"] == 1
+    assert repo.process_claimed_report(first, max_attempts=2) is False
+    raw_report = repo.db.raw_reports.find_one({"_id": report_id})
+    assert raw_report["status"] == "queued"
+    assert "boom" in raw_report["lastError"]
+
+    second = repo.claim_next_queued_report(worker_id="worker-1", max_attempts=2)
+    assert second is not None
+    assert second["attempts"] == 2
+    assert repo.process_claimed_report(second, max_attempts=2) is False
+    raw_report = repo.db.raw_reports.find_one({"_id": report_id})
+    assert raw_report["status"] == "failed"
+    assert raw_report["failedAt"]
+
+def test_stale_processing_report_can_be_reclaimed():
+    repo = fake_repository()
+    report_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.10",
+        encrypted_packet="packet",
+        challenge_id="challenge-stale",
+        device_id="device-stale",
+        payload=_event_payload(event_count=1),
+    )
+    first = repo.claim_next_queued_report(worker_id="worker-1", lease_seconds=300)
+    assert first is not None
+    assert first["leaseOwner"] == "worker-1"
+    repo.db.raw_reports.update_one(
+        {"_id": report_id},
+        {"$set": {"leaseExpiresAt": dt.datetime(2026, 1, 1, tzinfo=dt.UTC)}},
+    )
+
+    second = repo.claim_next_queued_report(worker_id="worker-2", lease_seconds=300)
+
+    assert second is not None
+    assert second["_id"] == report_id
+    assert second["leaseOwner"] == "worker-2"
+    assert second["attempts"] == 2
+
+def test_report_worker_run_once_processes_one_queued_report():
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    report_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.10",
+        encrypted_packet="packet",
+        challenge_id="challenge-worker",
+        device_id="device-worker",
+        payload=_event_payload(event_count=2),
+    )
+
+    class Container:
+        report_ingest = repo
+
+    worker = ReportWorker(
+        Container(),
+        ReportWorkerConfig(
+            poll_interval_seconds=0.1,
+            lease_seconds=300,
+            max_attempts=5,
+            batch_limit=1,
+        ),
+    )
+
+    assert worker.run_once() == 1
+    assert repo.db.raw_reports.find_one({"_id": report_id})["status"] == "processed"
+    assert len(repo.db.raw_activity_events.items) == 2
+
+def test_queued_report_retry_reuses_existing_raw_event_batch():
+    repo = fake_repository()
+    report_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.10",
+        encrypted_packet="packet",
+        challenge_id="challenge-retry-batch",
+        device_id="device-retry-batch",
+        payload=_event_payload(event_count=2),
+    )
+    repo.db.raw_event_batches.insert_one(
+        {
+            "batchId": "existing-batch",
+            "rawReportId": report_id,
+            "source": "ual",
+            "pluginVersion": "0.1.10",
+            "author": "Queue Author",
+            "authorEmail": "queue@example.com",
+            "projectId": "bike-rush-2",
+            "sessionId": "session-queue",
+            "deviceId": "device-retry-batch",
+            "receivedAt": dt.datetime(2026, 6, 12, 10, 0, tzinfo=dt.UTC),
+            "eventCount": 2,
+            "reportType": "auto",
+        }
+    )
+
+    assert repo.process_queued_report(report_id)
+
+    assert len(repo.db.raw_event_batches.items) == 1
+    assert {event["batchId"] for event in repo.db.raw_activity_events.items} == {"existing-batch"}
+
+def test_submit_report_source_mismatch_rejects_without_queue_write():
+    from al_backend.models import ReportIn
+    from al_backend.routers.reports import submit_report
+
+    repo = fake_repository()
+    repo.db.report_challenges.insert_one(
+        {
+            "challengeId": "challenge-mismatch",
+            "source": "ual",
+            "author": "Queue Author",
+            "authorEmail": "queue@example.com",
+            "projectId": "bike-rush-2",
+            "sessionId": "session-queue",
+            "deviceId": "device-queue",
+            "privateKeyPem": PRIVATE_KEY,
+            "expiresAt": dt.datetime(2099, 6, 12, 12, 0, tzinfo=dt.UTC),
+        }
+    )
+
+    try:
+        submit_report(
+            ReportIn(
+                source="ual",
+                pluginVersion="0.1.10",
+                challengeId="challenge-mismatch",
+                deviceId="device-queue",
+                encryptedPacket=_encode({"source": "cur", "author": "Queue Author"}),
+            ),
+            service=repo,
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 400
+    else:
+        raise AssertionError("submit_report should reject source mismatch")
+
+    assert repo.db.raw_reports.items == []
+
+def _event_payload(event_count: int) -> dict:
+    base = dt.datetime(2026, 6, 12, 10, 0, tzinfo=dt.UTC)
+    events = []
+
+    for index in range(event_count):
+        occurred = base + dt.timedelta(seconds=index * 10)
+        events.append(
+            {
+                "eventId": f"queued-{index}",
+                "eventType": "focus" if index == 0 else "editor_input",
+                "date": "2026-06-12",
+                "occurredAtUtc": occurred.isoformat().replace("+00:00", "Z"),
+                "occurredAtLocal": occurred.isoformat(),
+            }
+        )
+
+    return {
+        "source": "ual",
+        "author": "Queue Author",
+        "authorEmail": "queue@example.com",
+        "projectId": "bike-rush-2",
+        "sessionId": "session-queue",
+        "deviceId": "device-queue",
+        "timeZoneId": "UTC",
+        "timeZoneDisplayName": "UTC",
+        "sentAt": "2026-06-12T10:10:00Z",
+        "events": events,
+    }
 
 def test_deleted_author_profile_blocks_plugin_config_profile_recreation():
     repo = fake_repository()
