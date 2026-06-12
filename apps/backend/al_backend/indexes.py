@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from .activity_math import *
 
+RAW_REPORTS_RETENTION_SECONDS = 7 * 24 * 60 * 60
+RAW_REPORTS_RETENTION_INDEX_NAME = "raw_reports_received_at_ttl"
+
 
 class IndexManager:
     def __init__(self, db):
@@ -12,7 +15,7 @@ class IndexManager:
         self.db.raw_reports.create_index([("status", ASCENDING), ("leaseExpiresAt", ASCENDING), ("receivedAt", ASCENDING)])
         self.db.raw_reports.create_index([("status", ASCENDING), ("queuedAt", ASCENDING)])
         self.db.raw_reports.create_index([("status", ASCENDING), ("processedAt", DESCENDING)])
-        self.db.raw_reports.create_index([("receivedAt", DESCENDING)])
+        self._ensure_raw_reports_retention_index()
         self.db.raw_event_batches.create_index([("source", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.raw_activity_events.create_index("eventId", unique=True)
         self.db.raw_activity_events.create_index(
@@ -147,3 +150,34 @@ class IndexManager:
         self.db.site_users.create_index("email", unique=True)
         self.db.site_sessions.create_index("tokenHash", unique=True)
         self.db.site_sessions.create_index("expiresAt", expireAfterSeconds=0)
+
+    def _ensure_raw_reports_retention_index(self) -> None:
+        try:
+            existing_indexes = list(self.db.raw_reports.list_indexes())
+        except Exception:
+            existing_indexes = []
+
+        for spec in existing_indexes:
+            key = dict(spec.get("key") or {})
+            name = str(spec.get("name") or "")
+            is_received_at_only = key in ({"receivedAt": 1}, {"receivedAt": -1})
+            expire_after = spec.get("expireAfterSeconds")
+
+            if name == RAW_REPORTS_RETENTION_INDEX_NAME and expire_after != RAW_REPORTS_RETENTION_SECONDS:
+                try:
+                    self.db.raw_reports.drop_index(name)
+                except Exception:
+                    pass
+                continue
+
+            if is_received_at_only and name != RAW_REPORTS_RETENTION_INDEX_NAME:
+                try:
+                    self.db.raw_reports.drop_index(name)
+                except Exception:
+                    pass
+
+        self.db.raw_reports.create_index(
+            [("receivedAt", ASCENDING)],
+            expireAfterSeconds=RAW_REPORTS_RETENTION_SECONDS,
+            name=RAW_REPORTS_RETENTION_INDEX_NAME,
+        )
