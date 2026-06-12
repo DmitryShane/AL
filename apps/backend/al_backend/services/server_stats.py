@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from ..activity_math import _coerce_datetime
+from ..activity_math import _coerce_datetime, _display_name
 
 
 SERVER_STATS_PATHS = {
@@ -242,9 +242,11 @@ def _processing_seconds(report: dict[str, Any]) -> float | None:
     return max(0.0, round((finished_at - started_at).total_seconds(), 3))
 
 
-def _reports_queue_row(report: dict[str, Any]) -> dict[str, Any]:
+def _reports_queue_row(report: dict[str, Any], profiles_by_author: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     payload = report.get("payload") if isinstance(report.get("payload"), dict) else {}
     project_id = str(payload.get("projectId") or "").strip() or _first_payload_event_project_id(payload)
+    author = str(payload.get("author") or "")
+    display_name = _display_name(author, (profiles_by_author or {}).get(author, {}))
 
     return {
         "id": str(report.get("_id") or ""),
@@ -254,7 +256,8 @@ def _reports_queue_row(report: dict[str, Any]) -> dict[str, Any]:
         "processedAt": _isoformat_datetime(report.get("processedAt")),
         "failedAt": _isoformat_datetime(report.get("failedAt")),
         "source": str(report.get("source") or ""),
-        "author": str(payload.get("author") or ""),
+        "author": author,
+        "displayName": display_name,
         "projectId": project_id,
         "status": str(report.get("status") or "unknown"),
         "attempts": int(report.get("attempts") or 0),
@@ -600,6 +603,15 @@ class ServerStatsServiceMixin:
                 },
             ).sort([("failedAt", -1), ("receivedAt", -1)]).limit(20)
         )
+        raw_authors = {
+            str((report.get("payload") or {}).get("author") or "")
+            for report in [*recent_reports, *failed_reports]
+            if isinstance(report.get("payload"), dict) and str((report.get("payload") or {}).get("author") or "").strip()
+        }
+        profiles_by_author = {
+            str(profile.get("rawAuthor") or ""): profile
+            for profile in self.db.author_profiles.find({"rawAuthor": {"$in": sorted(raw_authors)}}, {"_id": 0})
+        } if raw_authors else {}
 
         queued_at = _coerce_datetime(oldest_queued.get("queuedAt")) if oldest_queued else None
         oldest_queued_payload = None
@@ -624,8 +636,8 @@ class ServerStatsServiceMixin:
                 "processedLastHour": self.db.raw_reports.count_documents({"status": "processed", "processedAt": {"$gte": processed_since}}),
             },
             "oldestQueued": oldest_queued_payload,
-            "recentReports": [_reports_queue_row(report) for report in recent_reports],
-            "failedReports": [_reports_queue_row(report) for report in failed_reports],
+            "recentReports": [_reports_queue_row(report, profiles_by_author) for report in recent_reports],
+            "failedReports": [_reports_queue_row(report, profiles_by_author) for report in failed_reports],
         }
 
     def reboot_server(self) -> dict[str, Any]:

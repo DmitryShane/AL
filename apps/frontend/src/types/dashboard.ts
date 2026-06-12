@@ -364,6 +364,7 @@ export type ReportsQueueReport = {
   failedAt?: string | null;
   source: string;
   author: string;
+  displayName?: string;
   projectId: string;
   status: string;
   attempts: number;

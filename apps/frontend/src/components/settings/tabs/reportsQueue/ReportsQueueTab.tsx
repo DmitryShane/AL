@@ -3,13 +3,15 @@ import { apiFetch } from "../../../../api/client";
 import { SourceIcon } from "../../../icons/SourceIcon";
 import type { ReportsQueueReport, ReportsQueueStatus, ServerStatsServiceStatus } from "../../../../types/dashboard";
 import { formatSource } from "../../../../utils/format";
+import { localBrowserStorage, readStorageItem, writeStorageCache } from "../../../../utils/browserStorage";
 import { formatDateTime } from "../../serverStatsFormatters";
 
 const REPORTS_QUEUE_REFRESH_MS = 5000;
+const REPORTS_QUEUE_CACHE_KEY = "AL.Dashboard.ReportsQueue.Status";
 
 export function ReportsQueueTab() {
-  const [status, setStatus] = useState<ReportsQueueStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState<ReportsQueueStatus | null>(() => readCachedReportsQueueStatus());
+  const [loading, setLoading] = useState(status === null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
@@ -25,6 +27,7 @@ export function ReportsQueueTab() {
 
       const payload = (await response.json()) as ReportsQueueStatus;
       setStatus(payload);
+      saveCachedReportsQueueStatus(payload);
       setError("");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Reports queue request failed");
@@ -197,7 +200,7 @@ function ReportQueueRow({ report, isFailedTable }: { report: ReportsQueueReport;
         <SourceIcon source={report.source} />
         {formatSource(report.source)}
       </span>
-      <span title={report.author || undefined}>{report.author || "unknown"}</span>
+      <span title={report.author || undefined}>{report.displayName || report.author || "unknown"}</span>
       <span title={report.receivedAt || undefined}>{formatDateTime(report.receivedAt)}</span>
       <span>
         <StatusBadge status={report.status} />
@@ -266,4 +269,28 @@ function formatDuration(seconds: number | null | undefined): string {
 
 function statusClassName(status: string): string {
   return (status || "unknown").replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "unknown";
+}
+
+function readCachedReportsQueueStatus(): ReportsQueueStatus | null {
+  try {
+    const raw = readStorageItem(localBrowserStorage(), REPORTS_QUEUE_CACHE_KEY);
+
+    if (!raw) {
+      return null;
+    }
+
+    const status = JSON.parse(raw) as Partial<ReportsQueueStatus>;
+
+    if (!status || !Array.isArray(status.recentReports) || !Array.isArray(status.failedReports)) {
+      return null;
+    }
+
+    return status as ReportsQueueStatus;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedReportsQueueStatus(status: ReportsQueueStatus) {
+  writeStorageCache(localBrowserStorage(), REPORTS_QUEUE_CACHE_KEY, JSON.stringify(status));
 }

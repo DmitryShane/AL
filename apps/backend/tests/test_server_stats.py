@@ -396,6 +396,7 @@ def test_server_stats_service_parses_named_systemd_fields(monkeypatch) -> None:
 def test_reports_queue_status_summarizes_queue_without_raw_payload(monkeypatch) -> None:
     repo = fake_repository()
     now = dt.datetime.now(dt.UTC)
+    repo.db.author_profiles.insert_one({"rawAuthor": "Evgeniy Dotsenko", "displayName": "Zhenya Dotsenko"})
 
     monkeypatch.setattr(
         server_stats_service,
@@ -479,6 +480,7 @@ def test_reports_queue_status_summarizes_queue_without_raw_payload(monkeypatch) 
 
     queued_row = next(row for row in payload["recentReports"] if row["id"] == "queued-old")
     assert queued_row["author"] == "Evgeniy Dotsenko"
+    assert queued_row["displayName"] == "Zhenya Dotsenko"
     assert queued_row["projectId"] == "Bike Rush 2"
     assert "payload" not in queued_row
     assert "encryptedPacket" not in queued_row
