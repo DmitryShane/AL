@@ -1750,7 +1750,7 @@ p {
   display: grid;
   grid-template-columns: minmax(520px, 1.45fr) minmax(600px, 2.4fr);
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .dashboard-insights-row > .panel,
@@ -1763,12 +1763,15 @@ p {
   display: grid;
   grid-template-columns: repeat(3, minmax(190px, 1fr));
   gap: 14px;
+  align-items: stretch;
+  height: 100%;
   min-width: 0;
   scroll-margin-top: 28px;
 }
 
 .dashboard-insights-row .breakdown-panel {
   gap: 14px;
+  min-height: 242px;
   padding-bottom: 14px;
 }
 
@@ -1837,7 +1840,7 @@ p {
   min-height: 0;
   align-content: start;
   align-items: start;
-  overscroll-behavior: contain;
+  overscroll-behavior: auto;
   padding-right: 10px;
 }
 
@@ -1906,6 +1909,7 @@ p {
   --breakdown-scroll-row-block: calc(8px + 1.15 * 12px + 1px);
   --breakdown-scroll-row-gap: 2px;
   overflow-y: auto;
+  overscroll-behavior: auto;
 }
 
 .mini-breakdown-list + .mini-breakdown-list {
