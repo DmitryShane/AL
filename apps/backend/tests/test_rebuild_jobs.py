@@ -201,6 +201,7 @@ def test_scoped_rebuild_compacts_high_frequency_editor_input_before_rebuild():
         occurred_at = base_at + dt.timedelta(milliseconds=index * 100)
         repo.db.raw_activity_events.insert_one(
             {
+                "_id": f"raw-editor-input-{index}",
                 "eventId": f"editor-input-{index}",
                 "batchId": "batch-1",
                 "author": author,
@@ -249,6 +250,7 @@ def test_scoped_rebuild_compacts_high_frequency_editor_input_before_rebuild():
     assert editor_inputs[0]["metadata"]["coalescedFromRawEvents"] is True
     assert editor_inputs[0]["metadata"]["coalescedEventCount"] == 100
     assert editor_inputs[0]["metadata"]["keyCode"] == "99"
+    assert editor_inputs[0].get("_id") not in {"raw-editor-input-0", "raw-editor-input-99"}
     assert navigation is not None
 
 

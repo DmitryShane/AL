@@ -263,6 +263,7 @@ class ActivityAggregationRebuildMixin:
                 }
             )
             synthetic = dict(last)
+            synthetic.pop("_id", None)
             synthetic.update(
                 {
                     "eventId": f"rebuild-coalesced-{uuid.uuid4().hex}",
