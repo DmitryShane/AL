@@ -24,10 +24,22 @@ class CalendarDayOverrideService(MongoComposableMixin):
         if not raw_author or not day_date:
             return None
 
-        mark = self.db.calendar_marks.find_one(
-            {"rawAuthor": raw_author, "date": day_date, "reasonId": VACATION_REASON_ID},
-            {"_id": 0},
-        )
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        cache_key = (raw_author, day_date)
+
+        if context:
+            cache = context.setdefault("vacationMarks", {})
+            if cache_key not in cache:
+                cache[cache_key] = self.db.calendar_marks.find_one(
+                    {"rawAuthor": raw_author, "date": day_date, "reasonId": VACATION_REASON_ID},
+                    {"_id": 0},
+                )
+            mark = cache.get(cache_key)
+        else:
+            mark = self.db.calendar_marks.find_one(
+                {"rawAuthor": raw_author, "date": day_date, "reasonId": VACATION_REASON_ID},
+                {"_id": 0},
+            )
 
         if not mark:
             return None

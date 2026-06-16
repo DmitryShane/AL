@@ -357,6 +357,165 @@ def test_raw_event_batch_accounting_caches_author_day_context_lookups():
     }
 
 
+def test_raw_event_batch_accounting_caches_vacation_marks():
+    repo = fake_repository()
+    author = "Future Artist"
+    day = "2026-06-16"
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    event = {
+        "author": author,
+        "date": day,
+        "source": "ual",
+        "timeZoneId": "UTC",
+        "occurredAtUtc": event_at,
+        "receivedAt": event_at,
+    }
+    repo.db.calendar_marks.insert_one({"rawAuthor": author, "date": day, "reasonId": "vacation", "note": ""})
+    calls = {"calendar_marks_find_one": 0}
+    original_find_one = repo.db.calendar_marks.find_one
+
+    def counting_find_one(*args, **kwargs):
+        calls["calendar_marks_find_one"] += 1
+        return original_find_one(*args, **kwargs)
+
+    repo.db.calendar_marks.find_one = counting_find_one
+
+    repo._begin_raw_event_batch_accounting([event, event])
+    try:
+        for _ in range(2):
+            assert repo.is_vacation_day(author, day) is True
+            assert repo.vacation_overtime_window_for_event(event) == (
+                dt.datetime(2026, 6, 16, 0, 0, tzinfo=dt.UTC),
+                dt.datetime(2026, 6, 17, 0, 0, tzinfo=dt.UTC),
+            )
+    finally:
+        repo._finish_raw_event_batch_accounting()
+
+    assert calls == {"calendar_marks_find_one": 1}
+
+
+def test_vacation_mark_lookup_without_batch_context_still_hits_database():
+    repo = fake_repository()
+    author = "Future Artist"
+    day = "2026-06-16"
+    repo.db.calendar_marks.insert_one({"rawAuthor": author, "date": day, "reasonId": "vacation", "note": ""})
+    calls = {"calendar_marks_find_one": 0}
+    original_find_one = repo.db.calendar_marks.find_one
+
+    def counting_find_one(*args, **kwargs):
+        calls["calendar_marks_find_one"] += 1
+        return original_find_one(*args, **kwargs)
+
+    repo.db.calendar_marks.find_one = counting_find_one
+
+    assert repo.is_vacation_day(author, day) is True
+    assert repo.is_vacation_day(author, day) is True
+
+    assert calls == {"calendar_marks_find_one": 2}
+
+
+def test_raw_event_batch_accounting_caches_overtime_rule_context_lookups():
+    repo = fake_repository()
+    author = "Future Artist"
+    day = "2026-06-16"
+    event_at = dt.datetime(2026, 6, 16, 20, 0, tzinfo=dt.UTC)
+    event = {
+        "author": author,
+        "date": day,
+        "source": "ual",
+        "timeZoneId": "UTC",
+        "occurredAtUtc": event_at,
+        "receivedAt": event_at,
+    }
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": author,
+            "date": day,
+            "lastOfflineAt": dt.datetime(2026, 6, 16, 18, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.break_events.insert_one(
+        {
+            "rawAuthor": author,
+            "date": day,
+            "eventType": "offline",
+            "timestamp": dt.datetime(2026, 6, 16, 18, 0, tzinfo=dt.UTC),
+        }
+    )
+    calls = {"day_sessions_find_one": 0, "break_events_find": 0}
+    original_day_session_find_one = repo.db.day_sessions.find_one
+    original_break_events_find = repo.db.break_events.find
+
+    def counting_day_session_find_one(*args, **kwargs):
+        calls["day_sessions_find_one"] += 1
+        return original_day_session_find_one(*args, **kwargs)
+
+    def counting_break_events_find(*args, **kwargs):
+        calls["break_events_find"] += 1
+        return original_break_events_find(*args, **kwargs)
+
+    repo.db.day_sessions.find_one = counting_day_session_find_one
+    repo.db.break_events.find = counting_break_events_find
+
+    repo._begin_raw_event_batch_accounting([event, event])
+    try:
+        for _ in range(2):
+            assert repo._day_session_for_overtime_rules(author, day)["lastOfflineAt"] == dt.datetime(
+                2026, 6, 16, 18, 0, tzinfo=dt.UTC
+            )
+            assert repo._is_author_offline_after_latest_telegram_state(author, day, event_at) is True
+    finally:
+        repo._finish_raw_event_batch_accounting()
+
+    assert calls == {"day_sessions_find_one": 1, "break_events_find": 1}
+
+
+def test_overtime_rule_context_without_batch_context_still_hits_database():
+    repo = fake_repository()
+    author = "Future Artist"
+    day = "2026-06-16"
+    event_at = dt.datetime(2026, 6, 16, 20, 0, tzinfo=dt.UTC)
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": author,
+            "date": day,
+            "lastOfflineAt": dt.datetime(2026, 6, 16, 18, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.break_events.insert_one(
+        {
+            "rawAuthor": author,
+            "date": day,
+            "eventType": "offline",
+            "timestamp": dt.datetime(2026, 6, 16, 18, 0, tzinfo=dt.UTC),
+        }
+    )
+    calls = {"day_sessions_find_one": 0, "break_events_find": 0}
+    original_day_session_find_one = repo.db.day_sessions.find_one
+    original_break_events_find = repo.db.break_events.find
+
+    def counting_day_session_find_one(*args, **kwargs):
+        calls["day_sessions_find_one"] += 1
+        return original_day_session_find_one(*args, **kwargs)
+
+    def counting_break_events_find(*args, **kwargs):
+        calls["break_events_find"] += 1
+        return original_break_events_find(*args, **kwargs)
+
+    repo.db.day_sessions.find_one = counting_day_session_find_one
+    repo.db.break_events.find = counting_break_events_find
+
+    for _ in range(2):
+        assert repo._day_session_for_overtime_rules(author, day)["lastOfflineAt"] == dt.datetime(
+            2026, 6, 16, 18, 0, tzinfo=dt.UTC
+        )
+        assert repo._is_author_offline_after_latest_telegram_state(author, day, event_at) is True
+
+    assert calls == {"day_sessions_find_one": 2, "break_events_find": 2}
+
+
 def test_raw_event_batch_accounting_caches_repeated_time_zone_updates():
     repo = fake_repository()
     calls = []

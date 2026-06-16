@@ -22,10 +22,7 @@ class ActivityAggregationService(
         )
 
     def _day_session_for_overtime_rules(self, raw_author: str, day_date: str) -> dict[str, Any] | None:
-        return self.db.day_sessions.find_one(
-            {"rawAuthor": raw_author, "date": day_date},
-            {"_id": 0, "lastOfflineAt": 1, "timeZoneId": 1, "reminderAction": 1},
-        )
+        return self._batch_overtime_day_session_doc(raw_author, day_date)
 
     def _notifications_suppressed_for_rebuild(self) -> bool:
         return bool(getattr(self, "_suppress_rebuild_notification_side_effects", False))

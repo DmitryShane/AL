@@ -148,6 +148,7 @@ class IndexManager:
         self.db.report_refresh_requests.create_index("requestedAt")
         self.db.manual_report_expectations.create_index("author", unique=True)
         self.db.calendar_marks.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)], unique=True)
+        self.db.calendar_marks.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING), ("reasonId", ASCENDING)])
         self.db.calendar_marks.create_index("date")
         self.db.calendar_reasons.create_index("id", unique=True)
         self.db.day_sessions.create_index([("rawAuthor", ASCENDING), ("date", ASCENDING)])

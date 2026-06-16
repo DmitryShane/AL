@@ -124,6 +124,8 @@ class ActivityRawEventAccountingMixin:
             "reportsStoppedEvents": {},
             "breakOnlineOfflineEvents": {},
             "dailyOvertimeRows": {},
+            "vacationMarks": {},
+            "overtimeDaySessions": {},
             "authorTimeZones": set(),
         }
 
@@ -312,6 +314,22 @@ class ActivityRawEventAccountingMixin:
 
         return [dict(item) for item in cache.get(cache_key) or []]
 
+    def _batch_overtime_day_session_doc(self, raw_author: str, day_date: str) -> dict[str, Any]:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        query = {"rawAuthor": raw_author, "date": day_date}
+        projection = {"_id": 0, "lastOfflineAt": 1, "timeZoneId": 1, "reminderAction": 1}
+
+        if not context:
+            return self.db.day_sessions.find_one(query, projection) or {}
+
+        cache = context.setdefault("overtimeDaySessions", {})
+        cache_key = (raw_author, day_date)
+
+        if cache_key not in cache:
+            cache[cache_key] = self.db.day_sessions.find_one(query, projection) or {}
+
+        return dict(cache.get(cache_key) or {})
+
     def _update_author_time_zone_for_raw_event_accounting(
         self,
         raw_author: str,
@@ -434,18 +452,30 @@ class ActivityRawEventAccountingMixin:
         latest_event_type = ""
         latest_timestamp: dt.datetime | None = None
 
-        for event in self.db.break_events.find(
-            {
-                "rawAuthor": raw_author,
-                "date": day_date,
-                "eventType": {"$in": ["online", "offline"]},
-                "timestamp": {"$lte": at},
-            },
-            {"_id": 0, "eventType": 1, "timestamp": 1},
-        ):
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if context:
+            events = self._batch_break_online_offline_events(raw_author, at)
+        else:
+            events = self.db.break_events.find(
+                {
+                    "rawAuthor": raw_author,
+                    "date": day_date,
+                    "eventType": {"$in": ["online", "offline"]},
+                    "timestamp": {"$lte": at},
+                },
+                {"_id": 0, "eventType": 1, "timestamp": 1},
+            )
+
+        for event in events:
+            if context and str(event.get("date") or "") != day_date:
+                continue
+
             timestamp = _coerce_datetime(event.get("timestamp"))
 
             if not timestamp:
+                continue
+
+            if timestamp > at:
                 continue
 
             if not latest_timestamp or timestamp > latest_timestamp:
