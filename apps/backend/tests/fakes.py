@@ -108,9 +108,17 @@ class FakeCollection:
             self.items.append(item)
 
     def update_many(self, query, operation):
+        modified_count = 0
         for item in self.items:
             if self._matches(item, query):
                 self._apply_operation(item, operation, inserting=False)
+                modified_count += 1
+
+        class Result:
+            def __init__(self, count):
+                self.modified_count = count
+
+        return Result(modified_count)
 
     def delete_one(self, query):
         before = len(self.items)
@@ -255,6 +263,7 @@ class FakeDb:
         self.activity_snapshot_maintenance_state = FakeCollection()
         self.activity_summary_cache = FakeCollection()
         self.aggregate_metadata = FakeCollection()
+        self.aggregate_rebuild_jobs = FakeCollection()
         self.aggregate_day_state = FakeCollection()
         self.break_events = FakeCollection()
         self.break_sessions = FakeCollection()

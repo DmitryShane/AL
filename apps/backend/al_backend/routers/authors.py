@@ -13,6 +13,7 @@ from ..repositories.authors import utc_inclusive_range_for_bulk_activity_preset
 from ..container import BackendServices
 from ..dependencies import get_author_service
 from ..models import AuthorAliasIn, AuthorProfileIn, BulkAuthorsActivityDeleteIn, DeviceProfileAliasIn, FullActivityRebuildIn
+from ..rebuild_jobs import is_rebuild_job_stale, mark_stale_rebuild_jobs_failed
 
 
 router = APIRouter()
@@ -31,7 +32,14 @@ REBUILD_PHASES = [
 
 
 def _active_rebuild_job(service: BackendServices) -> dict | None:
-    return service.db.aggregate_rebuild_jobs.find_one({"status": "running"}, {"_id": 0})
+    now = dt.datetime.now(dt.UTC)
+    mark_stale_rebuild_jobs_failed(service, now)
+    job = service.db.aggregate_rebuild_jobs.find_one({"status": "running"}, {"_id": 0}, sort=[("updatedAt", -1)])
+
+    if job and not is_rebuild_job_stale(job, now):
+        return job
+
+    return None
 
 
 def _rebuild_job_doc(job_id: str, label: str, scope: str) -> dict:
