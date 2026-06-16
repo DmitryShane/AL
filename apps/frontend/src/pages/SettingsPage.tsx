@@ -53,8 +53,12 @@ type ActivityRebuildProgress = {
   total?: number;
   createdAt?: string;
   updatedAt?: string;
+  finishedAt?: string;
   error?: string;
+  statusRefreshError?: string;
 };
+
+const RECENT_COMPLETED_REBUILD_MS = 10 * 60 * 1000;
 
 async function apiErrorDetail(response: Response, fallback: string): Promise<string> {
   try {
@@ -73,6 +77,40 @@ async function apiErrorDetail(response: Response, fallback: string): Promise<str
   }
 
   return `${fallback} (HTTP ${response.status})`;
+}
+
+function activityRebuildProgressFromJob(job: Partial<ActivityRebuildProgress>): ActivityRebuildProgress | null {
+  if (!job.jobId) {
+    return null;
+  }
+
+  const status = job.status === "completed" || job.status === "failed" ? job.status : "running";
+
+  return {
+    jobId: String(job.jobId),
+    label: String(job.label || "Activity rebuild"),
+    status,
+    phase: String(job.phase || (status === "completed" ? "Completed" : "Running")),
+    progress: Number(job.progress ?? (status === "completed" ? 100 : 1)),
+    current: typeof job.current === "number" ? job.current : undefined,
+    total: typeof job.total === "number" ? job.total : undefined,
+    createdAt: typeof job.createdAt === "string" ? job.createdAt : undefined,
+    updatedAt: typeof job.updatedAt === "string" ? job.updatedAt : undefined,
+    finishedAt: typeof job.finishedAt === "string" ? job.finishedAt : undefined,
+    error: typeof job.error === "string" ? job.error : undefined,
+    statusRefreshError: undefined,
+  };
+}
+
+function shouldShowInitialRebuildProgress(progress: ActivityRebuildProgress): boolean {
+  if (progress.status === "running" || progress.status === "failed") {
+    return true;
+  }
+
+  const completedAt = progress.finishedAt || progress.updatedAt;
+  const completedTime = completedAt ? new Date(completedAt).getTime() : Number.NaN;
+
+  return Number.isFinite(completedTime) && Date.now() - completedTime <= RECENT_COMPLETED_REBUILD_MS;
 }
 
 export function SettingsPage({
@@ -173,28 +211,24 @@ export function SettingsPage({
         const job = data.job;
 
         if (!cancelled && job?.jobId) {
-          const status = job.status === "completed" || job.status === "failed" ? job.status : "running";
-          setActivityRebuildProgress({
-            jobId: String(job.jobId),
-            label: String(job.label || "Activity rebuild"),
-            status,
-            phase: String(job.phase || (status === "completed" ? "Completed" : "Running")),
-            progress: Number(job.progress ?? (status === "completed" ? 100 : 1)),
-            current: typeof job.current === "number" ? job.current : undefined,
-            total: typeof job.total === "number" ? job.total : undefined,
-            createdAt: typeof job.createdAt === "string" ? job.createdAt : undefined,
-            updatedAt: typeof job.updatedAt === "string" ? job.updatedAt : undefined,
-            error: typeof job.error === "string" ? job.error : undefined,
-          });
+          const nextProgress = activityRebuildProgressFromJob(job);
 
-          if (status === "completed") {
+          if (!nextProgress) {
+            return;
+          }
+
+          setActivityRebuildProgress(nextProgress);
+
+          if (nextProgress.status === "completed") {
             onSaved();
           }
         }
       } catch (error) {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : "Activity rebuild status load failed";
-          setActivityRebuildProgress((current) => current ? { ...current, status: "failed", phase: "Status polling failed", error: message } : current);
+          setActivityRebuildProgress((current) =>
+            current ? { ...current, statusRefreshError: `${message}. Retrying...` } : current
+          );
         }
       }
     }
@@ -207,6 +241,35 @@ export function SettingsPage({
       window.clearInterval(intervalId);
     };
   }, [activityRebuildProgress?.jobId, activityRebuildProgress?.status, onSaved]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadInitialRebuildProgress() {
+      try {
+        const response = await apiFetch("/api/v1/authors/activity/rebuild/status");
+
+        if (!response.ok) {
+          throw new Error(await apiErrorDetail(response, "Activity rebuild status load failed"));
+        }
+
+        const data = await response.json() as { job?: Partial<ActivityRebuildProgress> | null };
+        const progress = data.job ? activityRebuildProgressFromJob(data.job) : null;
+
+        if (!cancelled && progress && shouldShowInitialRebuildProgress(progress)) {
+          setActivityRebuildProgress((current) => current ?? progress);
+        }
+      } catch {
+        // Initial status load is best-effort; polling handles visible jobs.
+      }
+    }
+
+    void loadInitialRebuildProgress();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const tab = readSettingsTabFromUrl();

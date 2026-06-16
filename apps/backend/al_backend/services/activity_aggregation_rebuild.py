@@ -349,32 +349,25 @@ class ActivityAggregationRebuildMixin:
         if snapshot_total == 0:
             self._report_rebuild_progress(progress_callback, "Rebuilding snapshots", 0, 0)
 
-        batch_ids = {
-            str(batch.get("batchId") or "")
-            for batch in self.db.raw_event_batches.find({}, {"_id": 0, "batchId": 1})
-            if batch.get("batchId")
-        }
+        batch_id_query: dict[str, Any] = {}
+        full_rebuild = target_dates is None and target_authors is None
+        batch_ids = (
+            {
+                str(batch.get("batchId") or "")
+                for batch in self.db.raw_event_batches.find({}, {"_id": 0, "batchId": 1})
+                if batch.get("batchId")
+            }
+            if full_rebuild
+            else set()
+        )
         batch_delta_items_by_batch_id: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
         orphan_report_rows: list[dict[str, Any]] = []
-        raw_events = self.db.raw_activity_events.find(raw_event_query).sort("occurredAtUtc", ASCENDING)
-        raw_event_total = self.db.raw_activity_events.count_documents(raw_event_query)
-        raw_event_count = 0
 
-        for event in raw_events:
-            deltas = self._apply_raw_event_to_aggregates(event)
-            raw_event_count += 1
-            self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", raw_event_count, raw_event_total)
-            batch_id = str(event.get("batchId") or "")
-
-            if batch_id and batch_id in batch_ids:
-                batch_delta_items = batch_delta_items_by_batch_id.setdefault(batch_id, [])
-                batch_delta_items.append((event, deltas))
-                continue
-
+        def add_orphan_report_row(event: dict[str, Any], deltas: dict[str, Any]) -> None:
             is_codex_presence_row = str(event.get("source") or "") == "codex" and _has_count_or_file_delta(deltas)
 
             if not (_has_time_delta(deltas) or is_codex_presence_row):
-                continue
+                return
 
             resolved_author = composed(self).resolve_author_alias(event.get("author") or "Unknown User")
             orphan_report_rows.append(
@@ -401,20 +394,40 @@ class ActivityAggregationRebuildMixin:
                 }
             )
 
+        raw_events = self.db.raw_activity_events.find(raw_event_query).sort("occurredAtUtc", ASCENDING)
+        raw_event_total = self.db.raw_activity_events.count_documents(raw_event_query)
+        raw_event_count = 0
+
+        for event in raw_events:
+            deltas = self._apply_raw_event_to_aggregates(event)
+            raw_event_count += 1
+            self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", raw_event_count, raw_event_total)
+            batch_id = str(event.get("batchId") or "")
+
+            if batch_id and ((full_rebuild and batch_id in batch_ids) or not full_rebuild):
+                batch_delta_items = batch_delta_items_by_batch_id.setdefault(batch_id, [])
+                batch_delta_items.append((event, deltas))
+                continue
+
+            add_orphan_report_row(event, deltas)
+
         if raw_event_total == 0:
             self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", 0, 0)
 
-        last_report_time_by_author: dict[str, dt.datetime] = {}
-        batch_total = self.db.raw_event_batches.count_documents({})
-        batch_count = 0
+        if not full_rebuild:
+            batch_ids = set(batch_delta_items_by_batch_id)
+            batch_id_query = {"batchId": {"$in": sorted(batch_ids)}} if batch_ids else {"batchId": {"$in": []}}
 
-        for batch in self.db.raw_event_batches.find({}).sort("receivedAt", ASCENDING):
+        last_report_time_by_author: dict[str, dt.datetime] = {}
+        batch_total = self.db.raw_event_batches.count_documents(batch_id_query)
+        batch_count = 0
+        processed_batch_ids: set[str] = set()
+
+        for batch in self.db.raw_event_batches.find(batch_id_query).sort("receivedAt", ASCENDING):
             batch_count += 1
             self._report_rebuild_progress(progress_callback, "Rebuilding event batches", batch_count, batch_total)
             batch_id = str(batch.get("batchId") or "")
-
-            if target_dates is not None and batch_id not in batch_delta_items_by_batch_id:
-                continue
+            processed_batch_ids.add(batch_id)
 
             author = str(batch.get("author") or "Unknown User")
             cutoff = last_report_time_by_author.get(author)
@@ -431,6 +444,13 @@ class ActivityAggregationRebuildMixin:
 
                 if row_time:
                     last_report_time_by_author[author] = row_time
+
+        for batch_id, delta_items in batch_delta_items_by_batch_id.items():
+            if batch_id in processed_batch_ids:
+                continue
+
+            for event, deltas in delta_items:
+                add_orphan_report_row(event, deltas)
 
         _insert_many_if_supported(self.db.report_rows, orphan_report_rows)
 

@@ -3888,6 +3888,10 @@ p {
   color: #991b1b !important;
 }
 
+.database-rebuild-progress__refresh-error {
+  color: #92400e !important;
+}
+
 .github-avatars-toolbar .github-avatars-refresh-all,
 .github-avatars-toolbar.delete-activity-bulk-toolbar .delete-activity-bulk-actions {
   margin-left: auto;

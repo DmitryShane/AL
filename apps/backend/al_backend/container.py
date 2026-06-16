@@ -27,7 +27,7 @@ from .services.telegram_activity import TelegramActivityService
 from .services.break_sessions import BreakSessionService
 from .services.activity_aggregation import ActivityAggregationService
 from .local_live_state_guard import close_imported_open_live_states
-from .rebuild_jobs import mark_stale_rebuild_jobs_failed
+from .rebuild_jobs import mark_running_rebuild_jobs_interrupted
 from .storage import MongoStorage
 from .settings import Settings
 from .indexes import IndexManager
@@ -97,7 +97,7 @@ class BackendContainer:
 
     def startup(self) -> None:
         self.indexes.ensure_indexes()
-        mark_stale_rebuild_jobs_failed(self.services)
+        mark_running_rebuild_jobs_interrupted(self.services)
         close_imported_open_live_states(self.services)
         self.activity_aggregation.rebuild_aggregates_if_needed(scope=self.activity_aggregation.aggregate_version_rebuild_scope)
         try:

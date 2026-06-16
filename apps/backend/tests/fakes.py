@@ -52,6 +52,16 @@ class FakeCursor:
 class FakeCollection:
     def __init__(self):
         self.items = []
+        self.created_indexes = []
+
+    def create_index(self, keys, **kwargs):
+        self.created_indexes.append({"keys": keys, **kwargs})
+
+    def list_indexes(self):
+        return []
+
+    def drop_index(self, name):
+        return None
 
     def find_one(self, query, projection=None, sort=None):
         items = self.items

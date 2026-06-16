@@ -18,12 +18,14 @@ class IndexManager:
         self.db.raw_reports.create_index([("status", ASCENDING), ("processedAt", DESCENDING)])
         self._ensure_raw_reports_retention_index()
         self.db.raw_event_batches.create_index([("source", ASCENDING), ("receivedAt", DESCENDING)])
+        self.db.raw_event_batches.create_index([("batchId", ASCENDING)])
         self.db.raw_report_chunks.create_index([("logicalReportId", ASCENDING), ("chunkIndex", ASCENDING)], unique=True)
         self.db.raw_report_chunks.create_index([("status", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.raw_activity_events.create_index("eventId", unique=True)
         self.db.raw_activity_events.create_index(
             [("source", ASCENDING), ("author", ASCENDING), ("projectId", ASCENDING), ("sessionId", ASCENDING), ("occurredAtUtc", ASCENDING)]
         )
+        self.db.raw_activity_events.create_index([("date", ASCENDING), ("author", ASCENDING), ("occurredAtUtc", ASCENDING)])
         self.db.report_challenges.create_index("challengeId", unique=True)
         self.db.report_challenges.create_index("expiresAt")
         self.db.report_security_events.create_index([("createdAt", DESCENDING)])

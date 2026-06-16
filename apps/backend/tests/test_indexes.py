@@ -25,6 +25,16 @@ def test_raw_reports_retention_index_replaces_plain_received_at_index() -> None:
     }
 
 
+def test_rebuild_hot_path_indexes_are_created() -> None:
+    db = DynamicFakeIndexDb()
+    manager = IndexManager(db)
+
+    manager.ensure_indexes()
+
+    assert {"keys": [("date", 1), ("author", 1), ("occurredAtUtc", 1)]} in db.raw_activity_events.created_indexes
+    assert {"keys": [("batchId", 1)]} in db.raw_event_batches.created_indexes
+
+
 class FakeIndexCollection:
     def __init__(self, indexes: list[dict]):
         self.indexes = indexes
@@ -39,3 +49,10 @@ class FakeIndexCollection:
 
     def create_index(self, keys, **kwargs) -> None:
         self.created_indexes.append({"keys": keys, **kwargs})
+
+
+class DynamicFakeIndexDb:
+    def __getattr__(self, name: str) -> FakeIndexCollection:
+        collection = FakeIndexCollection([])
+        setattr(self, name, collection)
+        return collection

@@ -40,7 +40,9 @@ type ActivityRebuildProgress = {
   total?: number;
   createdAt?: string;
   updatedAt?: string;
+  finishedAt?: string;
   error?: string;
+  statusRefreshError?: string;
 };
 
 type AuthorProfilesTabProps = {
@@ -567,6 +569,9 @@ export function AuthorProfilesTab({
     </dl>
     {activityRebuildProgress.status === "failed" && activityRebuildProgress.error ? (
       <p className="alert-text database-rebuild-progress__error">{activityRebuildProgress.error.split("\n")[0]}</p>
+    ) : null}
+    {activityRebuildProgress.status !== "failed" && activityRebuildProgress.statusRefreshError ? (
+      <p className="database-rebuild-progress__refresh-error">{activityRebuildProgress.statusRefreshError}</p>
     ) : null}
   </div>
 ) : null}

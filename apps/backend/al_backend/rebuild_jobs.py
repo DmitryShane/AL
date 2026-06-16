@@ -5,7 +5,8 @@ from typing import Any
 
 
 REBUILD_JOB_STALE_AFTER = dt.timedelta(minutes=5)
-STALE_REBUILD_JOB_ERROR = "Rebuild job was marked stale after backend restart or timeout. Start the rebuild again."
+INTERRUPTED_REBUILD_JOB_ERROR = "Rebuild job was interrupted by backend restart. Start the rebuild again."
+STALE_REBUILD_JOB_ERROR = "Rebuild job was marked stale after timeout. Start the rebuild again."
 
 
 def rebuild_job_stale_cutoff(now: dt.datetime | None = None) -> dt.datetime:
@@ -56,6 +57,23 @@ def mark_stale_rebuild_jobs_failed(service: Any, now: dt.datetime | None = None)
                 "updatedAt": current,
                 "finishedAt": current,
                 "error": STALE_REBUILD_JOB_ERROR,
+            }
+        },
+    )
+    return int(getattr(result, "modified_count", 0) or 0)
+
+
+def mark_running_rebuild_jobs_interrupted(service: Any, now: dt.datetime | None = None) -> int:
+    current = now or dt.datetime.now(dt.UTC)
+    result = service.db.aggregate_rebuild_jobs.update_many(
+        {"status": "running"},
+        {
+            "$set": {
+                "status": "failed",
+                "progress": 0,
+                "updatedAt": current,
+                "finishedAt": current,
+                "error": INTERRUPTED_REBUILD_JOB_ERROR,
             }
         },
     )
