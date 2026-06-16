@@ -11,7 +11,7 @@ from al_backend.rebuild_jobs import (
 )
 from al_backend.routers.authors import _active_rebuild_job, rebuild_author_activity
 from al_backend.services import activity_aggregation_rebuild as rebuild_module
-from al_backend.services.raw_event_batching import RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE, REBUILD_CURSOR_BATCH_SIZE
+from al_backend.services.raw_event_batching import RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE, REBUILD_CURSOR_BATCH_SIZE, REBUILD_RAW_FLUSH_BATCHES
 from tests.fakes import fake_repository
 
 
@@ -295,6 +295,7 @@ def test_editor_input_compaction_is_idempotent_and_keeps_group_boundaries():
 def test_rebuild_raw_events_uses_batch_accounting_and_reports_progress():
     repo = fake_repository()
     total_events = RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE + 2
+    assert total_events < RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE * REBUILD_RAW_FLUSH_BATCHES
     for index in range(total_events):
         repo.db.raw_activity_events.insert_one(
             {
@@ -331,8 +332,8 @@ def test_rebuild_raw_events_uses_batch_accounting_and_reports_progress():
         progress_callback=lambda phase, current, total: progress_events.append((phase, current, total)),
     )
 
-    assert begin_batch_sizes == [RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE, 2]
-    assert finish_count == 2
+    assert begin_batch_sizes == [total_events]
+    assert finish_count == 1
     assert ("Rebuilding raw activity events", total_events, total_events) in progress_events
 
 
@@ -374,6 +375,41 @@ def test_rebuild_hot_cursors_use_configured_batch_size():
     repo._rebuild_aggregates_from_sources({"2026-06-16"}, {"Future Artist"})
 
     assert any(cursor.batch_size_value == REBUILD_CURSOR_BATCH_SIZE for cursor in cursors)
+
+
+def test_rebuild_raw_phase_records_timing_diagnostics():
+    repo = fake_repository()
+    job_id = "raw-diagnostics-job"
+    repo._active_rebuild_job_id = job_id
+    repo.db.aggregate_rebuild_jobs.insert_one({"jobId": job_id, "status": "running"})
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "event-1",
+            "batchId": "batch-1",
+            "author": "Future Artist",
+            "date": "2026-06-16",
+            "source": "ual",
+            "eventType": "focus",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "deviceId": "unity-device",
+            "timeZoneId": "UTC",
+            "occurredAtUtc": event_at,
+            "receivedAt": event_at,
+        }
+    )
+    repo.db.raw_event_batches.insert_one({"batchId": "batch-1", "author": "Future Artist", "source": "ual", "receivedAt": event_at})
+    repo._materialize_status_report_rows = lambda: None
+
+    repo._rebuild_aggregates_from_sources({"2026-06-16"}, {"Future Artist"})
+
+    job = repo.db.aggregate_rebuild_jobs.find_one({"jobId": job_id})
+    assert job["rawFlushCount"] == 1
+    assert job["rawStateWrites"] >= 1
+    assert "rawEventAccounting" in job["rawTiming"]
+    assert "stateFlush" in job["rawTiming"]
+    assert job["rawEventsPerSecond"] > 0
 
 
 def test_coalesced_editor_input_preserves_activity_count():
@@ -425,6 +461,76 @@ def test_rebuild_delta_store_spills_and_cleans_temp_collection():
     store.cleanup()
 
     assert repo.db.aggregate_rebuild_event_deltas.items == []
+
+
+def test_raw_event_batch_accounting_flushes_state_and_daily_with_bulk_write():
+    repo = fake_repository()
+    calls = {"state_bulk": 0, "daily_bulk": 0, "state_update": 0, "daily_update": 0}
+    original_state_bulk = repo.db.aggregate_session_state.bulk_write
+    original_daily_bulk = repo.db.daily_author_activity.bulk_write
+    original_state_update = repo.db.aggregate_session_state.update_one
+    original_daily_update = repo.db.daily_author_activity.update_one
+
+    def counting_state_bulk(*args, **kwargs):
+        calls["state_bulk"] += 1
+        return original_state_bulk(*args, **kwargs)
+
+    def counting_daily_bulk(*args, **kwargs):
+        calls["daily_bulk"] += 1
+        return original_daily_bulk(*args, **kwargs)
+
+    def counting_state_update(*args, **kwargs):
+        calls["state_update"] += 1
+        return original_state_update(*args, **kwargs)
+
+    def counting_daily_update(*args, **kwargs):
+        calls["daily_update"] += 1
+        return original_daily_update(*args, **kwargs)
+
+    repo.db.aggregate_session_state.bulk_write = counting_state_bulk
+    repo.db.daily_author_activity.bulk_write = counting_daily_bulk
+    repo.db.aggregate_session_state.update_one = counting_state_update
+    repo.db.daily_author_activity.update_one = counting_daily_update
+    repo._begin_raw_event_batch_accounting([])
+    repo._set_batch_state_doc("state-1", {"author": "Future Artist", "date": "2026-06-16", "state": {}, "updatedAt": dt.datetime.now(dt.UTC)})
+    repo._set_batch_daily_doc(
+        "ual|Future Artist|bike-rush-2|2026-06-16",
+        {"source": "ual", "author": "Future Artist", "projectId": "bike-rush-2", "date": "2026-06-16"},
+    )
+
+    repo._finish_raw_event_batch_accounting()
+
+    assert calls == {"state_bulk": 1, "daily_bulk": 1, "state_update": 0, "daily_update": 0}
+    assert repo.db.aggregate_session_state.find_one({"_id": "state-1"}) is not None
+    assert repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-06-16"}) is not None
+    assert repo._last_raw_event_batch_accounting_stats["rawStateWrites"] == 1
+    assert repo._last_raw_event_batch_accounting_stats["rawDailyWrites"] == 1
+
+
+def test_raw_event_accounting_without_context_keeps_immediate_writes():
+    repo = fake_repository()
+    calls = {"state_update": 0, "daily_update": 0}
+    original_state_update = repo.db.aggregate_session_state.update_one
+    original_daily_update = repo.db.daily_author_activity.update_one
+
+    def counting_state_update(*args, **kwargs):
+        calls["state_update"] += 1
+        return original_state_update(*args, **kwargs)
+
+    def counting_daily_update(*args, **kwargs):
+        calls["daily_update"] += 1
+        return original_daily_update(*args, **kwargs)
+
+    repo.db.aggregate_session_state.update_one = counting_state_update
+    repo.db.daily_author_activity.update_one = counting_daily_update
+
+    repo._set_batch_state_doc("state-1", {"author": "Future Artist", "date": "2026-06-16", "state": {}, "updatedAt": dt.datetime.now(dt.UTC)})
+    repo._set_batch_daily_doc(
+        "ual|Future Artist|bike-rush-2|2026-06-16",
+        {"source": "ual", "author": "Future Artist", "projectId": "bike-rush-2", "date": "2026-06-16"},
+    )
+
+    assert calls == {"state_update": 1, "daily_update": 1}
 
 
 def test_rebuild_event_batches_do_not_use_live_ingest_batch_builder():

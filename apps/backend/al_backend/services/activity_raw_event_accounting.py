@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import time
 from typing import Any
+
+from pymongo import UpdateOne
 
 from ..activity_math import *
 from ..hourly_fill_rules import empty_hourly_activity, merge_hourly_activity
@@ -16,6 +19,14 @@ from .activity_status_intervals import status_interval_context_for_event
 
 
 MIDNIGHT_OFFLINE_CARRYOVER_SUPPRESSION_SECONDS = 15 * 60
+
+
+def _add_raw_timing(context: dict[str, Any] | None, key: str, elapsed: float) -> None:
+    if not context:
+        return
+
+    timings = context.setdefault("rawTiming", {})
+    timings[key] = float(timings.get(key) or 0.0) + max(0.0, elapsed)
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -111,6 +122,7 @@ def _raw_event_activity_count(event: dict[str, Any]) -> int:
 
 class ActivityRawEventAccountingMixin:
     def _begin_raw_event_batch_accounting(self, events: list[dict[str, Any]]) -> None:
+        started_at = time.perf_counter()
         state_keys = sorted(
             {
                 key
@@ -136,7 +148,12 @@ class ActivityRawEventAccountingMixin:
             "vacationMarks": {},
             "overtimeDaySessions": {},
             "authorTimeZones": set(),
+            "rawTiming": {},
+            "rawFlushCount": 0,
+            "rawStateWrites": 0,
+            "rawDailyWrites": 0,
         }
+        _add_raw_timing(self._raw_event_batch_accounting, "stateLoad", time.perf_counter() - started_at)
 
     def _finish_raw_event_batch_accounting(self) -> None:
         context = getattr(self, "_raw_event_batch_accounting", None)
@@ -144,16 +161,27 @@ class ActivityRawEventAccountingMixin:
             return
 
         try:
+            state_started_at = time.perf_counter()
+            state_ops = []
             for state_key in sorted(context.get("dirtyStates") or []):
                 doc = dict((context.get("states") or {}).get(state_key) or {})
                 if not doc:
                     continue
-                self.db.aggregate_session_state.update_one(
-                    {"_id": state_key},
-                    {"$set": {key: value for key, value in doc.items() if key != "_id"}},
-                    upsert=True,
+                state_ops.append(
+                    UpdateOne(
+                        {"_id": state_key},
+                        {"$set": {key: value for key, value in doc.items() if key != "_id"}},
+                        upsert=True,
+                    )
                 )
 
+            if state_ops:
+                self.db.aggregate_session_state.bulk_write(state_ops, ordered=False)
+
+            context["rawStateWrites"] = int(context.get("rawStateWrites") or 0) + len(state_ops)
+            _add_raw_timing(context, "stateFlush", time.perf_counter() - state_started_at)
+            daily_started_at = time.perf_counter()
+            daily_ops = []
             for daily_key in sorted(context.get("dirtyDaily") or []):
                 doc = dict((context.get("daily") or {}).get(daily_key) or {})
                 if not doc:
@@ -164,7 +192,20 @@ class ActivityRawEventAccountingMixin:
                     "projectId": doc.get("projectId") or "",
                     "date": doc.get("date") or "",
                 }
-                self.db.daily_author_activity.update_one(key, {"$set": doc}, upsert=True)
+                daily_ops.append(UpdateOne(key, {"$set": doc}, upsert=True))
+
+            if daily_ops:
+                self.db.daily_author_activity.bulk_write(daily_ops, ordered=False)
+
+            context["rawDailyWrites"] = int(context.get("rawDailyWrites") or 0) + len(daily_ops)
+            context["rawFlushCount"] = int(context.get("rawFlushCount") or 0) + 1
+            _add_raw_timing(context, "dailyFlush", time.perf_counter() - daily_started_at)
+            self._last_raw_event_batch_accounting_stats = {
+                "rawTiming": dict(context.get("rawTiming") or {}),
+                "rawFlushCount": int(context.get("rawFlushCount") or 0),
+                "rawStateWrites": int(context.get("rawStateWrites") or 0),
+                "rawDailyWrites": int(context.get("rawDailyWrites") or 0),
+            }
         finally:
             self._raw_event_batch_accounting = None
 
@@ -1242,19 +1283,23 @@ class ActivityRawEventAccountingMixin:
         return consumed_microseconds
 
     def _overtime_window_for_event(self, event: dict[str, Any]) -> tuple[dt.datetime, dt.datetime] | None:
+        started_at = time.perf_counter()
         context = self._overtime_rule_context()
 
-        vacation_window = is_vacation_overtime_window(event, context)
+        try:
+            vacation_window = is_vacation_overtime_window(event, context)
 
-        if vacation_window:
-            return vacation_window
+            if vacation_window:
+                return vacation_window
 
-        night_window = None if self._suppress_night_overtime_for_midnight_offline_carryover(event) else is_night_overtime_window(event)
+            night_window = None if self._suppress_night_overtime_for_midnight_offline_carryover(event) else is_night_overtime_window(event)
 
-        if night_window:
-            return night_window
+            if night_window:
+                return night_window
 
-        return is_telegram_overtime_window(event, context)
+            return is_telegram_overtime_window(event, context)
+        finally:
+            _add_raw_timing(getattr(self, "_raw_event_batch_accounting", None), "overtimeWindow", time.perf_counter() - started_at)
 
     def _overtime_window_for_interval(
         self,
@@ -1494,46 +1539,50 @@ class ActivityRawEventAccountingMixin:
         )
 
     def _has_reports_stopped_gap_overlap(self, event: dict[str, Any], start: dt.datetime, end: dt.datetime) -> bool:
+        started_at = time.perf_counter()
         if end <= start:
             return False
 
-        raw_author = str(event.get("author") or "Unknown User")
-        day_date = str(event.get("date") or "")
+        try:
+            raw_author = str(event.get("author") or "Unknown User")
+            day_date = str(event.get("date") or "")
 
-        if not raw_author or not day_date:
-            return False
+            if not raw_author or not day_date:
+                return False
 
-        offline_at: dt.datetime | None = None
+            offline_at: dt.datetime | None = None
 
-        for status_event in sorted(
-            [
-                status_event
-                for status_event in self._batch_reports_stopped_events(raw_author, day_date)
-                if (_coerce_datetime(status_event.get("transitionAt")) or dt.datetime.max.replace(tzinfo=dt.UTC)) <= end
-            ],
-            key=lambda item: _coerce_datetime(item.get("transitionAt")) or dt.datetime.min.replace(tzinfo=dt.UTC),
-        ):
-            transition_at = _coerce_datetime(status_event.get("transitionAt"))
+            for status_event in sorted(
+                [
+                    status_event
+                    for status_event in self._batch_reports_stopped_events(raw_author, day_date)
+                    if (_coerce_datetime(status_event.get("transitionAt")) or dt.datetime.max.replace(tzinfo=dt.UTC)) <= end
+                ],
+                key=lambda item: _coerce_datetime(item.get("transitionAt")) or dt.datetime.min.replace(tzinfo=dt.UTC),
+            ):
+                transition_at = _coerce_datetime(status_event.get("transitionAt"))
 
-            if not transition_at:
-                continue
+                if not transition_at:
+                    continue
 
-            status_type = str(status_event.get("statusEventType") or "")
-            reason = str(status_event.get("reason") or "")
+                status_type = str(status_event.get("statusEventType") or "")
+                reason = str(status_event.get("reason") or "")
 
-            if status_type == "offline" and reason == "reports_stopped":
-                offline_at = transition_at
-                continue
+                if status_type == "offline" and reason == "reports_stopped":
+                    offline_at = transition_at
+                    continue
 
-            if status_type != "online" or reason != "reports_resumed" or not offline_at:
-                continue
+                if status_type != "online" or reason != "reports_resumed" or not offline_at:
+                    continue
 
-            if _windows_overlap(start, end, offline_at, transition_at):
-                return True
+                if _windows_overlap(start, end, offline_at, transition_at):
+                    return True
 
-            offline_at = None
+                offline_at = None
 
-        return bool(offline_at and end > offline_at)
+            return bool(offline_at and end > offline_at)
+        finally:
+            _add_raw_timing(getattr(self, "_raw_event_batch_accounting", None), "reportsStoppedOverlap", time.perf_counter() - started_at)
 
     def _status_interval_context_for_event(
         self,
@@ -1541,16 +1590,21 @@ class ActivityRawEventAccountingMixin:
         occurred_at: dt.datetime,
         received_at: dt.datetime | None,
     ) -> dict[str, Any] | None:
+        started_at = time.perf_counter()
         raw_author = str(event.get("author") or "Unknown User")
         day_date = str(event.get("date") or "")
 
-        if not raw_author or not day_date or not occurred_at:
-            return None
+        try:
+            if not raw_author or not day_date or not occurred_at:
+                return None
 
-        status_events = self._batch_status_events(raw_author, day_date)
-        return status_interval_context_for_event(status_events, occurred_at, received_at)
+            status_events = self._batch_status_events(raw_author, day_date)
+            return status_interval_context_for_event(status_events, occurred_at, received_at)
+        finally:
+            _add_raw_timing(getattr(self, "_raw_event_batch_accounting", None), "statusInterval", time.perf_counter() - started_at)
 
     def _update_daily_author_activity(self, snapshot: dict[str, Any], deltas: dict[str, Any]) -> None:
+        started_at = time.perf_counter()
         key = {
             "source": snapshot.get("source"),
             "author": snapshot.get("author") or "Unknown User",
@@ -1604,3 +1658,4 @@ class ActivityRawEventAccountingMixin:
             set_fields["lastReceivedAt"] = snapshot.get("receivedAt")
 
         self._set_batch_daily_doc(daily_key, set_fields)
+        _add_raw_timing(getattr(self, "_raw_event_batch_accounting", None), "dailyActivityMerge", time.perf_counter() - started_at)

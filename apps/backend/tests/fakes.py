@@ -111,6 +111,36 @@ class FakeCollection:
 
         return Result(inserted_ids)
 
+    def bulk_write(self, operations, ordered=True):
+        modified_count = 0
+        upserted_count = 0
+
+        for operation in operations:
+            query = getattr(operation, "_filter", None) or getattr(operation, "_doc", None) or {}
+            update = getattr(operation, "_doc", None) or getattr(operation, "_update", None) or {}
+            upsert = bool(getattr(operation, "_upsert", False))
+            matched = False
+
+            for item in self.items:
+                if self._matches(item, query):
+                    self._apply_operation(item, update, inserting=False)
+                    modified_count += 1
+                    matched = True
+                    break
+
+            if not matched and upsert:
+                item = query.copy()
+                self._apply_operation(item, update, inserting=True)
+                self.items.append(item)
+                upserted_count += 1
+
+        class Result:
+            def __init__(self, modified, upserted):
+                self.modified_count = modified
+                self.upserted_count = upserted
+
+        return Result(modified_count, upserted_count)
+
     def update_one(self, query, operation, upsert=False):
         for item in self.items:
             if self._matches(item, query):

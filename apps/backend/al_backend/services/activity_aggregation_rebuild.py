@@ -17,6 +17,7 @@ from .raw_event_batching import (
     REBUILD_DELTA_SPILL_THRESHOLD,
     REBUILD_MEMORY_GUARD_ENABLED,
     REBUILD_MEMORY_SOFT_LIMIT_MB,
+    REBUILD_RAW_FLUSH_BATCHES,
 )
 
 
@@ -908,6 +909,7 @@ class ActivityAggregationRebuildMixin:
             raw_event_total = self.db.raw_activity_events.count_documents(raw_event_query)
             raw_event_count = 0
             raw_event_batch: list[dict[str, Any]] = []
+            raw_flush_size = RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE * REBUILD_RAW_FLUSH_BATCHES
             phase_started_at = time.monotonic()
 
             def process_raw_event_batch(events: list[dict[str, Any]]) -> None:
@@ -918,8 +920,23 @@ class ActivityAggregationRebuildMixin:
                 composed(self)._begin_raw_event_batch_accounting(events)
                 try:
                     for event in events:
+                        accounting_started_at = time.perf_counter()
                         deltas = self._apply_raw_event_to_aggregates(event)
+                        context = getattr(self, "_raw_event_batch_accounting", None)
+                        if context:
+                            timing = context.setdefault("rawTiming", {})
+                            timing["rawEventAccounting"] = float(timing.get("rawEventAccounting") or 0.0) + max(
+                                0.0,
+                                time.perf_counter() - accounting_started_at,
+                            )
                         raw_event_count += 1
+                        raw_elapsed = max(0.001, time.monotonic() - phase_started_at)
+                        self._set_rebuild_job_diagnostics(
+                            {
+                                "rawEventsPerSecond": raw_event_count / raw_elapsed,
+                                "rawFlushSize": raw_flush_size,
+                            }
+                        )
                         self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", raw_event_count, raw_event_total)
                         batch_id = str(event.get("batchId") or "")
 
@@ -933,11 +950,26 @@ class ActivityAggregationRebuildMixin:
                             flush_orphan_report_rows()
                 finally:
                     composed(self)._finish_raw_event_batch_accounting()
+                    stats = getattr(self, "_last_raw_event_batch_accounting_stats", {}) or {}
+                    raw_timing = metrics.setdefault("rawTiming", {})
+                    for key, value in (stats.get("rawTiming") or {}).items():
+                        raw_timing[key] = float(raw_timing.get(key) or 0.0) + float(value or 0.0)
+                    metrics["rawFlushCount"] = int(metrics.get("rawFlushCount") or 0) + int(stats.get("rawFlushCount") or 0)
+                    metrics["rawStateWrites"] = int(metrics.get("rawStateWrites") or 0) + int(stats.get("rawStateWrites") or 0)
+                    metrics["rawDailyWrites"] = int(metrics.get("rawDailyWrites") or 0) + int(stats.get("rawDailyWrites") or 0)
+                    self._set_rebuild_job_diagnostics(
+                        {
+                            "rawTiming": raw_timing,
+                            "rawFlushCount": metrics.get("rawFlushCount", 0),
+                            "rawStateWrites": metrics.get("rawStateWrites", 0),
+                            "rawDailyWrites": metrics.get("rawDailyWrites", 0),
+                        }
+                    )
                     self._maybe_apply_rebuild_memory_guard(metrics)
 
             for event in raw_events:
                 raw_event_batch.append(event)
-                if len(raw_event_batch) >= RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE:
+                if len(raw_event_batch) >= raw_flush_size:
                     process_raw_event_batch(raw_event_batch)
                     raw_event_batch = []
 
@@ -1106,6 +1138,10 @@ class ActivityAggregationRebuildMixin:
             "memoryGuardPauses": metrics.get("memoryGuardPauses", 0),
             "phaseDurations": metrics.get("phaseDurations", {}),
             "phaseRates": metrics.get("phaseRates", {}),
+            "rawTiming": metrics.get("rawTiming", {}),
+            "rawFlushCount": metrics.get("rawFlushCount", 0),
+            "rawStateWrites": metrics.get("rawStateWrites", 0),
+            "rawDailyWrites": metrics.get("rawDailyWrites", 0),
         }
         self._set_rebuild_job_diagnostics(self._last_rebuild_metrics)
 
