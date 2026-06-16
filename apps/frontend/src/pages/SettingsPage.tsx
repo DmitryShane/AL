@@ -49,6 +49,10 @@ type ActivityRebuildProgress = {
   status: "running" | "completed" | "failed";
   phase: string;
   progress: number;
+  current?: number;
+  total?: number;
+  createdAt?: string;
+  updatedAt?: string;
   error?: string;
 };
 
@@ -176,6 +180,10 @@ export function SettingsPage({
             status,
             phase: String(job.phase || (status === "completed" ? "Completed" : "Running")),
             progress: Number(job.progress ?? (status === "completed" ? 100 : 1)),
+            current: typeof job.current === "number" ? job.current : undefined,
+            total: typeof job.total === "number" ? job.total : undefined,
+            createdAt: typeof job.createdAt === "string" ? job.createdAt : undefined,
+            updatedAt: typeof job.updatedAt === "string" ? job.updatedAt : undefined,
             error: typeof job.error === "string" ? job.error : undefined,
           });
 

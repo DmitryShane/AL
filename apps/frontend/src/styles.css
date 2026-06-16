@@ -3819,6 +3819,43 @@ p {
   color: #2563eb;
 }
 
+.database-rebuild-progress__details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 18px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.database-rebuild-progress__details div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+}
+
+.database-rebuild-progress__details dt,
+.database-rebuild-progress__details dd {
+  margin: 0;
+}
+
+.database-rebuild-progress__details dt {
+  font-weight: 700;
+}
+
+.database-rebuild-progress__details dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .database-rebuild-progress__details {
+    grid-template-columns: 1fr;
+  }
+}
+
 .database-rebuild-progress--completed {
   border-color: #bbf7d0;
   background: #f0fdf4;

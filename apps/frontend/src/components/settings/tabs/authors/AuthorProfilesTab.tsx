@@ -36,6 +36,10 @@ type ActivityRebuildProgress = {
   status: "running" | "completed" | "failed";
   phase: string;
   progress: number;
+  current?: number;
+  total?: number;
+  createdAt?: string;
+  updatedAt?: string;
   error?: string;
 };
 
@@ -85,6 +89,29 @@ type AuthorProfilesTabProps = {
   onDeleteAuthorProfile: (rawAuthor: string) => void;
 };
 
+const rebuildUtcTimeFormatter = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+  timeZone: "UTC",
+  timeZoneName: "short"
+});
+
+function formatRebuildUtcTime(value: string | undefined): string {
+  if (!value) {
+    return "—";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return rebuildUtcTimeFormatter.format(date);
+}
+
 export function AuthorProfilesTab({
   profiles,
   drafts,
@@ -131,6 +158,13 @@ export function AuthorProfilesTab({
   onDeleteAuthorProfile
 }: AuthorProfilesTabProps) {
   const rebuildRunning = activityRebuildProgress?.status === "running";
+  const rebuildPercent = activityRebuildProgress ? Math.round(activityRebuildProgress.progress) : 0;
+  const rebuildCurrent =
+    activityRebuildProgress && typeof activityRebuildProgress.current === "number" && typeof activityRebuildProgress.total === "number"
+      ? `${activityRebuildProgress.current.toLocaleString("en-US")} / ${activityRebuildProgress.total.toLocaleString("en-US")}`
+      : "—";
+  const rebuildCreatedAt = formatRebuildUtcTime(activityRebuildProgress?.createdAt);
+  const rebuildUpdatedAt = formatRebuildUtcTime(activityRebuildProgress?.updatedAt);
 
   return (
 <>
@@ -500,12 +534,37 @@ export function AuthorProfilesTab({
   <div className={`database-rebuild-progress database-rebuild-progress--${activityRebuildProgress.status}`}>
     <div className="database-rebuild-progress__header">
       <strong>{activityRebuildProgress.label}</strong>
-      <span>{Math.round(activityRebuildProgress.progress)}%</span>
+      <span>{rebuildPercent}%</span>
     </div>
-    <div className="database-rebuild-progress__track" aria-label="Activity rebuild progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(activityRebuildProgress.progress)}>
+    <div className="database-rebuild-progress__track" aria-label="Activity rebuild progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={rebuildPercent}>
       <span style={{ width: `${Math.max(0, Math.min(100, activityRebuildProgress.progress))}%` }} />
     </div>
-    <p>{activityRebuildProgress.status === "completed" ? "Completed" : activityRebuildProgress.status === "failed" ? "Failed" : activityRebuildProgress.phase}</p>
+    <dl className="database-rebuild-progress__details">
+      <div>
+        <dt>status:</dt>
+        <dd>{activityRebuildProgress.status}</dd>
+      </div>
+      <div>
+        <dt>phase:</dt>
+        <dd>{activityRebuildProgress.status === "completed" ? "Completed" : activityRebuildProgress.status === "failed" ? "Failed" : activityRebuildProgress.phase}</dd>
+      </div>
+      <div>
+        <dt>current:</dt>
+        <dd>{rebuildCurrent}</dd>
+      </div>
+      <div>
+        <dt>progress:</dt>
+        <dd>{rebuildPercent}%</dd>
+      </div>
+      <div>
+        <dt>createdAt:</dt>
+        <dd>{rebuildCreatedAt}</dd>
+      </div>
+      <div>
+        <dt>updatedAt:</dt>
+        <dd>{rebuildUpdatedAt}</dd>
+      </div>
+    </dl>
     {activityRebuildProgress.status === "failed" && activityRebuildProgress.error ? (
       <p className="alert-text database-rebuild-progress__error">{activityRebuildProgress.error.split("\n")[0]}</p>
     ) : null}
