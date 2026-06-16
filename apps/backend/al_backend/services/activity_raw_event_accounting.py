@@ -100,6 +100,15 @@ def _codex_activity_count_type(event: dict[str, Any]) -> str:
     return labels.get(codex_event_type, "codex_activity")
 
 
+def _raw_event_activity_count(event: dict[str, Any]) -> int:
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+
+    try:
+        return max(1, int(metadata.get("coalescedEventCount") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 class ActivityRawEventAccountingMixin:
     def _begin_raw_event_batch_accounting(self, events: list[dict[str, Any]]) -> None:
         state_keys = sorted(
@@ -929,11 +938,12 @@ class ActivityRawEventAccountingMixin:
         if is_activity and not suppress_activity_count and not suppress_overtime_window_breakdown:
             activity_type = _codex_activity_count_type(event) if current_source == "codex" else _activity_count_type(event_type)
             activity_delta_key = "activityCountDeltas"
+            activity_count = _raw_event_activity_count(event)
 
             if event_counts_as_overtime_breakdown:
                 activity_delta_key = "overtimeActivityCountDeltas"
 
-            deltas[activity_delta_key].append({"type": activity_type, "count": 1})
+            deltas[activity_delta_key].append({"type": activity_type, "count": activity_count})
 
         if saved_prefab and not suppress_overtime_window_breakdown:
             saved_prefab_delta_key = "savedPrefabDeltas"

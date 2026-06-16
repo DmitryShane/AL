@@ -26,6 +26,10 @@ class IndexManager:
             [("source", ASCENDING), ("author", ASCENDING), ("projectId", ASCENDING), ("sessionId", ASCENDING), ("occurredAtUtc", ASCENDING)]
         )
         self.db.raw_activity_events.create_index([("date", ASCENDING), ("author", ASCENDING), ("occurredAtUtc", ASCENDING)])
+        self.db.raw_activity_events.create_index(
+            [("date", ASCENDING), ("author", ASCENDING), ("source", ASCENDING), ("eventType", ASCENDING), ("occurredAtUtc", ASCENDING)]
+        )
+        self.db.aggregate_rebuild_event_deltas.create_index([("token", ASCENDING), ("batchId", ASCENDING)])
         self.db.report_challenges.create_index("challengeId", unique=True)
         self.db.report_challenges.create_index("expiresAt")
         self.db.report_security_events.create_index([("createdAt", DESCENDING)])

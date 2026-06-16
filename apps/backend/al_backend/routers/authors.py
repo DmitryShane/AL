@@ -19,6 +19,7 @@ from ..rebuild_jobs import is_rebuild_job_stale, mark_stale_rebuild_jobs_failed
 router = APIRouter()
 
 REBUILD_PHASES = [
+    "Compacting editor input events",
     "Clearing derived data",
     "Clearing scoped derived data",
     "Rebuilding snapshots",
@@ -106,6 +107,8 @@ def _run_full_rebuild_job(service: BackendServices, job_id: str) -> None:
 
 
 def _run_scoped_rebuild_job(service: BackendServices, job_id: str, raw_author: str, start_date: str, end_date: str) -> None:
+    previous_job_id = getattr(service, "_active_rebuild_job_id", None)
+    service._active_rebuild_job_id = job_id
     try:
         result = service.rebuild_aggregates_for_dates(
             start_date=start_date,
@@ -116,6 +119,8 @@ def _run_scoped_rebuild_job(service: BackendServices, job_id: str, raw_author: s
         _finish_rebuild_job(service, job_id, "completed", result)
     except Exception as exc:
         _finish_rebuild_job(service, job_id, "failed", error=f"{exc}\n{traceback.format_exc()}")
+    finally:
+        service._active_rebuild_job_id = previous_job_id
 
 
 @router.get("/api/v1/avatars/author")

@@ -582,6 +582,9 @@ class ServerStatsServiceMixin:
 
     def start_server_stats_refresh(self) -> bool:
         self._ensure_server_stats_runtime_state()
+        if getattr(self, "_rebuild_in_progress", False):
+            return False
+
         with self._server_stats_lock:
             if self._server_stats_refreshing:
                 return False

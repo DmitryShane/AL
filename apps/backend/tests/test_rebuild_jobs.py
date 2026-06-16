@@ -10,7 +10,8 @@ from al_backend.rebuild_jobs import (
     mark_stale_rebuild_jobs_failed,
 )
 from al_backend.routers.authors import _active_rebuild_job, rebuild_author_activity
-from al_backend.services.raw_event_batching import RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE
+from al_backend.services import activity_aggregation_rebuild as rebuild_module
+from al_backend.services.raw_event_batching import RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE, REBUILD_CURSOR_BATCH_SIZE
 from tests.fakes import fake_repository
 
 
@@ -190,6 +191,105 @@ def test_scoped_rebuild_reads_only_matching_raw_event_batches():
     assert batch_find_queries == [{"batchId": {"$in": ["matching-batch"]}}]
 
 
+def test_scoped_rebuild_compacts_high_frequency_editor_input_before_rebuild():
+    repo = fake_repository()
+    author = "Future Artist"
+    day = "2026-06-16"
+    base_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+
+    for index in range(100):
+        occurred_at = base_at + dt.timedelta(milliseconds=index * 100)
+        repo.db.raw_activity_events.insert_one(
+            {
+                "eventId": f"editor-input-{index}",
+                "batchId": "batch-1",
+                "author": author,
+                "date": day,
+                "source": "ual",
+                "eventType": "editor_input",
+                "projectId": "bike-rush-2",
+                "sessionId": "unity-session",
+                "deviceId": "unity-device",
+                "timeZoneId": "UTC",
+                "occurredAtUtc": occurred_at,
+                "occurredAtLocal": occurred_at.isoformat(),
+                "receivedAt": occurred_at,
+                "metadata": {"state": "KeyDown", "keyCode": str(index)},
+            }
+        )
+
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "navigation-1",
+            "batchId": "batch-1",
+            "author": author,
+            "date": day,
+            "source": "ual",
+            "eventType": "scene_view_navigation",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "deviceId": "unity-device",
+            "timeZoneId": "UTC",
+            "occurredAtUtc": base_at,
+            "receivedAt": base_at,
+        }
+    )
+
+    repo._rebuild_aggregates_from_sources = lambda *args, **kwargs: None
+    result = repo.rebuild_aggregates_for_dates(day, dates=[day], authors=[author])
+    editor_inputs = list(repo.db.raw_activity_events.find({"author": author, "date": day, "eventType": "editor_input"}))
+    navigation = repo.db.raw_activity_events.find_one({"eventId": "navigation-1"})
+
+    assert result["rawEventsBeforeCompaction"] == 101
+    assert result["rawEventsAfterCompaction"] == 2
+    assert result["compactedEvents"] == 99
+    assert result["deletedEditorInputEvents"] == 100
+    assert result["insertedCompactedEvents"] == 1
+    assert len(editor_inputs) == 1
+    assert editor_inputs[0]["metadata"]["coalescedFromRawEvents"] is True
+    assert editor_inputs[0]["metadata"]["coalescedEventCount"] == 100
+    assert editor_inputs[0]["metadata"]["keyCode"] == "99"
+    assert navigation is not None
+
+
+def test_editor_input_compaction_is_idempotent_and_keeps_group_boundaries():
+    repo = fake_repository()
+    author = "Future Artist"
+    day = "2026-06-16"
+    base_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+
+    for batch_id in ("batch-a", "batch-b"):
+        for index in range(2):
+            occurred_at = base_at + dt.timedelta(seconds=index)
+            repo.db.raw_activity_events.insert_one(
+                {
+                    "eventId": f"{batch_id}-{index}",
+                    "batchId": batch_id,
+                    "author": author,
+                    "date": day,
+                    "source": "ual",
+                    "eventType": "editor_input",
+                    "projectId": "bike-rush-2",
+                    "sessionId": "unity-session",
+                    "deviceId": "unity-device",
+                    "timeZoneId": "UTC",
+                    "occurredAtUtc": occurred_at,
+                    "receivedAt": occurred_at,
+                    "metadata": {"state": "KeyDown"},
+                }
+            )
+
+    first = repo.compact_editor_input_events_for_rebuild({day}, {author})
+    second = repo.compact_editor_input_events_for_rebuild({day}, {author})
+    editor_inputs = list(repo.db.raw_activity_events.find({"author": author, "date": day, "eventType": "editor_input"}))
+
+    assert first["insertedCompactedEvents"] == 2
+    assert second["insertedCompactedEvents"] == 0
+    assert len(editor_inputs) == 2
+    assert sorted(event["batchId"] for event in editor_inputs) == ["batch-a", "batch-b"]
+    assert all(event["metadata"]["coalescedEventCount"] == 2 for event in editor_inputs)
+
+
 def test_rebuild_raw_events_uses_batch_accounting_and_reports_progress():
     repo = fake_repository()
     total_events = RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE + 2
@@ -232,6 +332,113 @@ def test_rebuild_raw_events_uses_batch_accounting_and_reports_progress():
     assert begin_batch_sizes == [RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE, 2]
     assert finish_count == 2
     assert ("Rebuilding raw activity events", total_events, total_events) in progress_events
+
+
+def test_rebuild_hot_cursors_use_configured_batch_size():
+    repo = fake_repository()
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "event-1",
+            "batchId": "batch-1",
+            "author": "Future Artist",
+            "date": "2026-06-16",
+            "eventType": "focus",
+            "occurredAtUtc": event_at,
+            "receivedAt": event_at,
+        }
+    )
+    repo.db.raw_event_batches.insert_one({"batchId": "batch-1", "author": "Future Artist", "receivedAt": event_at})
+    cursors = []
+    original_raw_find = repo.db.raw_activity_events.find
+    original_batch_find = repo.db.raw_event_batches.find
+
+    def recording_raw_find(*args, **kwargs):
+        cursor = original_raw_find(*args, **kwargs)
+        cursors.append(cursor)
+        return cursor
+
+    def recording_batch_find(*args, **kwargs):
+        cursor = original_batch_find(*args, **kwargs)
+        cursors.append(cursor)
+        return cursor
+
+    repo.db.raw_activity_events.find = recording_raw_find
+    repo.db.raw_event_batches.find = recording_batch_find
+    repo._apply_raw_event_to_aggregates = lambda event: {}
+    repo._build_event_batch_report_rows = lambda batch, delta_items, cutoff=None: []
+    repo._materialize_status_report_rows = lambda: None
+
+    repo._rebuild_aggregates_from_sources({"2026-06-16"}, {"Future Artist"})
+
+    assert any(cursor.batch_size_value == REBUILD_CURSOR_BATCH_SIZE for cursor in cursors)
+
+
+def test_coalesced_editor_input_preserves_activity_count():
+    repo = fake_repository()
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "eventId": "coalesced-editor-input",
+            "author": "Future Artist",
+            "date": "2026-06-16",
+            "source": "ual",
+            "eventType": "editor_input",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "deviceId": "unity-device",
+            "timeZoneId": "UTC",
+            "occurredAtUtc": event_at,
+            "receivedAt": event_at,
+            "metadata": {"coalescedFromRawEvents": True, "coalescedEventCount": 42},
+        }
+    )
+
+    assert deltas["activityCountDeltas"] == [{"type": "editor_input", "count": 42}]
+
+
+def test_rebuild_delta_store_spills_and_cleans_temp_collection():
+    repo = fake_repository()
+    store = rebuild_module._RebuildDeltaStore(repo, "token-1", threshold=1)
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    event = {
+        "author": "Future Artist",
+        "date": "2026-06-16",
+        "source": "ual",
+        "batchId": "batch-1",
+        "occurredAtUtc": event_at,
+        "receivedAt": event_at,
+    }
+
+    store.add("batch-1", event, {"activeDeltaSeconds": 1})
+    store.add("batch-1", event, {"activeDeltaSeconds": 2})
+
+    assert store.spilled is True
+    assert len(repo.db.aggregate_rebuild_event_deltas.items) == 2
+    assert [deltas for _event, deltas in store.get_batch("batch-1")] == [
+        {"activeDeltaSeconds": 1},
+        {"activeDeltaSeconds": 2},
+    ]
+
+    store.cleanup()
+
+    assert repo.db.aggregate_rebuild_event_deltas.items == []
+
+
+def test_rebuild_memory_guard_records_pause(monkeypatch):
+    repo = fake_repository()
+    metrics = {"memoryGuardPauses": 0, "rssPeakMb": 0}
+    pauses = []
+
+    monkeypatch.setattr(rebuild_module, "_rebuild_current_rss_mb", lambda: 999)
+    monkeypatch.setattr(rebuild_module.time, "sleep", lambda seconds: pauses.append(seconds))
+
+    repo._maybe_apply_rebuild_memory_guard(metrics)
+
+    assert metrics["rssPeakMb"] == 999
+    assert metrics["memorySoftLimitMb"] == 400
+    assert metrics["memoryGuardPauses"] == 1
+    assert pauses == [0.05]
 
 
 def test_rebuild_raw_event_batch_accounting_finishes_when_event_processing_fails():

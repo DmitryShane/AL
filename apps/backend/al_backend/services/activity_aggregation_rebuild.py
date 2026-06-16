@@ -1,10 +1,26 @@
 from __future__ import annotations
 
+import gc
+import logging
+import os
+import time
+import uuid
 from typing import Any, Callable
 
 from ..activity_math import *
 from ..backend_composable_host import composed
-from .raw_event_batching import RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE
+from .raw_event_batching import (
+    EDITOR_INPUT_COMPACTION_WINDOW_SECONDS,
+    RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE,
+    REBUILD_CURSOR_BATCH_SIZE,
+    REBUILD_DELTA_SPILL_THRESHOLD,
+    REBUILD_MEMORY_GUARD_ENABLED,
+    REBUILD_MEMORY_SOFT_LIMIT_MB,
+)
+
+
+LOGGER = logging.getLogger("al_backend.rebuild")
+REBUILD_EVENT_DELTA_COLLECTION = "aggregate_rebuild_event_deltas"
 
 
 def _has_count_or_file_delta(deltas: dict[str, Any]) -> bool:
@@ -28,7 +44,311 @@ def _primary_activity_type(deltas: dict[str, Any]) -> str | None:
     return None
 
 
+def _cursor_with_batch_size(cursor: Any, batch_size: int = REBUILD_CURSOR_BATCH_SIZE) -> Any:
+    batch_size_method = getattr(cursor, "batch_size", None)
+
+    if callable(batch_size_method):
+        return batch_size_method(batch_size)
+
+    return cursor
+
+
+def _minimal_event_for_report_rows(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source": event.get("source"),
+        "pluginVersion": event.get("pluginVersion"),
+        "author": event.get("author"),
+        "authorEmail": event.get("authorEmail", ""),
+        "projectId": event.get("projectId") or "",
+        "sessionId": event.get("sessionId") or "",
+        "deviceId": event.get("deviceId") or "",
+        "date": event.get("date"),
+        "occurredAtLocal": event.get("occurredAtLocal"),
+        "occurredAtUtc": event.get("occurredAtUtc"),
+        "receivedAt": event.get("receivedAt"),
+        "rawReportId": event.get("rawReportId"),
+        "batchId": event.get("batchId"),
+        "reportType": event.get("reportType", "auto"),
+        "timeZoneId": event.get("timeZoneId"),
+        "timeZoneDisplayName": event.get("timeZoneDisplayName"),
+    }
+
+
+def _rebuild_current_rss_mb() -> float:
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        with open("/proc/self/statm", encoding="utf-8") as handle:
+            resident_pages = int(handle.read().split()[1])
+        return (resident_pages * page_size) / (1024 * 1024)
+    except Exception:
+        try:
+            import resource
+
+            usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            return usage / 1024
+        except Exception:
+            return 0.0
+
+
+class _RebuildDeltaStore:
+    def __init__(self, service: Any, token: str, threshold: int = REBUILD_DELTA_SPILL_THRESHOLD):
+        self.service = service
+        self.token = token
+        self.threshold = threshold
+        self.memory: dict[str, list[dict[str, Any]]] = {}
+        self.spilled = False
+        self.count = 0
+
+    def add(self, batch_id: str, event: dict[str, Any], deltas: dict[str, Any]) -> None:
+        item = {"batchId": batch_id, "event": _minimal_event_for_report_rows(event), "deltas": dict(deltas)}
+        self.count += 1
+
+        if self.spilled:
+            self._insert_spill_item(item)
+            return
+
+        self.memory.setdefault(batch_id, []).append(item)
+
+        if self.count > self.threshold:
+            self._spill_memory()
+
+    def batch_ids(self) -> set[str]:
+        if self.spilled:
+            return {
+                str(item.get("batchId") or "")
+                for item in _cursor_with_batch_size(
+                    self.service.db.aggregate_rebuild_event_deltas.find({"token": self.token}, {"_id": 0, "batchId": 1})
+                )
+                if item.get("batchId")
+            }
+
+        return set(self.memory)
+
+    def get_batch(self, batch_id: str) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        if self.spilled:
+            cursor = self.service.db.aggregate_rebuild_event_deltas.find(
+                {"token": self.token, "batchId": batch_id},
+                {"_id": 0, "event": 1, "deltas": 1},
+            )
+            return [(dict(item.get("event") or {}), dict(item.get("deltas") or {})) for item in _cursor_with_batch_size(cursor)]
+
+        return [(dict(item.get("event") or {}), dict(item.get("deltas") or {})) for item in self.memory.get(batch_id, [])]
+
+    def iter_unprocessed(
+        self, processed_batch_ids: set[str]
+    ) -> list[tuple[str, list[tuple[dict[str, Any], dict[str, Any]]]]]:
+        return [(batch_id, self.get_batch(batch_id)) for batch_id in sorted(self.batch_ids()) if batch_id not in processed_batch_ids]
+
+    def cleanup(self) -> None:
+        self.memory.clear()
+        self.service.db.aggregate_rebuild_event_deltas.delete_many({"token": self.token})
+
+    def _insert_spill_item(self, item: dict[str, Any]) -> None:
+        self.service.db.aggregate_rebuild_event_deltas.insert_one({"token": self.token, **item})
+
+    def _spill_memory(self) -> None:
+        docs = [
+            {"token": self.token, **item}
+            for items in self.memory.values()
+            for item in items
+        ]
+        _insert_many_if_supported(self.service.db.aggregate_rebuild_event_deltas, docs)
+        self.memory.clear()
+        self.spilled = True
+
+
 class ActivityAggregationRebuildMixin:
+    def _set_rebuild_job_diagnostics(self, values: dict[str, Any]) -> None:
+        job_id = getattr(self, "_active_rebuild_job_id", None)
+
+        if not job_id:
+            return
+
+        self.db.aggregate_rebuild_jobs.update_one(
+            {"jobId": job_id},
+            {"$set": {**values, "updatedAt": dt.datetime.now(dt.UTC)}},
+        )
+
+    def _record_rebuild_observation(self, metrics: dict[str, Any], phase: str, started_at: float, processed: int = 0) -> None:
+        elapsed = max(0.0, time.monotonic() - started_at)
+        metrics.setdefault("phaseDurations", {})[phase] = elapsed
+
+        if processed > 0 and elapsed > 0:
+            metrics.setdefault("phaseRates", {})[phase] = processed / elapsed
+
+        LOGGER.info(
+            "Activity rebuild phase=%s seconds=%.3f processed=%s rate=%.2f/s rss_peak_mb=%.1f guard_pauses=%s",
+            phase,
+            elapsed,
+            processed,
+            (processed / elapsed) if processed > 0 and elapsed > 0 else 0,
+            float(metrics.get("rssPeakMb") or 0),
+            int(metrics.get("memoryGuardPauses") or 0),
+        )
+
+    def _maybe_apply_rebuild_memory_guard(self, metrics: dict[str, Any]) -> None:
+        current_rss = _rebuild_current_rss_mb()
+        metrics["rssCurrentMb"] = round(current_rss, 1)
+        metrics["rssPeakMb"] = round(max(float(metrics.get("rssPeakMb") or 0), current_rss), 1)
+        metrics["memorySoftLimitMb"] = REBUILD_MEMORY_SOFT_LIMIT_MB
+
+        if not REBUILD_MEMORY_GUARD_ENABLED or current_rss <= REBUILD_MEMORY_SOFT_LIMIT_MB:
+            return
+
+        gc.collect()
+        time.sleep(0.05)
+        metrics["memoryGuardPauses"] = int(metrics.get("memoryGuardPauses") or 0) + 1
+        self._set_rebuild_job_diagnostics(
+            {
+                "rssCurrentMb": metrics["rssCurrentMb"],
+                "rssPeakMb": metrics["rssPeakMb"],
+                "memorySoftLimitMb": REBUILD_MEMORY_SOFT_LIMIT_MB,
+                "memoryGuardPauses": metrics["memoryGuardPauses"],
+            }
+        )
+
+    def compact_editor_input_events_for_rebuild(
+        self,
+        target_dates: set[str],
+        target_authors: set[str],
+        progress_callback: Callable[[str, int, int], None] | None = None,
+    ) -> dict[str, Any]:
+        if not target_dates or not target_authors:
+            return {
+                "rawEventsBeforeCompaction": 0,
+                "rawEventsAfterCompaction": 0,
+                "compactedEvents": 0,
+                "insertedCompactedEvents": 0,
+                "deletedEditorInputEvents": 0,
+            }
+
+        raw_event_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
+        raw_event_before = self.db.raw_activity_events.count_documents(raw_event_query)
+        query = {
+            **raw_event_query,
+            "source": "ual",
+            "eventType": "editor_input",
+            "metadata.coalescedFromRawEvents": {"$ne": True},
+        }
+        total = self.db.raw_activity_events.count_documents(query)
+        processed = 0
+        inserted = 0
+        deleted = 0
+        compacted = 0
+        delete_ids: list[str] = []
+        insert_docs: list[dict[str, Any]] = []
+        current_group_key: tuple[Any, ...] | None = None
+        current_window: list[dict[str, Any]] = []
+        window_start: dt.datetime | None = None
+
+        def flush_window() -> None:
+            nonlocal inserted, deleted, compacted, current_window, window_start
+
+            if len(current_window) <= 1:
+                current_window = []
+                window_start = None
+                return
+
+            first = current_window[0]
+            last = current_window[-1]
+            first_at = _coerce_datetime(first.get("occurredAtUtc")) or _coerce_datetime(first.get("occurredAtLocal"))
+            last_at = _coerce_datetime(last.get("occurredAtUtc")) or _coerce_datetime(last.get("occurredAtLocal")) or first_at
+            metadata = dict(last.get("metadata") if isinstance(last.get("metadata"), dict) else {})
+            metadata.update(
+                {
+                    "coalescedFromRawEvents": True,
+                    "coalescedEventCount": len(current_window),
+                    "coalescedFirstAtUtc": _isoformat_or_none(first_at),
+                    "coalescedLastAtUtc": _isoformat_or_none(last_at),
+                }
+            )
+            synthetic = dict(last)
+            synthetic.update(
+                {
+                    "eventId": f"rebuild-coalesced-{uuid.uuid4().hex}",
+                    "occurredAtUtc": first_at or last_at or last.get("occurredAtUtc"),
+                    "occurredAtLocal": first.get("occurredAtLocal") or last.get("occurredAtLocal"),
+                    "receivedAt": last.get("receivedAt"),
+                    "metadata": metadata,
+                }
+            )
+            insert_docs.append(synthetic)
+            delete_ids.extend(str(item.get("eventId") or "") for item in current_window if item.get("eventId"))
+            inserted += 1
+            deleted += len(current_window)
+            compacted += max(0, len(current_window) - 1)
+            current_window = []
+            window_start = None
+
+            if len(insert_docs) >= 500:
+                _insert_many_if_supported(self.db.raw_activity_events, insert_docs)
+                insert_docs.clear()
+
+            if len(delete_ids) >= 1_000:
+                self.db.raw_activity_events.delete_many({"eventId": {"$in": list(delete_ids)}})
+                delete_ids.clear()
+
+        sort_spec = [
+            ("author", ASCENDING),
+            ("date", ASCENDING),
+            ("source", ASCENDING),
+            ("projectId", ASCENDING),
+            ("sessionId", ASCENDING),
+            ("deviceId", ASCENDING),
+            ("batchId", ASCENDING),
+            ("timeZoneId", ASCENDING),
+            ("occurredAtUtc", ASCENDING),
+        ]
+        cursor = _cursor_with_batch_size(self.db.raw_activity_events.find(query).sort(sort_spec))
+
+        self._report_rebuild_progress(progress_callback, "Compacting editor input events", 0, total)
+
+        for event in cursor:
+            event_at = _coerce_datetime(event.get("occurredAtUtc")) or _coerce_datetime(event.get("occurredAtLocal"))
+            group_key = (
+                event.get("author"),
+                event.get("date"),
+                event.get("source"),
+                event.get("projectId"),
+                event.get("sessionId"),
+                event.get("deviceId"),
+                event.get("batchId"),
+                event.get("timeZoneId"),
+            )
+
+            if current_group_key is not None and group_key != current_group_key:
+                flush_window()
+
+            if window_start is not None and event_at is not None and (event_at - window_start).total_seconds() >= EDITOR_INPUT_COMPACTION_WINDOW_SECONDS:
+                flush_window()
+
+            current_group_key = group_key
+            if not current_window:
+                window_start = event_at
+            current_window.append(event)
+            processed += 1
+            self._report_rebuild_progress(progress_callback, "Compacting editor input events", processed, total)
+
+        flush_window()
+
+        if insert_docs:
+            _insert_many_if_supported(self.db.raw_activity_events, insert_docs)
+
+        if delete_ids:
+            self.db.raw_activity_events.delete_many({"eventId": {"$in": list(delete_ids)}})
+
+        raw_event_after = self.db.raw_activity_events.count_documents(raw_event_query)
+        result = {
+            "rawEventsBeforeCompaction": raw_event_before,
+            "rawEventsAfterCompaction": raw_event_after,
+            "compactedEvents": compacted,
+            "insertedCompactedEvents": inserted,
+            "deletedEditorInputEvents": deleted,
+        }
+        self._set_rebuild_job_diagnostics(result)
+        LOGGER.info("Activity rebuild editor input compaction result=%s", result)
+        return result
+
     def rebuild_aggregates_if_needed(
         self,
         force: bool = False,
@@ -60,7 +380,9 @@ class ActivityAggregationRebuildMixin:
             return
 
         previous_suppression = getattr(self, "_suppress_rebuild_notification_side_effects", False)
+        previous_rebuild_in_progress = getattr(self, "_rebuild_in_progress", False)
         self._suppress_rebuild_notification_side_effects = True
+        self._rebuild_in_progress = True
         self._daily_consumed_microseconds_cache = {}
         try:
             self._report_rebuild_progress(progress_callback, "Clearing derived data", 0, 1)
@@ -85,6 +407,7 @@ class ActivityAggregationRebuildMixin:
         finally:
             self._daily_consumed_microseconds_cache = None
             self._suppress_rebuild_notification_side_effects = previous_suppression
+            self._rebuild_in_progress = previous_rebuild_in_progress
 
     def _current_author_calendar_dates(self) -> list[str]:
         now = dt.datetime.now(dt.UTC)
@@ -121,6 +444,11 @@ class ActivityAggregationRebuildMixin:
             target_authors.update(composed(self).author_alias_keys(normalized_author))
         scoped_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
         raw_author_query = self._aggregate_rebuild_query(target_dates, target_authors, "rawAuthor")
+        compaction_result = self.compact_editor_input_events_for_rebuild(
+            set(target_dates),
+            target_authors,
+            progress_callback=progress_callback,
+        )
         self._report_rebuild_progress(progress_callback, "Clearing scoped derived data", 0, 1)
         backfilled_live_meeting_events = self._backfill_live_meeting_events_from_report_rows(scoped_query)
         deleted_report_rows = self.db.report_rows.delete_many(scoped_query).deleted_count
@@ -141,9 +469,11 @@ class ActivityAggregationRebuildMixin:
         previous_dates = getattr(self, "_aggregate_rebuild_target_dates", None)
         previous_authors = getattr(self, "_aggregate_rebuild_target_authors", None)
         previous_suppression = getattr(self, "_suppress_rebuild_notification_side_effects", False)
+        previous_rebuild_in_progress = getattr(self, "_rebuild_in_progress", False)
         self._aggregate_rebuild_target_dates = set(target_dates)
         self._aggregate_rebuild_target_authors = set(target_authors)
         self._suppress_rebuild_notification_side_effects = True
+        self._rebuild_in_progress = True
         self._daily_consumed_microseconds_cache = {}
 
         try:
@@ -152,6 +482,7 @@ class ActivityAggregationRebuildMixin:
             self._aggregate_rebuild_target_dates = previous_dates
             self._aggregate_rebuild_target_authors = previous_authors
             self._suppress_rebuild_notification_side_effects = previous_suppression
+            self._rebuild_in_progress = previous_rebuild_in_progress
             self._daily_consumed_microseconds_cache = None
 
         self._report_rebuild_progress(progress_callback, "Capturing day state", 0, 1)
@@ -171,6 +502,8 @@ class ActivityAggregationRebuildMixin:
             "backfilledLiveMeetingEvents": backfilled_live_meeting_events,
             "rawAuthorQuery": raw_author_query,
             "rebuiltActivitySnapshots": rebuilt_snapshots,
+            **(getattr(self, "_last_rebuild_metrics", {}) or {}),
+            **compaction_result,
         }
 
     def _backfill_live_meeting_events_from_report_rows(self, scoped_query: dict[str, Any]) -> int:
@@ -338,31 +671,34 @@ class ActivityAggregationRebuildMixin:
         raw_author_query = self._aggregate_rebuild_query(target_dates, target_authors, "rawAuthor")
         raw_event_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
 
-        snapshots = self.db.activity_snapshots.find(snapshot_query).sort("receivedAt", ASCENDING)
+        metrics: dict[str, Any] = {"memoryGuardPauses": 0, "rssPeakMb": 0}
+        snapshots = _cursor_with_batch_size(self.db.activity_snapshots.find(snapshot_query).sort("receivedAt", ASCENDING))
         snapshot_total = self.db.activity_snapshots.count_documents(snapshot_query)
         snapshot_count = 0
+        phase_started_at = time.monotonic()
 
         for snapshot in snapshots:
             self._apply_snapshot_to_aggregates(snapshot)
             snapshot_count += 1
             self._report_rebuild_progress(progress_callback, "Rebuilding snapshots", snapshot_count, snapshot_total)
+            self._maybe_apply_rebuild_memory_guard(metrics)
+
+        self._record_rebuild_observation(metrics, "Rebuilding snapshots", phase_started_at, snapshot_count)
 
         if snapshot_total == 0:
             self._report_rebuild_progress(progress_callback, "Rebuilding snapshots", 0, 0)
 
         batch_id_query: dict[str, Any] = {}
         full_rebuild = target_dates is None and target_authors is None
-        batch_ids = (
-            {
-                str(batch.get("batchId") or "")
-                for batch in self.db.raw_event_batches.find({}, {"_id": 0, "batchId": 1})
-                if batch.get("batchId")
-            }
-            if full_rebuild
-            else set()
-        )
-        batch_delta_items_by_batch_id: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+        delta_store = _RebuildDeltaStore(self, uuid.uuid4().hex)
         orphan_report_rows: list[dict[str, Any]] = []
+
+        def flush_orphan_report_rows() -> None:
+            if not orphan_report_rows:
+                return
+
+            _insert_many_if_supported(self.db.report_rows, list(orphan_report_rows))
+            orphan_report_rows.clear()
 
         def add_orphan_report_row(event: dict[str, Any], deltas: dict[str, Any]) -> None:
             is_codex_presence_row = str(event.get("source") or "") == "codex" and _has_count_or_file_delta(deltas)
@@ -395,88 +731,109 @@ class ActivityAggregationRebuildMixin:
                 }
             )
 
-        raw_events = self.db.raw_activity_events.find(raw_event_query).sort("occurredAtUtc", ASCENDING)
-        raw_event_total = self.db.raw_activity_events.count_documents(raw_event_query)
-        raw_event_count = 0
-        raw_event_batch: list[dict[str, Any]] = []
+        try:
+            raw_events = _cursor_with_batch_size(self.db.raw_activity_events.find(raw_event_query).sort("occurredAtUtc", ASCENDING))
+            raw_event_total = self.db.raw_activity_events.count_documents(raw_event_query)
+            raw_event_count = 0
+            raw_event_batch: list[dict[str, Any]] = []
+            phase_started_at = time.monotonic()
 
-        def process_raw_event_batch(events: list[dict[str, Any]]) -> None:
-            nonlocal raw_event_count
-            if not events:
-                return
+            def process_raw_event_batch(events: list[dict[str, Any]]) -> None:
+                nonlocal raw_event_count
+                if not events:
+                    return
 
-            composed(self)._begin_raw_event_batch_accounting(events)
-            try:
-                for event in events:
-                    deltas = self._apply_raw_event_to_aggregates(event)
-                    raw_event_count += 1
-                    self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", raw_event_count, raw_event_total)
-                    batch_id = str(event.get("batchId") or "")
+                composed(self)._begin_raw_event_batch_accounting(events)
+                try:
+                    for event in events:
+                        deltas = self._apply_raw_event_to_aggregates(event)
+                        raw_event_count += 1
+                        self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", raw_event_count, raw_event_total)
+                        batch_id = str(event.get("batchId") or "")
 
-                    if batch_id and ((full_rebuild and batch_id in batch_ids) or not full_rebuild):
-                        batch_delta_items = batch_delta_items_by_batch_id.setdefault(batch_id, [])
-                        batch_delta_items.append((event, deltas))
-                        continue
+                        if batch_id:
+                            delta_store.add(batch_id, event, deltas)
+                            continue
 
+                        add_orphan_report_row(event, deltas)
+
+                        if len(orphan_report_rows) >= 1_000:
+                            flush_orphan_report_rows()
+                finally:
+                    composed(self)._finish_raw_event_batch_accounting()
+                    self._maybe_apply_rebuild_memory_guard(metrics)
+
+            for event in raw_events:
+                raw_event_batch.append(event)
+                if len(raw_event_batch) >= RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE:
+                    process_raw_event_batch(raw_event_batch)
+                    raw_event_batch = []
+
+            process_raw_event_batch(raw_event_batch)
+            self._record_rebuild_observation(metrics, "Rebuilding raw activity events", phase_started_at, raw_event_count)
+
+            if raw_event_total == 0:
+                self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", 0, 0)
+
+            if not full_rebuild:
+                batch_ids = delta_store.batch_ids()
+                batch_id_query = {"batchId": {"$in": sorted(batch_ids)}} if batch_ids else {"batchId": {"$in": []}}
+
+            last_report_time_by_author: dict[str, dt.datetime] = {}
+            batch_total = self.db.raw_event_batches.count_documents(batch_id_query)
+            batch_count = 0
+            processed_batch_ids: set[str] = set()
+            phase_started_at = time.monotonic()
+
+            for batch in _cursor_with_batch_size(self.db.raw_event_batches.find(batch_id_query).sort("receivedAt", ASCENDING)):
+                batch_count += 1
+                self._report_rebuild_progress(progress_callback, "Rebuilding event batches", batch_count, batch_total)
+                batch_id = str(batch.get("batchId") or "")
+                processed_batch_ids.add(batch_id)
+
+                author = str(batch.get("author") or "Unknown User")
+                cutoff = last_report_time_by_author.get(author)
+                rows = composed(self)._build_event_batch_report_rows(batch, delta_store.get_batch(batch_id), cutoff)
+                materialized_rows = [
+                    row
+                    for row in rows
+                    if self._should_materialize_aggregate_date(str(row.get("date") or ""), str(row.get("author") or "Unknown User"))
+                ]
+                _insert_many_if_supported(self.db.report_rows, materialized_rows)
+
+                for row in rows:
+                    row_time = _report_row_time(row)
+
+                    if row_time:
+                        last_report_time_by_author[author] = row_time
+
+                self._maybe_apply_rebuild_memory_guard(metrics)
+
+            self._record_rebuild_observation(metrics, "Rebuilding event batches", phase_started_at, batch_count)
+
+            for _batch_id, delta_items in delta_store.iter_unprocessed(processed_batch_ids):
+                for event, deltas in delta_items:
                     add_orphan_report_row(event, deltas)
-            finally:
-                composed(self)._finish_raw_event_batch_accounting()
 
-        for event in raw_events:
-            raw_event_batch.append(event)
-            if len(raw_event_batch) >= RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE:
-                process_raw_event_batch(raw_event_batch)
-                raw_event_batch = []
+                    if len(orphan_report_rows) >= 1_000:
+                        flush_orphan_report_rows()
 
-        process_raw_event_batch(raw_event_batch)
-
-        if raw_event_total == 0:
-            self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", 0, 0)
-
-        if not full_rebuild:
-            batch_ids = set(batch_delta_items_by_batch_id)
-            batch_id_query = {"batchId": {"$in": sorted(batch_ids)}} if batch_ids else {"batchId": {"$in": []}}
-
-        last_report_time_by_author: dict[str, dt.datetime] = {}
-        batch_total = self.db.raw_event_batches.count_documents(batch_id_query)
-        batch_count = 0
-        processed_batch_ids: set[str] = set()
-
-        for batch in self.db.raw_event_batches.find(batch_id_query).sort("receivedAt", ASCENDING):
-            batch_count += 1
-            self._report_rebuild_progress(progress_callback, "Rebuilding event batches", batch_count, batch_total)
-            batch_id = str(batch.get("batchId") or "")
-            processed_batch_ids.add(batch_id)
-
-            author = str(batch.get("author") or "Unknown User")
-            cutoff = last_report_time_by_author.get(author)
-            rows = composed(self)._build_event_batch_report_rows(batch, batch_delta_items_by_batch_id.get(batch_id, []), cutoff)
-            materialized_rows = [
-                row
-                for row in rows
-                if self._should_materialize_aggregate_date(str(row.get("date") or ""), str(row.get("author") or "Unknown User"))
-            ]
-            _insert_many_if_supported(self.db.report_rows, materialized_rows)
-
-            for row in rows:
-                row_time = _report_row_time(row)
-
-                if row_time:
-                    last_report_time_by_author[author] = row_time
-
-        for batch_id, delta_items in batch_delta_items_by_batch_id.items():
-            if batch_id in processed_batch_ids:
-                continue
-
-            for event, deltas in delta_items:
-                add_orphan_report_row(event, deltas)
-
-        _insert_many_if_supported(self.db.report_rows, orphan_report_rows)
+            flush_orphan_report_rows()
+        finally:
+            delta_store.cleanup()
+            self._set_rebuild_job_diagnostics(
+                {
+                    "rssPeakMb": metrics.get("rssPeakMb"),
+                    "memorySoftLimitMb": REBUILD_MEMORY_SOFT_LIMIT_MB,
+                    "memoryGuardPauses": metrics.get("memoryGuardPauses", 0),
+                }
+            )
 
         break_total = self.db.break_events.count_documents(raw_author_query)
         break_count = 0
 
-        for event in self.db.break_events.find(raw_author_query).sort("timestamp", ASCENDING):
+        phase_started_at = time.monotonic()
+        for event in _cursor_with_batch_size(self.db.break_events.find(raw_author_query).sort("timestamp", ASCENDING)):
             break_count += 1
             self._report_rebuild_progress(progress_callback, "Rebuilding Telegram activity", break_count, break_total)
             event_time = _coerce_datetime(event.get("timestamp"))
@@ -498,6 +855,9 @@ class ActivityAggregationRebuildMixin:
                 str(event.get("telegramStatus") or event.get("eventType") or "telegram"),
                 metadata,
             )
+            self._maybe_apply_rebuild_memory_guard(metrics)
+
+        self._record_rebuild_observation(metrics, "Rebuilding Telegram activity", phase_started_at, break_count)
 
         if break_total == 0:
             self._report_rebuild_progress(progress_callback, "Rebuilding Telegram activity", 0, 0)
@@ -505,7 +865,8 @@ class ActivityAggregationRebuildMixin:
         meeting_total = self.db.meeting_events.count_documents(raw_author_query)
         meeting_count = 0
 
-        for event in self.db.meeting_events.find(raw_author_query).sort("timestamp", ASCENDING):
+        phase_started_at = time.monotonic()
+        for event in _cursor_with_batch_size(self.db.meeting_events.find(raw_author_query).sort("timestamp", ASCENDING)):
             meeting_count += 1
             self._report_rebuild_progress(progress_callback, "Rebuilding Discord meetings", meeting_count, meeting_total)
             event_time = _coerce_datetime(event.get("timestamp"))
@@ -534,6 +895,9 @@ class ActivityAggregationRebuildMixin:
                 str(event.get("channelId") or ""),
                 metadata,
             )
+            self._maybe_apply_rebuild_memory_guard(metrics)
+
+        self._record_rebuild_observation(metrics, "Rebuilding Discord meetings", phase_started_at, meeting_count)
 
         if meeting_total == 0:
             self._report_rebuild_progress(progress_callback, "Rebuilding Discord meetings", 0, 0)
@@ -541,6 +905,14 @@ class ActivityAggregationRebuildMixin:
         self._report_rebuild_progress(progress_callback, "Rebuilding status events", 0, 1)
         composed(self)._materialize_status_report_rows()
         self._report_rebuild_progress(progress_callback, "Rebuilding status events", 1, 1)
+        self._last_rebuild_metrics = {
+            "rssPeakMb": metrics.get("rssPeakMb"),
+            "memorySoftLimitMb": REBUILD_MEMORY_SOFT_LIMIT_MB,
+            "memoryGuardPauses": metrics.get("memoryGuardPauses", 0),
+            "phaseDurations": metrics.get("phaseDurations", {}),
+            "phaseRates": metrics.get("phaseRates", {}),
+        }
+        self._set_rebuild_job_diagnostics(self._last_rebuild_metrics)
 
     def _report_rebuild_progress(
         self,
@@ -619,7 +991,7 @@ class ActivityAggregationRebuildMixin:
         captured = 0
         now = dt.datetime.now(dt.UTC)
 
-        for state in self.db.aggregate_session_state.find({}):
+        for state in _cursor_with_batch_size(self.db.aggregate_session_state.find({})):
             state_date = str(state.get("date") or "")
 
             if state_date not in target_dates:

@@ -11,6 +11,7 @@ from al_backend.container import BackendServices
 class FakeCursor:
     def __init__(self, items):
         self.items = items
+        self.batch_size_value = None
 
     def __iter__(self):
         return iter(self.items)
@@ -40,6 +41,10 @@ class FakeCursor:
         if args:
             self.items = self.items[int(args[0]) :]
 
+        return self
+
+    def batch_size(self, value):
+        self.batch_size_value = value
         return self
 
     def _sort_value(self, value):
@@ -194,6 +199,26 @@ class FakeCollection:
 
         return str(value or "")
 
+    def _field_value(self, item, key):
+        current = item
+
+        for part in str(key).split("."):
+            if not isinstance(current, dict) or part not in current:
+                return None
+            current = current.get(part)
+
+        return current
+
+    def _field_exists(self, item, key):
+        current = item
+
+        for part in str(key).split("."):
+            if not isinstance(current, dict) or part not in current:
+                return False
+            current = current.get(part)
+
+        return True
+
     def _matches(self, item, query):
         for key, value in query.items():
             if key == "$or":
@@ -207,7 +232,7 @@ class FakeCollection:
 
                 continue
 
-            item_value = item.get(key)
+            item_value = self._field_value(item, key)
 
             if isinstance(value, dict):
                 if "$ne" in value and item_value == value["$ne"]:
@@ -219,7 +244,7 @@ class FakeCollection:
                 if "$nin" in value and item_value in value["$nin"]:
                     return False
 
-                if "$exists" in value and (key in item) is not bool(value["$exists"]):
+                if "$exists" in value and self._field_exists(item, key) is not bool(value["$exists"]):
                     return False
 
                 if "$regex" in value and not re.search(value["$regex"], str(item_value or "")):
@@ -305,6 +330,7 @@ class FakeDb:
         self.manual_report_expectations = FakeCollection()
         self.raw_activity_events = FakeCollection()
         self.raw_event_batches = FakeCollection()
+        self.aggregate_rebuild_event_deltas = FakeCollection()
         self.raw_report_chunks = FakeCollection()
         self.raw_reports = FakeCollection()
         self.report_challenges = FakeCollection()

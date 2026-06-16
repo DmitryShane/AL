@@ -221,6 +221,9 @@ class ActivityDaySummarySnapshotsMixin:
         if getattr(self, "activity_snapshot_background_disabled", False):
             return {"started": False, "reason": "background_disabled"}
 
+        if getattr(self, "_rebuild_in_progress", False):
+            return {"started": False, "reason": "rebuild_in_progress"}
+
         lock = getattr(self, "activity_snapshot_maintenance_lock", None)
 
         if lock is not None and lock.locked():
