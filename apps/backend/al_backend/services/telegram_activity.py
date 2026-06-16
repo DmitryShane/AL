@@ -1459,10 +1459,12 @@ class TelegramActivityService(MongoComposableMixin):
         received_at: dt.datetime,
         status: str,
         metadata: dict[str, Any] | None = None,
+        *,
+        respect_rebuild_scope: bool = False,
     ) -> None:
         materialize_predicate = getattr(composed(self), "_should_materialize_aggregate_date", None)
 
-        if callable(materialize_predicate) and not materialize_predicate(event_date, raw_author):
+        if respect_rebuild_scope and callable(materialize_predicate) and not materialize_predicate(event_date, raw_author):
             return
 
         deltas = _empty_event_deltas()

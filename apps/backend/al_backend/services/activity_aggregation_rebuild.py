@@ -854,6 +854,7 @@ class ActivityAggregationRebuildMixin:
                 received_at,
                 str(event.get("telegramStatus") or event.get("eventType") or "telegram"),
                 metadata,
+                respect_rebuild_scope=True,
             )
             self._maybe_apply_rebuild_memory_guard(metrics)
 

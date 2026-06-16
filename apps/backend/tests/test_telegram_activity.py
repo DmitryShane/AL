@@ -2272,6 +2272,26 @@ def test_duplicate_telegram_offline_skips_extra_report():
     assert len(offline_rows) == 1
     assert len([b for b in repo.db.break_events.items if b.get("eventType") == "offline"]) == 1
 
+def test_live_telegram_offline_materializes_during_scoped_rebuild():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Denis Ostrovskiy", "telegramUsername": "vedamir_infinum", "timeZoneId": "UTC"}
+    )
+    repo.record_break_event("vedamir_infinum", "online", "2026-06-16T08:00:00Z")
+    repo._aggregate_rebuild_target_dates = {"2026-06-16"}
+    repo._aggregate_rebuild_target_authors = {"Evgeniy Dotsenko"}
+
+    result = repo.record_break_event("vedamir_infinum", "offline", "2026-06-16T17:08:27Z")
+
+    assert result["status"] == "day_closed"
+    offline_rows = [
+        row
+        for row in repo.db.report_rows.items
+        if row.get("author") == "Denis Ostrovskiy" and row.get("telegramEventType") == "offline"
+    ]
+    assert len(offline_rows) == 1
+    assert offline_rows[0]["telegramStatus"] == "day_closed"
+
 def test_telegram_offline_without_online_does_not_create_activity_rows():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
