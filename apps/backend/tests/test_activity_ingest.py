@@ -401,6 +401,66 @@ def test_stale_processing_report_can_be_reclaimed():
     assert second["leaseOwner"] == "worker-2"
     assert second["attempts"] == 2
 
+def test_reports_for_different_authors_can_be_claimed_in_parallel():
+    repo = fake_repository()
+    first_payload = _event_payload(event_count=1)
+    first_payload["author"] = "Author One"
+    first_payload["authorEmail"] = "one@example.com"
+    second_payload = _event_payload(event_count=1)
+    second_payload["author"] = "Author Two"
+    second_payload["authorEmail"] = "two@example.com"
+    first_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.10",
+        encrypted_packet="packet-1",
+        challenge_id="challenge-lane-1",
+        device_id="device-lane-1",
+        payload=first_payload,
+    )
+    second_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.10",
+        encrypted_packet="packet-2",
+        challenge_id="challenge-lane-2",
+        device_id="device-lane-2",
+        payload=second_payload,
+    )
+
+    first = repo.claim_next_queued_report(worker_id="worker-1", lease_seconds=300)
+    second = repo.claim_next_queued_report(worker_id="worker-2", lease_seconds=300)
+
+    assert {first["_id"], second["_id"]} == {first_id, second_id}
+    assert first["authorKey"] != second["authorKey"]
+
+def test_reports_for_same_author_do_not_claim_concurrently():
+    repo = fake_repository()
+    first_payload = _event_payload(event_count=1)
+    first_payload["author"] = "Same Author"
+    second_payload = _event_payload(event_count=1)
+    second_payload["author"] = "Same Author"
+    first_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.10",
+        encrypted_packet="packet-1",
+        challenge_id="challenge-same-lane-1",
+        device_id="device-same-lane-1",
+        payload=first_payload,
+    )
+    repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.10",
+        encrypted_packet="packet-2",
+        challenge_id="challenge-same-lane-2",
+        device_id="device-same-lane-2",
+        payload=second_payload,
+    )
+
+    first = repo.claim_next_queued_report(worker_id="worker-1", lease_seconds=300)
+    second = repo.claim_next_queued_report(worker_id="worker-2", lease_seconds=300)
+
+    assert first["_id"] == first_id
+    assert second is None
+
 def test_report_worker_run_once_processes_one_queued_report():
     repo = fake_repository()
     set_idle_threshold(repo, 60)

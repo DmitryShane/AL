@@ -365,6 +365,7 @@ export type ReportsQueueReport = {
   failedAt?: string | null;
   source: string;
   author: string;
+  authorKey?: string;
   displayName?: string;
   projectId: string;
   status: string;
@@ -373,6 +374,9 @@ export type ReportsQueueReport = {
   assemblyStatus?: string;
   processingStatus?: string;
   attempts: number;
+  leaseOwner?: string;
+  eventIngestTotal?: number;
+  eventIngestProcessed?: number;
   assemblySeconds?: number | null;
   processingSeconds?: number | null;
   lastError: string;

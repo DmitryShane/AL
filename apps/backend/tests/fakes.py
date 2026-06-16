@@ -183,6 +183,11 @@ class FakeCollection:
                     return False
 
                 continue
+            if key == "$and":
+                if not all(self._matches(item, option) for option in value):
+                    return False
+
+                continue
 
             item_value = item.get(key)
 

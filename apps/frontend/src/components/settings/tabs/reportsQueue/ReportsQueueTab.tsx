@@ -206,7 +206,7 @@ function ReportQueueRow({ report, isFailedTable }: { report: ReportsQueueReport;
           <SourceIcon source={report.source} />
           {formatSource(report.source)}
         </span>
-        <span title={report.author || undefined}>{report.displayName || report.author || "unknown"}</span>
+        <span title={formatAuthorLaneTitle(report)}>{report.displayName || report.author || "unknown"}</span>
         <span title={report.receivedAt || undefined}>{formatDateTime(report.receivedAt)}</span>
         <span title={formatStageTitle(report)}>
           <StatusBadge status={report.stage || report.status} label={report.stageLabel || formatStatusLabel(report.status)} />
@@ -334,6 +334,13 @@ function formatAssemblyState(report: ReportsQueueReport): string {
 }
 
 function formatProcessingState(report: ReportsQueueReport): string {
+  const total = report.eventIngestTotal ?? 0;
+  const processed = report.eventIngestProcessed ?? 0;
+
+  if (total > 0 && processed < total) {
+    return `${processed}/${total} events`;
+  }
+
   const status = report.processingStatus || (report.processingSeconds !== null && report.processingSeconds !== undefined ? "done" : "pending");
   if (status === "done") {
     return `done · ${formatDuration(report.processingSeconds)}`;
@@ -348,6 +355,20 @@ function formatProcessingState(report: ReportsQueueReport): string {
     return "failed";
   }
   return "pending";
+}
+
+function formatAuthorLaneTitle(report: ReportsQueueReport): string {
+  const parts = [report.author || "unknown"];
+
+  if (report.authorKey) {
+    parts.push(`lane: ${report.authorKey}`);
+  }
+
+  if (report.leaseOwner) {
+    parts.push(`worker: ${report.leaseOwner}`);
+  }
+
+  return parts.join(" | ");
 }
 
 function formatChunkProgress(report: ReportsQueueReport): string {

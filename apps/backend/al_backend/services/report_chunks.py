@@ -7,6 +7,7 @@ from typing import Any
 from pymongo import ASCENDING
 
 from ..activity_math import _coerce_datetime, dt
+from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
 
@@ -210,6 +211,7 @@ class ReportChunkService(MongoComposableMixin):
         assembled_payload.pop("chunkEventCount", None)
 
         logical_report_id = str(ordered_chunks[0].get("logicalReportId") or "")
+        author_key = composed(self).resolve_author_alias(str(first_payload.get("author") or "Unknown User"))
         if self.db.raw_reports.find_one({"_id": logical_report_id}):
             return
 
@@ -229,6 +231,7 @@ class ReportChunkService(MongoComposableMixin):
                 "attempts": 0,
                 "assembledFromChunks": True,
                 "logicalReportId": logical_report_id,
+                "authorKey": author_key,
             }
         )
         LOGGER.info(

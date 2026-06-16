@@ -101,6 +101,114 @@ def _codex_activity_count_type(event: dict[str, Any]) -> str:
 
 
 class ActivityRawEventAccountingMixin:
+    def _begin_raw_event_batch_accounting(self, events: list[dict[str, Any]]) -> None:
+        state_keys = sorted(
+            {
+                key
+                for event in events
+                for key in (_raw_event_session_key(event), _raw_event_author_day_key(event))
+                if str(key or "").strip()
+            }
+        )
+        states = {
+            str(item.get("_id")): item
+            for item in self.db.aggregate_session_state.find({"_id": {"$in": state_keys}})
+        }
+        self._raw_event_batch_accounting = {
+            "states": states,
+            "dirtyStates": set(),
+            "daily": {},
+            "dirtyDaily": set(),
+        }
+
+    def _finish_raw_event_batch_accounting(self) -> None:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if not context:
+            return
+
+        try:
+            for state_key in sorted(context.get("dirtyStates") or []):
+                doc = dict((context.get("states") or {}).get(state_key) or {})
+                if not doc:
+                    continue
+                self.db.aggregate_session_state.update_one(
+                    {"_id": state_key},
+                    {"$set": {key: value for key, value in doc.items() if key != "_id"}},
+                    upsert=True,
+                )
+
+            for daily_key in sorted(context.get("dirtyDaily") or []):
+                doc = dict((context.get("daily") or {}).get(daily_key) or {})
+                if not doc:
+                    continue
+                key = {
+                    "source": doc.get("source"),
+                    "author": doc.get("author") or "Unknown User",
+                    "projectId": doc.get("projectId") or "",
+                    "date": doc.get("date") or "",
+                }
+                self.db.daily_author_activity.update_one(key, {"$set": doc}, upsert=True)
+        finally:
+            self._raw_event_batch_accounting = None
+
+    def _batch_state_doc(self, state_key: str) -> dict[str, Any] | None:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if not context:
+            return None
+
+        states = context.setdefault("states", {})
+        if state_key not in states:
+            states[state_key] = self.db.aggregate_session_state.find_one({"_id": state_key}) or {}
+        return dict(states.get(state_key) or {})
+
+    def _set_batch_state_doc(self, state_key: str, doc: dict[str, Any]) -> None:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if not context:
+            self.db.aggregate_session_state.update_one(
+                {"_id": state_key},
+                {"$set": {key: value for key, value in doc.items() if key != "_id"}},
+                upsert=True,
+            )
+            return
+
+        doc = dict(doc)
+        doc["_id"] = state_key
+        context.setdefault("states", {})[state_key] = doc
+        context.setdefault("dirtyStates", set()).add(state_key)
+
+    def _batch_daily_doc(self, key: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        daily_key = "|".join(
+            [
+                str(key.get("source") or ""),
+                str(key.get("author") or "Unknown User"),
+                str(key.get("projectId") or ""),
+                str(key.get("date") or ""),
+            ]
+        )
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if not context:
+            return daily_key, self.db.daily_author_activity.find_one(key, {"_id": 0}) or {}
+
+        daily = context.setdefault("daily", {})
+        if daily_key not in daily:
+            daily[daily_key] = self.db.daily_author_activity.find_one(key, {"_id": 0}) or {}
+        return daily_key, dict(daily.get(daily_key) or {})
+
+    def _set_batch_daily_doc(self, daily_key: str, doc: dict[str, Any]) -> None:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if not context:
+            key = {
+                "source": doc.get("source"),
+                "author": doc.get("author") or "Unknown User",
+                "projectId": doc.get("projectId") or "",
+                "date": doc.get("date") or "",
+            }
+            self.db.daily_author_activity.update_one(key, {"$set": doc}, upsert=True)
+            return
+
+        context.setdefault("daily", {})[daily_key] = dict(doc)
+        context.setdefault("dirtyDaily", set()).add(daily_key)
+
     def _apply_snapshot_to_aggregates(self, snapshot: dict[str, Any]) -> None:
         snapshot = dict(snapshot)
         snapshot["author"] = composed(self).resolve_author_alias(snapshot.get("author") or "Unknown User")
@@ -227,10 +335,14 @@ class ActivityRawEventAccountingMixin:
         event["author"] = composed(self).resolve_author_alias(event.get("author") or "Unknown User")
         composed(self).update_author_time_zone(event.get("author") or "Unknown User", event.get("timeZoneId"), event.get("timeZoneDisplayName"))
         state_key = _raw_event_session_key(event)
-        previous = self.db.aggregate_session_state.find_one({"_id": state_key}) or {}
+        previous = self._batch_state_doc(state_key)
+        if previous is None:
+            previous = self.db.aggregate_session_state.find_one({"_id": state_key}) or {}
         state = dict(previous.get("state", {}))
         author_state_key = _raw_event_author_day_key(event)
-        author_previous = self.db.aggregate_session_state.find_one({"_id": author_state_key}) or {}
+        author_previous = self._batch_state_doc(author_state_key)
+        if author_previous is None:
+            author_previous = self.db.aggregate_session_state.find_one({"_id": author_state_key}) or {}
         author_state = dict(author_previous.get("state", {}))
         event_type = str(event.get("eventType") or "")
         occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or event.get("occurredAt")
@@ -747,55 +859,49 @@ class ActivityRawEventAccountingMixin:
                 occurred_at,
             )
 
-        self.db.aggregate_session_state.update_one(
-            {"_id": state_key},
+        self._set_batch_state_doc(
+            state_key,
             {
-                "$set": {
-                    "author": event.get("author") or "Unknown User",
-                    "date": event.get("date") or "",
-                    "state": {
-                        "firstActivityAt": first_activity_at.isoformat() if first_activity_at else None,
-                        "lastActivityAt": last_activity_at.isoformat() if last_activity_at else None,
-                        "lastAccountingAt": last_accounting_at.isoformat() if last_accounting_at else None,
-                        "lastActivityLocalAt": last_activity_local_at.isoformat() if last_activity_local_at else None,
-                        "lastAccountingLocalAt": last_accounting_local_at.isoformat() if last_accounting_local_at else None,
-                        "lastActivitySource": last_activity_source or None,
-                        "lastAccountingSource": last_accounting_source or None,
-                        "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
-                        "lastHoldStartedAt": _hold_started_at_for_state(event),
-                        "lastSceneNavigationDurationSeconds": state_scene_navigation_duration,
-                        "lastSceneNavigationStartedAt": state_scene_navigation_started,
-                        "isFocused": source_is_focused,
-                    },
-                    "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
-                }
+                "author": event.get("author") or "Unknown User",
+                "date": event.get("date") or "",
+                "state": {
+                    "firstActivityAt": first_activity_at.isoformat() if first_activity_at else None,
+                    "lastActivityAt": last_activity_at.isoformat() if last_activity_at else None,
+                    "lastAccountingAt": last_accounting_at.isoformat() if last_accounting_at else None,
+                    "lastActivityLocalAt": last_activity_local_at.isoformat() if last_activity_local_at else None,
+                    "lastAccountingLocalAt": last_accounting_local_at.isoformat() if last_accounting_local_at else None,
+                    "lastActivitySource": last_activity_source or None,
+                    "lastAccountingSource": last_accounting_source or None,
+                    "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
+                    "lastHoldStartedAt": _hold_started_at_for_state(event),
+                    "lastSceneNavigationDurationSeconds": state_scene_navigation_duration,
+                    "lastSceneNavigationStartedAt": state_scene_navigation_started,
+                    "isFocused": source_is_focused,
+                },
+                "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
             },
-            upsert=True,
         )
-        self.db.aggregate_session_state.update_one(
-            {"_id": author_state_key},
+        self._set_batch_state_doc(
+            author_state_key,
             {
-                "$set": {
-                    "author": event.get("author") or "Unknown User",
-                    "date": event.get("date") or "",
-                    "state": {
-                        "firstActivityAt": author_first_activity_at.isoformat() if author_first_activity_at else None,
-                        "lastActivityAt": author_last_activity_at.isoformat() if author_last_activity_at else None,
-                        "lastAccountingAt": author_last_accounting_at.isoformat() if author_last_accounting_at else None,
-                        "lastActivityLocalAt": author_last_activity_local_at.isoformat() if author_last_activity_local_at else None,
-                        "lastAccountingLocalAt": author_last_accounting_local_at.isoformat() if author_last_accounting_local_at else None,
-                        "lastActivityScope": author_last_activity_scope or None,
-                        "lastAccountingScope": author_last_accounting_scope or None,
-                        "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
-                        "lastHoldStartedAt": _hold_started_at_for_state(event),
-                        "lastSceneNavigationDurationSeconds": author_state_scene_navigation_duration,
-                        "lastSceneNavigationStartedAt": author_state_scene_navigation_started,
-                        "statusIdleAccountedUntil": status_idle_accounted_until.isoformat() if status_idle_accounted_until else None,
-                    },
-                    "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
-                }
+                "author": event.get("author") or "Unknown User",
+                "date": event.get("date") or "",
+                "state": {
+                    "firstActivityAt": author_first_activity_at.isoformat() if author_first_activity_at else None,
+                    "lastActivityAt": author_last_activity_at.isoformat() if author_last_activity_at else None,
+                    "lastAccountingAt": author_last_accounting_at.isoformat() if author_last_accounting_at else None,
+                    "lastActivityLocalAt": author_last_activity_local_at.isoformat() if author_last_activity_local_at else None,
+                    "lastAccountingLocalAt": author_last_accounting_local_at.isoformat() if author_last_accounting_local_at else None,
+                    "lastActivityScope": author_last_activity_scope or None,
+                    "lastAccountingScope": author_last_accounting_scope or None,
+                    "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
+                    "lastHoldStartedAt": _hold_started_at_for_state(event),
+                    "lastSceneNavigationDurationSeconds": author_state_scene_navigation_duration,
+                    "lastSceneNavigationStartedAt": author_state_scene_navigation_started,
+                    "statusIdleAccountedUntil": status_idle_accounted_until.isoformat() if status_idle_accounted_until else None,
+                },
+                "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
             },
-            upsert=True,
         )
 
         if (
@@ -1315,7 +1421,7 @@ class ActivityRawEventAccountingMixin:
             "projectId": snapshot.get("projectId") or "",
             "date": snapshot.get("date") or "",
         }
-        current = self.db.daily_author_activity.find_one(key, {"_id": 0}) or {}
+        daily_key, current = self._batch_daily_doc(key)
         hourly_activity = current.get("hourlyActivity") or empty_hourly_activity()
         merge_hourly_activity(hourly_activity, deltas.get("hourlyActivityDelta", []))
         activity_counts = _merge_count_list(current.get("activityCounts", []), deltas.get("activityCountDeltas", []), "type", "count")
@@ -1361,8 +1467,4 @@ class ActivityRawEventAccountingMixin:
             set_fields["lastRecordedAt"] = snapshot.get("recordedAt")
             set_fields["lastReceivedAt"] = snapshot.get("receivedAt")
 
-        self.db.daily_author_activity.update_one(
-            key,
-            {"$set": set_fields},
-            upsert=True,
-        )
+        self._set_batch_daily_doc(daily_key, set_fields)

@@ -14,6 +14,7 @@ from .report_chunks import assembled_chunk_metadata, chunk_metadata
 
 
 LOGGER = logging.getLogger("al_backend.report_ingest")
+ASSEMBLED_REPORT_EVENT_SUB_BATCH_SIZE = 500
 
 
 def _has_count_or_file_delta(deltas: dict[str, Any]) -> bool:
@@ -140,6 +141,10 @@ class ReportIngestService(MongoComposableMixin):
     REPORT_QUEUE_LEASE_SECONDS = 300
     REPORT_QUEUE_MAX_ATTEMPTS = 5
 
+    def report_author_key(self, payload: dict[str, Any] | None) -> str:
+        payload = payload if isinstance(payload, dict) else {}
+        return composed(self).resolve_author_alias(str(payload.get("author") or "Unknown User"))
+
     def save_report(
         self,
         source: str,
@@ -209,6 +214,7 @@ class ReportIngestService(MongoComposableMixin):
         if not self._is_unassigned_device_report_author(effective_source, payload.get("author")):
             composed(self).update_author_time_zone(str(payload.get("author") or "Unknown User"), payload.get("timeZoneId"), payload.get("timeZoneDisplayName"))
         report_type = self.consume_expected_report_type(payload.get("author"))
+        author_key = self.report_author_key(payload)
         raw_report_id = _new_id()
         raw_result = self.db.raw_reports.insert_one(
             {
@@ -224,6 +230,7 @@ class ReportIngestService(MongoComposableMixin):
                 "status": "queued",
                 "attempts": 0,
                 "reportType": report_type,
+                "authorKey": author_key,
             }
         )
         return str(raw_result.inserted_id)
@@ -238,6 +245,30 @@ class ReportIngestService(MongoComposableMixin):
         now = dt.datetime.now(dt.UTC)
         lease_delta = dt.timedelta(seconds=lease_seconds or self.REPORT_QUEUE_LEASE_SECONDS)
         max_attempt_count = max_attempts or self.REPORT_QUEUE_MAX_ATTEMPTS
+        for legacy_report in self.db.raw_reports.find(
+            {
+                "authorKey": {"$exists": False},
+                "$or": [
+                    {"status": "queued"},
+                    {"status": "processing", "leaseExpiresAt": {"$lte": now}},
+                ],
+            },
+            {"_id": 1, "payload": 1},
+        ):
+            self.db.raw_reports.update_one(
+                {"_id": legacy_report.get("_id")},
+                {"$set": {"authorKey": self.report_author_key(legacy_report.get("payload"))}},
+            )
+        processing_author_keys = sorted(
+            {
+                str(item.get("authorKey") or self.report_author_key(item.get("payload")))
+                for item in self.db.raw_reports.find(
+                    {"status": "processing", "leaseExpiresAt": {"$gt": now}},
+                    {"_id": 0, "authorKey": 1, "payload": 1},
+                )
+                if str(item.get("authorKey") or self.report_author_key(item.get("payload"))).strip()
+            }
+        )
         query = {
             "$or": [
                 {"status": "queued"},
@@ -245,21 +276,79 @@ class ReportIngestService(MongoComposableMixin):
             ],
             "attempts": {"$lt": max_attempt_count},
         }
-        return self.db.raw_reports.find_one_and_update(
-            query,
-            {
-                "$set": {
-                    "status": "processing",
-                    "processingStartedAt": now,
-                    "leaseOwner": worker_id,
-                    "leaseExpiresAt": now + lease_delta,
+        if processing_author_keys:
+            query["authorKey"] = {"$nin": processing_author_keys}
+        for _attempt in range(5):
+            report = self.db.raw_reports.find_one_and_update(
+                query,
+                {
+                    "$set": {
+                        "status": "processing",
+                        "processingStartedAt": now,
+                        "leaseOwner": worker_id,
+                        "leaseExpiresAt": now + lease_delta,
+                    },
+                    "$inc": {"attempts": 1},
+                    "$unset": {"lastError": ""},
                 },
-                "$inc": {"attempts": 1},
-                "$unset": {"lastError": ""},
-            },
-            sort=[("queuedAt", ASCENDING), ("receivedAt", ASCENDING)],
-            return_document=ReturnDocument.AFTER,
+                sort=[("queuedAt", ASCENDING), ("receivedAt", ASCENDING)],
+                return_document=ReturnDocument.AFTER,
+            )
+            if not report:
+                return None
+
+            author_key = str(report.get("authorKey") or "").strip() or self.report_author_key(report.get("payload"))
+            if not str(report.get("authorKey") or "").strip():
+                self.db.raw_reports.update_one({"_id": report.get("_id")}, {"$set": {"authorKey": author_key}})
+                report["authorKey"] = author_key
+
+            if not self._claimed_report_has_earlier_lane_peer(report, now):
+                return report
+
+            excluded_author_keys = list((query.get("authorKey") or {}).get("$nin") or [])
+            if author_key not in excluded_author_keys:
+                excluded_author_keys.append(author_key)
+                query["authorKey"] = {"$nin": excluded_author_keys}
+            self.db.raw_reports.update_one(
+                {"_id": report.get("_id"), "status": "processing", "leaseOwner": worker_id},
+                {
+                    "$set": {"status": "queued"},
+                    "$inc": {"attempts": -1},
+                    "$unset": {"leaseOwner": "", "leaseExpiresAt": "", "processingStartedAt": ""},
+                },
+            )
+
+        return None
+
+    def _claimed_report_has_earlier_lane_peer(self, report: dict[str, Any], now: dt.datetime) -> bool:
+        author_key = str(report.get("authorKey") or "").strip()
+        if not author_key:
+            return False
+
+        current_sort_key = (
+            str(report.get("queuedAt") or ""),
+            str(report.get("receivedAt") or ""),
+            str(report.get("_id") or ""),
         )
+        for peer in self.db.raw_reports.find(
+            {
+                "status": "processing",
+                "authorKey": author_key,
+                "leaseExpiresAt": {"$gt": now},
+            },
+            {"_id": 1, "queuedAt": 1, "receivedAt": 1},
+        ):
+            if peer.get("_id") == report.get("_id"):
+                continue
+            peer_sort_key = (
+                str(peer.get("queuedAt") or ""),
+                str(peer.get("receivedAt") or ""),
+                str(peer.get("_id") or ""),
+            )
+            if peer_sort_key < current_sort_key:
+                return True
+
+        return False
 
     def process_claimed_report(self, report: dict[str, Any], *, max_attempts: int | None = None) -> bool:
         try:
@@ -748,11 +837,47 @@ class ReportIngestService(MongoComposableMixin):
                         inserted_event_ids.add(event_id)
 
         accounting_started_at = dt.datetime.now(dt.UTC)
-        for event in normalized_events:
-            if str(event.get("eventId") or "") not in inserted_event_ids:
-                continue
-            deltas = composed(self)._apply_raw_event_to_aggregates(event)
-            batch_delta_items.append((event, deltas))
+        events_to_account = [event for event in normalized_events if str(event.get("eventId") or "") in inserted_event_ids]
+        assembled_metadata = assembled_chunk_metadata(payload, source)
+        if assembled_metadata:
+            self.db.raw_reports.update_one(
+                {"_id": raw_report_id},
+                {
+                    "$set": {
+                        "eventIngestTotal": len(events_to_account),
+                        "eventIngestProcessed": 0,
+                        "eventIngestStartedAt": accounting_started_at,
+                    }
+                },
+            )
+
+        for offset in range(0, len(events_to_account), ASSEMBLED_REPORT_EVENT_SUB_BATCH_SIZE):
+            sub_batch = events_to_account[offset : offset + ASSEMBLED_REPORT_EVENT_SUB_BATCH_SIZE]
+            composed(self)._begin_raw_event_batch_accounting(sub_batch)
+            sub_batch_dates: set[str] = set()
+            try:
+                for event in sub_batch:
+                    deltas = composed(self)._apply_raw_event_to_aggregates(event)
+                    batch_delta_items.append((event, deltas))
+                    event_date = str(event.get("date") or "")
+                    if event_date:
+                        sub_batch_dates.add(event_date)
+            finally:
+                composed(self)._finish_raw_event_batch_accounting()
+
+            if sub_batch_dates:
+                composed(self).invalidate_activity_summary_cache(sub_batch_dates)
+
+            if assembled_metadata:
+                self.db.raw_reports.update_one(
+                    {"_id": raw_report_id},
+                    {
+                        "$set": {
+                            "eventIngestProcessed": min(offset + len(sub_batch), len(events_to_account)),
+                            "eventIngestCursor": min(offset + len(sub_batch), len(events_to_account)),
+                        }
+                    },
+                )
 
         rows_started_at = dt.datetime.now(dt.UTC)
         rows = self._build_event_batch_report_rows(batch, batch_delta_items)
@@ -763,11 +888,12 @@ class ReportIngestService(MongoComposableMixin):
         _insert_many_if_supported(self.db.report_rows, rows)
         finished_at = dt.datetime.now(dt.UTC)
         LOGGER.info(
-            "Saved event batch raw_report_id=%s source=%s events=%s inserted_events=%s rows=%s raw_write_seconds=%.3f accounting_seconds=%.3f row_seconds=%.3f total_seconds=%.3f",
+            "Saved event batch raw_report_id=%s source=%s events=%s inserted_events=%s accounted_events=%s rows=%s raw_write_seconds=%.3f accounting_seconds=%.3f row_seconds=%.3f total_seconds=%.3f",
             raw_report_id,
             source,
             len(normalized_events),
             len(inserted_event_ids),
+            len(events_to_account),
             len(rows),
             (accounting_started_at - raw_write_started_at).total_seconds(),
             (rows_started_at - accounting_started_at).total_seconds(),

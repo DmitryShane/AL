@@ -13,6 +13,7 @@ class IndexManager:
     def ensure_indexes(self) -> None:
         self.db.raw_reports.create_index([("source", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.raw_reports.create_index([("status", ASCENDING), ("leaseExpiresAt", ASCENDING), ("receivedAt", ASCENDING)])
+        self.db.raw_reports.create_index([("status", ASCENDING), ("authorKey", ASCENDING), ("queuedAt", ASCENDING)])
         self.db.raw_reports.create_index([("status", ASCENDING), ("queuedAt", ASCENDING)])
         self.db.raw_reports.create_index([("status", ASCENDING), ("processedAt", DESCENDING)])
         self._ensure_raw_reports_retention_index()
