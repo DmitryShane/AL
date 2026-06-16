@@ -557,6 +557,10 @@ def test_reports_queue_status_includes_chunk_progress(monkeypatch) -> None:
 
     assert row["kind"] == "chunked"
     assert row["status"] == "processing"
+    assert row["stage"] == "receiving_chunks"
+    assert row["stageLabel"] == "Receiving chunks"
+    assert row["assemblyStatus"] == "pending"
+    assert row["processingStatus"] == "pending"
     assert row["chunksReceived"] == 2
     assert row["chunksProcessed"] == 1
     assert row["chunkCount"] == 4
@@ -565,7 +569,7 @@ def test_reports_queue_status_includes_chunk_progress(monkeypatch) -> None:
     assert row["processingStartedAt"] == (now - dt.timedelta(minutes=3, seconds=5)).isoformat()
     assert row["processingSeconds"] == 5
     assert len(row["chunks"]) == 2
-    assert {chunk["status"] for chunk in row["chunks"]} == {"processed", "processing"}
+    assert {chunk["status"] for chunk in row["chunks"]} == {"processed", "received"}
     processed_chunk = next(chunk for chunk in row["chunks"] if chunk["chunkIndex"] == 1)
     processing_chunk = next(chunk for chunk in row["chunks"] if chunk["chunkIndex"] == 2)
     assert processed_chunk["attempts"] == 2
@@ -639,9 +643,132 @@ def test_reports_queue_status_shows_assembled_report_processing_events(monkeypat
     row = next(row for row in payload["recentReports"] if row["id"] == "logical-processing")
 
     assert row["status"] == "processing_events"
+    assert row["stage"] == "processing_events"
+    assert row["stageLabel"] == "Processing events"
+    assert row["assemblyStatus"] == "done"
+    assert row["processingStatus"] == "running"
     assert row["assemblySeconds"] == 2
     assert row["processingSeconds"] is None
-    assert {chunk["status"] for chunk in row["chunks"]} == {"assembled"}
+    assert {chunk["status"] for chunk in row["chunks"]} == {"processed"}
+
+
+def test_reports_queue_status_shows_queued_assembled_report_stage(monkeypatch) -> None:
+    repo = fake_repository()
+    now = dt.datetime.now(dt.UTC)
+
+    monkeypatch.setattr(
+        server_stats_service,
+        "_server_stats_service",
+        lambda key, label, unit: {
+            "key": key,
+            "label": label,
+            "unit": unit,
+            "status": "running",
+            "activeState": "active",
+            "subState": "running",
+            "loadState": "loaded",
+            "unitFileState": "enabled",
+            "activeEnteredAt": "Fri 2026-06-12 12:25:20 UTC",
+        },
+    )
+
+    for index in (1, 2):
+        repo.db.raw_report_chunks.insert_one(
+            {
+                "logicalReportId": "logical-queued",
+                "chunkIndex": index,
+                "chunkCount": 2,
+                "totalEventCount": 1500,
+                "rawReportId": f"queued-chunk-{index}",
+                "source": "ual",
+                "author": "Evgeniy Dotsenko",
+                "projectId": "Bike Rush 2",
+                "receivedAt": now - dt.timedelta(minutes=5),
+                "processedAt": now - dt.timedelta(minutes=5),
+                "assemblingStartedAt": now - dt.timedelta(minutes=4),
+                "assembledAt": now - dt.timedelta(minutes=4, seconds=-2),
+                "status": "assembled",
+                "attempts": 1,
+                "eventCount": 750,
+            }
+        )
+    repo.db.raw_reports.insert_one(
+        {
+            "_id": "logical-queued",
+            "source": "ual",
+            "payload": {
+                "author": "Evgeniy Dotsenko",
+                "projectId": "Bike Rush 2",
+                "logicalReportId": "logical-queued",
+                "chunkCount": 2,
+                "totalEventCount": 1500,
+            },
+            "receivedAt": now - dt.timedelta(minutes=5),
+            "queuedAt": now - dt.timedelta(minutes=4),
+            "status": "queued",
+            "attempts": 0,
+        }
+    )
+
+    payload = repo.get_reports_queue_status()
+    row = next(row for row in payload["recentReports"] if row["id"] == "logical-queued")
+
+    assert row["stage"] == "queued_for_processing"
+    assert row["stageLabel"] == "Queued for processing"
+    assert row["assemblyStatus"] == "done"
+    assert row["processingStatus"] == "queued"
+    assert {chunk["status"] for chunk in row["chunks"]} == {"processed"}
+
+
+def test_reports_queue_status_keeps_historical_processed_chunked_report_processed(monkeypatch) -> None:
+    repo = fake_repository()
+    now = dt.datetime.now(dt.UTC)
+
+    monkeypatch.setattr(
+        server_stats_service,
+        "_server_stats_service",
+        lambda key, label, unit: {
+            "key": key,
+            "label": label,
+            "unit": unit,
+            "status": "running",
+            "activeState": "active",
+            "subState": "running",
+            "loadState": "loaded",
+            "unitFileState": "enabled",
+            "activeEnteredAt": "Fri 2026-06-12 12:25:20 UTC",
+        },
+    )
+
+    for index in (1, 2):
+        repo.db.raw_report_chunks.insert_one(
+            {
+                "logicalReportId": "logical-old",
+                "chunkIndex": index,
+                "chunkCount": 2,
+                "totalEventCount": 1500,
+                "rawReportId": f"old-chunk-{index}",
+                "source": "ual",
+                "author": "Evgeniy Dotsenko",
+                "projectId": "Bike Rush 2",
+                "receivedAt": now - dt.timedelta(minutes=5),
+                "processedAt": now - dt.timedelta(minutes=5),
+                "assemblingStartedAt": now - dt.timedelta(minutes=4),
+                "assembledAt": now - dt.timedelta(minutes=4, seconds=-2),
+                "status": "processed",
+                "attempts": 1,
+                "eventCount": 750,
+            }
+        )
+
+    payload = repo.get_reports_queue_status()
+    row = next(row for row in payload["recentReports"] if row["id"] == "logical-old")
+
+    assert row["status"] == "processed"
+    assert row["stage"] == "processed"
+    assert row["stageLabel"] == "Processed"
+    assert row["assemblyStatus"] == "done"
+    assert row["processingStatus"] == "done"
 
 
 def test_server_reboot_schedules_delayed_systemd_restart(monkeypatch) -> None:

@@ -3676,12 +3676,20 @@ p {
   color: #2f8f5d;
 }
 
-.reports-queue-status-processing,
-.reports-queue-status-processing_events,
 .reports-queue-status-queued,
 .reports-queue-status-receiving,
+.reports-queue-status-receiving_chunks,
+.reports-queue-status-queued_for_processing,
+.reports-queue-status-received {
+  background: #eef2f7;
+  color: #475569;
+}
+
+.reports-queue-status-processing,
+.reports-queue-status-processing_events,
 .reports-queue-status-assembling,
-.reports-queue-status-assembled {
+.reports-queue-status-assembling_report,
+.reports-queue-status-running {
   background: #fff7ed;
   color: #b45309;
 }

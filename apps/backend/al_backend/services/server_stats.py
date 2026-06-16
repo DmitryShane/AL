@@ -296,6 +296,8 @@ def _is_assembled_chunk_report(report: dict[str, Any]) -> bool:
 
 
 def _chunk_status(chunks: list[dict[str, Any]], assembled_report: dict[str, Any] | None = None) -> str:
+    expected_chunk_count = int((chunks[0] if chunks else {}).get("chunkCount") or len(chunks))
+    has_all_chunks = bool(chunks) and len({int(chunk.get("chunkIndex") or 0) for chunk in chunks}) >= expected_chunk_count
     assembled_status = str((assembled_report or {}).get("status") or "")
     if assembled_status == "failed":
         return "failed"
@@ -307,7 +309,9 @@ def _chunk_status(chunks: list[dict[str, Any]], assembled_report: dict[str, Any]
         return "processed"
     if any(str(chunk.get("status") or "") == "failed" for chunk in chunks):
         return "failed"
-    if chunks and all(chunk.get("assembledAt") for chunk in chunks):
+    if has_all_chunks and all(str(chunk.get("status") or "") == "processed" for chunk in chunks):
+        return "processed"
+    if has_all_chunks and all(chunk.get("assembledAt") for chunk in chunks):
         return "assembled"
     if any(str(chunk.get("status") or "") == "processing" for chunk in chunks):
         return "processing"
@@ -316,6 +320,42 @@ def _chunk_status(chunks: list[dict[str, Any]], assembled_report: dict[str, Any]
     if any(str(chunk.get("status") or "") == "queued" for chunk in chunks):
         return "queued"
     return "receiving"
+
+
+def _chunk_stage(status: str, chunks: list[dict[str, Any]], assembled_report: dict[str, Any] | None = None) -> tuple[str, str, str, str]:
+    assembled_status = str((assembled_report or {}).get("status") or "")
+    if status == "failed":
+        return "failed", "Failed", _assembly_status(chunks), "failed"
+    if assembled_status == "processing":
+        return "processing_events", "Processing events", "done", "running"
+    if assembled_status == "queued":
+        return "queued_for_processing", "Queued for processing", "done", "queued"
+    if assembled_status == "processed" or status == "processed":
+        return "processed", "Processed", "done", "done"
+    if status == "assembling":
+        return "assembling_report", "Assembling report", "running", "pending"
+    if status == "assembled":
+        return "queued_for_processing", "Queued for processing", "done", "queued"
+    return "receiving_chunks", "Receiving chunks", "pending", "pending"
+
+
+def _assembly_status(chunks: list[dict[str, Any]]) -> str:
+    if any(str(chunk.get("status") or "") == "failed" for chunk in chunks):
+        return "failed"
+    if chunks and all(chunk.get("assembledAt") for chunk in chunks):
+        return "done"
+    if any(str(chunk.get("status") or "") == "assembling" for chunk in chunks):
+        return "running"
+    return "pending"
+
+
+def _chunk_detail_status(chunk: dict[str, Any]) -> str:
+    status = str(chunk.get("status") or "")
+    if status == "failed" or chunk.get("failedAt"):
+        return "failed"
+    if chunk.get("processedAt") or chunk.get("assembledAt") or status in {"processed", "assembled", "assembling"}:
+        return "processed"
+    return "received"
 
 
 def _chunk_reports_queue_rows(
@@ -347,6 +387,7 @@ def _chunk_reports_queue_rows(
         author = str(first.get("author") or "")
         assembled_report = assembled_by_logical_id.get(logical_id)
         status = _chunk_status(ordered, assembled_report)
+        stage, stage_label, assembly_status, processing_status = _chunk_stage(status, ordered, assembled_report)
         received_at_values = [_coerce_datetime(item.get("receivedAt")) for item in ordered]
         received_at_values = [value for value in received_at_values if value is not None]
         processed_at_values = [_coerce_datetime(item.get("assembledAt") or item.get("processedAt")) for item in ordered]
@@ -390,6 +431,10 @@ def _chunk_reports_queue_rows(
                 "displayName": _display_name(author, (profiles_by_author or {}).get(author, {})),
                 "projectId": str(first.get("projectId") or ""),
                 "status": status,
+                "stage": stage,
+                "stageLabel": stage_label,
+                "assemblyStatus": assembly_status,
+                "processingStatus": processing_status,
                 "attempts": attempts,
                 "assemblySeconds": _duration_seconds(assembly_started_at, assembled_at),
                 "processingSeconds": assembled_processing_seconds if assembled_report else _duration_seconds(processing_started_at, finished_at),
@@ -407,7 +452,8 @@ def _chunk_reports_queue_rows(
                         "receivedAt": _isoformat_datetime(item.get("receivedAt")),
                         "queuedAt": _isoformat_datetime(item.get("queuedAt")),
                         "processingStartedAt": _isoformat_datetime(item.get("processingStartedAt")),
-                        "status": str(item.get("status") or "unknown"),
+                        "status": _chunk_detail_status(item),
+                        "rawStatus": str(item.get("status") or "unknown"),
                         "processedAt": _isoformat_datetime(item.get("processedAt")),
                         "failedAt": _isoformat_datetime(item.get("failedAt")),
                         "attempts": int(item.get("attempts") or 0),

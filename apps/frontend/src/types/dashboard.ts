@@ -368,6 +368,10 @@ export type ReportsQueueReport = {
   displayName?: string;
   projectId: string;
   status: string;
+  stage?: string;
+  stageLabel?: string;
+  assemblyStatus?: string;
+  processingStatus?: string;
   attempts: number;
   assemblySeconds?: number | null;
   processingSeconds?: number | null;
@@ -388,6 +392,7 @@ export type ReportsQueueChunk = {
   queuedAt?: string | null;
   processingStartedAt?: string | null;
   status: string;
+  rawStatus?: string;
   processedAt?: string | null;
   failedAt?: string | null;
   attempts: number;

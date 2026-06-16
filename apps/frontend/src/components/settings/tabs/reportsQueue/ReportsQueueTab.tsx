@@ -201,15 +201,15 @@ function ReportQueueRow({ report, isFailedTable }: { report: ReportsQueueReport;
 
   return (
     <>
-      <div className={`reports-queue-row reports-queue-row-${statusClassName(report.status)}`}>
+      <div className={`reports-queue-row reports-queue-row-${statusClassName(report.stage || report.status)}`}>
         <span className="source-cell" title={report.source || undefined}>
           <SourceIcon source={report.source} />
           {formatSource(report.source)}
         </span>
         <span title={report.author || undefined}>{report.displayName || report.author || "unknown"}</span>
         <span title={report.receivedAt || undefined}>{formatDateTime(report.receivedAt)}</span>
-        <span>
-          <StatusBadge status={report.status} />
+        <span title={formatStageTitle(report)}>
+          <StatusBadge status={report.stage || report.status} label={report.stageLabel || formatStatusLabel(report.status)} />
         </span>
         <span>
           {hasChunks ? (
@@ -221,8 +221,8 @@ function ReportQueueRow({ report, isFailedTable }: { report: ReportsQueueReport;
           )}
         </span>
         <span>{report.attempts}</span>
-        <span>{formatDuration(report.assemblySeconds)}</span>
-        <span>{formatDuration(report.processingSeconds)}</span>
+        <span>{formatAssemblyState(report)}</span>
+        <span>{formatProcessingState(report)}</span>
         <span title={report.lastError || undefined}>{report.lastError || (isFailedTable ? "No error recorded" : "")}</span>
       </div>
       {hasChunks && expanded ? (
@@ -232,7 +232,7 @@ function ReportQueueRow({ report, isFailedTable }: { report: ReportsQueueReport;
               <span>Chunk {chunk.chunkIndex}/{report.chunkCount || report.chunks?.length || "?"}</span>
               <span>{chunk.eventCount} events</span>
               <span>{formatDateTime(chunk.receivedAt)}</span>
-              <StatusBadge status={chunk.status} />
+              <StatusBadge status={chunk.status} label={formatStatusLabel(chunk.status)} />
               <span>{chunk.attempts ?? 0} attempts</span>
               <span>{formatDuration(chunk.processingSeconds)}</span>
               <span>{chunk.rawReportId}</span>
@@ -245,8 +245,8 @@ function ReportQueueRow({ report, isFailedTable }: { report: ReportsQueueReport;
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  return <span className={`reports-queue-status reports-queue-status-${statusClassName(status)}`}>{status || "unknown"}</span>;
+function StatusBadge({ status, label }: { status: string; label?: string }) {
+  return <span className={`reports-queue-status reports-queue-status-${statusClassName(status)}`}>{label || formatStatusLabel(status)}</span>;
 }
 
 function formatWorkerStatus(status: ServerStatsServiceStatus): string {
@@ -300,14 +300,73 @@ function formatDuration(seconds: number | null | undefined): string {
   return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
+function formatStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    assembled: "Assembled",
+    assembling: "Assembling",
+    assembling_report: "Assembling report",
+    failed: "Failed",
+    processed: "Processed",
+    processing: "Processing",
+    processing_events: "Processing events",
+    queued: "Queued",
+    queued_for_processing: "Queued for processing",
+    received: "Received",
+    receiving: "Receiving",
+    receiving_chunks: "Receiving chunks",
+    running: "Running",
+  };
+  return labels[status] || status || "unknown";
+}
+
+function formatAssemblyState(report: ReportsQueueReport): string {
+  const status = report.assemblyStatus || (report.assemblySeconds !== null && report.assemblySeconds !== undefined ? "done" : "pending");
+  if (status === "done") {
+    return `done · ${formatDuration(report.assemblySeconds)}`;
+  }
+  if (status === "running") {
+    return "running";
+  }
+  if (status === "failed") {
+    return "failed";
+  }
+  return "pending";
+}
+
+function formatProcessingState(report: ReportsQueueReport): string {
+  const status = report.processingStatus || (report.processingSeconds !== null && report.processingSeconds !== undefined ? "done" : "pending");
+  if (status === "done") {
+    return `done · ${formatDuration(report.processingSeconds)}`;
+  }
+  if (status === "queued") {
+    return "queued";
+  }
+  if (status === "running") {
+    return "running";
+  }
+  if (status === "failed") {
+    return "failed";
+  }
+  return "pending";
+}
+
 function formatChunkProgress(report: ReportsQueueReport): string {
   const received = report.chunksReceived ?? report.chunks?.length ?? 0;
   const total = report.chunkCount ?? report.chunks?.length ?? 0;
   const processed = report.chunksProcessed ?? 0;
-  const eventsReceived = report.eventsReceived ?? 0;
-  const totalEvents = report.totalEventCount ?? eventsReceived;
-  const events = totalEvents > 0 ? `, ${eventsReceived}/${totalEvents} events` : "";
-  return `${received}/${total} chunks, ${processed}/${total} processed${events}`;
+  return `${received}/${total} received, ${processed}/${total} processed`;
+}
+
+function formatStageTitle(report: ReportsQueueReport): string {
+  if (report.kind === "chunked") {
+    return [
+      report.stageLabel || formatStatusLabel(report.stage || report.status),
+      `Chunks: ${formatChunkProgress(report)}`,
+      `Assembly: ${formatAssemblyState(report)}`,
+      `Processing: ${formatProcessingState(report)}`,
+    ].join(" · ");
+  }
+  return formatStatusLabel(report.status);
 }
 
 function statusClassName(status: string): string {
