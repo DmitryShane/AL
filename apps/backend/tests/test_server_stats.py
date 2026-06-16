@@ -574,6 +574,76 @@ def test_reports_queue_status_includes_chunk_progress(monkeypatch) -> None:
     assert processing_chunk["processingSeconds"] is None
 
 
+def test_reports_queue_status_shows_assembled_report_processing_events(monkeypatch) -> None:
+    repo = fake_repository()
+    now = dt.datetime.now(dt.UTC)
+
+    monkeypatch.setattr(
+        server_stats_service,
+        "_server_stats_service",
+        lambda key, label, unit: {
+            "key": key,
+            "label": label,
+            "unit": unit,
+            "status": "running",
+            "activeState": "active",
+            "subState": "running",
+            "loadState": "loaded",
+            "unitFileState": "enabled",
+            "activeEnteredAt": "Fri 2026-06-12 12:25:20 UTC",
+        },
+    )
+
+    for index in (1, 2):
+        repo.db.raw_report_chunks.insert_one(
+            {
+                "logicalReportId": "logical-processing",
+                "chunkIndex": index,
+                "chunkCount": 2,
+                "totalEventCount": 1500,
+                "rawReportId": f"chunk-{index}",
+                "source": "ual",
+                "author": "Evgeniy Dotsenko",
+                "projectId": "Bike Rush 2",
+                "receivedAt": now - dt.timedelta(minutes=5),
+                "queuedAt": now - dt.timedelta(minutes=5),
+                "processingStartedAt": now - dt.timedelta(minutes=5),
+                "processedAt": now - dt.timedelta(minutes=5),
+                "assemblingStartedAt": now - dt.timedelta(minutes=4),
+                "assembledAt": now - dt.timedelta(minutes=4, seconds=-2),
+                "status": "assembled",
+                "attempts": 1,
+                "eventCount": 750,
+            }
+        )
+    repo.db.raw_reports.insert_one(
+        {
+            "_id": "logical-processing",
+            "source": "ual",
+            "payload": {
+                "author": "Evgeniy Dotsenko",
+                "projectId": "Bike Rush 2",
+                "logicalReportId": "logical-processing",
+                "chunkCount": 2,
+                "totalEventCount": 1500,
+            },
+            "receivedAt": now - dt.timedelta(minutes=5),
+            "queuedAt": now - dt.timedelta(minutes=4),
+            "processingStartedAt": now - dt.timedelta(seconds=20),
+            "status": "processing",
+            "attempts": 1,
+        }
+    )
+
+    payload = repo.get_reports_queue_status()
+    row = next(row for row in payload["recentReports"] if row["id"] == "logical-processing")
+
+    assert row["status"] == "processing_events"
+    assert row["assemblySeconds"] == 2
+    assert row["processingSeconds"] is None
+    assert {chunk["status"] for chunk in row["chunks"]} == {"assembled"}
+
+
 def test_server_reboot_schedules_delayed_systemd_restart(monkeypatch) -> None:
     calls = []
 

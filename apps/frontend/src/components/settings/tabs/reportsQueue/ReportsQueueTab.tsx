@@ -160,6 +160,7 @@ function ReportsQueueTable({
             <span>Status</span>
             <span>Chunks</span>
             <span>Attempts</span>
+            <span>Assembly</span>
             <span>Processing</span>
             <span>Error</span>
           </div>
@@ -220,6 +221,7 @@ function ReportQueueRow({ report, isFailedTable }: { report: ReportsQueueReport;
           )}
         </span>
         <span>{report.attempts}</span>
+        <span>{formatDuration(report.assemblySeconds)}</span>
         <span>{formatDuration(report.processingSeconds)}</span>
         <span title={report.lastError || undefined}>{report.lastError || (isFailedTable ? "No error recorded" : "")}</span>
       </div>

@@ -279,14 +279,36 @@ def _is_chunk_raw_report(report: dict[str, Any]) -> bool:
         chunk_count = int(payload.get("chunkCount") or 0)
     except (TypeError, ValueError):
         chunk_count = 0
-    return bool(str(payload.get("logicalReportId") or "").strip()) and chunk_count > 1
+    try:
+        chunk_index = int(payload.get("chunkIndex") or 0)
+    except (TypeError, ValueError):
+        chunk_index = 0
+    return bool(str(payload.get("logicalReportId") or "").strip()) and chunk_count > 1 and chunk_index > 0
 
 
-def _chunk_status(chunks: list[dict[str, Any]]) -> str:
+def _is_assembled_chunk_report(report: dict[str, Any]) -> bool:
+    payload = report.get("payload") if isinstance(report.get("payload"), dict) else {}
+    try:
+        chunk_count = int(payload.get("chunkCount") or 0)
+    except (TypeError, ValueError):
+        chunk_count = 0
+    return bool(str(payload.get("logicalReportId") or report.get("logicalReportId") or "").strip()) and chunk_count > 1 and not payload.get("chunkIndex")
+
+
+def _chunk_status(chunks: list[dict[str, Any]], assembled_report: dict[str, Any] | None = None) -> str:
+    assembled_status = str((assembled_report or {}).get("status") or "")
+    if assembled_status == "failed":
+        return "failed"
+    if assembled_status == "processing":
+        return "processing_events"
+    if assembled_status == "queued":
+        return "queued"
+    if assembled_status == "processed":
+        return "processed"
     if any(str(chunk.get("status") or "") == "failed" for chunk in chunks):
         return "failed"
     if chunks and all(chunk.get("assembledAt") for chunk in chunks):
-        return "processed"
+        return "assembled"
     if any(str(chunk.get("status") or "") == "processing" for chunk in chunks):
         return "processing"
     if any(str(chunk.get("status") or "") == "assembling" for chunk in chunks):
@@ -296,7 +318,16 @@ def _chunk_status(chunks: list[dict[str, Any]]) -> str:
     return "receiving"
 
 
-def _chunk_reports_queue_rows(chunks: list[dict[str, Any]], profiles_by_author: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+def _chunk_reports_queue_rows(
+    chunks: list[dict[str, Any]],
+    profiles_by_author: dict[str, dict[str, Any]] | None = None,
+    assembled_reports: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    assembled_by_logical_id = {
+        str((report.get("payload") or {}).get("logicalReportId") or report.get("logicalReportId") or ""): report
+        for report in assembled_reports or []
+        if isinstance(report.get("payload"), dict)
+    }
     by_logical_id: dict[str, list[dict[str, Any]]] = {}
     for chunk in chunks:
         logical_id = str(chunk.get("logicalReportId") or "").strip()
@@ -314,7 +345,8 @@ def _chunk_reports_queue_rows(chunks: list[dict[str, Any]], profiles_by_author: 
         events_received = sum(int(item.get("eventCount") or 0) for item in ordered)
         total_event_count = int(first.get("totalEventCount") or events_received)
         author = str(first.get("author") or "")
-        status = _chunk_status(ordered)
+        assembled_report = assembled_by_logical_id.get(logical_id)
+        status = _chunk_status(ordered, assembled_report)
         received_at_values = [_coerce_datetime(item.get("receivedAt")) for item in ordered]
         received_at_values = [value for value in received_at_values if value is not None]
         processed_at_values = [_coerce_datetime(item.get("assembledAt") or item.get("processedAt")) for item in ordered]
@@ -331,25 +363,36 @@ def _chunk_reports_queue_rows(chunks: list[dict[str, Any]], profiles_by_author: 
         finished_at_values = [*processed_at_values, *failed_at_values]
         processing_started_at = min(processing_started_values) if processing_started_values else None
         finished_at = max(finished_at_values) if finished_at_values else None
+        assembly_started_values = [_coerce_datetime(item.get("assemblingStartedAt")) for item in ordered]
+        assembly_started_values = [value for value in assembly_started_values if value is not None]
+        assembled_at_values = [_coerce_datetime(item.get("assembledAt")) for item in ordered]
+        assembled_at_values = [value for value in assembled_at_values if value is not None]
+        assembly_started_at = min(assembly_started_values) if assembly_started_values else None
+        assembled_at = max(assembled_at_values) if assembled_at_values else None
+        assembled_processing_seconds = _processing_seconds(assembled_report or {}) if assembled_report else None
+        assembled_attempts = int((assembled_report or {}).get("attempts") or 0)
         last_error = next((str(item.get("lastError") or "") for item in ordered if str(item.get("lastError") or "")), "")
-        attempts = max([int(item.get("attempts") or 0) for item in ordered] or [0])
+        if assembled_report and str(assembled_report.get("lastError") or ""):
+            last_error = str(assembled_report.get("lastError") or "")
+        attempts = max([*[int(item.get("attempts") or 0) for item in ordered], assembled_attempts] or [0])
 
         rows.append(
             {
                 "id": logical_id,
                 "kind": "chunked",
                 "receivedAt": min(received_at_values).isoformat() if received_at_values else None,
-                "queuedAt": min(queued_at_values).isoformat() if queued_at_values else None,
-                "processingStartedAt": processing_started_at.isoformat() if processing_started_at else None,
-                "processedAt": max(processed_at_values).isoformat() if status == "processed" and processed_at_values else None,
-                "failedAt": max(failed_at_values).isoformat() if failed_at_values else None,
+                "queuedAt": _isoformat_datetime((assembled_report or {}).get("queuedAt")) or (min(queued_at_values).isoformat() if queued_at_values else None),
+                "processingStartedAt": _isoformat_datetime((assembled_report or {}).get("processingStartedAt")) or (processing_started_at.isoformat() if processing_started_at else None),
+                "processedAt": _isoformat_datetime((assembled_report or {}).get("processedAt")) if status == "processed" else None,
+                "failedAt": _isoformat_datetime((assembled_report or {}).get("failedAt")) or (max(failed_at_values).isoformat() if failed_at_values else None),
                 "source": str(first.get("source") or ""),
                 "author": author,
                 "displayName": _display_name(author, (profiles_by_author or {}).get(author, {})),
                 "projectId": str(first.get("projectId") or ""),
                 "status": status,
                 "attempts": attempts,
-                "processingSeconds": _duration_seconds(processing_started_at, finished_at),
+                "assemblySeconds": _duration_seconds(assembly_started_at, assembled_at),
+                "processingSeconds": assembled_processing_seconds if assembled_report else _duration_seconds(processing_started_at, finished_at),
                 "lastError": last_error,
                 "chunksReceived": chunks_received,
                 "chunksProcessed": chunks_processed,
@@ -777,7 +820,8 @@ class ServerStatsServiceMixin:
                 },
             ).sort([("receivedAt", -1)]).limit(50)
         )
-        recent_reports = [report for report in raw_recent_reports if not _is_chunk_raw_report(report)]
+        assembled_recent_reports = [report for report in raw_recent_reports if _is_assembled_chunk_report(report)]
+        recent_reports = [report for report in raw_recent_reports if not _is_chunk_raw_report(report) and not _is_assembled_chunk_report(report)]
         raw_failed_reports = list(
             self.db.raw_reports.find(
                 {"status": "failed"},
@@ -808,9 +852,11 @@ class ServerStatsServiceMixin:
                 },
             ).sort([("failedAt", -1), ("receivedAt", -1)]).limit(20)
         )
-        failed_reports = [report for report in raw_failed_reports if not _is_chunk_raw_report(report)]
+        assembled_failed_reports = [report for report in raw_failed_reports if _is_assembled_chunk_report(report)]
+        failed_reports = [report for report in raw_failed_reports if not _is_chunk_raw_report(report) and not _is_assembled_chunk_report(report)]
         chunk_docs = list(self.db.raw_report_chunks.find({}).sort([("receivedAt", -1)]).limit(200))
         raw_chunk_reports = [report for report in [*raw_recent_reports, *raw_failed_reports] if _is_chunk_raw_report(report)]
+        assembled_reports = [*assembled_recent_reports, *assembled_failed_reports]
         chunk_docs = _enrich_chunk_docs_from_raw_reports(chunk_docs, raw_chunk_reports)
         pending_chunk_docs = _pending_chunk_docs_from_raw_reports(raw_chunk_reports, chunk_docs)
         chunk_docs = [*chunk_docs, *pending_chunk_docs]
@@ -840,8 +886,8 @@ class ServerStatsServiceMixin:
                 "ageSeconds": max(0, int((now - queued_at).total_seconds())),
             }
 
-        chunk_rows = _chunk_reports_queue_rows(chunk_docs, profiles_by_author)
-        failed_chunk_rows = _chunk_reports_queue_rows(chunk_failed_docs, profiles_by_author)
+        chunk_rows = _chunk_reports_queue_rows(chunk_docs, profiles_by_author, assembled_reports)
+        failed_chunk_rows = _chunk_reports_queue_rows(chunk_failed_docs, profiles_by_author, assembled_reports)
 
         return {
             "generatedAt": now.isoformat(),

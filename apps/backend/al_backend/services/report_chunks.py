@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 
 from pymongo import ASCENDING
 
 from ..activity_math import _coerce_datetime, dt
-from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
 
 CHUNKED_REPORT_SOURCE_ALLOWLIST = {"ual"}
+LOGGER = logging.getLogger("al_backend.report_chunks")
 
 
 def chunk_metadata(payload: dict[str, Any], source: str) -> dict[str, Any] | None:
@@ -43,6 +45,25 @@ def chunk_metadata(payload: dict[str, Any], source: str) -> dict[str, Any] | Non
         "chunkEventCount": chunk_event_count,
         "totalEventCount": total_event_count,
     }
+
+
+def assembled_chunk_metadata(payload: dict[str, Any], source: str) -> dict[str, Any] | None:
+    if source not in CHUNKED_REPORT_SOURCE_ALLOWLIST or "chunkIndex" in payload:
+        return None
+
+    logical_report_id = str(payload.get("logicalReportId") or "").strip()
+    if not logical_report_id:
+        return None
+
+    try:
+        chunk_count = int(payload.get("chunkCount") or 0)
+    except (TypeError, ValueError):
+        return None
+
+    if chunk_count < 2:
+        return None
+
+    return {"logicalReportId": logical_report_id, "chunkCount": chunk_count}
 
 
 class ReportChunkService(MongoComposableMixin):
@@ -121,7 +142,7 @@ class ReportChunkService(MongoComposableMixin):
         )
 
         try:
-            affected_dates = self._assemble_complete_chunked_report(
+            self._assemble_complete_chunked_report(
                 chunks=chunks,
                 source=source,
                 plugin_version=plugin_version,
@@ -141,14 +162,13 @@ class ReportChunkService(MongoComposableMixin):
             {"logicalReportId": metadata["logicalReportId"]},
             {
                 "$set": {
-                    "status": "processed",
+                    "status": "assembled",
                     "assembledAt": dt.datetime.now(dt.UTC),
-                    "affectedDates": sorted({date for date in affected_dates if str(date).strip()}),
                 },
                 "$unset": {"lastError": ""},
             },
         )
-        return affected_dates
+        return []
 
     def _assemble_complete_chunked_report(
         self,
@@ -160,13 +180,16 @@ class ReportChunkService(MongoComposableMixin):
         received_at: dt.datetime,
         device_id: str | None,
         challenge_id: str,
-    ) -> list[str]:
+    ) -> None:
+        started_at = time.perf_counter()
         ordered_chunks = sorted(chunks, key=lambda item: int(item.get("chunkIndex") or 0))
         raw_report_ids = [chunk.get("rawReportId") for chunk in ordered_chunks]
+        load_started_at = time.perf_counter()
         raw_reports = {
             report.get("_id"): report
             for report in self.db.raw_reports.find({"_id": {"$in": raw_report_ids}})
         }
+        load_seconds = time.perf_counter() - load_started_at
         first_payload = dict((raw_reports.get(raw_report_ids[0]) or {}).get("payload") or {})
         events: list[dict[str, Any]] = []
 
@@ -175,7 +198,9 @@ class ReportChunkService(MongoComposableMixin):
             payload = report.get("payload") if isinstance(report.get("payload"), dict) else {}
             events.extend(payload.get("events") if isinstance(payload.get("events"), list) else [])
 
+        sort_started_at = time.perf_counter()
         events.sort(key=lambda item: str(item.get("occurredAtUtc") or item.get("occurredAtLocal") or ""))
+        sort_seconds = time.perf_counter() - sort_started_at
         assembled_payload = dict(first_payload)
         assembled_payload["events"] = events
         assembled_payload["logicalReportId"] = ordered_chunks[0].get("logicalReportId")
@@ -184,13 +209,59 @@ class ReportChunkService(MongoComposableMixin):
         assembled_payload.pop("chunkIndex", None)
         assembled_payload.pop("chunkEventCount", None)
 
-        return composed(self)._save_event_batch(
-            source=source,
-            plugin_version=plugin_version,
-            payload=assembled_payload,
-            raw_report_id=str(ordered_chunks[0].get("logicalReportId") or ""),
-            report_type=report_type,
-            received_at=received_at,
-            challenge_id=challenge_id,
-            device_id=device_id,
+        logical_report_id = str(ordered_chunks[0].get("logicalReportId") or "")
+        if self.db.raw_reports.find_one({"_id": logical_report_id}):
+            return
+
+        self.db.raw_reports.insert_one(
+            {
+                "_id": logical_report_id,
+                "source": source,
+                "pluginVersion": plugin_version,
+                "encryptedPacket": "",
+                "challengeId": challenge_id,
+                "deviceId": str(device_id or ""),
+                "reportType": report_type,
+                "payload": assembled_payload,
+                "receivedAt": received_at,
+                "queuedAt": dt.datetime.now(dt.UTC),
+                "status": "queued",
+                "attempts": 0,
+                "assembledFromChunks": True,
+                "logicalReportId": logical_report_id,
+            }
+        )
+        LOGGER.info(
+            "Assembled chunked report logical_report_id=%s chunks=%s events=%s load_seconds=%.3f sort_seconds=%.3f total_seconds=%.3f",
+            logical_report_id,
+            len(ordered_chunks),
+            len(events),
+            load_seconds,
+            sort_seconds,
+            time.perf_counter() - started_at,
+        )
+
+    def mark_assembled_report_processed(self, logical_report_id: str, affected_dates: list[str]) -> None:
+        if not logical_report_id:
+            return
+
+        self.db.raw_report_chunks.update_many(
+            {"logicalReportId": logical_report_id},
+            {
+                "$set": {
+                    "status": "processed",
+                    "assembledProcessedAt": dt.datetime.now(dt.UTC),
+                    "affectedDates": sorted({date for date in affected_dates if str(date).strip()}),
+                },
+                "$unset": {"lastError": ""},
+            },
+        )
+
+    def mark_assembled_report_failed(self, logical_report_id: str, error: str) -> None:
+        if not logical_report_id:
+            return
+
+        self.db.raw_report_chunks.update_many(
+            {"logicalReportId": logical_report_id},
+            {"$set": {"status": "failed", "failedAt": dt.datetime.now(dt.UTC), "lastError": error}},
         )

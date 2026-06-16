@@ -369,6 +369,7 @@ export type ReportsQueueReport = {
   projectId: string;
   status: string;
   attempts: number;
+  assemblySeconds?: number | null;
   processingSeconds?: number | null;
   lastError: string;
   chunksReceived?: number;

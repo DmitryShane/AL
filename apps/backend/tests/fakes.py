@@ -84,6 +84,18 @@ class FakeCollection:
 
         return Result()
 
+    def insert_many(self, items, ordered=True):
+        inserted_ids = []
+        for item in items:
+            self.items.append(item.copy())
+            inserted_ids.append(item.get("_id"))
+
+        class Result:
+            def __init__(self, ids):
+                self.inserted_ids = ids
+
+        return Result(inserted_ids)
+
     def update_one(self, query, operation, upsert=False):
         for item in self.items:
             if self._matches(item, query):

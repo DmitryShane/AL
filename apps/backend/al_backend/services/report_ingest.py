@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import traceback
+
+from pymongo.errors import BulkWriteError
 
 from ..activity_math import *
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
-from .report_chunks import chunk_metadata
+from .report_chunks import assembled_chunk_metadata, chunk_metadata
+
+
+LOGGER = logging.getLogger("al_backend.report_ingest")
 
 
 def _has_count_or_file_delta(deltas: dict[str, Any]) -> bool:
@@ -261,6 +267,15 @@ class ReportIngestService(MongoComposableMixin):
         if status == "failed":
             update["failedAt"] = now
 
+        payload = report.get("payload") if isinstance(report.get("payload"), dict) else {}
+        source = str(report.get("source") or "")
+        assembled_metadata = assembled_chunk_metadata(payload, source)
+        if status == "failed" and assembled_metadata:
+            composed(self).mark_assembled_report_failed(
+                str(assembled_metadata.get("logicalReportId") or ""),
+                update["lastError"],
+            )
+
         self.db.raw_reports.update_one(
             {"_id": raw_report_id, "status": {"$ne": "processed"}},
             {
@@ -307,6 +322,12 @@ class ReportIngestService(MongoComposableMixin):
                     challenge_id=challenge_id,
                     device_id=device_id,
                 )
+                assembled_metadata = assembled_chunk_metadata(payload, source)
+                if assembled_metadata:
+                    composed(self).mark_assembled_report_processed(
+                        str(assembled_metadata.get("logicalReportId") or ""),
+                        affected_dates,
+                    )
             if not self._is_unassigned_device_report_author(source, author_for_stale_touch):
                 composed(self).touch_last_raw_report_received_at(author_for_stale_touch, received_at)
             composed(self).invalidate_activity_summary_cache(affected_dates)
@@ -548,6 +569,7 @@ class ReportIngestService(MongoComposableMixin):
         challenge_id: str,
         device_id: str | None,
     ) -> list[str]:
+        batch_started_at = dt.datetime.now(dt.UTC)
         author = composed(self).resolve_author_alias(str(payload.get("author") or "Unknown User"))
         author_email = str(payload.get("authorEmail") or "")
         project_id = str(payload.get("projectId") or "")
@@ -582,6 +604,8 @@ class ReportIngestService(MongoComposableMixin):
 
         events = sorted(payload.get("events") or [], key=lambda item: str(item.get("occurredAtUtc") or item.get("occurredAtLocal") or ""))
         resume_cutoff = composed(self).get_effective_plugin_ingest_resume_cutoff_utc(author)
+        normalized_events: list[dict[str, Any]] = []
+        seen_event_ids: set[str] = set()
 
         for raw_event in events:
             event = _normalize_raw_event(
@@ -610,9 +634,8 @@ class ReportIngestService(MongoComposableMixin):
                 if event_time is None or event_time < resume_cutoff:
                     continue
 
-            try:
-                self.db.raw_activity_events.insert_one(event)
-            except DuplicateKeyError:
+            event_id = str(event.get("eventId") or "")
+            if event_id in seen_event_ids:
                 self.log_report_security_event(
                     event_type="duplicate_event",
                     source=source,
@@ -623,19 +646,98 @@ class ReportIngestService(MongoComposableMixin):
                     session_id=session_id,
                     device_id=resolved_device_id,
                     challenge_id=challenge_id,
-                    message="Raw event id was submitted more than once.",
+                    message="Raw event id was duplicated inside one event batch.",
                 )
                 continue
+            seen_event_ids.add(event_id)
+            normalized_events.append(event)
 
+        raw_write_started_at = dt.datetime.now(dt.UTC)
+        inserted_event_ids = {str(event.get("eventId") or "") for event in normalized_events}
+
+        if normalized_events:
+            try:
+                insert_many = getattr(self.db.raw_activity_events, "insert_many", None)
+                if insert_many:
+                    insert_many(normalized_events, ordered=False)
+                else:
+                    for event in normalized_events:
+                        self.db.raw_activity_events.insert_one(event)
+            except BulkWriteError as exc:
+                duplicate_event_ids: set[str] = set()
+                non_duplicate_errors: list[dict[str, Any]] = []
+                for error in exc.details.get("writeErrors", []):
+                    if int(error.get("code") or 0) == 11000:
+                        op = error.get("op") if isinstance(error.get("op"), dict) else {}
+                        duplicate_event_ids.add(str(op.get("eventId") or ""))
+                    else:
+                        non_duplicate_errors.append(error)
+                if non_duplicate_errors:
+                    raise
+                inserted_event_ids.difference_update(duplicate_event_ids)
+                for event_id in sorted(duplicate_event_ids):
+                    self.log_report_security_event(
+                        event_type="duplicate_event",
+                        source=source,
+                        plugin_version=plugin_version,
+                        author=author,
+                        author_email=author_email,
+                        project_id=project_id,
+                        session_id=session_id,
+                        device_id=resolved_device_id,
+                        challenge_id=challenge_id,
+                        message=f"Raw event id was submitted more than once: {event_id}",
+                    )
+            except DuplicateKeyError:
+                inserted_event_ids = set()
+                for event in normalized_events:
+                    event_id = str(event.get("eventId") or "")
+                    try:
+                        self.db.raw_activity_events.insert_one(event)
+                    except DuplicateKeyError:
+                        inserted_event_ids.discard(event_id)
+                        self.log_report_security_event(
+                            event_type="duplicate_event",
+                            source=source,
+                            plugin_version=plugin_version,
+                            author=author,
+                            author_email=author_email,
+                            project_id=project_id,
+                            session_id=session_id,
+                            device_id=resolved_device_id,
+                            challenge_id=challenge_id,
+                            message=f"Raw event id was submitted more than once: {event_id}",
+                        )
+                    else:
+                        inserted_event_ids.add(event_id)
+
+        accounting_started_at = dt.datetime.now(dt.UTC)
+        for event in normalized_events:
+            if str(event.get("eventId") or "") not in inserted_event_ids:
+                continue
             deltas = composed(self)._apply_raw_event_to_aggregates(event)
             batch_delta_items.append((event, deltas))
 
+        rows_started_at = dt.datetime.now(dt.UTC)
         rows = self._build_event_batch_report_rows(batch, batch_delta_items)
 
         if not rows:
             return []
 
         _insert_many_if_supported(self.db.report_rows, rows)
+        finished_at = dt.datetime.now(dt.UTC)
+        LOGGER.info(
+            "Saved event batch raw_report_id=%s source=%s events=%s inserted_events=%s rows=%s raw_write_seconds=%.3f accounting_seconds=%.3f row_seconds=%.3f total_seconds=%.3f",
+            raw_report_id,
+            source,
+            len(normalized_events),
+            len(inserted_event_ids),
+            len(rows),
+            (accounting_started_at - raw_write_started_at).total_seconds(),
+            (rows_started_at - accounting_started_at).total_seconds(),
+            (finished_at - rows_started_at).total_seconds(),
+            (finished_at - batch_started_at).total_seconds(),
+        )
 
         for row in rows:
             report_time = _report_row_time(row) or received_at

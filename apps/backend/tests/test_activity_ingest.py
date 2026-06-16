@@ -587,6 +587,21 @@ def test_chunked_unity_report_waits_until_all_chunks_before_rows():
     )
     assert repo.process_queued_report(final_report_id)
 
+    assert repo.db.raw_event_batches.items == []
+    assert repo.db.raw_activity_events.items == []
+    assert repo.db.report_rows.items == []
+    assembled_report = repo.db.raw_reports.find_one({"_id": "logical-1"})
+    assert assembled_report["status"] == "queued"
+    assert assembled_report["assembledFromChunks"] is True
+    queue_status = repo.get_reports_queue_status()
+    chunk_row = next(row for row in queue_status["recentReports"] if row["id"] == "logical-1")
+    assert chunk_row["status"] == "queued"
+    assert chunk_row["assemblySeconds"] is not None
+
+    claimed = repo.claim_next_queued_report(worker_id="test-worker")
+    assert claimed["_id"] == "logical-1"
+    assert repo.process_claimed_report(claimed)
+
     assert len(repo.db.raw_event_batches.items) == 1
     assert repo.db.raw_event_batches.items[0]["rawReportId"] == "logical-1"
     assert repo.db.raw_event_batches.items[0]["eventCount"] == 3500
@@ -623,10 +638,35 @@ def test_chunked_unity_report_duplicate_chunk_does_not_duplicate_events():
     assert repo.process_queued_report(first)
     assert repo.process_queued_report(duplicate)
     assert repo.process_queued_report(second)
+    assert repo.process_queued_report("logical-dup")
 
     assert len(repo.db.raw_report_chunks.items) == 2
     assert len(repo.db.raw_activity_events.items) == 3
     assert len(repo.db.report_rows.items) == 1
+
+
+def test_event_batch_uses_bulk_insert_for_raw_activity_events(monkeypatch):
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    payload = _event_payload(3000)
+    report_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.12",
+        encrypted_packet="packet-bulk",
+        challenge_id="challenge-bulk",
+        device_id="device-queue",
+        payload=payload,
+    )
+
+    def fail_insert_one(_item):
+        raise AssertionError("raw_activity_events.insert_one should not be used for event batches")
+
+    monkeypatch.setattr(repo.db.raw_activity_events, "insert_one", fail_insert_one)
+
+    assert repo.process_queued_report(report_id)
+    assert len(repo.db.raw_activity_events.items) == 3000
+    assert len(repo.db.report_rows.items) == 1
+
 
 def test_deleted_author_profile_blocks_plugin_config_profile_recreation():
     repo = fake_repository()
