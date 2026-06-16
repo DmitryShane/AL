@@ -427,6 +427,91 @@ def test_rebuild_delta_store_spills_and_cleans_temp_collection():
     assert repo.db.aggregate_rebuild_event_deltas.items == []
 
 
+def test_rebuild_event_batches_do_not_use_live_ingest_batch_builder():
+    repo = fake_repository()
+    author = "Future Artist"
+    day = "2026-06-16"
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "raw-1",
+            "batchId": "batch-1",
+            "author": author,
+            "date": day,
+            "source": "ual",
+            "eventType": "editor_input",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "deviceId": "unity-device",
+            "timeZoneId": "UTC",
+            "occurredAtUtc": event_at,
+            "receivedAt": event_at,
+        }
+    )
+    repo.db.raw_event_batches.insert_one(
+        {
+            "batchId": "batch-1",
+            "author": author,
+            "date": day,
+            "source": "ual",
+            "pluginVersion": "test",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "deviceId": "unity-device",
+            "receivedAt": event_at,
+        }
+    )
+    repo._apply_raw_event_to_aggregates = lambda event: {"activeDeltaSeconds": 1}
+    repo._build_event_batch_report_rows = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("live builder used"))
+    repo._materialize_status_report_rows = lambda: None
+
+    repo._rebuild_aggregates_from_sources({day}, {author})
+
+    row = repo.db.report_rows.find_one({"batchId": "batch-1"})
+    assert row is not None
+    assert row["activeDeltaSeconds"] == 1
+    assert repo.db.aggregate_rebuild_event_deltas.items == []
+
+
+def test_rebuild_event_batch_materializer_updates_inner_batch_progress(monkeypatch):
+    repo = fake_repository()
+    job_id = "job-progress"
+    repo._active_rebuild_job_id = job_id
+    repo.db.aggregate_rebuild_jobs.insert_one({"jobId": job_id, "status": "running"})
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    items = [
+        (
+            {
+                "date": "2026-06-16",
+                "occurredAtUtc": event_at + dt.timedelta(seconds=index),
+                "timeZoneId": "UTC",
+            },
+            {"activeDeltaSeconds": 1},
+        )
+        for index in range(3)
+    ]
+    progress_calls = []
+    monkeypatch.setattr(rebuild_module, "REBUILD_BATCH_DELTA_CHUNK_SIZE", 2)
+
+    rows = repo._build_rebuild_event_batch_report_rows(
+        {"batchId": "batch-1", "source": "ual", "author": "Future Artist", "receivedAt": event_at},
+        iter(items),
+        None,
+        lambda phase, current, total: progress_calls.append((phase, current, total)),
+        batch_index=1,
+        batch_total=1,
+        batch_delta_total=3,
+    )
+
+    job = repo.db.aggregate_rebuild_jobs.find_one({"jobId": job_id})
+    assert rows[0]["activeDeltaSeconds"] == 2
+    assert progress_calls == [("Rebuilding event batches", 1, 1)]
+    assert job["currentBatch"] == 1
+    assert job["totalBatches"] == 1
+    assert job["currentBatchEvents"] == 3
+    assert job["totalBatchEvents"] == 3
+
+
 def test_rebuild_memory_guard_records_pause(monkeypatch):
     repo = fake_repository()
     metrics = {"memoryGuardPauses": 0, "rssPeakMb": 0}

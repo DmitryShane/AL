@@ -12,6 +12,7 @@ from ..backend_composable_host import composed
 from .raw_event_batching import (
     EDITOR_INPUT_COMPACTION_WINDOW_SECONDS,
     RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE,
+    REBUILD_BATCH_DELTA_CHUNK_SIZE,
     REBUILD_CURSOR_BATCH_SIZE,
     REBUILD_DELTA_SPILL_THRESHOLD,
     REBUILD_MEMORY_GUARD_ENABLED,
@@ -74,6 +75,45 @@ def _minimal_event_for_report_rows(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _rebuild_cap_ual_time_deltas_to_window(
+    deltas: dict[str, Any],
+    first_event_time: dt.datetime | None,
+    last_event_time: dt.datetime | None,
+) -> dict[str, Any]:
+    if not first_event_time or not last_event_time or last_event_time <= first_event_time:
+        return deltas
+
+    max_microseconds = max(0, int((last_event_time - first_event_time).total_seconds() * MICROSECONDS_PER_SECOND))
+    time_keys = (
+        ("activeDeltaSeconds", "activeDeltaMicroseconds"),
+        ("idleDeltaSeconds", "idleDeltaMicroseconds"),
+        ("overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds"),
+    )
+    total_microseconds = sum(_time_microseconds(deltas, seconds_key, microseconds_key) for seconds_key, microseconds_key in time_keys)
+    excess_microseconds = total_microseconds - max_microseconds
+
+    if excess_microseconds <= 0:
+        return deltas
+
+    capped = dict(deltas)
+    for seconds_key, microseconds_key in time_keys:
+        current_microseconds = _time_microseconds(capped, seconds_key, microseconds_key)
+        reduction = min(current_microseconds, excess_microseconds)
+
+        if reduction <= 0:
+            continue
+
+        current_microseconds -= reduction
+        excess_microseconds -= reduction
+        capped[microseconds_key] = current_microseconds
+        capped[seconds_key] = _seconds_from_microseconds(current_microseconds)
+
+        if excess_microseconds <= 0:
+            break
+
+    return capped
+
+
 def _rebuild_current_rss_mb() -> float:
     try:
         page_size = os.sysconf("SC_PAGE_SIZE")
@@ -125,19 +165,42 @@ class _RebuildDeltaStore:
         return set(self.memory)
 
     def get_batch(self, batch_id: str) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        return list(self.iter_batch(batch_id))
+
+    def iter_batch(self, batch_id: str) -> Any:
         if self.spilled:
             cursor = self.service.db.aggregate_rebuild_event_deltas.find(
                 {"token": self.token, "batchId": batch_id},
                 {"_id": 0, "event": 1, "deltas": 1},
             )
-            return [(dict(item.get("event") or {}), dict(item.get("deltas") or {})) for item in _cursor_with_batch_size(cursor)]
 
-        return [(dict(item.get("event") or {}), dict(item.get("deltas") or {})) for item in self.memory.get(batch_id, [])]
+            for item in _cursor_with_batch_size(cursor):
+                yield dict(item.get("event") or {}), dict(item.get("deltas") or {})
 
-    def iter_unprocessed(
-        self, processed_batch_ids: set[str]
-    ) -> list[tuple[str, list[tuple[dict[str, Any], dict[str, Any]]]]]:
-        return [(batch_id, self.get_batch(batch_id)) for batch_id in sorted(self.batch_ids()) if batch_id not in processed_batch_ids]
+            return
+
+        for item in self.memory.get(batch_id, []):
+            yield dict(item.get("event") or {}), dict(item.get("deltas") or {})
+
+    def count_batch(self, batch_id: str) -> int:
+        if self.spilled:
+            return int(self.service.db.aggregate_rebuild_event_deltas.count_documents({"token": self.token, "batchId": batch_id}))
+
+        return len(self.memory.get(batch_id, []))
+
+    def delete_batch(self, batch_id: str) -> None:
+        if self.spilled:
+            self.service.db.aggregate_rebuild_event_deltas.delete_many({"token": self.token, "batchId": batch_id})
+            return
+
+        self.memory.pop(batch_id, None)
+
+    def iter_unprocessed(self, processed_batch_ids: set[str]) -> Any:
+        for batch_id in sorted(self.batch_ids()):
+            if batch_id in processed_batch_ids:
+                continue
+
+            yield batch_id, self.iter_batch(batch_id)
 
     def cleanup(self) -> None:
         self.memory.clear()
@@ -206,6 +269,114 @@ class ActivityAggregationRebuildMixin:
                 "memoryGuardPauses": metrics["memoryGuardPauses"],
             }
         )
+
+    def _build_rebuild_event_batch_report_rows(
+        self,
+        batch: dict[str, Any],
+        delta_items: Any,
+        cutoff: dt.datetime | None,
+        progress_callback: Callable[[str, int, int], None] | None,
+        *,
+        batch_index: int,
+        batch_total: int,
+        batch_delta_total: int,
+    ) -> list[dict[str, Any]]:
+        merged_by_date: dict[str, dict[str, Any]] = {}
+        first_time_by_date: dict[str, dt.datetime] = {}
+        last_time_by_date: dict[str, dt.datetime] = {}
+        last_event_by_date: dict[str, dict[str, Any]] = {}
+        processed = 0
+
+        for event, deltas in delta_items:
+            processed += 1
+            event_time = _raw_event_time(event)
+
+            if cutoff and event_time and event_time <= cutoff:
+                continue
+
+            event_date = str(event.get("date") or "")
+
+            if not event_date:
+                continue
+
+            batch_deltas = merged_by_date.setdefault(event_date, _empty_batch_deltas())
+            _merge_batch_deltas(batch_deltas, deltas)
+            last_event_by_date[event_date] = event
+
+            if event_time:
+                first_time = first_time_by_date.get(event_date)
+
+                if first_time is None or event_time < first_time:
+                    first_time_by_date[event_date] = event_time
+
+                last_time = last_time_by_date.get(event_date)
+
+                if last_time is None or event_time > last_time:
+                    last_time_by_date[event_date] = event_time
+
+            if processed % REBUILD_BATCH_DELTA_CHUNK_SIZE == 0:
+                self._set_rebuild_job_diagnostics(
+                    {
+                        "currentBatch": batch_index,
+                        "totalBatches": batch_total,
+                        "currentBatchEvents": processed,
+                        "totalBatchEvents": batch_delta_total,
+                    }
+                )
+                self._report_rebuild_progress(progress_callback, "Rebuilding event batches", batch_index, batch_total)
+
+        self._set_rebuild_job_diagnostics(
+            {
+                "currentBatch": batch_index,
+                "totalBatches": batch_total,
+                "currentBatchEvents": processed,
+                "totalBatchEvents": batch_delta_total,
+            }
+        )
+
+        rows: list[dict[str, Any]] = []
+
+        for event_date, batch_deltas in merged_by_date.items():
+            last_event = last_event_by_date.get(event_date)
+
+            if str(batch.get("source") or "") == "ual":
+                batch_deltas = _rebuild_cap_ual_time_deltas_to_window(
+                    batch_deltas,
+                    first_time_by_date.get(event_date),
+                    last_time_by_date.get(event_date),
+                )
+
+            is_codex_presence_row = str(batch.get("source") or "") == "codex" and _has_count_or_file_delta(batch_deltas)
+
+            if not last_event or not (_has_time_delta(batch_deltas) or is_codex_presence_row):
+                continue
+
+            rows.append(
+                {
+                    "source": batch.get("source"),
+                    "pluginVersion": batch.get("pluginVersion"),
+                    "author": batch.get("author") or "Unknown User",
+                    "authorEmail": batch.get("authorEmail", ""),
+                    "projectId": batch.get("projectId") or "",
+                    "sessionId": batch.get("sessionId") or "",
+                    "deviceId": batch.get("deviceId") or "",
+                    "date": last_event.get("date"),
+                    "recordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
+                    "receivedAt": batch.get("receivedAt"),
+                    "lastRecordedAt": last_event.get("occurredAtLocal") or last_event.get("occurredAtUtc"),
+                    "lastReceivedAt": batch.get("receivedAt"),
+                    "timeZoneId": last_event.get("timeZoneId"),
+                    "timeZoneDisplayName": last_event.get("timeZoneDisplayName"),
+                    "rawReportId": batch.get("rawReportId"),
+                    "batchId": batch.get("batchId"),
+                    "challengeId": batch.get("challengeId"),
+                    "reportType": batch.get("reportType", "auto"),
+                    "activityType": _primary_activity_type(batch_deltas),
+                    **batch_deltas,
+                }
+            )
+
+        return rows
 
     def compact_editor_input_events_for_rebuild(
         self,
@@ -794,7 +965,24 @@ class ActivityAggregationRebuildMixin:
 
                 author = str(batch.get("author") or "Unknown User")
                 cutoff = last_report_time_by_author.get(author)
-                rows = composed(self)._build_event_batch_report_rows(batch, delta_store.get_batch(batch_id), cutoff)
+                batch_delta_total = delta_store.count_batch(batch_id)
+                self._set_rebuild_job_diagnostics(
+                    {
+                        "currentBatch": batch_count,
+                        "totalBatches": batch_total,
+                        "currentBatchEvents": 0,
+                        "totalBatchEvents": batch_delta_total,
+                    }
+                )
+                rows = self._build_rebuild_event_batch_report_rows(
+                    batch,
+                    delta_store.iter_batch(batch_id),
+                    cutoff,
+                    progress_callback,
+                    batch_index=batch_count,
+                    batch_total=batch_total,
+                    batch_delta_total=batch_delta_total,
+                )
                 materialized_rows = [
                     row
                     for row in rows
@@ -808,6 +996,9 @@ class ActivityAggregationRebuildMixin:
                     if row_time:
                         last_report_time_by_author[author] = row_time
 
+                delta_store.delete_batch(batch_id)
+                rows.clear()
+                materialized_rows.clear()
                 self._maybe_apply_rebuild_memory_guard(metrics)
 
             self._record_rebuild_observation(metrics, "Rebuilding event batches", phase_started_at, batch_count)
@@ -818,6 +1009,8 @@ class ActivityAggregationRebuildMixin:
 
                     if len(orphan_report_rows) >= 1_000:
                         flush_orphan_report_rows()
+
+                delta_store.delete_batch(_batch_id)
 
             flush_orphan_report_rows()
         finally:
