@@ -352,11 +352,20 @@ class ActivityRawEventAccountingMixin:
             navigation_deltas = _empty_event_deltas()
 
             if navigation_context:
+                navigation_accounted_start_at = last_accounting_at
+                navigation_accounted_start_local_at = last_accounting_local_at
+                if author_last_accounting_at and (
+                    not navigation_accounted_start_at or author_last_accounting_at > navigation_accounted_start_at
+                ):
+                    navigation_accounted_start_at = author_last_accounting_at
+                    navigation_accounted_start_local_at = author_last_accounting_local_at
                 navigation_deltas = self._scene_navigation_duration_deltas(
                     event,
                     author_state,
                     consumed_normal_microseconds,
                     overtime_window,
+                    navigation_accounted_start_at,
+                    navigation_accounted_start_local_at,
                 )
 
                 if (
@@ -864,6 +873,8 @@ class ActivityRawEventAccountingMixin:
         author_state: dict[str, Any],
         consumed_normal_microseconds: int,
         overtime_window: tuple[dt.datetime, dt.datetime] | None,
+        accounted_start_at: dt.datetime | None = None,
+        accounted_start_local_at: dt.datetime | None = None,
     ) -> dict[str, Any]:
         deltas = _empty_event_deltas()
         context = self._scene_navigation_duration_context(event, author_state)
@@ -872,6 +883,11 @@ class ActivityRawEventAccountingMixin:
             return deltas
 
         _duration_delta_seconds, interval_start_at, interval_start_local_at, occurred_at, interval_end_local_at = context
+        if accounted_start_at and accounted_start_at > interval_start_at:
+            if accounted_start_at >= occurred_at:
+                return deltas
+            interval_start_at = accounted_start_at
+            interval_start_local_at = accounted_start_local_at or interval_start_at
         navigation_overtime_window = overtime_window or self._overtime_window_for_interval(event, interval_start_at, occurred_at)
         navigation_deltas = _interval_deltas(
             interval_start_at,

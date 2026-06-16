@@ -1116,6 +1116,58 @@ def test_unity_scene_view_navigation_duration_counts_as_active_time():
     assert {item["type"]: item["count"] for item in daily["activityCounts"]} == {"scene_view_navigation": 3}
 
 
+def test_unity_scene_view_navigation_duration_does_not_overlap_prior_activity_interval():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one({"kind": "global", "idleThresholdSeconds": 60})
+
+    base_event = {
+        "source": "ual",
+        "author": "Evgeniy Dotsenko",
+        "projectId": "bike-rush-2",
+        "sessionId": "unity-session",
+        "deviceId": "unity-device",
+        "date": "2026-06-03",
+        "timeZoneId": "UTC",
+    }
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "editor_input",
+            "occurredAtUtc": "2026-06-03T10:00:00Z",
+            "occurredAtLocal": "2026-06-03T10:00:00+00:00",
+            "receivedAt": dt.datetime(2026, 6, 3, 10, 0, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "editor_input",
+            "occurredAtUtc": "2026-06-03T10:00:05Z",
+            "occurredAtLocal": "2026-06-03T10:00:05+00:00",
+            "receivedAt": dt.datetime(2026, 6, 3, 10, 0, 5, tzinfo=dt.UTC),
+        }
+    )
+    navigation_deltas = repo._apply_raw_event_to_aggregates(
+        {
+            **base_event,
+            "eventType": "scene_view_navigation",
+            "occurredAtUtc": "2026-06-03T10:00:10Z",
+            "occurredAtLocal": "2026-06-03T10:00:10+00:00",
+            "receivedAt": dt.datetime(2026, 6, 3, 10, 0, 10, tzinfo=dt.UTC),
+            "metadata": {
+                "firstNavigationAtUtc": "2026-06-03T10:00:00Z",
+                "lastNavigationAtUtc": "2026-06-03T10:00:10Z",
+                "navigationDurationSeconds": 10,
+            },
+        }
+    )
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Evgeniy Dotsenko", "date": "2026-06-03", "source": "ual"})
+    assert daily is not None
+    assert navigation_deltas["activeDeltaSeconds"] == 5
+    assert daily["activeSeconds"] == 10
+
+
 def test_unity_scene_view_navigation_heartbeat_keeps_navigation_time_active():
     repo = fake_repository()
     repo.db.interval_settings.insert_one({"kind": "global", "idleThresholdSeconds": 60})
@@ -1270,6 +1322,80 @@ def test_unity_scene_view_navigation_accounts_idle_gap_before_navigation():
     assert navigation_deltas["idleDeltaSeconds"] == 480
     assert daily["activeSeconds"] == 120
     assert daily["idleSeconds"] == 480
+
+
+def test_unity_dense_navigation_batch_cannot_exceed_event_window_active_time():
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one({"kind": "global", "idleThresholdSeconds": 60})
+    received_at = dt.datetime(2026, 6, 3, 10, 10, tzinfo=dt.UTC)
+    events = [
+        {
+            "eventId": "dense-start",
+            "eventType": "editor_input",
+            "date": "2026-06-03",
+            "occurredAtUtc": "2026-06-03T10:00:00Z",
+            "occurredAtLocal": "2026-06-03T10:00:00+00:00",
+        }
+    ]
+    for index in range(1, 10):
+        occurred_second = index * 60
+        minute = occurred_second // 60
+        events.append(
+            {
+                "eventId": f"dense-input-{index}",
+                "eventType": "editor_input",
+                "date": "2026-06-03",
+                "occurredAtUtc": f"2026-06-03T10:{minute:02d}:00Z",
+                "occurredAtLocal": f"2026-06-03T10:{minute:02d}:00+00:00",
+            }
+        )
+        events.append(
+            {
+                "eventId": f"dense-navigation-{index}",
+                "eventType": "scene_view_navigation",
+                "date": "2026-06-03",
+                "occurredAtUtc": f"2026-06-03T10:{minute:02d}:30Z",
+                "occurredAtLocal": f"2026-06-03T10:{minute:02d}:30+00:00",
+                "metadata": {
+                    "firstNavigationAtUtc": f"2026-06-03T10:{minute:02d}:00Z",
+                    "lastNavigationAtUtc": f"2026-06-03T10:{minute:02d}:30Z",
+                    "navigationDurationSeconds": 30,
+                },
+            }
+        )
+    events.append(
+        {
+            "eventId": "dense-end",
+            "eventType": "heartbeat",
+            "date": "2026-06-03",
+            "occurredAtUtc": "2026-06-03T10:10:00Z",
+            "occurredAtLocal": "2026-06-03T10:10:00+00:00",
+        }
+    )
+
+    repo._save_event_batch(
+        "ual",
+        "0.3.1",
+        {
+            "author": "Evgeniy Dotsenko",
+            "authorEmail": "evgeniy@example.com",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "deviceId": "unity-device",
+            "timeZoneId": "UTC",
+            "timeZoneDisplayName": "UTC",
+            "events": events,
+        },
+        "raw-dense-navigation",
+        "auto",
+        received_at,
+        "challenge-dense-navigation",
+        None,
+    )
+
+    row = repo.db.report_rows.items[0]
+    assert row["activeDeltaSeconds"] <= 600
+    assert row["activeDeltaSeconds"] + row["idleDeltaSeconds"] + row.get("overtimeActiveDeltaSeconds", 0) <= 600
 
 
 def test_unity_scene_view_navigation_duplicate_does_not_suppress_later_idle():

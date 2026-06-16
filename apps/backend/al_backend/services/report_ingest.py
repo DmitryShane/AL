@@ -37,6 +37,42 @@ def _primary_activity_type(deltas: dict[str, Any]) -> str | None:
     return None
 
 
+def _cap_time_deltas_to_event_window(deltas: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
+    event_times = sorted(time for time in (_raw_event_time(event) for event in events) if time is not None)
+    if len(event_times) < 2:
+        return deltas
+
+    max_microseconds = max(
+        0,
+        int((event_times[-1] - event_times[0]).total_seconds() * MICROSECONDS_PER_SECOND),
+    )
+    time_keys = (
+        ("activeDeltaSeconds", "activeDeltaMicroseconds"),
+        ("idleDeltaSeconds", "idleDeltaMicroseconds"),
+        ("overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds"),
+    )
+    total_microseconds = sum(_time_microseconds(deltas, seconds_key, microseconds_key) for seconds_key, microseconds_key in time_keys)
+    excess_microseconds = total_microseconds - max_microseconds
+
+    if excess_microseconds <= 0:
+        return deltas
+
+    capped = dict(deltas)
+    for seconds_key, microseconds_key in time_keys:
+        current_microseconds = _time_microseconds(capped, seconds_key, microseconds_key)
+        reduction = min(current_microseconds, excess_microseconds)
+        if reduction <= 0:
+            continue
+        current_microseconds -= reduction
+        excess_microseconds -= reduction
+        capped[microseconds_key] = current_microseconds
+        capped[seconds_key] = _seconds_from_microseconds(current_microseconds)
+        if excess_microseconds <= 0:
+            break
+
+    return capped
+
+
 def is_unknown_device_author(value: Any) -> bool:
     author = _normalize_author(value or "")
     return author in {"Unknown User", "Device"}
@@ -762,6 +798,10 @@ class ReportIngestService(MongoComposableMixin):
         merged_items = _merge_event_delta_items_by_date(delta_items, cutoff)
 
         for batch_deltas, last_event in merged_items:
+            event_date = str((last_event or {}).get("date") or "")
+            date_events = [event for event, _deltas in delta_items if str(event.get("date") or "") == event_date]
+            if str(batch.get("source") or "") == "ual":
+                batch_deltas = _cap_time_deltas_to_event_window(batch_deltas, date_events)
             is_codex_presence_row = str(batch.get("source") or "") == "codex" and _has_count_or_file_delta(batch_deltas)
 
             if not last_event or not (_has_time_delta(batch_deltas) or is_codex_presence_row):
