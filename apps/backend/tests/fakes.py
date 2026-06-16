@@ -269,6 +269,7 @@ class FakeDb:
         self.manual_report_expectations = FakeCollection()
         self.raw_activity_events = FakeCollection()
         self.raw_event_batches = FakeCollection()
+        self.raw_report_chunks = FakeCollection()
         self.raw_reports = FakeCollection()
         self.report_challenges = FakeCollection()
         self.report_refresh_requests = FakeCollection()

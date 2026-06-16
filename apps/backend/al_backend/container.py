@@ -11,6 +11,7 @@ from .services.author_avatar_service import AuthorAvatarService
 from .services.author_timezone_rebucket import AuthorTimezoneRebucketService
 from .services.report_challenges import ReportChallengeService
 from .services.report_security import ReportSecurityService
+from .services.report_chunks import ReportChunkService
 from .services.report_ingest import ReportIngestService
 from .services.report_listing import ReportListingService
 from .services.activity_summary import ActivitySummaryService
@@ -41,6 +42,7 @@ class BackendServices(
     AuthorTimezoneRebucketService,
     ReportChallengeService,
     ReportSecurityService,
+    ReportChunkService,
     AuthorRepository,
     DeviceProfileRepository,
     ReportIngestService,

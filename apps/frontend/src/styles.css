@@ -3622,13 +3622,13 @@ p {
 }
 
 .reports-queue-table {
-  min-width: 1120px;
+  min-width: 1280px;
 }
 
 .reports-queue-table-head,
 .reports-queue-row {
   display: grid;
-  grid-template-columns: 150px 180px 170px 120px 80px 110px minmax(240px, 1fr);
+  grid-template-columns: 150px 180px 170px 120px 180px 80px 110px minmax(240px, 1fr);
   gap: 12px;
   align-items: center;
   border-bottom: 1px solid #e5eaf0;
@@ -3677,7 +3677,9 @@ p {
 }
 
 .reports-queue-status-processing,
-.reports-queue-status-queued {
+.reports-queue-status-queued,
+.reports-queue-status-receiving,
+.reports-queue-status-assembling {
   background: #fff7ed;
   color: #b45309;
 }
@@ -3685,6 +3687,40 @@ p {
 .reports-queue-status-failed {
   background: #fee2e2;
   color: #dc2626;
+}
+
+.reports-queue-chunks-button {
+  max-width: 100%;
+  border: 1px solid #dbe4ff;
+  border-radius: 6px;
+  background: #eef2ff;
+  color: #3730a3;
+  padding: 4px 8px;
+  overflow: hidden;
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.reports-queue-chunk-details {
+  display: grid;
+  gap: 6px;
+  padding: 8px 14px 12px 44px;
+  border-bottom: 1px solid #e5eaf0;
+  background: #f8fafc;
+}
+
+.reports-queue-chunk-row {
+  display: grid;
+  grid-template-columns: 100px 100px 170px 120px minmax(180px, 1fr) minmax(200px, 1fr);
+  gap: 10px;
+  align-items: center;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .reports-queue-empty {

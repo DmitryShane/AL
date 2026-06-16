@@ -158,6 +158,7 @@ function ReportsQueueTable({
             <span>Author</span>
             <span>Received</span>
             <span>Status</span>
+            <span>Chunks</span>
             <span>Attempts</span>
             <span>Processing</span>
             <span>Error</span>
@@ -194,21 +195,49 @@ function ReportsQueueTable({
 }
 
 function ReportQueueRow({ report, isFailedTable }: { report: ReportsQueueReport; isFailedTable: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasChunks = Array.isArray(report.chunks) && report.chunks.length > 0;
+
   return (
-    <div className={`reports-queue-row reports-queue-row-${statusClassName(report.status)}`}>
-      <span className="source-cell" title={report.source || undefined}>
-        <SourceIcon source={report.source} />
-        {formatSource(report.source)}
-      </span>
-      <span title={report.author || undefined}>{report.displayName || report.author || "unknown"}</span>
-      <span title={report.receivedAt || undefined}>{formatDateTime(report.receivedAt)}</span>
-      <span>
-        <StatusBadge status={report.status} />
-      </span>
-      <span>{report.attempts}</span>
-      <span>{formatDuration(report.processingSeconds)}</span>
-      <span title={report.lastError || undefined}>{report.lastError || (isFailedTable ? "No error recorded" : "")}</span>
-    </div>
+    <>
+      <div className={`reports-queue-row reports-queue-row-${statusClassName(report.status)}`}>
+        <span className="source-cell" title={report.source || undefined}>
+          <SourceIcon source={report.source} />
+          {formatSource(report.source)}
+        </span>
+        <span title={report.author || undefined}>{report.displayName || report.author || "unknown"}</span>
+        <span title={report.receivedAt || undefined}>{formatDateTime(report.receivedAt)}</span>
+        <span>
+          <StatusBadge status={report.status} />
+        </span>
+        <span>
+          {hasChunks ? (
+            <button className="reports-queue-chunks-button" onClick={() => setExpanded((value) => !value)}>
+              {formatChunkProgress(report)}
+            </button>
+          ) : (
+            "-"
+          )}
+        </span>
+        <span>{report.attempts}</span>
+        <span>{formatDuration(report.processingSeconds)}</span>
+        <span title={report.lastError || undefined}>{report.lastError || (isFailedTable ? "No error recorded" : "")}</span>
+      </div>
+      {hasChunks && expanded ? (
+        <div className="reports-queue-chunk-details">
+          {(report.chunks || []).map((chunk) => (
+            <div className="reports-queue-chunk-row" key={`${report.id}-${chunk.chunkIndex}`}>
+              <span>Chunk {chunk.chunkIndex}/{report.chunkCount || report.chunks?.length || "?"}</span>
+              <span>{chunk.eventCount} events</span>
+              <span>{formatDateTime(chunk.receivedAt)}</span>
+              <StatusBadge status={chunk.status} />
+              <span>{chunk.rawReportId}</span>
+              <span title={chunk.lastError || undefined}>{chunk.lastError}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -265,6 +294,16 @@ function formatDuration(seconds: number | null | undefined): string {
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;
   return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function formatChunkProgress(report: ReportsQueueReport): string {
+  const received = report.chunksReceived ?? report.chunks?.length ?? 0;
+  const total = report.chunkCount ?? report.chunks?.length ?? 0;
+  const processed = report.chunksProcessed ?? 0;
+  const eventsReceived = report.eventsReceived ?? 0;
+  const totalEvents = report.totalEventCount ?? eventsReceived;
+  const events = totalEvents > 0 ? `, ${eventsReceived}/${totalEvents} events` : "";
+  return `${received}/${total} chunks, ${processed}/${total} processed${events}`;
 }
 
 function statusClassName(status: string): string {

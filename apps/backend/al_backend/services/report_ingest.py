@@ -7,6 +7,7 @@ import traceback
 from ..activity_math import *
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+from .report_chunks import chunk_metadata
 
 
 def _has_count_or_file_delta(deltas: dict[str, Any]) -> bool:
@@ -284,16 +285,28 @@ class ReportIngestService(MongoComposableMixin):
         affected_dates: list[str] = []
 
         if isinstance(payload.get("events"), list):
-            affected_dates = self._save_event_batch(
-                source=source,
-                plugin_version=plugin_version,
-                payload=payload,
-                raw_report_id=raw_report_id,
-                report_type=report_type,
-                received_at=received_at,
-                challenge_id=challenge_id,
-                device_id=device_id,
-            )
+            if chunk_metadata(payload, source):
+                affected_dates = composed(self).process_chunked_report(
+                    source=source,
+                    plugin_version=plugin_version,
+                    payload=payload,
+                    raw_report_id=raw_report_id,
+                    report_type=report_type,
+                    received_at=received_at,
+                    challenge_id=challenge_id,
+                    device_id=device_id,
+                )
+            else:
+                affected_dates = self._save_event_batch(
+                    source=source,
+                    plugin_version=plugin_version,
+                    payload=payload,
+                    raw_report_id=raw_report_id,
+                    report_type=report_type,
+                    received_at=received_at,
+                    challenge_id=challenge_id,
+                    device_id=device_id,
+                )
             if not self._is_unassigned_device_report_author(source, author_for_stale_touch):
                 composed(self).touch_last_raw_report_received_at(author_for_stale_touch, received_at)
             composed(self).invalidate_activity_summary_cache(affected_dates)

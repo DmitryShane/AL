@@ -357,6 +357,7 @@ export type ReportsQueueOldestQueued = {
 
 export type ReportsQueueReport = {
   id: string;
+  kind?: "chunked" | string;
   receivedAt?: string | null;
   queuedAt?: string | null;
   processingStartedAt?: string | null;
@@ -369,6 +370,22 @@ export type ReportsQueueReport = {
   status: string;
   attempts: number;
   processingSeconds?: number | null;
+  lastError: string;
+  chunksReceived?: number;
+  chunksProcessed?: number;
+  chunkCount?: number;
+  eventsReceived?: number;
+  totalEventCount?: number;
+  chunks?: ReportsQueueChunk[];
+};
+
+export type ReportsQueueChunk = {
+  chunkIndex: number;
+  eventCount: number;
+  rawReportId: string;
+  receivedAt?: string | null;
+  status: string;
+  processedAt?: string | null;
   lastError: string;
 };
 

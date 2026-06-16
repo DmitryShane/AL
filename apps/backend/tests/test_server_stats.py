@@ -492,6 +492,76 @@ def test_reports_queue_status_summarizes_queue_without_raw_payload(monkeypatch) 
     assert failed_row["lastError"] == "ValueError: bad payload"
 
 
+def test_reports_queue_status_includes_chunk_progress(monkeypatch) -> None:
+    repo = fake_repository()
+    now = dt.datetime.now(dt.UTC)
+
+    monkeypatch.setattr(
+        server_stats_service,
+        "_server_stats_service",
+        lambda key, label, unit: {
+            "key": key,
+            "label": label,
+            "unit": unit,
+            "status": "running",
+            "activeState": "active",
+            "subState": "running",
+            "loadState": "loaded",
+            "unitFileState": "enabled",
+            "activeEnteredAt": "Fri 2026-06-12 12:25:20 UTC",
+        },
+    )
+
+    repo.db.raw_report_chunks.insert_one(
+        {
+            "logicalReportId": "logical-queue",
+            "chunkIndex": 1,
+            "chunkCount": 4,
+            "totalEventCount": 3500,
+            "rawReportId": "chunk-1",
+            "source": "ual",
+            "author": "Evgeniy Dotsenko",
+            "projectId": "Bike Rush 2",
+            "receivedAt": now - dt.timedelta(minutes=3),
+            "processedAt": now - dt.timedelta(minutes=3),
+            "status": "processed",
+            "eventCount": 1000,
+        }
+    )
+    repo.db.raw_reports.insert_one(
+        {
+            "_id": "chunk-2",
+            "source": "ual",
+            "payload": {
+                "author": "Evgeniy Dotsenko",
+                "projectId": "Bike Rush 2",
+                "logicalReportId": "logical-queue",
+                "chunkIndex": 2,
+                "chunkCount": 4,
+                "chunkEventCount": 1000,
+                "totalEventCount": 3500,
+            },
+            "receivedAt": now - dt.timedelta(minutes=2),
+            "queuedAt": now - dt.timedelta(minutes=2),
+            "processingStartedAt": now - dt.timedelta(minutes=1),
+            "status": "processing",
+            "attempts": 1,
+        }
+    )
+
+    payload = repo.get_reports_queue_status()
+    row = next(row for row in payload["recentReports"] if row["id"] == "logical-queue")
+
+    assert row["kind"] == "chunked"
+    assert row["status"] == "processing"
+    assert row["chunksReceived"] == 2
+    assert row["chunksProcessed"] == 1
+    assert row["chunkCount"] == 4
+    assert row["eventsReceived"] == 2000
+    assert len(row["chunks"]) == 2
+    assert {chunk["status"] for chunk in row["chunks"]} == {"processed", "processing"}
+
+
 def test_server_reboot_schedules_delayed_systemd_restart(monkeypatch) -> None:
     calls = []
 

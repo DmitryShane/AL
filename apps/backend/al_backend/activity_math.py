@@ -70,6 +70,7 @@ RAW_ACTIVITY_EVENT_TYPES = {
     "selection",
     "select",
     "scene_saved",
+    "scene_touched",
     "asset_saved",
     "prefab_saved",
     "undo_redo",
@@ -611,7 +612,7 @@ def _activity_count_type(event_type: str) -> str:
 def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
     event_type = str(event.get("eventType") or "")
 
-    if event_type not in {"prefab_saved", "asset_saved", "scene_saved", "file_saved"}:
+    if event_type not in {"prefab_saved", "asset_saved", "scene_saved", "scene_touched", "file_saved"}:
         return None
 
     metadata = event.get("metadata") or {}
@@ -628,6 +629,8 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
 
         if not path:
             return None
+    elif event_type == "scene_touched":
+        return None
 
     lower_path = path.lower()
 
@@ -637,7 +640,7 @@ def _saved_prefab_delta(event: dict[str, Any]) -> dict[str, Any] | None:
 
         if event_type == "prefab_saved" and not lower_path.endswith(".prefab"):
             return None
-        if event_type == "scene_saved" and not lower_path.endswith(".unity"):
+        if event_type in {"scene_saved", "scene_touched"} and not lower_path.endswith(".unity"):
             return None
         if event_type == "asset_saved" and not any(lower_path.endswith(extension) for extension in UAL_SAVED_FILE_EXTENSIONS):
             return None

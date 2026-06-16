@@ -528,6 +528,103 @@ def _event_payload(event_count: int) -> dict:
         "events": events,
     }
 
+
+def _chunk_payload(logical_report_id: str, chunk_index: int, chunk_count: int, events: list[dict], total_event_count: int) -> dict:
+    payload = _event_payload(0)
+    payload.update(
+        {
+            "logicalReportId": logical_report_id,
+            "chunkIndex": chunk_index,
+            "chunkCount": chunk_count,
+            "chunkEventCount": len(events),
+            "totalEventCount": total_event_count,
+            "events": events,
+        }
+    )
+    return payload
+
+
+def test_chunked_unity_report_waits_until_all_chunks_before_rows():
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    payload = _event_payload(3500)
+    chunks = [
+        payload["events"][0:1000],
+        payload["events"][1000:2000],
+        payload["events"][2000:3000],
+        payload["events"][3000:3500],
+    ]
+
+    for index in (2, 1, 3):
+        report_id = repo.queue_decoded_report(
+            source="ual",
+            plugin_version="0.1.12",
+            encrypted_packet=f"packet-{index}",
+            challenge_id=f"challenge-{index}",
+            device_id="device-queue",
+            payload=_chunk_payload("logical-1", index, 4, chunks[index - 1], 3500),
+        )
+        assert repo.process_queued_report(report_id)
+
+    assert len(repo.db.raw_report_chunks.items) == 3
+    assert repo.db.raw_event_batches.items == []
+    assert repo.db.raw_activity_events.items == []
+    assert repo.db.report_rows.items == []
+    queue_status = repo.get_reports_queue_status()
+    chunk_row = next(row for row in queue_status["recentReports"] if row["id"] == "logical-1")
+    assert chunk_row["status"] == "receiving"
+    assert chunk_row["chunksReceived"] == 3
+    assert chunk_row["chunkCount"] == 4
+    assert len(chunk_row["chunks"]) == 3
+
+    final_report_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.12",
+        encrypted_packet="packet-4",
+        challenge_id="challenge-4",
+        device_id="device-queue",
+        payload=_chunk_payload("logical-1", 4, 4, chunks[3], 3500),
+    )
+    assert repo.process_queued_report(final_report_id)
+
+    assert len(repo.db.raw_event_batches.items) == 1
+    assert repo.db.raw_event_batches.items[0]["rawReportId"] == "logical-1"
+    assert repo.db.raw_event_batches.items[0]["eventCount"] == 3500
+    assert len(repo.db.raw_activity_events.items) == 3500
+    assert len(repo.db.report_rows.items) == 1
+    queue_status = repo.get_reports_queue_status()
+    chunk_row = next(row for row in queue_status["recentReports"] if row["id"] == "logical-1")
+    assert chunk_row["status"] == "processed"
+    assert chunk_row["chunksReceived"] == 4
+    assert chunk_row["chunksProcessed"] == 4
+    assert chunk_row["eventsReceived"] == 3500
+
+
+def test_chunked_unity_report_duplicate_chunk_does_not_duplicate_events():
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    payload = _event_payload(3)
+    chunk = _chunk_payload("logical-dup", 1, 2, payload["events"][:2], 3)
+
+    first = repo.queue_decoded_report("ual", "0.1.12", "packet-1", chunk, "challenge-1", "device-queue")
+    duplicate = repo.queue_decoded_report("ual", "0.1.12", "packet-dup", chunk, "challenge-dup", "device-queue")
+    second = repo.queue_decoded_report(
+        "ual",
+        "0.1.12",
+        "packet-2",
+        _chunk_payload("logical-dup", 2, 2, payload["events"][2:], 3),
+        "challenge-2",
+        "device-queue",
+    )
+
+    assert repo.process_queued_report(first)
+    assert repo.process_queued_report(duplicate)
+    assert repo.process_queued_report(second)
+
+    assert len(repo.db.raw_report_chunks.items) == 2
+    assert len(repo.db.raw_activity_events.items) == 3
+    assert len(repo.db.report_rows.items) == 1
+
 def test_deleted_author_profile_blocks_plugin_config_profile_recreation():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
@@ -1439,6 +1536,65 @@ def test_device_summary_uses_application_name_as_saved_item():
     assert source_group["savedPrefabs"] == [
         {"path": "device:bike rush 2", "name": "Bike Rush 2", "projectId": "Bike Rush 2", "saveCount": 3}
     ]
+
+
+def test_unity_scene_touched_appears_in_activity_summary_saved_files():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "bike-rush-2",
+            "deviceId": "mac-mini",
+            "date": "2026-05-05",
+            "eventType": "selection",
+            "occurredAtUtc": "2026-05-05T09:59:00Z",
+            "occurredAtLocal": "2026-05-05T11:59:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 5, 9, 59, 1, tzinfo=dt.UTC),
+        }
+    )
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "bike-rush-2",
+            "deviceId": "mac-mini",
+            "date": "2026-05-05",
+            "eventType": "scene_touched",
+            "occurredAtUtc": "2026-05-05T10:00:00Z",
+            "occurredAtLocal": "2026-05-05T12:00:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 5, 10, 0, 1, tzinfo=dt.UTC),
+            "metadata": {
+                "path": "Assets/Project/Levels/Level.011/Level.011.unity",
+                "name": "Level.011",
+                "state": "scene_activity",
+            },
+        }
+    )
+    repo._apply_raw_event_to_aggregates(
+        {
+            "source": "ual",
+            "author": "Future Artist",
+            "projectId": "bike-rush-2",
+            "deviceId": "mac-mini",
+            "date": "2026-05-05",
+            "eventType": "editor_input",
+            "occurredAtUtc": "2026-05-05T10:01:00Z",
+            "occurredAtLocal": "2026-05-05T12:01:00+02:00",
+            "receivedAt": dt.datetime(2026, 5, 5, 10, 1, 1, tzinfo=dt.UTC),
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-05", end_date="2026-05-05")
+    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Future Artist")
+    expected = {"path": "Assets/Project/Levels/Level.011/Level.011.unity", "name": "Level.011", "saveCount": 1}
+
+    assert deltas["savedPrefabDeltas"] == [expected]
+    assert expected in author["savedPrefabs"]
+    assert next(item for item in author["savedPrefabsBySource"] if item["source"] == "ual")["savedPrefabs"] == [expected]
+
 
 def test_device_report_author_is_stable_for_same_device_id():
     repo = fake_repository()
@@ -3418,6 +3574,48 @@ def test_unity_scene_saved_is_counted_as_saved_file():
         "name": "Level.005",
         "saveCount": 1,
     }
+
+
+def test_unity_scene_touched_is_counted_as_saved_file():
+    saved = _saved_prefab_delta(
+        {
+            "source": "ual",
+            "eventType": "scene_touched",
+            "metadata": {
+                "path": "Assets/Project/Levels/Level.011/Level.011.unity",
+                "name": "Level.011",
+            },
+        }
+    )
+
+    assert saved == {
+        "path": "Assets/Project/Levels/Level.011/Level.011.unity",
+        "name": "Level.011",
+        "saveCount": 1,
+    }
+
+
+def test_unity_scene_touched_requires_unity_scene_path():
+    assert (
+        _saved_prefab_delta(
+            {
+                "source": "ual",
+                "eventType": "scene_touched",
+                "metadata": {"path": "Assets/Project/Levels/Level.011/Level.011.prefab", "name": "Level.011"},
+            }
+        )
+        is None
+    )
+    assert (
+        _saved_prefab_delta(
+            {
+                "source": "vsc",
+                "eventType": "scene_touched",
+                "metadata": {"path": "Assets/Project/Levels/Level.011/Level.011.unity", "name": "Level.011"},
+            }
+        )
+        is None
+    )
 
 
 def test_unity_asset_saved_is_not_counted_as_saved_file():

@@ -78,6 +78,7 @@ def _is_unity_saved_file_event(event: dict[str, Any]) -> bool:
         "asset_saved",
         "prefab_saved",
         "scene_saved",
+        "scene_touched",
     }
 
 
@@ -319,6 +320,18 @@ class ActivityRawEventAccountingMixin:
         if is_inside_status_offline:
             is_activity = False
             is_time_accounting_activity = False
+
+        if event_type == "events_dropped":
+            if not first_activity_at:
+                first_activity_at = occurred_at
+            if not author_first_activity_at:
+                author_first_activity_at = occurred_at
+            last_accounting_at = occurred_at
+            last_accounting_local_at = occurred_local_at
+            last_accounting_source = current_source
+            author_last_accounting_at = occurred_at
+            author_last_accounting_local_at = occurred_local_at
+            author_last_accounting_scope = current_scope
 
         if is_time_accounting_activity and event_type == "hold":
             hold_deltas = self._device_hold_duration_deltas(
@@ -609,7 +622,7 @@ class ActivityRawEventAccountingMixin:
                     author_last_accounting_scope = current_scope
 
         suppress_rebuild_notifications = self._notifications_suppressed_for_rebuild()
-        saved_like_event = event_type in {"asset_saved", "prefab_saved", "scene_saved", "file_saved"}
+        saved_like_event = event_type in {"asset_saved", "prefab_saved", "scene_saved", "scene_touched", "file_saved"}
         late_overtime_breakdown_event = bool(
             overtime_window_kind is not None
             and not saved_like_event
@@ -629,7 +642,7 @@ class ActivityRawEventAccountingMixin:
         saved_prefab = None if is_inside_status_offline else _saved_prefab_delta(event)
         suppress_activity_count = (
             current_source == "ual"
-            and event_type in {"asset_saved", "prefab_saved", "scene_saved"}
+            and event_type in {"asset_saved", "prefab_saved", "scene_saved", "scene_touched"}
             and saved_prefab is None
             and not suppress_rebuild_notifications
         )
