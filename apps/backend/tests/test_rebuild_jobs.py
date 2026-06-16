@@ -267,3 +267,109 @@ def test_rebuild_raw_event_batch_accounting_finishes_when_event_processing_fails
         repo._rebuild_aggregates_from_sources({"2026-06-16"}, {"Future Artist"})
 
     assert finish_count == 1
+
+
+def test_raw_event_batch_accounting_caches_author_day_context_lookups():
+    repo = fake_repository()
+    author = "Future Artist"
+    day = "2026-06-16"
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    repo.db.day_sessions.insert_one({"rawAuthor": author, "date": day, "startedAt": dt.datetime(2026, 6, 16, 9, 0, tzinfo=dt.UTC)})
+    repo.db.status_events.insert_one(
+        {
+            "rawAuthor": author,
+            "date": day,
+            "statusEventType": "offline",
+            "reason": "reports_stopped",
+            "transitionAt": dt.datetime(2026, 6, 16, 9, 30, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.break_events.insert_one(
+        {
+            "rawAuthor": author,
+            "date": "2026-06-15",
+            "eventType": "offline",
+            "timestamp": dt.datetime(2026, 6, 15, 23, 59, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": author,
+            "date": day,
+            "source": "ual",
+            "overtimeActiveSeconds": 60,
+            "hourlyActivity": [{"hour": 0, "overtimeActiveSeconds": 60}],
+        }
+    )
+    calls = {"day_sessions_find_one": 0, "status_events_find": 0, "break_events_find": 0, "daily_author_activity_find": 0}
+    original_day_session_find_one = repo.db.day_sessions.find_one
+    original_status_events_find = repo.db.status_events.find
+    original_break_events_find = repo.db.break_events.find
+    original_daily_find = repo.db.daily_author_activity.find
+
+    def counting_day_session_find_one(*args, **kwargs):
+        calls["day_sessions_find_one"] += 1
+        return original_day_session_find_one(*args, **kwargs)
+
+    def counting_status_events_find(*args, **kwargs):
+        calls["status_events_find"] += 1
+        return original_status_events_find(*args, **kwargs)
+
+    def counting_break_events_find(*args, **kwargs):
+        calls["break_events_find"] += 1
+        return original_break_events_find(*args, **kwargs)
+
+    def counting_daily_find(*args, **kwargs):
+        calls["daily_author_activity_find"] += 1
+        return original_daily_find(*args, **kwargs)
+
+    repo.db.day_sessions.find_one = counting_day_session_find_one
+    repo.db.status_events.find = counting_status_events_find
+    repo.db.break_events.find = counting_break_events_find
+    repo.db.daily_author_activity.find = counting_daily_find
+    event = {
+        "author": author,
+        "date": day,
+        "source": "ual",
+        "timeZoneId": "UTC",
+        "occurredAtUtc": event_at,
+        "receivedAt": event_at,
+    }
+
+    repo._begin_raw_event_batch_accounting([event, event])
+    try:
+        for _ in range(2):
+            assert repo._is_waiting_for_first_workday_activity(event, None, event_at) is True
+            repo._status_interval_context_for_event(event, event_at, event_at)
+            assert repo._has_reports_stopped_gap_overlap(event, event_at, event_at + dt.timedelta(minutes=5)) is True
+            repo._suppress_night_overtime_for_midnight_offline_carryover(
+                {**event, "occurredAtUtc": dt.datetime(2026, 6, 16, 0, 5, tzinfo=dt.UTC)}
+            )
+            repo._is_waiting_for_telegram_online_after_night_overtime(event, author, day, event_at)
+    finally:
+        repo._finish_raw_event_batch_accounting()
+
+    assert calls == {
+        "day_sessions_find_one": 1,
+        "status_events_find": 1,
+        "break_events_find": 1,
+        "daily_author_activity_find": 1,
+    }
+
+
+def test_raw_event_batch_accounting_caches_repeated_time_zone_updates():
+    repo = fake_repository()
+    calls = []
+    repo.update_author_time_zone = lambda raw_author, time_zone_id, time_zone_display_name=None: calls.append(
+        (raw_author, time_zone_id, time_zone_display_name)
+    )
+
+    repo._begin_raw_event_batch_accounting([])
+    try:
+        repo._update_author_time_zone_for_raw_event_accounting("Future Artist", "UTC", "UTC")
+        repo._update_author_time_zone_for_raw_event_accounting("Future Artist", "UTC", "UTC")
+        repo._update_author_time_zone_for_raw_event_accounting("Future Artist", "Europe/Madrid", "CET")
+    finally:
+        repo._finish_raw_event_batch_accounting()
+
+    assert calls == [("Future Artist", "UTC", "UTC"), ("Future Artist", "Europe/Madrid", "CET")]

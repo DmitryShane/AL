@@ -119,6 +119,12 @@ class ActivityRawEventAccountingMixin:
             "dirtyStates": set(),
             "daily": {},
             "dirtyDaily": set(),
+            "daySessions": {},
+            "statusEvents": {},
+            "reportsStoppedEvents": {},
+            "breakOnlineOfflineEvents": {},
+            "dailyOvertimeRows": {},
+            "authorTimeZones": set(),
         }
 
     def _finish_raw_event_batch_accounting(self) -> None:
@@ -208,6 +214,124 @@ class ActivityRawEventAccountingMixin:
 
         context.setdefault("daily", {})[daily_key] = dict(doc)
         context.setdefault("dirtyDaily", set()).add(daily_key)
+
+    def _batch_day_session_doc(self, raw_author: str, day_date: str) -> dict[str, Any]:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        query = {"rawAuthor": raw_author, "date": day_date}
+        projection = {"_id": 0, "startedAt": 1}
+
+        if not context:
+            return self.db.day_sessions.find_one(query, projection) or {}
+
+        cache = context.setdefault("daySessions", {})
+        cache_key = (raw_author, day_date)
+
+        if cache_key not in cache:
+            cache[cache_key] = self.db.day_sessions.find_one(query, projection) or {}
+
+        return dict(cache.get(cache_key) or {})
+
+    def _batch_status_events(self, raw_author: str, day_date: str) -> list[dict[str, Any]]:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        query = {"rawAuthor": raw_author, "date": day_date}
+        projection = {"_id": 0, "statusEventType": 1, "transitionAt": 1, "timeZoneId": 1, "reason": 1}
+
+        if not context:
+            return list(self.db.status_events.find(query, projection))
+
+        cache = context.setdefault("statusEvents", {})
+        cache_key = (raw_author, day_date)
+
+        if cache_key not in cache:
+            cache[cache_key] = list(self.db.status_events.find(query, projection))
+
+        return [dict(item) for item in cache.get(cache_key) or []]
+
+    def _batch_reports_stopped_events(self, raw_author: str, day_date: str) -> list[dict[str, Any]]:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        query = {
+            "rawAuthor": raw_author,
+            "date": day_date,
+            "reason": {"$in": ["reports_stopped", "reports_resumed"]},
+        }
+        projection = {"_id": 0, "statusEventType": 1, "transitionAt": 1, "reason": 1}
+
+        if not context:
+            return list(self.db.status_events.find(query, projection))
+
+        cache = context.setdefault("reportsStoppedEvents", {})
+        cache_key = (raw_author, day_date)
+
+        if cache_key not in cache:
+            status_events = self._batch_status_events(raw_author, day_date)
+            cache[cache_key] = [
+                {
+                    "statusEventType": item.get("statusEventType"),
+                    "transitionAt": item.get("transitionAt"),
+                    "reason": item.get("reason"),
+                }
+                for item in status_events
+                if item.get("reason") in {"reports_stopped", "reports_resumed"}
+            ]
+
+        return [dict(item) for item in cache.get(cache_key) or []]
+
+    def _batch_break_online_offline_events(self, raw_author: str, occurred_at: dt.datetime) -> list[dict[str, Any]]:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        projection = {"_id": 0, "eventType": 1, "timestamp": 1, "date": 1}
+
+        if not context:
+            query = {
+                "rawAuthor": raw_author,
+                "eventType": {"$in": ["online", "offline"]},
+                "timestamp": {"$lte": occurred_at},
+            }
+            return list(self.db.break_events.find(query, projection))
+
+        query = {"rawAuthor": raw_author, "eventType": {"$in": ["online", "offline"]}}
+        cache = context.setdefault("breakOnlineOfflineEvents", {})
+
+        if raw_author not in cache:
+            cache[raw_author] = list(self.db.break_events.find(query, projection))
+
+        return [dict(item) for item in cache.get(raw_author) or []]
+
+    def _batch_daily_overtime_rows(self, raw_author: str, day_date: str) -> list[dict[str, Any]]:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        query = {"author": raw_author, "date": day_date, "overtimeActiveSeconds": {"$gt": 0}}
+        projection = {"_id": 0, "source": 1, "hourlyActivity": 1, "overtimeActiveSeconds": 1}
+
+        if not context:
+            return list(self.db.daily_author_activity.find(query, projection))
+
+        cache = context.setdefault("dailyOvertimeRows", {})
+        cache_key = (raw_author, day_date)
+
+        if cache_key not in cache:
+            cache[cache_key] = list(self.db.daily_author_activity.find(query, projection))
+
+        return [dict(item) for item in cache.get(cache_key) or []]
+
+    def _update_author_time_zone_for_raw_event_accounting(
+        self,
+        raw_author: str,
+        time_zone_id: Any,
+        time_zone_display_name: Any | None = None,
+    ) -> None:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+
+        if not context:
+            composed(self).update_author_time_zone(raw_author, time_zone_id, time_zone_display_name)
+            return
+
+        cache = context.setdefault("authorTimeZones", set())
+        cache_key = (str(raw_author or ""), str(time_zone_id or ""), str(time_zone_display_name or ""))
+
+        if cache_key in cache:
+            return
+
+        cache.add(cache_key)
+        composed(self).update_author_time_zone(raw_author, time_zone_id, time_zone_display_name)
 
     def _apply_snapshot_to_aggregates(self, snapshot: dict[str, Any]) -> None:
         snapshot = dict(snapshot)
@@ -333,7 +457,11 @@ class ActivityRawEventAccountingMixin:
     def _apply_raw_event_to_aggregates(self, event: dict[str, Any]) -> dict[str, Any]:
         event = dict(event)
         event["author"] = composed(self).resolve_author_alias(event.get("author") or "Unknown User")
-        composed(self).update_author_time_zone(event.get("author") or "Unknown User", event.get("timeZoneId"), event.get("timeZoneDisplayName"))
+        composed(self)._update_author_time_zone_for_raw_event_accounting(
+            event.get("author") or "Unknown User",
+            event.get("timeZoneId"),
+            event.get("timeZoneDisplayName"),
+        )
         state_key = _raw_event_session_key(event)
         previous = self._batch_state_doc(state_key)
         if previous is None:
@@ -1146,10 +1274,7 @@ class ActivityRawEventAccountingMixin:
         if not raw_author or not day_date:
             return None
 
-        session = self.db.day_sessions.find_one(
-            {"rawAuthor": raw_author, "date": day_date},
-            {"_id": 0, "startedAt": 1},
-        )
+        session = self._batch_day_session_doc(raw_author, day_date)
         started_at = _coerce_datetime((session or {}).get("startedAt"))
 
         if started_at and start < started_at < end:
@@ -1178,10 +1303,7 @@ class ActivityRawEventAccountingMixin:
         if not raw_author or not day_date:
             return None
 
-        session = self.db.day_sessions.find_one(
-            {"rawAuthor": raw_author, "date": day_date},
-            {"_id": 0, "startedAt": 1},
-        )
+        session = self._batch_day_session_doc(raw_author, day_date)
         started_at = _coerce_datetime((session or {}).get("startedAt"))
 
         if started_at:
@@ -1204,10 +1326,7 @@ class ActivityRawEventAccountingMixin:
         if not raw_author or not day_date:
             return False
 
-        session = self.db.day_sessions.find_one(
-            {"rawAuthor": raw_author, "date": day_date},
-            {"_id": 0, "startedAt": 1},
-        )
+        session = self._batch_day_session_doc(raw_author, day_date)
         started_at = _coerce_datetime((session or {}).get("startedAt"))
 
         if started_at:
@@ -1245,14 +1364,7 @@ class ActivityRawEventAccountingMixin:
         if at < night_end_at:
             return False
 
-        for daily in self.db.daily_author_activity.find(
-            {
-                "author": raw_author,
-                "date": day_date,
-                "overtimeActiveSeconds": {"$gt": 0},
-            },
-            {"_id": 0, "source": 1, "hourlyActivity": 1, "overtimeActiveSeconds": 1},
-        ):
+        for daily in self._batch_daily_overtime_rows(raw_author, day_date):
             for hour in daily.get("hourlyActivity") or []:
                 hour_start_at = dt.datetime.combine(day, dt.time(hour=int(hour.get("hour") or 0)), zone).astimezone(dt.UTC)
                 hour_end_at = hour_start_at + dt.timedelta(hours=1)
@@ -1287,10 +1399,7 @@ class ActivityRawEventAccountingMixin:
         if not raw_author or not day_date:
             return False
 
-        session = self.db.day_sessions.find_one(
-            {"rawAuthor": raw_author, "date": day_date},
-            {"_id": 0, "startedAt": 1},
-        )
+        session = self._batch_day_session_doc(raw_author, day_date)
         started_at = _coerce_datetime((session or {}).get("startedAt"))
 
         return bool(started_at and occurred_at < started_at <= received_at)
@@ -1306,17 +1415,13 @@ class ActivityRawEventAccountingMixin:
         latest_event: dict[str, Any] | None = None
         latest_timestamp: dt.datetime | None = None
 
-        for current in self.db.break_events.find(
-            {
-                "rawAuthor": raw_author,
-                "eventType": {"$in": ["online", "offline"]},
-                "timestamp": {"$lte": occurred_at},
-            },
-            {"_id": 0, "eventType": 1, "timestamp": 1, "date": 1},
-        ):
+        for current in self._batch_break_online_offline_events(raw_author, occurred_at):
             timestamp = _coerce_datetime(current.get("timestamp"))
 
             if not timestamp:
+                continue
+
+            if timestamp > occurred_at:
                 continue
 
             if latest_timestamp is None or timestamp > latest_timestamp:
@@ -1361,15 +1466,11 @@ class ActivityRawEventAccountingMixin:
         offline_at: dt.datetime | None = None
 
         for status_event in sorted(
-            self.db.status_events.find(
-                {
-                    "rawAuthor": raw_author,
-                    "date": day_date,
-                    "reason": {"$in": ["reports_stopped", "reports_resumed"]},
-                    "transitionAt": {"$lte": end},
-                },
-                {"_id": 0, "statusEventType": 1, "transitionAt": 1, "reason": 1},
-            ),
+            [
+                status_event
+                for status_event in self._batch_reports_stopped_events(raw_author, day_date)
+                if (_coerce_datetime(status_event.get("transitionAt")) or dt.datetime.max.replace(tzinfo=dt.UTC)) <= end
+            ],
             key=lambda item: _coerce_datetime(item.get("transitionAt")) or dt.datetime.min.replace(tzinfo=dt.UTC),
         ):
             transition_at = _coerce_datetime(status_event.get("transitionAt"))
@@ -1406,12 +1507,7 @@ class ActivityRawEventAccountingMixin:
         if not raw_author or not day_date or not occurred_at:
             return None
 
-        status_events = list(
-            self.db.status_events.find(
-                {"rawAuthor": raw_author, "date": day_date},
-                {"_id": 0, "statusEventType": 1, "transitionAt": 1, "timeZoneId": 1, "reason": 1},
-            )
-        )
+        status_events = self._batch_status_events(raw_author, day_date)
         return status_interval_context_for_event(status_events, occurred_at, received_at)
 
     def _update_daily_author_activity(self, snapshot: dict[str, Any], deltas: dict[str, Any]) -> None:
