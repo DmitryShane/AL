@@ -10,6 +10,7 @@ from al_backend.rebuild_jobs import (
     mark_stale_rebuild_jobs_failed,
 )
 from al_backend.routers.authors import _active_rebuild_job, rebuild_author_activity
+from al_backend.services.raw_event_batching import RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE
 from tests.fakes import fake_repository
 
 
@@ -187,3 +188,82 @@ def test_scoped_rebuild_reads_only_matching_raw_event_batches():
     repo._rebuild_aggregates_from_sources({"2026-06-16"}, {"Future Artist"})
 
     assert batch_find_queries == [{"batchId": {"$in": ["matching-batch"]}}]
+
+
+def test_rebuild_raw_events_uses_batch_accounting_and_reports_progress():
+    repo = fake_repository()
+    total_events = RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE + 2
+    for index in range(total_events):
+        repo.db.raw_activity_events.insert_one(
+            {
+                "eventId": f"event-{index}",
+                "batchId": f"batch-{index}",
+                "author": "Future Artist",
+                "date": "2026-06-16",
+                "eventType": "focus",
+                "occurredAtUtc": dt.datetime(2026, 6, 16, 10, 0, index % 60, tzinfo=dt.UTC),
+                "receivedAt": dt.datetime(2026, 6, 16, 10, 0, index % 60, tzinfo=dt.UTC),
+            }
+        )
+
+    begin_batch_sizes = []
+    finish_count = 0
+    progress_events = []
+
+    def begin_batch(events):
+        begin_batch_sizes.append(len(events))
+
+    def finish_batch():
+        nonlocal finish_count
+        finish_count += 1
+
+    repo._begin_raw_event_batch_accounting = begin_batch
+    repo._finish_raw_event_batch_accounting = finish_batch
+    repo._apply_raw_event_to_aggregates = lambda event: {}
+    repo._build_event_batch_report_rows = lambda batch, delta_items, cutoff=None: []
+    repo._materialize_status_report_rows = lambda: None
+
+    repo._rebuild_aggregates_from_sources(
+        {"2026-06-16"},
+        {"Future Artist"},
+        progress_callback=lambda phase, current, total: progress_events.append((phase, current, total)),
+    )
+
+    assert begin_batch_sizes == [RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE, 2]
+    assert finish_count == 2
+    assert ("Rebuilding raw activity events", total_events, total_events) in progress_events
+
+
+def test_rebuild_raw_event_batch_accounting_finishes_when_event_processing_fails():
+    repo = fake_repository()
+    for index in range(2):
+        repo.db.raw_activity_events.insert_one(
+            {
+                "eventId": f"event-{index}",
+                "batchId": f"batch-{index}",
+                "author": "Future Artist",
+                "date": "2026-06-16",
+                "eventType": "focus",
+                "occurredAtUtc": dt.datetime(2026, 6, 16, 10, 0, index, tzinfo=dt.UTC),
+                "receivedAt": dt.datetime(2026, 6, 16, 10, 0, index, tzinfo=dt.UTC),
+            }
+        )
+
+    finish_count = 0
+
+    def finish_batch():
+        nonlocal finish_count
+        finish_count += 1
+
+    def fail_apply(event):
+        raise RuntimeError("boom")
+
+    repo._begin_raw_event_batch_accounting = lambda events: None
+    repo._finish_raw_event_batch_accounting = finish_batch
+    repo._apply_raw_event_to_aggregates = fail_apply
+    repo._materialize_status_report_rows = lambda: None
+
+    with pytest.raises(RuntimeError, match="boom"):
+        repo._rebuild_aggregates_from_sources({"2026-06-16"}, {"Future Artist"})
+
+    assert finish_count == 1

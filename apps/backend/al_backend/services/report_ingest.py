@@ -11,10 +11,10 @@ from ..activity_math import *
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 from .report_chunks import assembled_chunk_metadata, chunk_metadata
+from .raw_event_batching import RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE
 
 
 LOGGER = logging.getLogger("al_backend.report_ingest")
-ASSEMBLED_REPORT_EVENT_SUB_BATCH_SIZE = 500
 
 
 def _has_count_or_file_delta(deltas: dict[str, Any]) -> bool:
@@ -851,8 +851,8 @@ class ReportIngestService(MongoComposableMixin):
                 },
             )
 
-        for offset in range(0, len(events_to_account), ASSEMBLED_REPORT_EVENT_SUB_BATCH_SIZE):
-            sub_batch = events_to_account[offset : offset + ASSEMBLED_REPORT_EVENT_SUB_BATCH_SIZE]
+        for offset in range(0, len(events_to_account), RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE):
+            sub_batch = events_to_account[offset : offset + RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE]
             composed(self)._begin_raw_event_batch_accounting(sub_batch)
             sub_batch_dates: set[str] = set()
             try:

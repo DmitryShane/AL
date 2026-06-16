@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from ..activity_math import *
 from ..backend_composable_host import composed
+from .raw_event_batching import RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE
 
 
 def _has_count_or_file_delta(deltas: dict[str, Any]) -> bool:
@@ -397,19 +398,37 @@ class ActivityAggregationRebuildMixin:
         raw_events = self.db.raw_activity_events.find(raw_event_query).sort("occurredAtUtc", ASCENDING)
         raw_event_total = self.db.raw_activity_events.count_documents(raw_event_query)
         raw_event_count = 0
+        raw_event_batch: list[dict[str, Any]] = []
+
+        def process_raw_event_batch(events: list[dict[str, Any]]) -> None:
+            nonlocal raw_event_count
+            if not events:
+                return
+
+            composed(self)._begin_raw_event_batch_accounting(events)
+            try:
+                for event in events:
+                    deltas = self._apply_raw_event_to_aggregates(event)
+                    raw_event_count += 1
+                    self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", raw_event_count, raw_event_total)
+                    batch_id = str(event.get("batchId") or "")
+
+                    if batch_id and ((full_rebuild and batch_id in batch_ids) or not full_rebuild):
+                        batch_delta_items = batch_delta_items_by_batch_id.setdefault(batch_id, [])
+                        batch_delta_items.append((event, deltas))
+                        continue
+
+                    add_orphan_report_row(event, deltas)
+            finally:
+                composed(self)._finish_raw_event_batch_accounting()
 
         for event in raw_events:
-            deltas = self._apply_raw_event_to_aggregates(event)
-            raw_event_count += 1
-            self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", raw_event_count, raw_event_total)
-            batch_id = str(event.get("batchId") or "")
+            raw_event_batch.append(event)
+            if len(raw_event_batch) >= RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE:
+                process_raw_event_batch(raw_event_batch)
+                raw_event_batch = []
 
-            if batch_id and ((full_rebuild and batch_id in batch_ids) or not full_rebuild):
-                batch_delta_items = batch_delta_items_by_batch_id.setdefault(batch_id, [])
-                batch_delta_items.append((event, deltas))
-                continue
-
-            add_orphan_report_row(event, deltas)
+        process_raw_event_batch(raw_event_batch)
 
         if raw_event_total == 0:
             self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", 0, 0)
