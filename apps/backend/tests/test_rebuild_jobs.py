@@ -10,9 +10,26 @@ from al_backend.rebuild_jobs import (
     mark_stale_rebuild_jobs_failed,
 )
 from al_backend.routers.authors import _active_rebuild_job, rebuild_author_activity
+from al_backend.services import activity_raw_event_accounting as raw_accounting_module
 from al_backend.services import activity_aggregation_rebuild as rebuild_module
 from al_backend.services.raw_event_batching import RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE, REBUILD_CURSOR_BATCH_SIZE, REBUILD_RAW_FLUSH_BATCHES
 from tests.fakes import fake_repository
+
+
+def _normalize_docs(items):
+    def normalize(value):
+        if isinstance(value, dt.datetime):
+            return value.isoformat()
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        if isinstance(value, dict):
+            return {key: normalize(value[key]) for key in sorted(value)}
+        return value
+
+    return sorted(
+        [normalize({key: value for key, value in item.items() if key != "_id"}) for item in items],
+        key=lambda item: repr(item),
+    )
 
 
 def test_fresh_running_rebuild_job_blocks_new_rebuild():
@@ -410,6 +427,115 @@ def test_rebuild_raw_phase_records_timing_diagnostics():
     assert "rawEventAccounting" in job["rawTiming"]
     assert "stateFlush" in job["rawTiming"]
     assert job["rawEventsPerSecond"] > 0
+    assert job["rawFastAccountingEnabled"] is True
+
+
+def test_rebuild_raw_phase_records_slow_event_diagnostics(monkeypatch):
+    repo = fake_repository()
+    job_id = "raw-slow-event-job"
+    repo._active_rebuild_job_id = job_id
+    repo.db.aggregate_rebuild_jobs.insert_one({"jobId": job_id, "status": "running"})
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "event-1",
+            "batchId": "batch-1",
+            "author": "Future Artist",
+            "date": "2026-06-16",
+            "source": "ual",
+            "eventType": "editor_input",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "deviceId": "unity-device",
+            "timeZoneId": "UTC",
+            "occurredAtUtc": event_at,
+            "receivedAt": event_at,
+        }
+    )
+    repo.db.raw_event_batches.insert_one({"batchId": "batch-1", "author": "Future Artist", "source": "ual", "receivedAt": event_at})
+    repo._materialize_status_report_rows = lambda: None
+    monkeypatch.setattr(rebuild_module, "REBUILD_SLOW_EVENT_THRESHOLD_MS", 1)
+    original_apply = repo._apply_raw_event_to_aggregates
+
+    def slow_apply(event):
+        import time
+
+        time.sleep(0.002)
+        return original_apply(event)
+
+    repo._apply_raw_event_to_aggregates = slow_apply
+
+    repo._rebuild_aggregates_from_sources({"2026-06-16"}, {"Future Artist"})
+
+    job = repo.db.aggregate_rebuild_jobs.find_one({"jobId": job_id})
+    assert job["status"] == "running"
+    assert job["rawSlowEvents"]
+    assert job["rawSlowEvents"][0]["eventType"] == "editor_input"
+    assert job["rawSlowEvents"][0]["durationMs"] >= 1
+
+
+def test_fast_raw_accounting_matches_legacy_rebuild_outputs(monkeypatch):
+    author = "Denis Ostrovskiy"
+    day = "2026-06-16"
+    base_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+
+    def seed(repo):
+        repo.db.raw_event_batches.insert_one(
+            {
+                "batchId": "batch-1",
+                "author": author,
+                "source": "ual",
+                "projectId": "bike-rush-2",
+                "receivedAt": base_at + dt.timedelta(minutes=12),
+            }
+        )
+        for index, (event_type, offset_seconds, metadata) in enumerate(
+            [
+                ("focus", 0, {}),
+                ("editor_input", 60, {"coalescedEventCount": 3}),
+                ("click", 120, {}),
+                ("scene_view_navigation", 180, {"navigationDurationSeconds": 30, "firstNavigationAtUtc": (base_at + dt.timedelta(seconds=150)).isoformat()}),
+                ("heartbeat", 900, {}),
+            ],
+            start=1,
+        ):
+            occurred_at = base_at + dt.timedelta(seconds=offset_seconds)
+            repo.db.raw_activity_events.insert_one(
+                {
+                    "eventId": f"event-{index}",
+                    "batchId": "batch-1",
+                    "author": author,
+                    "authorEmail": "vedamir.infinum@gmail.com",
+                    "date": day,
+                    "source": "ual",
+                    "eventType": event_type,
+                    "projectId": "bike-rush-2",
+                    "sessionId": "unity-session",
+                    "deviceId": "unity-device",
+                    "timeZoneId": "UTC",
+                    "occurredAtUtc": occurred_at,
+                    "occurredAtLocal": occurred_at.isoformat(),
+                    "receivedAt": occurred_at,
+                    "metadata": metadata,
+                }
+            )
+
+    def run_with_fast_flag(enabled):
+        monkeypatch.setattr(raw_accounting_module, "REBUILD_FAST_ACCOUNTING_ENABLED", enabled)
+        repo = fake_repository()
+        seed(repo)
+        repo._materialize_status_report_rows = lambda: None
+        repo._rebuild_aggregates_from_sources({day}, {author})
+        return {
+            "report_rows": _normalize_docs(repo.db.report_rows.items),
+            "daily_author_activity": _normalize_docs(repo.db.daily_author_activity.items),
+            "aggregate_session_state": _normalize_docs(repo.db.aggregate_session_state.items),
+        }
+
+    legacy = run_with_fast_flag(False)
+    fast = run_with_fast_flag(True)
+
+    assert fast == legacy
 
 
 def test_coalesced_editor_input_preserves_activity_count():
@@ -531,6 +657,96 @@ def test_raw_event_accounting_without_context_keeps_immediate_writes():
     )
 
     assert calls == {"state_update": 1, "daily_update": 1}
+
+
+def test_fast_raw_event_batch_accounting_defers_daily_merge_until_finish():
+    repo = fake_repository()
+    calls = {"daily_bulk": 0, "daily_update": 0}
+    original_daily_bulk = repo.db.daily_author_activity.bulk_write
+    original_daily_update = repo.db.daily_author_activity.update_one
+
+    def counting_daily_bulk(*args, **kwargs):
+        calls["daily_bulk"] += 1
+        return original_daily_bulk(*args, **kwargs)
+
+    def counting_daily_update(*args, **kwargs):
+        calls["daily_update"] += 1
+        return original_daily_update(*args, **kwargs)
+
+    repo.db.daily_author_activity.bulk_write = counting_daily_bulk
+    repo.db.daily_author_activity.update_one = counting_daily_update
+    repo._begin_raw_event_batch_accounting([])
+    snapshot = {
+        "source": "ual",
+        "author": "Future Artist",
+        "projectId": "bike-rush-2",
+        "date": "2026-06-16",
+        "receivedAt": dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC),
+        "recordedAt": "2026-06-16T10:00:00+00:00",
+    }
+    deltas = {
+        "activeDeltaSeconds": 1,
+        "activeDeltaMicroseconds": 1_000_000,
+        "idleDeltaSeconds": 0,
+        "idleDeltaMicroseconds": 0,
+        "breakDeltaSeconds": 0,
+        "overtimeActiveDeltaSeconds": 0,
+        "overtimeActiveDeltaMicroseconds": 0,
+        "hourlyActivityDelta": [],
+        "activityCountDeltas": [{"type": "editor_input", "count": 2}],
+        "savedPrefabDeltas": [],
+        "overtimeActivityCountDeltas": [],
+        "overtimeSavedPrefabDeltas": [],
+    }
+
+    repo._update_daily_author_activity(snapshot, deltas)
+
+    assert repo.db.daily_author_activity.items == []
+    assert calls == {"daily_bulk": 0, "daily_update": 0}
+
+    repo._finish_raw_event_batch_accounting()
+
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-06-16"})
+    assert calls == {"daily_bulk": 1, "daily_update": 0}
+    assert daily["activeMicroseconds"] == 1_000_000
+    assert daily["activityCounts"] == [{"type": "editor_input", "count": 2}]
+    assert repo._last_raw_event_batch_accounting_stats["rawFastAccountingEnabled"] is True
+    assert repo._last_raw_event_batch_accounting_stats["rawDailyMergeFlushSeconds"] >= 0
+
+
+def test_raw_event_batch_accounting_fast_flag_disabled_keeps_immediate_batch_daily_merge(monkeypatch):
+    monkeypatch.setattr(raw_accounting_module, "REBUILD_FAST_ACCOUNTING_ENABLED", False)
+    repo = fake_repository()
+    repo._begin_raw_event_batch_accounting([])
+    snapshot = {
+        "source": "ual",
+        "author": "Future Artist",
+        "projectId": "bike-rush-2",
+        "date": "2026-06-16",
+        "receivedAt": dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC),
+        "recordedAt": "2026-06-16T10:00:00+00:00",
+    }
+    deltas = {
+        "activeDeltaSeconds": 1,
+        "activeDeltaMicroseconds": 1_000_000,
+        "idleDeltaSeconds": 0,
+        "idleDeltaMicroseconds": 0,
+        "breakDeltaSeconds": 0,
+        "overtimeActiveDeltaSeconds": 0,
+        "overtimeActiveDeltaMicroseconds": 0,
+        "hourlyActivityDelta": [],
+        "activityCountDeltas": [],
+        "savedPrefabDeltas": [],
+        "overtimeActivityCountDeltas": [],
+        "overtimeSavedPrefabDeltas": [],
+    }
+
+    repo._update_daily_author_activity(snapshot, deltas)
+
+    assert repo._raw_event_batch_accounting["pendingDailyDeltas"] == {}
+    assert repo._raw_event_batch_accounting["daily"]
+    repo._finish_raw_event_batch_accounting()
+    assert repo._last_raw_event_batch_accounting_stats["rawFastAccountingEnabled"] is False
 
 
 def test_rebuild_event_batches_do_not_use_live_ingest_batch_builder():

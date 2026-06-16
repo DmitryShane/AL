@@ -16,6 +16,7 @@ from ..overtime_rules import (
     is_vacation_overtime_window,
 )
 from .activity_status_intervals import status_interval_context_for_event
+from .raw_event_batching import REBUILD_FAST_ACCOUNTING_ENABLED
 
 
 MIDNIGHT_OFFLINE_CARRYOVER_SUPPRESSION_SECONDS = 15 * 60
@@ -120,6 +121,10 @@ def _raw_event_activity_count(event: dict[str, Any]) -> int:
         return 1
 
 
+def _raw_event_fast_cache_key(event: dict[str, Any]) -> str:
+    return str(event.get("eventId") or event.get("_id") or id(event))
+
+
 class ActivityRawEventAccountingMixin:
     def _begin_raw_event_batch_accounting(self, events: list[dict[str, Any]]) -> None:
         started_at = time.perf_counter()
@@ -148,10 +153,15 @@ class ActivityRawEventAccountingMixin:
             "vacationMarks": {},
             "overtimeDaySessions": {},
             "authorTimeZones": set(),
+            "fastAccountingEnabled": REBUILD_FAST_ACCOUNTING_ENABLED,
+            "eventDerived": {},
+            "pendingDailyDeltas": {},
+            "pendingDailyOrder": [],
             "rawTiming": {},
             "rawFlushCount": 0,
             "rawStateWrites": 0,
             "rawDailyWrites": 0,
+            "rawDailyMergeFlushSeconds": 0.0,
         }
         _add_raw_timing(self._raw_event_batch_accounting, "stateLoad", time.perf_counter() - started_at)
 
@@ -161,6 +171,7 @@ class ActivityRawEventAccountingMixin:
             return
 
         try:
+            self._flush_pending_daily_author_activity_deltas(context)
             state_started_at = time.perf_counter()
             state_ops = []
             for state_key in sorted(context.get("dirtyStates") or []):
@@ -205,9 +216,41 @@ class ActivityRawEventAccountingMixin:
                 "rawFlushCount": int(context.get("rawFlushCount") or 0),
                 "rawStateWrites": int(context.get("rawStateWrites") or 0),
                 "rawDailyWrites": int(context.get("rawDailyWrites") or 0),
+                "rawFastAccountingEnabled": bool(context.get("fastAccountingEnabled")),
+                "rawFastContextBuildSeconds": float((context.get("rawTiming") or {}).get("stateLoad") or 0.0),
+                "rawDailyMergeFlushSeconds": float(context.get("rawDailyMergeFlushSeconds") or 0.0),
             }
         finally:
             self._raw_event_batch_accounting = None
+
+    def _flush_pending_daily_author_activity_deltas(self, context: dict[str, Any]) -> None:
+        pending = context.get("pendingDailyDeltas") or {}
+        order = context.get("pendingDailyOrder") or []
+
+        if not pending:
+            return
+
+        started_at = time.perf_counter()
+
+        for daily_key in order:
+            item = pending.get(daily_key)
+
+            if not item:
+                continue
+
+            snapshot = dict(item.get("snapshot") or {})
+            merged = _empty_event_deltas()
+
+            for deltas in item.get("deltas") or []:
+                _merge_batch_deltas(merged, deltas)
+
+            self._merge_daily_author_activity_now(snapshot, merged)
+
+        pending.clear()
+        order.clear()
+        elapsed = time.perf_counter() - started_at
+        context["rawDailyMergeFlushSeconds"] = float(context.get("rawDailyMergeFlushSeconds") or 0.0) + elapsed
+        _add_raw_timing(context, "dailyMergeFlush", elapsed)
 
     def _batch_state_doc(self, state_key: str) -> dict[str, Any] | None:
         context = getattr(self, "_raw_event_batch_accounting", None)
@@ -379,6 +422,15 @@ class ActivityRawEventAccountingMixin:
             cache[cache_key] = self.db.day_sessions.find_one(query, projection) or {}
 
         return dict(cache.get(cache_key) or {})
+
+    def _fast_event_derived_cache(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+
+        if not context or not context.get("fastAccountingEnabled"):
+            return None
+
+        event_key = _raw_event_fast_cache_key(event)
+        return context.setdefault("eventDerived", {}).setdefault(event_key, {})
 
     def _update_author_time_zone_for_raw_event_accounting(
         self,
@@ -1283,6 +1335,10 @@ class ActivityRawEventAccountingMixin:
         return consumed_microseconds
 
     def _overtime_window_for_event(self, event: dict[str, Any]) -> tuple[dt.datetime, dt.datetime] | None:
+        event_cache = self._fast_event_derived_cache(event)
+        if event_cache is not None and "overtimeWindow" in event_cache:
+            return event_cache.get("overtimeWindow")
+
         started_at = time.perf_counter()
         context = self._overtime_rule_context()
 
@@ -1290,14 +1346,24 @@ class ActivityRawEventAccountingMixin:
             vacation_window = is_vacation_overtime_window(event, context)
 
             if vacation_window:
+                if event_cache is not None:
+                    event_cache["overtimeWindow"] = vacation_window
+                    event_cache["overtimeWindowKind"] = "vacation"
                 return vacation_window
 
             night_window = None if self._suppress_night_overtime_for_midnight_offline_carryover(event) else is_night_overtime_window(event)
 
             if night_window:
+                if event_cache is not None:
+                    event_cache["overtimeWindow"] = night_window
+                    event_cache["overtimeWindowKind"] = "night"
                 return night_window
 
-            return is_telegram_overtime_window(event, context)
+            telegram_window = is_telegram_overtime_window(event, context)
+            if event_cache is not None:
+                event_cache["overtimeWindow"] = telegram_window
+                event_cache["overtimeWindowKind"] = "telegram" if telegram_window else None
+            return telegram_window
         finally:
             _add_raw_timing(getattr(self, "_raw_event_batch_accounting", None), "overtimeWindow", time.perf_counter() - started_at)
 
@@ -1328,15 +1394,27 @@ class ActivityRawEventAccountingMixin:
         return None
 
     def _overtime_window_kind_for_event(self, event: dict[str, Any]) -> str | None:
+        event_cache = self._fast_event_derived_cache(event)
+        if event_cache is not None and "overtimeWindowKind" in event_cache:
+            return event_cache.get("overtimeWindowKind")
+
         context = self._overtime_rule_context()
 
         if is_vacation_overtime_window(event, context):
+            if event_cache is not None:
+                event_cache["overtimeWindowKind"] = "vacation"
             return "vacation"
         if not self._suppress_night_overtime_for_midnight_offline_carryover(event) and is_night_overtime_window(event):
+            if event_cache is not None:
+                event_cache["overtimeWindowKind"] = "night"
             return "night"
         if is_telegram_overtime_window(event, context):
+            if event_cache is not None:
+                event_cache["overtimeWindowKind"] = "telegram"
             return "telegram"
 
+        if event_cache is not None:
+            event_cache["overtimeWindowKind"] = None
         return None
 
     def _workday_started_at_for_event_interval(
@@ -1543,6 +1621,11 @@ class ActivityRawEventAccountingMixin:
         if end <= start:
             return False
 
+        event_cache = self._fast_event_derived_cache(event)
+        cache_key = ("reportsStoppedOverlap", start.isoformat(), end.isoformat())
+        if event_cache is not None and cache_key in event_cache:
+            return bool(event_cache.get(cache_key))
+
         try:
             raw_author = str(event.get("author") or "Unknown User")
             day_date = str(event.get("date") or "")
@@ -1576,11 +1659,16 @@ class ActivityRawEventAccountingMixin:
                     continue
 
                 if _windows_overlap(start, end, offline_at, transition_at):
+                    if event_cache is not None:
+                        event_cache[cache_key] = True
                     return True
 
                 offline_at = None
 
-            return bool(offline_at and end > offline_at)
+            result = bool(offline_at and end > offline_at)
+            if event_cache is not None:
+                event_cache[cache_key] = result
+            return result
         finally:
             _add_raw_timing(getattr(self, "_raw_event_batch_accounting", None), "reportsStoppedOverlap", time.perf_counter() - started_at)
 
@@ -1590,6 +1678,11 @@ class ActivityRawEventAccountingMixin:
         occurred_at: dt.datetime,
         received_at: dt.datetime | None,
     ) -> dict[str, Any] | None:
+        event_cache = self._fast_event_derived_cache(event)
+        if event_cache is not None and "statusIntervalContext" in event_cache:
+            cached = event_cache.get("statusIntervalContext")
+            return dict(cached) if isinstance(cached, dict) else None
+
         started_at = time.perf_counter()
         raw_author = str(event.get("author") or "Unknown User")
         day_date = str(event.get("date") or "")
@@ -1599,11 +1692,42 @@ class ActivityRawEventAccountingMixin:
                 return None
 
             status_events = self._batch_status_events(raw_author, day_date)
-            return status_interval_context_for_event(status_events, occurred_at, received_at)
+            result = status_interval_context_for_event(status_events, occurred_at, received_at)
+            if event_cache is not None:
+                event_cache["statusIntervalContext"] = dict(result) if result else None
+            return result
         finally:
             _add_raw_timing(getattr(self, "_raw_event_batch_accounting", None), "statusInterval", time.perf_counter() - started_at)
 
     def _update_daily_author_activity(self, snapshot: dict[str, Any], deltas: dict[str, Any]) -> None:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if context and context.get("fastAccountingEnabled"):
+            key = {
+                "source": snapshot.get("source"),
+                "author": snapshot.get("author") or "Unknown User",
+                "projectId": snapshot.get("projectId") or "",
+                "date": snapshot.get("date") or "",
+            }
+            daily_key = "|".join(
+                [
+                    str(key.get("source") or ""),
+                    str(key.get("author") or "Unknown User"),
+                    str(key.get("projectId") or ""),
+                    str(key.get("date") or ""),
+                ]
+            )
+            pending = context.setdefault("pendingDailyDeltas", {})
+            if daily_key not in pending:
+                pending[daily_key] = {"snapshot": dict(snapshot), "deltas": []}
+                context.setdefault("pendingDailyOrder", []).append(daily_key)
+            else:
+                pending[daily_key]["snapshot"] = dict(snapshot)
+            pending[daily_key].setdefault("deltas", []).append(dict(deltas))
+            return
+
+        self._merge_daily_author_activity_now(snapshot, deltas)
+
+    def _merge_daily_author_activity_now(self, snapshot: dict[str, Any], deltas: dict[str, Any]) -> None:
         started_at = time.perf_counter()
         key = {
             "source": snapshot.get("source"),

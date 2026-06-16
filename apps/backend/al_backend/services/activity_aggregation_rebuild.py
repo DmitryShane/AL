@@ -17,7 +17,9 @@ from .raw_event_batching import (
     REBUILD_DELTA_SPILL_THRESHOLD,
     REBUILD_MEMORY_GUARD_ENABLED,
     REBUILD_MEMORY_SOFT_LIMIT_MB,
+    REBUILD_FAST_ACCOUNTING_ENABLED,
     REBUILD_RAW_FLUSH_BATCHES,
+    REBUILD_SLOW_EVENT_THRESHOLD_MS,
 )
 
 
@@ -911,6 +913,10 @@ class ActivityAggregationRebuildMixin:
             raw_event_batch: list[dict[str, Any]] = []
             raw_flush_size = RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE * REBUILD_RAW_FLUSH_BATCHES
             phase_started_at = time.monotonic()
+            slow_event_threshold_seconds = max(0.0, REBUILD_SLOW_EVENT_THRESHOLD_MS / 1000.0)
+            metrics["rawFastAccountingEnabled"] = REBUILD_FAST_ACCOUNTING_ENABLED
+            metrics.setdefault("rawSlowEvents", [])
+            self._set_rebuild_job_diagnostics({"rawFastAccountingEnabled": REBUILD_FAST_ACCOUNTING_ENABLED})
 
             def process_raw_event_batch(events: list[dict[str, Any]]) -> None:
                 nonlocal raw_event_count
@@ -922,19 +928,31 @@ class ActivityAggregationRebuildMixin:
                     for event in events:
                         accounting_started_at = time.perf_counter()
                         deltas = self._apply_raw_event_to_aggregates(event)
+                        accounting_elapsed = max(0.0, time.perf_counter() - accounting_started_at)
                         context = getattr(self, "_raw_event_batch_accounting", None)
                         if context:
                             timing = context.setdefault("rawTiming", {})
-                            timing["rawEventAccounting"] = float(timing.get("rawEventAccounting") or 0.0) + max(
-                                0.0,
-                                time.perf_counter() - accounting_started_at,
+                            timing["rawEventAccounting"] = float(timing.get("rawEventAccounting") or 0.0) + accounting_elapsed
+                        if slow_event_threshold_seconds and accounting_elapsed >= slow_event_threshold_seconds:
+                            slow_events = metrics.setdefault("rawSlowEvents", [])
+                            slow_events.append(
+                                {
+                                    "eventType": str(event.get("eventType") or ""),
+                                    "source": str(event.get("source") or ""),
+                                    "date": str(event.get("date") or ""),
+                                    "occurredAtUtc": str(event.get("occurredAtUtc") or ""),
+                                    "batchId": str(event.get("batchId") or ""),
+                                    "durationMs": round(accounting_elapsed * 1000, 1),
+                                }
                             )
+                            del slow_events[:-20]
                         raw_event_count += 1
                         raw_elapsed = max(0.001, time.monotonic() - phase_started_at)
                         self._set_rebuild_job_diagnostics(
                             {
                                 "rawEventsPerSecond": raw_event_count / raw_elapsed,
                                 "rawFlushSize": raw_flush_size,
+                                "rawSlowEvents": metrics.get("rawSlowEvents", []),
                             }
                         )
                         self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", raw_event_count, raw_event_total)
@@ -957,12 +975,22 @@ class ActivityAggregationRebuildMixin:
                     metrics["rawFlushCount"] = int(metrics.get("rawFlushCount") or 0) + int(stats.get("rawFlushCount") or 0)
                     metrics["rawStateWrites"] = int(metrics.get("rawStateWrites") or 0) + int(stats.get("rawStateWrites") or 0)
                     metrics["rawDailyWrites"] = int(metrics.get("rawDailyWrites") or 0) + int(stats.get("rawDailyWrites") or 0)
+                    metrics["rawDailyMergeFlushSeconds"] = float(metrics.get("rawDailyMergeFlushSeconds") or 0.0) + float(
+                        stats.get("rawDailyMergeFlushSeconds") or 0.0
+                    )
+                    metrics["rawFastContextBuildSeconds"] = float(metrics.get("rawFastContextBuildSeconds") or 0.0) + float(
+                        stats.get("rawFastContextBuildSeconds") or 0.0
+                    )
                     self._set_rebuild_job_diagnostics(
                         {
                             "rawTiming": raw_timing,
                             "rawFlushCount": metrics.get("rawFlushCount", 0),
                             "rawStateWrites": metrics.get("rawStateWrites", 0),
                             "rawDailyWrites": metrics.get("rawDailyWrites", 0),
+                            "rawFastAccountingEnabled": stats.get("rawFastAccountingEnabled", REBUILD_FAST_ACCOUNTING_ENABLED),
+                            "rawFastContextBuildSeconds": metrics.get("rawFastContextBuildSeconds", 0.0),
+                            "rawDailyMergeFlushSeconds": metrics.get("rawDailyMergeFlushSeconds", 0.0),
+                            "rawSlowEvents": metrics.get("rawSlowEvents", []),
                         }
                     )
                     self._maybe_apply_rebuild_memory_guard(metrics)
@@ -1142,6 +1170,10 @@ class ActivityAggregationRebuildMixin:
             "rawFlushCount": metrics.get("rawFlushCount", 0),
             "rawStateWrites": metrics.get("rawStateWrites", 0),
             "rawDailyWrites": metrics.get("rawDailyWrites", 0),
+            "rawFastAccountingEnabled": metrics.get("rawFastAccountingEnabled", REBUILD_FAST_ACCOUNTING_ENABLED),
+            "rawFastContextBuildSeconds": metrics.get("rawFastContextBuildSeconds", 0.0),
+            "rawDailyMergeFlushSeconds": metrics.get("rawDailyMergeFlushSeconds", 0.0),
+            "rawSlowEvents": metrics.get("rawSlowEvents", []),
         }
         self._set_rebuild_job_diagnostics(self._last_rebuild_metrics)
 
