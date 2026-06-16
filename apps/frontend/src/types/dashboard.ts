@@ -384,8 +384,13 @@ export type ReportsQueueChunk = {
   eventCount: number;
   rawReportId: string;
   receivedAt?: string | null;
+  queuedAt?: string | null;
+  processingStartedAt?: string | null;
   status: string;
   processedAt?: string | null;
+  failedAt?: string | null;
+  attempts: number;
+  processingSeconds?: number | null;
   lastError: string;
 };
 

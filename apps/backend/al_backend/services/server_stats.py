@@ -242,6 +242,13 @@ def _processing_seconds(report: dict[str, Any]) -> float | None:
     return max(0.0, round((finished_at - started_at).total_seconds(), 3))
 
 
+def _duration_seconds(started_at: dt.datetime | None, finished_at: dt.datetime | None) -> float | None:
+    if not started_at or not finished_at:
+        return None
+
+    return max(0.0, round((finished_at - started_at).total_seconds(), 3))
+
+
 def _reports_queue_row(report: dict[str, Any], profiles_by_author: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     payload = report.get("payload") if isinstance(report.get("payload"), dict) else {}
     project_id = str(payload.get("projectId") or "").strip() or _first_payload_event_project_id(payload)
@@ -314,15 +321,26 @@ def _chunk_reports_queue_rows(chunks: list[dict[str, Any]], profiles_by_author: 
         processed_at_values = [value for value in processed_at_values if value is not None]
         failed_at_values = [_coerce_datetime(item.get("failedAt")) for item in ordered]
         failed_at_values = [value for value in failed_at_values if value is not None]
+        queued_at_values = [_coerce_datetime(item.get("queuedAt")) for item in ordered]
+        queued_at_values = [value for value in queued_at_values if value is not None]
+        processing_started_values = [
+            _coerce_datetime(item.get("processingStartedAt")) or _coerce_datetime(item.get("assemblingStartedAt"))
+            for item in ordered
+        ]
+        processing_started_values = [value for value in processing_started_values if value is not None]
+        finished_at_values = [*processed_at_values, *failed_at_values]
+        processing_started_at = min(processing_started_values) if processing_started_values else None
+        finished_at = max(finished_at_values) if finished_at_values else None
         last_error = next((str(item.get("lastError") or "") for item in ordered if str(item.get("lastError") or "")), "")
+        attempts = max([int(item.get("attempts") or 0) for item in ordered] or [0])
 
         rows.append(
             {
                 "id": logical_id,
                 "kind": "chunked",
                 "receivedAt": min(received_at_values).isoformat() if received_at_values else None,
-                "queuedAt": None,
-                "processingStartedAt": _isoformat_datetime(first.get("assemblingStartedAt")),
+                "queuedAt": min(queued_at_values).isoformat() if queued_at_values else None,
+                "processingStartedAt": processing_started_at.isoformat() if processing_started_at else None,
                 "processedAt": max(processed_at_values).isoformat() if status == "processed" and processed_at_values else None,
                 "failedAt": max(failed_at_values).isoformat() if failed_at_values else None,
                 "source": str(first.get("source") or ""),
@@ -330,8 +348,8 @@ def _chunk_reports_queue_rows(chunks: list[dict[str, Any]], profiles_by_author: 
                 "displayName": _display_name(author, (profiles_by_author or {}).get(author, {})),
                 "projectId": str(first.get("projectId") or ""),
                 "status": status,
-                "attempts": 0,
-                "processingSeconds": None,
+                "attempts": attempts,
+                "processingSeconds": _duration_seconds(processing_started_at, finished_at),
                 "lastError": last_error,
                 "chunksReceived": chunks_received,
                 "chunksProcessed": chunks_processed,
@@ -344,8 +362,13 @@ def _chunk_reports_queue_rows(chunks: list[dict[str, Any]], profiles_by_author: 
                         "eventCount": int(item.get("eventCount") or 0),
                         "rawReportId": str(item.get("rawReportId") or ""),
                         "receivedAt": _isoformat_datetime(item.get("receivedAt")),
+                        "queuedAt": _isoformat_datetime(item.get("queuedAt")),
+                        "processingStartedAt": _isoformat_datetime(item.get("processingStartedAt")),
                         "status": str(item.get("status") or "unknown"),
                         "processedAt": _isoformat_datetime(item.get("processedAt")),
+                        "failedAt": _isoformat_datetime(item.get("failedAt")),
+                        "attempts": int(item.get("attempts") or 0),
+                        "processingSeconds": _processing_seconds(item),
                         "lastError": str(item.get("lastError") or ""),
                     }
                     for item in ordered
@@ -390,8 +413,12 @@ def _pending_chunk_docs_from_raw_reports(reports: list[dict[str, Any]], existing
                 "sessionId": str(payload.get("sessionId") or ""),
                 "deviceId": str(report.get("deviceId") or payload.get("deviceId") or ""),
                 "receivedAt": report.get("receivedAt"),
+                "queuedAt": report.get("queuedAt"),
+                "processingStartedAt": report.get("processingStartedAt"),
                 "processedAt": None,
+                "failedAt": report.get("failedAt"),
                 "status": str(report.get("status") or "queued"),
+                "attempts": int(report.get("attempts") or 0),
                 "eventCount": int(payload.get("chunkEventCount") or 0),
                 "reportType": str(report.get("reportType") or "auto"),
                 "lastError": str(report.get("lastError") or ""),
@@ -399,6 +426,26 @@ def _pending_chunk_docs_from_raw_reports(reports: list[dict[str, Any]], existing
         )
 
     return pending_chunks
+
+
+def _enrich_chunk_docs_from_raw_reports(chunks: list[dict[str, Any]], reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    reports_by_id = {report.get("_id"): report for report in reports}
+    enriched: list[dict[str, Any]] = []
+
+    for chunk in chunks:
+        item = dict(chunk)
+        report = reports_by_id.get(item.get("rawReportId"))
+
+        if report:
+            for field in ("queuedAt", "processingStartedAt", "processedAt", "failedAt"):
+                if item.get(field) is None and report.get(field) is not None:
+                    item[field] = report.get(field)
+            if not item.get("attempts"):
+                item["attempts"] = int(report.get("attempts") or 0)
+
+        enriched.append(item)
+
+    return enriched
 
 
 class ServerStatsServiceMixin:
@@ -764,6 +811,7 @@ class ServerStatsServiceMixin:
         failed_reports = [report for report in raw_failed_reports if not _is_chunk_raw_report(report)]
         chunk_docs = list(self.db.raw_report_chunks.find({}).sort([("receivedAt", -1)]).limit(200))
         raw_chunk_reports = [report for report in [*raw_recent_reports, *raw_failed_reports] if _is_chunk_raw_report(report)]
+        chunk_docs = _enrich_chunk_docs_from_raw_reports(chunk_docs, raw_chunk_reports)
         pending_chunk_docs = _pending_chunk_docs_from_raw_reports(raw_chunk_reports, chunk_docs)
         chunk_docs = [*chunk_docs, *pending_chunk_docs]
         chunk_failed_docs = [chunk for chunk in chunk_docs if str(chunk.get("status") or "") == "failed"]

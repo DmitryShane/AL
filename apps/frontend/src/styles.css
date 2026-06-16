@@ -3715,7 +3715,7 @@ p {
 
 .reports-queue-chunk-row {
   display: grid;
-  grid-template-columns: 100px 100px 170px 120px minmax(180px, 1fr) minmax(200px, 1fr);
+  grid-template-columns: 100px 100px 170px 120px 90px 90px minmax(180px, 1fr) minmax(200px, 1fr);
   gap: 10px;
   align-items: center;
   color: #475569;

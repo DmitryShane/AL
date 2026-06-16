@@ -231,6 +231,8 @@ function ReportQueueRow({ report, isFailedTable }: { report: ReportsQueueReport;
               <span>{chunk.eventCount} events</span>
               <span>{formatDateTime(chunk.receivedAt)}</span>
               <StatusBadge status={chunk.status} />
+              <span>{chunk.attempts ?? 0} attempts</span>
+              <span>{formatDuration(chunk.processingSeconds)}</span>
               <span>{chunk.rawReportId}</span>
               <span title={chunk.lastError || undefined}>{chunk.lastError}</span>
             </div>

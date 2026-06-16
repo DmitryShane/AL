@@ -598,6 +598,9 @@ def test_chunked_unity_report_waits_until_all_chunks_before_rows():
     assert chunk_row["chunksReceived"] == 4
     assert chunk_row["chunksProcessed"] == 4
     assert chunk_row["eventsReceived"] == 3500
+    assert chunk_row["attempts"] == 1
+    assert chunk_row["processingSeconds"] is not None
+    assert all(chunk["attempts"] == 1 for chunk in chunk_row["chunks"])
 
 
 def test_chunked_unity_report_duplicate_chunk_does_not_duplicate_events():

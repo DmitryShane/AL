@@ -523,8 +523,11 @@ def test_reports_queue_status_includes_chunk_progress(monkeypatch) -> None:
             "author": "Evgeniy Dotsenko",
             "projectId": "Bike Rush 2",
             "receivedAt": now - dt.timedelta(minutes=3),
+            "queuedAt": now - dt.timedelta(minutes=3),
+            "processingStartedAt": now - dt.timedelta(minutes=3, seconds=5),
             "processedAt": now - dt.timedelta(minutes=3),
             "status": "processed",
+            "attempts": 2,
             "eventCount": 1000,
         }
     )
@@ -558,8 +561,17 @@ def test_reports_queue_status_includes_chunk_progress(monkeypatch) -> None:
     assert row["chunksProcessed"] == 1
     assert row["chunkCount"] == 4
     assert row["eventsReceived"] == 2000
+    assert row["attempts"] == 2
+    assert row["processingStartedAt"] == (now - dt.timedelta(minutes=3, seconds=5)).isoformat()
+    assert row["processingSeconds"] == 5
     assert len(row["chunks"]) == 2
     assert {chunk["status"] for chunk in row["chunks"]} == {"processed", "processing"}
+    processed_chunk = next(chunk for chunk in row["chunks"] if chunk["chunkIndex"] == 1)
+    processing_chunk = next(chunk for chunk in row["chunks"] if chunk["chunkIndex"] == 2)
+    assert processed_chunk["attempts"] == 2
+    assert processed_chunk["processingSeconds"] == 5
+    assert processing_chunk["attempts"] == 1
+    assert processing_chunk["processingSeconds"] is None
 
 
 def test_server_reboot_schedules_delayed_systemd_restart(monkeypatch) -> None:

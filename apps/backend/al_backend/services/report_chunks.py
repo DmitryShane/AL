@@ -75,12 +75,22 @@ class ReportChunkService(MongoComposableMixin):
             "sessionId": str(payload.get("sessionId") or ""),
             "deviceId": str(device_id or payload.get("deviceId") or ""),
             "receivedAt": received_at,
+            "queuedAt": None,
+            "processingStartedAt": None,
             "processedAt": now,
+            "failedAt": None,
             "status": "processed",
+            "attempts": 0,
             "eventCount": len(payload.get("events") or []),
             "reportType": report_type,
             "lastError": "",
         }
+        raw_report = self.db.raw_reports.find_one({"_id": raw_report_id}) or {}
+        chunk_doc["queuedAt"] = raw_report.get("queuedAt")
+        chunk_doc["processingStartedAt"] = raw_report.get("processingStartedAt")
+        chunk_doc["processedAt"] = raw_report.get("processedAt") or now
+        chunk_doc["failedAt"] = raw_report.get("failedAt")
+        chunk_doc["attempts"] = int(raw_report.get("attempts") or 1)
         query = {"logicalReportId": metadata["logicalReportId"], "chunkIndex": metadata["chunkIndex"]}
         self.db.raw_report_chunks.update_one(
             query,
