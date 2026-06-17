@@ -15,6 +15,7 @@ from .raw_event_batching import (
     REBUILD_BATCH_DELTA_CHUNK_SIZE,
     REBUILD_CURSOR_BATCH_SIZE,
     REBUILD_DELTA_SPILL_THRESHOLD,
+    REBUILD_EXECUTION_PLAN_ENABLED,
     REBUILD_FAST_ACCOUNTING_ENABLED,
     REBUILD_INTERVAL_ACCUMULATOR_ENABLED,
     REBUILD_MEMORY_GUARD_ENABLED,
@@ -1068,6 +1069,7 @@ class ActivityAggregationRebuildMixin:
             slow_event_threshold_seconds = max(0.0, REBUILD_SLOW_EVENT_THRESHOLD_MS / 1000.0)
             metrics["rawFastAccountingEnabled"] = REBUILD_FAST_ACCOUNTING_ENABLED
             metrics["rawIntervalAccumulatorEnabled"] = REBUILD_INTERVAL_ACCUMULATOR_ENABLED
+            metrics["rawExecutionPlanEnabled"] = REBUILD_EXECUTION_PLAN_ENABLED
             metrics.setdefault("rawSlowEvents", [])
             metrics.setdefault("rawSlowEventsByType", {})
             metrics.setdefault("rawAccountingSecondsByEventType", {})
@@ -1086,6 +1088,7 @@ class ActivityAggregationRebuildMixin:
                 {
                     "rawFastAccountingEnabled": REBUILD_FAST_ACCOUNTING_ENABLED,
                     "rawIntervalAccumulatorEnabled": REBUILD_INTERVAL_ACCUMULATOR_ENABLED,
+                    "rawExecutionPlanEnabled": REBUILD_EXECUTION_PLAN_ENABLED,
                 }
             )
 
@@ -1200,6 +1203,15 @@ class ActivityAggregationRebuildMixin:
                     metrics["rawFastContextBuildSeconds"] = float(metrics.get("rawFastContextBuildSeconds") or 0.0) + float(
                         stats.get("rawFastContextBuildSeconds") or 0.0
                     )
+                    metrics["executionPlanBuildSeconds"] = float(metrics.get("executionPlanBuildSeconds") or 0.0) + float(
+                        stats.get("executionPlanBuildSeconds") or 0.0
+                    )
+                    helper_calls = metrics.setdefault("hotLoopHelperCallsByName", {})
+                    for key, value in (stats.get("hotLoopHelperCallsByName") or {}).items():
+                        helper_calls[key] = int(helper_calls.get(key) or 0) + int(value or 0)
+                    interval_checks = metrics.setdefault("precomputedIntervalChecksByType", {})
+                    for key, value in (stats.get("precomputedIntervalChecksByType") or {}).items():
+                        interval_checks[key] = int(interval_checks.get(key) or 0) + int(value or 0)
                     self._set_rebuild_job_diagnostics(
                         {
                             "rawTiming": raw_timing,
@@ -1211,7 +1223,11 @@ class ActivityAggregationRebuildMixin:
                                 "rawIntervalAccumulatorEnabled",
                                 REBUILD_INTERVAL_ACCUMULATOR_ENABLED,
                             ),
+                            "rawExecutionPlanEnabled": REBUILD_EXECUTION_PLAN_ENABLED,
                             "rawFastContextBuildSeconds": metrics.get("rawFastContextBuildSeconds", 0.0),
+                            "executionPlanBuildSeconds": metrics.get("executionPlanBuildSeconds", 0.0),
+                            "hotLoopHelperCallsByName": metrics.get("hotLoopHelperCallsByName", {}),
+                            "precomputedIntervalChecksByType": metrics.get("precomputedIntervalChecksByType", {}),
                             "rawDailyMergeFlushSeconds": metrics.get("rawDailyMergeFlushSeconds", 0.0),
                             "rawSlowEvents": metrics.get("rawSlowEvents", []),
                             "rawSlowEventsByType": metrics.get("rawSlowEventsByType", {}),
@@ -1408,7 +1424,11 @@ class ActivityAggregationRebuildMixin:
             "rawDailyWrites": metrics.get("rawDailyWrites", 0),
             "rawFastAccountingEnabled": metrics.get("rawFastAccountingEnabled", REBUILD_FAST_ACCOUNTING_ENABLED),
             "rawIntervalAccumulatorEnabled": metrics.get("rawIntervalAccumulatorEnabled", REBUILD_INTERVAL_ACCUMULATOR_ENABLED),
+            "rawExecutionPlanEnabled": metrics.get("rawExecutionPlanEnabled", REBUILD_EXECUTION_PLAN_ENABLED),
             "rawFastContextBuildSeconds": metrics.get("rawFastContextBuildSeconds", 0.0),
+            "executionPlanBuildSeconds": metrics.get("executionPlanBuildSeconds", 0.0),
+            "hotLoopHelperCallsByName": metrics.get("hotLoopHelperCallsByName", {}),
+            "precomputedIntervalChecksByType": metrics.get("precomputedIntervalChecksByType", {}),
             "rawDailyMergeFlushSeconds": metrics.get("rawDailyMergeFlushSeconds", 0.0),
             "rawSlowEvents": metrics.get("rawSlowEvents", []),
             "rawSlowEventsByType": metrics.get("rawSlowEventsByType", {}),

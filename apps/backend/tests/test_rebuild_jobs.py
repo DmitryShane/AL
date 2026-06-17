@@ -619,12 +619,21 @@ def test_rebuild_interval_accumulator_matches_legacy_for_noop_heartbeat(monkeypa
                 }
             )
 
-    def run_with_accumulator(enabled):
+    def run_with_accumulator(enabled, forbid_hot_loop_helpers=False):
         monkeypatch.setattr(raw_accounting_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", enabled)
         monkeypatch.setattr(rebuild_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", enabled)
         repo = fake_repository()
         seed(repo)
         repo._materialize_status_report_rows = lambda: None
+        if forbid_hot_loop_helpers:
+            def forbidden_helper(*args, **kwargs):
+                raise AssertionError("forbidden hot-loop helper called")
+
+            repo._overtime_window_for_event = forbidden_helper
+            repo._status_interval_context_for_event = forbidden_helper
+            repo._workday_started_at_for_event_interval = forbidden_helper
+            repo._has_reports_stopped_gap_overlap = forbidden_helper
+            repo._normal_microseconds_consumed_for_event = forbidden_helper
         repo._rebuild_aggregates_from_sources({day}, {author})
         return repo, {
             "report_rows": _normalize_docs(repo.db.report_rows.items),
@@ -633,7 +642,7 @@ def test_rebuild_interval_accumulator_matches_legacy_for_noop_heartbeat(monkeypa
         }
 
     legacy_repo, legacy = run_with_accumulator(False)
-    fast_repo, fast = run_with_accumulator(True)
+    fast_repo, fast = run_with_accumulator(True, forbid_hot_loop_helpers=True)
 
     assert fast == legacy
     assert fast_repo._last_rebuild_metrics["rawAccumulatorEventsByType"] == {"ual:editor_input": 1, "ual:heartbeat": 1}
@@ -689,12 +698,21 @@ def test_rebuild_interval_accumulator_handles_high_volume_unity_events(monkeypat
                 }
             )
 
-    def run_with_accumulator(enabled):
+    def run_with_accumulator(enabled, forbid_hot_loop_helpers=False):
         monkeypatch.setattr(raw_accounting_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", enabled)
         monkeypatch.setattr(rebuild_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", enabled)
         repo = fake_repository()
         seed(repo)
         repo._materialize_status_report_rows = lambda: None
+        if forbid_hot_loop_helpers:
+            def forbidden_helper(*args, **kwargs):
+                raise AssertionError("forbidden hot-loop helper called")
+
+            repo._overtime_window_for_event = forbidden_helper
+            repo._status_interval_context_for_event = forbidden_helper
+            repo._workday_started_at_for_event_interval = forbidden_helper
+            repo._has_reports_stopped_gap_overlap = forbidden_helper
+            repo._normal_microseconds_consumed_for_event = forbidden_helper
         repo._rebuild_aggregates_from_sources({day}, {author})
         return repo, {
             "report_rows": _normalize_docs(repo.db.report_rows.items),
@@ -703,7 +721,7 @@ def test_rebuild_interval_accumulator_handles_high_volume_unity_events(monkeypat
         }
 
     legacy_repo, legacy = run_with_accumulator(False)
-    fast_repo, fast = run_with_accumulator(True)
+    fast_repo, fast = run_with_accumulator(True, forbid_hot_loop_helpers=True)
 
     assert fast == legacy
     assert legacy_repo._last_rebuild_metrics["rawAccumulatorEvents"] == 0
@@ -714,6 +732,8 @@ def test_rebuild_interval_accumulator_handles_high_volume_unity_events(monkeypat
     assert handled["ual:hold"] == 1
     assert handled["ual:heartbeat"] == 2
     assert fast_repo._last_rebuild_metrics["rawLegacyFallbackEventsByType"] == {}
+    assert fast_repo._last_rebuild_metrics["hotLoopHelperCallsByName"] == {}
+    assert fast_repo._last_rebuild_metrics["executionPlanBuildSeconds"] >= 0
 
 
 def test_fast_daily_deltas_are_merged_before_flush():

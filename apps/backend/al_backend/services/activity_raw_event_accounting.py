@@ -16,7 +16,11 @@ from ..overtime_rules import (
     is_vacation_overtime_window,
 )
 from .activity_status_intervals import status_interval_context_for_event
-from .raw_event_batching import REBUILD_FAST_ACCOUNTING_ENABLED, REBUILD_INTERVAL_ACCUMULATOR_ENABLED
+from .raw_event_batching import (
+    REBUILD_EXECUTION_PLAN_ENABLED,
+    REBUILD_FAST_ACCOUNTING_ENABLED,
+    REBUILD_INTERVAL_ACCUMULATOR_ENABLED,
+)
 
 
 MIDNIGHT_OFFLINE_CARRYOVER_SUPPRESSION_SECONDS = 15 * 60
@@ -155,6 +159,9 @@ class ActivityRawEventAccountingMixin:
             "authorTimeZones": set(),
             "fastAccountingEnabled": REBUILD_FAST_ACCOUNTING_ENABLED,
             "intervalAccumulatorEnabled": REBUILD_INTERVAL_ACCUMULATOR_ENABLED,
+            "executionPlanEnabled": REBUILD_EXECUTION_PLAN_ENABLED,
+            "executionPlans": {},
+            "authorAliases": {},
             "eventDerived": {},
             "pendingDailyDeltas": {},
             "pendingDailyOrder": [],
@@ -166,6 +173,9 @@ class ActivityRawEventAccountingMixin:
             "rawAccumulatorFlushSeconds": 0.0,
             "rawAccumulatorDailyWrites": 0,
             "rawAccumulatorStateWrites": 0,
+            "executionPlanBuildSeconds": 0.0,
+            "hotLoopHelperCallsByName": {},
+            "precomputedIntervalChecksByType": {},
         }
         _add_raw_timing(self._raw_event_batch_accounting, "stateLoad", time.perf_counter() - started_at)
 
@@ -226,9 +236,13 @@ class ActivityRawEventAccountingMixin:
                 "rawAccumulatorStateWrites": int(context.get("rawAccumulatorStateWrites") or 0),
                 "rawFastAccountingEnabled": bool(context.get("fastAccountingEnabled")),
                 "rawIntervalAccumulatorEnabled": bool(context.get("intervalAccumulatorEnabled")),
+                "rawExecutionPlanEnabled": bool(context.get("executionPlanEnabled")),
                 "rawFastContextBuildSeconds": float((context.get("rawTiming") or {}).get("stateLoad") or 0.0),
                 "rawDailyMergeFlushSeconds": float(context.get("rawDailyMergeFlushSeconds") or 0.0),
                 "rawAccumulatorFlushSeconds": float(context.get("rawAccumulatorFlushSeconds") or 0.0),
+                "executionPlanBuildSeconds": float(context.get("executionPlanBuildSeconds") or 0.0),
+                "hotLoopHelperCallsByName": dict(context.get("hotLoopHelperCallsByName") or {}),
+                "precomputedIntervalChecksByType": dict(context.get("precomputedIntervalChecksByType") or {}),
             }
         finally:
             self._raw_event_batch_accounting = None
@@ -442,6 +456,218 @@ class ActivityRawEventAccountingMixin:
         event_key = _raw_event_fast_cache_key(event)
         return context.setdefault("eventDerived", {}).setdefault(event_key, {})
 
+    def _raw_accounting_alias(self, raw_author: str) -> str:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if not context:
+            return composed(self).resolve_author_alias(raw_author or "Unknown User")
+
+        aliases = context.setdefault("authorAliases", {})
+        key = str(raw_author or "Unknown User")
+        if key not in aliases:
+            aliases[key] = composed(self).resolve_author_alias(key)
+        return str(aliases.get(key) or "Unknown User")
+
+    def _execution_plan_for_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if not context or not context.get("executionPlanEnabled"):
+            return None
+
+        raw_author = str(event.get("author") or "Unknown User")
+        day_date = str(event.get("date") or "")
+        source = str(event.get("source") or "")
+        if not raw_author or not day_date:
+            return None
+
+        cache_key = (raw_author, day_date, source)
+        plans = context.setdefault("executionPlans", {})
+        if cache_key in plans:
+            return plans[cache_key]
+
+        started_at = time.perf_counter()
+        time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
+        try:
+            day = dt.date.fromisoformat(day_date)
+            zone = ZoneInfo(time_zone_id)
+        except ValueError:
+            zone = ZoneInfo("UTC")
+            day = (_coerce_datetime(event.get("occurredAtUtc")) or dt.datetime.now(dt.UTC)).date()
+
+        night_start_at = dt.datetime.combine(day, dt.time(hour=NIGHT_OVERTIME_START_HOUR), zone).astimezone(dt.UTC)
+        night_end_at = dt.datetime.combine(day, dt.time(hour=NIGHT_OVERTIME_END_HOUR), zone).astimezone(dt.UTC)
+        if night_end_at <= night_start_at:
+            night_end_at += dt.timedelta(days=1)
+
+        day_session = self._batch_day_session_doc(raw_author, day_date)
+        started_at_utc = _coerce_datetime((day_session or {}).get("startedAt"))
+        status_events = list(self._batch_status_events(raw_author, day_date))
+        reports_stopped_events = list(self._batch_reports_stopped_events(raw_author, day_date))
+        break_events = list(self._batch_break_online_offline_events(raw_author, dt.datetime.combine(day, dt.time.max, dt.UTC)))
+        consumed_microseconds = self._normal_microseconds_consumed_for_event_fast_baseline(raw_author, day_date)
+        target_dates = getattr(self, "_aggregate_rebuild_target_dates", None)
+        target_authors = getattr(self, "_aggregate_rebuild_target_authors", None)
+        materialize = (target_dates is None or day_date in target_dates) and (
+            not target_authors or self._raw_accounting_alias(raw_author) in target_authors
+        )
+        global_setting = self.db.interval_settings.find_one({"kind": "global"}) or {}
+        if is_device_source(source) and global_setting.get("deviceIdleThresholdSeconds"):
+            idle_threshold_seconds = int(global_setting["deviceIdleThresholdSeconds"])
+        elif global_setting.get("idleThresholdSeconds"):
+            idle_threshold_seconds = int(global_setting["idleThresholdSeconds"])
+        else:
+            idle_threshold_seconds = DEFAULT_IDLE_THRESHOLD_SECONDS
+
+        plan = {
+            "author": raw_author,
+            "date": day_date,
+            "source": source,
+            "timeZoneId": time_zone_id,
+            "idleThresholdSeconds": idle_threshold_seconds,
+            "materialize": materialize,
+            "startedAt": started_at_utc,
+            "statusEvents": status_events,
+            "reportsStoppedEvents": reports_stopped_events,
+            "breakEvents": break_events,
+            "nightWindow": (night_start_at, night_end_at),
+            "consumedNormalMicroseconds": consumed_microseconds,
+        }
+        plans[cache_key] = plan
+        elapsed = time.perf_counter() - started_at
+        context["executionPlanBuildSeconds"] = float(context.get("executionPlanBuildSeconds") or 0.0) + elapsed
+        _add_raw_timing(context, "executionPlanBuild", elapsed)
+        return plan
+
+    def _normal_microseconds_consumed_for_event_fast_baseline(self, raw_author: str, day_date: str) -> int:
+        cache = getattr(self, "_daily_consumed_microseconds_cache", None)
+        cache_key = (str(raw_author or "Unknown User"), str(day_date or ""))
+        if cache is not None and cache_key in cache:
+            return int(cache.get(cache_key) or 0)
+
+        consumed_microseconds = 0
+        for current in self.db.daily_author_activity.find(
+            {"author": raw_author or "Unknown User", "date": day_date or ""},
+            {"_id": 0, "activeSeconds": 1, "idleSeconds": 1, "activeMicroseconds": 1, "idleMicroseconds": 1},
+        ):
+            consumed_microseconds += _time_microseconds(current, "activeSeconds", "activeMicroseconds")
+            consumed_microseconds += _time_microseconds(current, "idleSeconds", "idleMicroseconds")
+
+        consumed_microseconds = min(
+            DEFAULT_PLUGIN_WORK_WINDOW_SECONDS * MICROSECONDS_PER_SECOND,
+            max(0, consumed_microseconds),
+        )
+        if cache is not None:
+            cache[cache_key] = consumed_microseconds
+        return consumed_microseconds
+
+    def _increment_hot_loop_helper_call(self, name: str) -> None:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if not context:
+            return
+        calls = context.setdefault("hotLoopHelperCallsByName", {})
+        calls[name] = int(calls.get(name) or 0) + 1
+
+    def _increment_precomputed_interval_check(self, name: str) -> None:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if not context:
+            return
+        checks = context.setdefault("precomputedIntervalChecksByType", {})
+        checks[name] = int(checks.get(name) or 0) + 1
+
+    def _plan_status_interval_context(
+        self,
+        plan: dict[str, Any],
+        occurred_at: dt.datetime,
+        received_at: dt.datetime | None,
+    ) -> dict[str, Any] | None:
+        self._increment_precomputed_interval_check("statusInterval")
+        return status_interval_context_for_event(plan.get("statusEvents") or [], occurred_at, received_at)
+
+    def _plan_has_reports_stopped_overlap(self, plan: dict[str, Any], start: dt.datetime, end: dt.datetime) -> bool:
+        self._increment_precomputed_interval_check("reportsStoppedOverlap")
+        if end <= start:
+            return False
+
+        offline_at: dt.datetime | None = None
+        for status_event in sorted(
+            [
+                status_event
+                for status_event in plan.get("reportsStoppedEvents") or []
+                if (_coerce_datetime(status_event.get("transitionAt")) or dt.datetime.max.replace(tzinfo=dt.UTC)) <= end
+            ],
+            key=lambda item: _coerce_datetime(item.get("transitionAt")) or dt.datetime.min.replace(tzinfo=dt.UTC),
+        ):
+            transition_at = _coerce_datetime(status_event.get("transitionAt"))
+            if not transition_at:
+                continue
+            status_type = str(status_event.get("statusEventType") or "")
+            reason = str(status_event.get("reason") or "")
+            if status_type == "offline" and reason == "reports_stopped":
+                offline_at = transition_at
+                continue
+            if status_type != "online" or reason != "reports_resumed" or not offline_at:
+                continue
+            if _windows_overlap(start, end, offline_at, transition_at):
+                return True
+            offline_at = None
+        return bool(offline_at and end > offline_at)
+
+    def _plan_overtime_window_for_interval(
+        self,
+        plan: dict[str, Any],
+        start: dt.datetime,
+        end: dt.datetime,
+    ) -> tuple[dt.datetime, dt.datetime] | None:
+        self._increment_precomputed_interval_check("overtimeWindow")
+        if end <= start:
+            return None
+        night_window = plan.get("nightWindow")
+        if night_window and _windows_overlap(start, end, night_window[0], night_window[1]):
+            return night_window
+        return None
+
+    def _plan_workday_started_at_for_interval(
+        self,
+        plan: dict[str, Any],
+        start: dt.datetime,
+        end: dt.datetime,
+    ) -> dt.datetime | None:
+        self._increment_precomputed_interval_check("workdayStart")
+        started_at = _coerce_datetime(plan.get("startedAt"))
+        if started_at and start < started_at < end:
+            return started_at
+        return None
+
+    def _plan_is_waiting_for_first_workday_activity(
+        self,
+        plan: dict[str, Any],
+        author_last_activity_at: dt.datetime | None,
+        at: dt.datetime,
+    ) -> bool:
+        self._increment_precomputed_interval_check("waitingForFirstActivity")
+        started_at = _coerce_datetime(plan.get("startedAt"))
+        if started_at:
+            if at <= started_at:
+                return False
+            return not author_last_activity_at or author_last_activity_at < started_at
+        return False
+
+    def _plan_author_offline_after_latest_telegram_state(self, plan: dict[str, Any], at: dt.datetime) -> bool:
+        self._increment_precomputed_interval_check("telegramOffline")
+        latest_event_type = ""
+        latest_timestamp: dt.datetime | None = None
+        day_date = str(plan.get("date") or "")
+
+        for event in plan.get("breakEvents") or []:
+            if str(event.get("date") or "") != day_date:
+                continue
+            timestamp = _coerce_datetime(event.get("timestamp"))
+            if not timestamp or timestamp > at:
+                continue
+            if not latest_timestamp or timestamp > latest_timestamp:
+                latest_timestamp = timestamp
+                latest_event_type = str(event.get("eventType") or "")
+
+        return latest_event_type == "offline"
+
     def _try_apply_rebuild_interval_accumulator_event(self, event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         context = getattr(self, "_raw_event_batch_accounting", None)
         if not context or not context.get("intervalAccumulatorEnabled"):
@@ -449,7 +675,7 @@ class ActivityRawEventAccountingMixin:
 
         context["lastAccumulatorFallbackReason"] = None
         event = dict(event)
-        event["author"] = composed(self).resolve_author_alias(event.get("author") or "Unknown User")
+        event["author"] = self._raw_accounting_alias(event.get("author") or "Unknown User")
         composed(self)._update_author_time_zone_for_raw_event_accounting(
             event.get("author") or "Unknown User",
             event.get("timeZoneId"),
@@ -477,7 +703,12 @@ class ActivityRawEventAccountingMixin:
             context["lastAccumulatorFallbackReason"] = "unsupported_event_type"
             return False, _empty_event_deltas()
 
-        if self._batch_status_events(str(event.get("author") or "Unknown User"), str(event.get("date") or "")):
+        plan = self._execution_plan_for_event(event)
+        if not plan:
+            context["lastAccumulatorFallbackReason"] = "missing_execution_plan"
+            return False, _empty_event_deltas()
+
+        if plan.get("statusEvents"):
             context["lastAccumulatorFallbackReason"] = "status_events"
             return False, _empty_event_deltas()
 
@@ -500,26 +731,24 @@ class ActivityRawEventAccountingMixin:
             return False, _empty_event_deltas()
 
         if occurred_at <= last_accounting_at:
-            return self._apply_heartbeat_noop_fast(event, state, author_state)
+            return self._apply_heartbeat_noop_fast(event, state, author_state, plan)
 
         if last_activity_source and source != last_activity_source:
-            return self._apply_heartbeat_noop_fast(event, state, author_state)
+            return self._apply_heartbeat_noop_fast(event, state, author_state, plan)
 
         if author_last_activity_scope and current_scope != author_last_activity_scope:
-            return self._apply_heartbeat_noop_fast(event, state, author_state)
+            return self._apply_heartbeat_noop_fast(event, state, author_state, plan)
 
-        idle_threshold_seconds = composed(self).get_idle_threshold_for_author(
-            str(event.get("author") or "Unknown User"),
-            source,
-        )
+        idle_threshold_seconds = int(plan.get("idleThresholdSeconds") or DEFAULT_IDLE_THRESHOLD_SECONDS)
 
         if (occurred_at - last_activity_at).total_seconds() < idle_threshold_seconds:
-            return self._apply_heartbeat_noop_fast(event, state, author_state)
+            return self._apply_heartbeat_noop_fast(event, state, author_state, plan)
 
         return self._try_apply_heartbeat_idle_fast(event, state, author_state, idle_threshold_seconds)
 
     def _try_apply_standard_activity_fast(self, event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         context = getattr(self, "_raw_event_batch_accounting", None)
+        plan = self._execution_plan_for_event(event)
         state_key = _raw_event_session_key(event)
         state_doc = self._batch_state_doc(state_key) or {}
         state = dict(state_doc.get("state", {}))
@@ -538,18 +767,22 @@ class ActivityRawEventAccountingMixin:
                 context["lastAccumulatorFallbackReason"] = "missing_timestamp"
             return False, _empty_event_deltas()
 
-        if self._batch_status_events(str(event.get("author") or "Unknown User"), str(event.get("date") or "")):
+        if not plan:
+            if context is not None:
+                context["lastAccumulatorFallbackReason"] = "missing_execution_plan"
+            return False, _empty_event_deltas()
+
+        if plan.get("statusEvents"):
             if context is not None:
                 context["lastAccumulatorFallbackReason"] = "status_events"
             return False, _empty_event_deltas()
 
-        overtime_window = self._overtime_window_for_event(event)
-        if overtime_window is not None:
+        if self._plan_overtime_window_for_interval(plan, occurred_at, occurred_at + dt.timedelta(microseconds=1)) is not None:
             if context is not None:
                 context["lastAccumulatorFallbackReason"] = "overtime_window"
             return False, _empty_event_deltas()
 
-        if self._status_interval_context_for_event(event, occurred_at, _coerce_datetime(event.get("receivedAt"))):
+        if self._plan_status_interval_context(plan, occurred_at, _coerce_datetime(event.get("receivedAt"))):
             if context is not None:
                 context["lastAccumulatorFallbackReason"] = "status_interval"
             return False, _empty_event_deltas()
@@ -578,17 +811,10 @@ class ActivityRawEventAccountingMixin:
         author_last_accounting_local_at = _parse_local_datetime(author_state.get("lastAccountingLocalAt"))
         author_last_activity_scope = str(author_state.get("lastActivityScope") or "")
         author_last_accounting_scope = str(author_state.get("lastAccountingScope") or "")
-        idle_threshold_seconds = composed(self).get_idle_threshold_for_author(
-            str(event.get("author") or "Unknown User"),
-            current_source,
-        )
-        consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
+        idle_threshold_seconds = int(plan.get("idleThresholdSeconds") or DEFAULT_IDLE_THRESHOLD_SECONDS)
+        consumed_normal_microseconds = int(plan.get("consumedNormalMicroseconds") or 0)
         deltas = _empty_event_deltas()
-        waiting_for_first_workday_activity = self._is_waiting_for_first_workday_activity(
-            event,
-            author_last_activity_at,
-            occurred_at,
-        )
+        waiting_for_first_workday_activity = self._plan_is_waiting_for_first_workday_activity(plan, author_last_activity_at, occurred_at)
 
         if not first_activity_at:
             first_activity_at = occurred_at
@@ -608,7 +834,7 @@ class ActivityRawEventAccountingMixin:
                 interval_activity_at = author_last_activity_at
 
             if accounting_start_at < occurred_at:
-                workday_started_at = self._workday_started_at_for_event_interval(event, accounting_start_at, occurred_at)
+                workday_started_at = self._plan_workday_started_at_for_interval(plan, accounting_start_at, occurred_at)
                 if workday_started_at and accounting_start_at < workday_started_at < occurred_at:
                     accounting_start_at = workday_started_at
                     accounting_start_local_at = _to_local_datetime(
@@ -619,12 +845,12 @@ class ActivityRawEventAccountingMixin:
                 interval_end_at = occurred_at
                 interval_end_local_at = occurred_local_at
                 interval_is_active = (occurred_at - interval_activity_at).total_seconds() < idle_threshold_seconds
-                interval_overtime_window = self._overtime_window_for_interval(event, accounting_start_at, interval_end_at)
+                interval_overtime_window = self._plan_overtime_window_for_interval(plan, accounting_start_at, interval_end_at)
                 if interval_overtime_window is not None:
                     if context is not None:
                         context["lastAccumulatorFallbackReason"] = "interval_overtime_window"
                     return False, _empty_event_deltas()
-                if self._has_reports_stopped_gap_overlap(event, accounting_start_at, interval_end_at):
+                if self._plan_has_reports_stopped_overlap(plan, accounting_start_at, interval_end_at):
                     if context is not None:
                         context["lastAccumulatorFallbackReason"] = "reports_stopped_overlap"
                     return False, _empty_event_deltas()
@@ -689,6 +915,7 @@ class ActivityRawEventAccountingMixin:
             author_last_accounting_scope,
             author_state.get("statusIdleAccountedUntil"),
             waiting_for_first_workday_activity,
+            plan,
         )
 
     def _try_apply_heartbeat_idle_fast(
@@ -699,6 +926,7 @@ class ActivityRawEventAccountingMixin:
         idle_threshold_seconds: int,
     ) -> tuple[bool, dict[str, Any]]:
         context = getattr(self, "_raw_event_batch_accounting", None)
+        plan = self._execution_plan_for_event(event)
         occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or event.get("occurredAt")
         occurred_at = occurred_at if isinstance(occurred_at, dt.datetime) else None
         occurred_local_at = _parse_local_datetime(event.get("occurredAtLocal")) or occurred_at
@@ -707,14 +935,17 @@ class ActivityRawEventAccountingMixin:
         last_accounting_local_at = _parse_local_datetime(state.get("lastAccountingLocalAt"))
         author_last_activity_at = _coerce_datetime(author_state.get("lastActivityAt"))
 
+        if not plan:
+            if context is not None:
+                context["lastAccumulatorFallbackReason"] = "missing_execution_plan"
+            return False, _empty_event_deltas()
+
         if not occurred_at or not occurred_local_at or not last_activity_at or not last_accounting_at:
             if context is not None:
                 context["lastAccumulatorFallbackReason"] = "missing_heartbeat_state"
             return False, _empty_event_deltas()
 
-        overtime_window = self._overtime_window_for_event(event)
-        overtime_window_kind = self._overtime_window_kind_for_event(event)
-        if overtime_window is not None:
+        if self._plan_overtime_window_for_interval(plan, occurred_at, occurred_at + dt.timedelta(microseconds=1)) is not None:
             if context is not None:
                 context["lastAccumulatorFallbackReason"] = "overtime_window"
             return False, _empty_event_deltas()
@@ -738,18 +969,15 @@ class ActivityRawEventAccountingMixin:
 
         interval_seconds = int((heartbeat_end - last_accounting_at).total_seconds())
         if interval_seconds < MIN_HEARTBEAT_IDLE_FRAGMENT_SECONDS:
-            return self._apply_heartbeat_noop_fast(event, state, author_state)
+            return self._apply_heartbeat_noop_fast(event, state, author_state, plan)
 
         interval_start_at = last_accounting_at
         interval_start_local_at = last_accounting_local_at or last_accounting_at
         interval_end_at = heartbeat_end
         interval_end_local_at = heartbeat_local_end
-        workday_started_at = self._workday_started_at_after_night_activity(
-            event,
-            last_activity_at,
-            interval_start_at,
-            interval_end_at,
-        )
+        workday_started_at = None
+        if self._plan_overtime_window_for_interval(plan, last_activity_at, last_activity_at + dt.timedelta(microseconds=1)):
+            workday_started_at = self._plan_workday_started_at_for_interval(plan, interval_start_at, interval_end_at)
         if workday_started_at:
             interval_start_at = workday_started_at
             interval_start_local_at = _to_local_datetime(
@@ -757,22 +985,20 @@ class ActivityRawEventAccountingMixin:
                 _valid_time_zone_id(event.get("timeZoneId")) or "UTC",
             )
 
-        if self._is_waiting_for_first_workday_activity(event, author_last_activity_at, interval_end_at):
-            return self._apply_heartbeat_noop_fast(event, state, author_state)
+        if self._plan_is_waiting_for_first_workday_activity(plan, author_last_activity_at, interval_end_at):
+            return self._apply_heartbeat_noop_fast(event, state, author_state, plan)
 
-        interval_overtime_window = self._overtime_window_for_interval(event, interval_start_at, interval_end_at)
-        if interval_overtime_window is not None or (
-            stale_heartbeat_capped and overtime_window_kind == "night"
-        ):
+        interval_overtime_window = self._plan_overtime_window_for_interval(plan, interval_start_at, interval_end_at)
+        if interval_overtime_window is not None:
             if context is not None:
                 context["lastAccumulatorFallbackReason"] = "interval_overtime_window"
             return False, _empty_event_deltas()
-        if self._has_reports_stopped_gap_overlap(event, interval_start_at, interval_end_at):
+        if self._plan_has_reports_stopped_overlap(plan, interval_start_at, interval_end_at):
             if context is not None:
                 context["lastAccumulatorFallbackReason"] = "reports_stopped_overlap"
             return False, _empty_event_deltas()
 
-        consumed_normal_microseconds = self._normal_microseconds_consumed_for_event(event)
+        consumed_normal_microseconds = int(plan.get("consumedNormalMicroseconds") or 0)
         deltas = _interval_deltas(
             interval_start_at,
             interval_end_at,
@@ -817,6 +1043,7 @@ class ActivityRawEventAccountingMixin:
             current_scope,
             author_state.get("statusIdleAccountedUntil"),
             False,
+            plan,
         )
 
     def _materialize_fast_event(
@@ -842,6 +1069,7 @@ class ActivityRawEventAccountingMixin:
         author_last_accounting_scope: str,
         status_idle_accounted_until: Any,
         waiting_for_first_workday_activity: bool,
+        plan: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or event.get("occurredAt")
         occurred_at = occurred_at if isinstance(occurred_at, dt.datetime) else dt.datetime.now(dt.UTC)
@@ -860,8 +1088,11 @@ class ActivityRawEventAccountingMixin:
             "timeZoneDisplayName": event.get("timeZoneDisplayName"),
             "workWindowSeconds": DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
         }
-        suppress_deltas = self._should_suppress_post_offline_plugin_deltas(event, deltas)
-        materialize = self._should_materialize_aggregate_date(str(snapshot.get("date") or ""), str(snapshot.get("author") or "Unknown User"))
+        suppress_deltas = self._should_suppress_post_offline_plugin_deltas_fast(event, deltas, plan)
+        materialize = bool(plan.get("materialize")) if plan else self._should_materialize_aggregate_date(
+            str(snapshot.get("date") or ""),
+            str(snapshot.get("author") or "Unknown User"),
+        )
 
         if not suppress_deltas and materialize and (not waiting_for_first_workday_activity or _has_presence_delta(deltas)):
             self._update_daily_author_activity(snapshot, deltas)
@@ -919,6 +1150,7 @@ class ActivityRawEventAccountingMixin:
         event: dict[str, Any],
         state: dict[str, Any],
         author_state: dict[str, Any],
+        plan: dict[str, Any] | None = None,
     ) -> tuple[bool, dict[str, Any]]:
         occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or event.get("occurredAt")
         occurred_at = occurred_at if isinstance(occurred_at, dt.datetime) else dt.datetime.now(dt.UTC)
@@ -939,12 +1171,15 @@ class ActivityRawEventAccountingMixin:
         }
         deltas = _empty_event_deltas()
         author_last_activity_at = _coerce_datetime(author_state.get("lastActivityAt"))
-        waiting_for_first_workday_activity = self._is_waiting_for_first_workday_activity(
-            event,
-            author_last_activity_at,
-            occurred_at,
+        waiting_for_first_workday_activity = (
+            self._plan_is_waiting_for_first_workday_activity(plan, author_last_activity_at, occurred_at)
+            if plan
+            else self._is_waiting_for_first_workday_activity(event, author_last_activity_at, occurred_at)
         )
-        materialize = self._should_materialize_aggregate_date(str(snapshot.get("date") or ""), str(snapshot.get("author") or "Unknown User"))
+        materialize = bool(plan.get("materialize")) if plan else self._should_materialize_aggregate_date(
+            str(snapshot.get("date") or ""),
+            str(snapshot.get("author") or "Unknown User"),
+        )
         if materialize and not waiting_for_first_workday_activity:
             self._update_daily_author_activity(snapshot, deltas)
 
@@ -1152,6 +1387,34 @@ class ActivityRawEventAccountingMixin:
             str(item.get("date") or ""),
             received_at,
         )
+
+    def _should_suppress_post_offline_plugin_deltas_fast(
+        self,
+        item: dict[str, Any],
+        deltas: dict[str, Any],
+        plan: dict[str, Any] | None,
+    ) -> bool:
+        if not plan:
+            self._increment_hot_loop_helper_call("_should_suppress_post_offline_plugin_deltas")
+            return self._should_suppress_post_offline_plugin_deltas(item, deltas)
+
+        if item.get("source") in {"telegram", "discord"} or item.get("reportType") in {"telegram", "meeting"}:
+            return False
+
+        if not _has_time_delta(deltas):
+            return False
+
+        if _time_microseconds(deltas, "overtimeActiveDeltaSeconds", "overtimeActiveDeltaMicroseconds") > 0:
+            return False
+
+        if deltas.get("overtimeActivityCountDeltas") or deltas.get("overtimeSavedPrefabDeltas"):
+            return False
+
+        received_at = _coerce_datetime(item.get("receivedAt") or item.get("lastReceivedAt"))
+        if not received_at:
+            return False
+
+        return self._plan_author_offline_after_latest_telegram_state(plan, received_at)
 
     def _is_author_offline_after_latest_telegram_state(self, raw_author: str, day_date: str, at: dt.datetime) -> bool:
         latest_event_type = ""
