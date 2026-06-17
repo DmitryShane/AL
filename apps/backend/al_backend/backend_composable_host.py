@@ -217,7 +217,9 @@ class BackendComposableHost(Protocol):
 
     # Cache and aggregate maintenance
     def invalidate_activity_summary_cache(
-        self, dates: list[str] | tuple[str, ...] | set[str] | None = None
+        self,
+        dates: list[str] | tuple[str, ...] | set[str] | None = None,
+        authors: list[str] | tuple[str, ...] | set[str] | None = None,
     ) -> None: ...
 
     def list_authors(self) -> list[str]: ...

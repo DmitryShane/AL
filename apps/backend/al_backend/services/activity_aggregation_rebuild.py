@@ -817,7 +817,7 @@ class ActivityAggregationRebuildMixin:
         self._report_rebuild_progress(progress_callback, "Capturing day state", 0, 1)
         state_count = self._persist_aggregate_day_state(target_dates, target_authors)
         self._report_rebuild_progress(progress_callback, "Capturing day state", 1, 1)
-        composed(self).invalidate_activity_summary_cache(target_dates)
+        composed(self).invalidate_activity_summary_cache(target_dates, sorted(target_authors) or None)
         rebuilt_snapshots = composed(self).rebuild_activity_day_summary_snapshots_for_dates(target_dates, sorted(target_authors))
         return {
             "ok": True,

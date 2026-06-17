@@ -141,6 +141,43 @@ class ReportIngestService(MongoComposableMixin):
     REPORT_QUEUE_LEASE_SECONDS = 300
     REPORT_QUEUE_MAX_ATTEMPTS = 5
 
+    def _activity_snapshot_authors_from_payload(self, payload: dict[str, Any]) -> list[str]:
+        authors: set[str] = set()
+        payload_author = str(payload.get("author") or "").strip()
+
+        if payload_author:
+            authors.add(composed(self).resolve_author_alias(payload_author))
+
+        for event in payload.get("events") or []:
+            if not isinstance(event, dict):
+                continue
+
+            event_author = str(event.get("author") or payload_author or "").strip()
+            if event_author:
+                authors.add(composed(self).resolve_author_alias(event_author))
+
+        return sorted({author for author in authors if author})
+
+    def _invalidate_and_wake_activity_snapshots(
+        self,
+        dates: list[str] | tuple[str, ...] | set[str],
+        authors: list[str] | tuple[str, ...] | set[str] | None,
+    ) -> None:
+        author_values = sorted(
+            {
+                composed(self).resolve_author_alias(str(author or "Unknown User"))
+                for author in authors or []
+                if str(author or "").strip()
+            }
+        )
+        author_values = [author for author in author_values if author]
+        composed(self).invalidate_activity_summary_cache(dates, author_values or None)
+
+        if author_values:
+            composed(self).start_activity_snapshot_author_day_background_materialization(dates, author_values)
+        else:
+            composed(self).start_activity_snapshot_background_drain()
+
     def report_author_key(self, payload: dict[str, Any] | None) -> str:
         payload = payload if isinstance(payload, dict) else {}
         return composed(self).resolve_author_alias(str(payload.get("author") or "Unknown User"))
@@ -423,6 +460,7 @@ class ReportIngestService(MongoComposableMixin):
         received_at = _coerce_datetime(report.get("receivedAt")) or dt.datetime.now(dt.UTC)
         author_for_stale_touch = str(payload.get("author") or "Unknown User")
         affected_dates: list[str] = []
+        affected_authors = self._activity_snapshot_authors_from_payload(payload)
 
         if isinstance(payload.get("events"), list):
             if chunk_metadata(payload, source):
@@ -455,7 +493,7 @@ class ReportIngestService(MongoComposableMixin):
                     )
             if not self._is_unassigned_device_report_author(source, author_for_stale_touch):
                 composed(self).touch_last_raw_report_received_at(author_for_stale_touch, received_at)
-            composed(self).invalidate_activity_summary_cache(affected_dates)
+            self._invalidate_and_wake_activity_snapshots(affected_dates, affected_authors)
         else:
             snapshot = dict(payload)
             snapshot.update(
@@ -474,7 +512,8 @@ class ReportIngestService(MongoComposableMixin):
             if not self._is_unassigned_device_report_author(source, author_for_stale_touch):
                 composed(self).touch_last_raw_report_received_at(author_for_stale_touch, received_at)
             affected_dates = [str(snapshot.get("date") or "")]
-            composed(self).invalidate_activity_summary_cache(affected_dates)
+            affected_authors = self._activity_snapshot_authors_from_payload(snapshot)
+            self._invalidate_and_wake_activity_snapshots(affected_dates, affected_authors)
 
         now = dt.datetime.now(dt.UTC)
         self.db.raw_reports.update_one(
@@ -866,7 +905,12 @@ class ReportIngestService(MongoComposableMixin):
                 composed(self)._finish_raw_event_batch_accounting()
 
             if sub_batch_dates:
-                composed(self).invalidate_activity_summary_cache(sub_batch_dates)
+                sub_batch_authors = {
+                    composed(self).resolve_author_alias(str(event.get("author") or author or "Unknown User"))
+                    for event in sub_batch
+                    if str(event.get("author") or author or "").strip()
+                }
+                self._invalidate_and_wake_activity_snapshots(sub_batch_dates, sub_batch_authors)
 
             if assembled_metadata:
                 self.db.raw_reports.update_one(

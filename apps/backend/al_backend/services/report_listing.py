@@ -91,9 +91,24 @@ class ReportListingService(MongoComposableMixin):
         hour: int | None = None,
         limit: int = 25,
         offset: int = 0,
+        use_snapshots: bool = True,
     ) -> dict[str, Any]:
         limit = max(1, min(int(limit), 200))
         offset = max(0, int(offset))
+        if use_snapshots and hasattr(self, "snapshot_reports_page"):
+            snapshot_page = self.snapshot_reports_page(
+                start_date=start_date,
+                end_date=end_date,
+                date_mode=date_mode,
+                author=author,
+                source=source,
+                hour=hour,
+                limit=limit,
+                offset=offset,
+            )
+            if snapshot_page is not None:
+                return snapshot_page
+
         hour = _normalize_report_hour_filter(hour)
         query, profiles, now = self._reports_query_context(start_date, end_date, date_mode, author, source)
         source_query, _, _ = self._reports_query_context(start_date, end_date, date_mode, author)

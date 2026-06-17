@@ -248,6 +248,9 @@ class AuthorRepository(MongoComposableMixin):
 
         if previous_time_zone != normalized_time_zone or previous_display_name != display_name:
             self._rebucket_author_telegram_time_zone(raw_author, normalized_time_zone, display_name)
+            reschedule = getattr(composed(self), "reschedule_activity_snapshot_timers", None)
+            if callable(reschedule):
+                reschedule()
 
     def upsert_author_profile(
         self,
@@ -355,6 +358,10 @@ class AuthorRepository(MongoComposableMixin):
 
         self.db.author_profiles.update_one({"rawAuthor": raw_author}, operation, upsert=True)
         composed(self).invalidate_activity_summary_cache()
+        if normalized_time_zone and normalized_time_zone != existing_profile.get("timeZoneId"):
+            reschedule = getattr(composed(self), "reschedule_activity_snapshot_timers", None)
+            if callable(reschedule):
+                reschedule()
         merged_profile = {**existing_profile, **update}
         if operation.get("$unset", {}).get("avatarRefreshedAt") == "":
             merged_profile.pop("avatarRefreshedAt", None)

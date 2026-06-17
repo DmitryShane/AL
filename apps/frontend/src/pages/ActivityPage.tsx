@@ -41,8 +41,9 @@ export function ActivityPage({
   onRefreshAuthor: (author: string) => void;
 }) {
   const author = selectedAuthor ? summary.authors.find((item) => item.rawAuthor === selectedAuthor) ?? null : null;
-  const snapshotPreparing = summary.snapshot?.status === "preparing";
+  const snapshotPreparing = summary.snapshot?.status === "preparing" && summary.authors.length === 0;
   const snapshotEmpty = summary.snapshot?.status === "empty";
+  const authorSnapshotPreparing = author?.snapshotStatus === "preparing" || author?.snapshotStatus === "live";
   const isHistoricalSingleDay = dateRange.preset !== "live" && dateRange.startDate === dateRange.endDate;
   const hourlyCacheKey = useMemo(() => JSON.stringify({
     startDate: dateRange.startDate,
@@ -295,6 +296,15 @@ export function ActivityPage({
         return;
       }
 
+      if (authorSnapshotPreparing) {
+        setReports([]);
+        setReportsTotal(0);
+        setReportSources([]);
+        setReportsLoading(false);
+        setReportsError(null);
+        return;
+      }
+
       if (!author?.rawAuthor) {
         if (loading) {
           return;
@@ -392,7 +402,7 @@ export function ActivityPage({
     return () => {
       ignore = true;
     };
-  }, [author?.rawAuthor, dateRange.startDate, dateRange.endDate, dateRange.preset, loading, reportsPage, reportsPageSize, reportSourceFilter, reportHourFilter, reportsCacheKey, snapshotEmpty]);
+  }, [author?.rawAuthor, authorSnapshotPreparing, dateRange.startDate, dateRange.endDate, dateRange.preset, loading, reportsPage, reportsPageSize, reportSourceFilter, reportHourFilter, reportsCacheKey, snapshotEmpty]);
 
   return (
     <>
@@ -441,6 +451,12 @@ export function ActivityPage({
             <strong>No activity data for this day</strong>
             <p>This was a day off, so nobody worked and no activity reports were recorded.</p>
           </div>
+        ) : authorSnapshotPreparing ? (
+          <p className="empty" data-doc-target="activity-snapshot-preparing">
+            {author?.snapshotStatus === "live"
+              ? `Historical activity snapshot for ${author.displayName} will be prepared after their local day ends.`
+              : `Preparing historical activity snapshot for ${author?.displayName ?? "this author"}...`}
+          </p>
         ) : author ? (
           <>
             <div className="toolbar" data-doc-target="activity-selected-author" id="activity-selected-author">

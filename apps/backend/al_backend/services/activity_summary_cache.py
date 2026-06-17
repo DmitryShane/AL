@@ -40,8 +40,13 @@ class ActivitySummaryCacheMixin:
 
         if snapshot_doc:
             payload = dict(snapshot_doc.get("payload") or {})
+            snapshot_meta = dict(payload.get("snapshot") or {})
             payload["cache"] = {"hit": True, "key": cache_key}
-            payload["snapshot"] = {"hit": True, "date": snapshot_date}
+            payload["snapshot"] = {
+                **snapshot_meta,
+                "hit": bool(snapshot_meta.get("hit")) if snapshot_meta else True,
+                "date": snapshot_date,
+            }
             return payload
 
         cached = self.db.activity_summary_cache.find_one(
@@ -96,8 +101,12 @@ class ActivitySummaryCacheMixin:
         payload["cache"] = {"hit": False, "key": cache_key}
         return payload
 
-    def invalidate_activity_summary_cache(self, dates: list[str] | tuple[str, ...] | set[str] | None = None) -> None:
-        self.invalidate_activity_day_summary_snapshots(dates)
+    def invalidate_activity_summary_cache(
+        self,
+        dates: list[str] | tuple[str, ...] | set[str] | None = None,
+        authors: list[str] | tuple[str, ...] | set[str] | None = None,
+    ) -> None:
+        self.invalidate_activity_day_summary_snapshots(dates, authors)
 
         if dates is not None:
             date_values = {str(day) for day in dates if str(day or "").strip()}

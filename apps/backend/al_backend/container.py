@@ -101,7 +101,7 @@ class BackendContainer:
         close_imported_open_live_states(self.services)
         self.activity_aggregation.rebuild_aggregates_if_needed(scope=self.activity_aggregation.aggregate_version_rebuild_scope)
         try:
-            self.activity_summary.start_activity_snapshot_background_drain()
+            self.activity_summary.start_activity_snapshot_scheduler()
         except Exception:
             logger.exception("Activity snapshot maintenance failed during startup")
         try:
@@ -111,6 +111,10 @@ class BackendContainer:
         self.auth.ensure_bootstrap_site_admin(self.settings.admin_email, self.settings.admin_password)
 
     def close(self) -> None:
+        try:
+            self.activity_summary.stop_activity_snapshot_scheduler()
+        except Exception:
+            logger.exception("Activity snapshot scheduler shutdown failed")
         try:
             self.settings_service.stop_server_stats_daily_refresh()
         except Exception:

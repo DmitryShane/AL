@@ -214,7 +214,9 @@ export function useDashboardData({
   }, [authUser?.email, dateRange.startDate, dateRange.endDate, dateRange.preset, dashboardRefreshMs, page]);
 
   useEffect(() => {
-    if (!authUser || page !== "activity" || summary?.activitySummary.snapshot?.status !== "preparing") {
+    const snapshot = summary?.activitySummary.snapshot;
+    const hasPreparingAuthors = Boolean(snapshot?.preparingAuthors?.length || snapshot?.pendingAuthors?.length);
+    if (!authUser || page !== "activity" || (snapshot?.status !== "preparing" && !hasPreparingAuthors)) {
       return;
     }
 
@@ -225,7 +227,7 @@ export function useDashboardData({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [authUser?.email, page, summary?.activitySummary.snapshot?.status, dateRange.startDate, dateRange.endDate, dateRange.preset]);
+  }, [authUser?.email, page, summary?.activitySummary.snapshot?.status, summary?.activitySummary.snapshot?.preparingAuthors?.join(","), summary?.activitySummary.snapshot?.pendingAuthors?.join(","), dateRange.startDate, dateRange.endDate, dateRange.preset]);
 
   async function requestReportRefresh(author?: string | null) {
     setRefreshingReports(true);

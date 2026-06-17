@@ -102,6 +102,7 @@ export type AuthorRow = {
   overtimeSavedPrefabsBySource?: SavedPrefabsSourceGroup[];
   status?: "online" | "stale";
   stalePresence?: "telegram" | "reports" | "both" | "device";
+  snapshotStatus?: "ready" | "preparing" | "live";
   dayOverride?: CalendarDayOverride;
   calendarDayMark?: CalendarDayOverride;
 };
@@ -143,9 +144,12 @@ export type ActivitySummary = {
   snapshot?: {
     hit?: boolean;
     date?: string;
-    status?: "preparing" | "empty";
+    status?: "ready" | "partial" | "preparing" | "empty";
+    partial?: boolean;
     readyAuthors?: string[];
     pendingAuthors?: string[];
+    preparingAuthors?: string[];
+    liveAuthors?: string[];
   };
 };
 

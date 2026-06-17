@@ -11,9 +11,11 @@ from .activity_summary_helpers import _is_device_profile_raw_author
 class ActivityDaySummarySnapshotsMixin:
     ACTIVITY_DAY_SUMMARY_SNAPSHOT_VIEW = "activity-day"
     ACTIVITY_AUTHOR_DAY_SUMMARY_MAINTENANCE_LIMIT = 3
-    ACTIVITY_DAY_SUMMARY_SNAPSHOT_VERSION_OFFSET = 6
+    ACTIVITY_DAY_SUMMARY_SNAPSHOT_VERSION_OFFSET = 7
     ACTIVITY_SNAPSHOT_STALE_LOCK_SECONDS = 15 * 60
     ACTIVITY_SNAPSHOT_BACKGROUND_DRAIN_LIMIT = 250
+    ACTIVITY_SNAPSHOT_REPORTS_LIMIT = 50
+    ACTIVITY_SNAPSHOT_LOCAL_MIDNIGHT_DELAY_SECONDS = 5 * 60
 
     def activity_day_summary_snapshot_version(self) -> int:
         return int(getattr(composed(self), "aggregates_version", 0)) + self.ACTIVITY_DAY_SUMMARY_SNAPSHOT_VERSION_OFFSET
@@ -44,6 +46,15 @@ class ActivityDaySummarySnapshotsMixin:
         if not snapshot_date:
             return None, None
 
+        author_payload = self.activity_author_day_summary_snapshot_payload_for_request(
+            snapshot_date,
+            view=view,
+            now=now,
+        )
+
+        if author_payload:
+            return snapshot_date, {"payload": author_payload}
+
         doc = self.db.activity_day_summary_snapshots.find_one(
             {
                 "date": snapshot_date,
@@ -64,6 +75,70 @@ class ActivityDaySummarySnapshotsMixin:
             return snapshot_date, None
 
         return snapshot_date, doc
+
+    def activity_author_day_summary_snapshot_payload_for_request(
+        self,
+        day_date: str,
+        *,
+        view: str,
+        now: dt.datetime | None = None,
+    ) -> dict[str, Any] | None:
+        snapshot_date = str(day_date or "").strip()
+
+        if not snapshot_date:
+            return None
+
+        now = now or dt.datetime.now(dt.UTC)
+        version = self.activity_day_summary_snapshot_version()
+        required_authors = self._snapshot_authors_for_date(snapshot_date)
+        input_authors = set(self._snapshot_input_authors_for_date(snapshot_date))
+
+        if not required_authors:
+            return None
+
+        docs = list(
+            self.db.activity_author_day_summary_snapshots.find(
+                {"date": snapshot_date, "rawAuthor": {"$in": required_authors}, "snapshotVersion": version},
+                {"_id": 0, "rawAuthor": 1, "payload": 1},
+            )
+        )
+        docs_by_author = {str(doc.get("rawAuthor") or ""): dict(doc.get("payload") or {}) for doc in docs}
+
+        ready_authors = sorted(docs_by_author)
+        live_authors: list[str] = []
+        pending_authors: list[str] = []
+
+        for raw_author in required_authors:
+            if raw_author in docs_by_author:
+                continue
+
+            if raw_author not in input_authors:
+                continue
+
+            if self._is_author_day_live(raw_author, snapshot_date, now):
+                live_authors.append(raw_author)
+            else:
+                pending_authors.append(raw_author)
+
+        if not ready_authors and not pending_authors:
+            return None
+
+        payload = self._compose_activity_author_day_snapshot_payload(
+            snapshot_date,
+            required_authors,
+            docs_by_author,
+            ready_authors=ready_authors,
+            pending_authors=sorted(pending_authors),
+            live_authors=sorted(live_authors),
+        )
+
+        if view == "activity-hourly":
+            payload = {
+                "hourlyActivityByAuthor": payload.get("hourlyActivityByAuthor", []),
+                "snapshot": payload.get("snapshot", {}),
+            }
+
+        return payload
 
     def activity_day_summary_preparing_payload(self, day_date: str, now: dt.datetime | None = None) -> dict[str, Any]:
         snapshot_date = str(day_date or "").strip()
@@ -92,6 +167,179 @@ class ActivityDaySummarySnapshotsMixin:
             "hourlyActivityByAuthor": [],
             "snapshot": {"hit": False, "status": "preparing", "date": snapshot_date, **status},
         }
+
+    def start_activity_snapshot_scheduler(self) -> dict[str, Any]:
+        if getattr(self, "activity_snapshot_background_disabled", False):
+            return {"started": False, "reason": "background_disabled"}
+
+        self.start_activity_snapshot_background_drain()
+        return self.reschedule_activity_snapshot_timers()
+
+    def stop_activity_snapshot_scheduler(self) -> None:
+        timers = getattr(self, "_activity_snapshot_timers", None) or {}
+        for timer in list(timers.values()):
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+        self._activity_snapshot_timers = {}
+
+    def reschedule_activity_snapshot_timers(self, now: dt.datetime | None = None) -> dict[str, Any]:
+        if getattr(self, "activity_snapshot_background_disabled", False):
+            return {"started": False, "reason": "background_disabled"}
+
+        now = now or dt.datetime.now(dt.UTC)
+        timers = getattr(self, "_activity_snapshot_timers", None)
+
+        if timers is None:
+            timers = {}
+            self._activity_snapshot_timers = timers
+
+        scheduled: list[dict[str, Any]] = []
+        active_authors = self._activity_snapshot_timer_authors()
+        active_keys = {author["rawAuthor"] for author in active_authors}
+
+        for raw_author, timer in list(timers.items()):
+            if raw_author not in active_keys:
+                timer.cancel()
+                timers.pop(raw_author, None)
+
+        for author in active_authors:
+            raw_author = author["rawAuthor"]
+            run_at = self._next_activity_snapshot_timer_at(author.get("timeZoneId"), now)
+            existing = timers.get(raw_author)
+
+            if existing is not None and getattr(existing, "run_at", None) == run_at:
+                scheduled.append({"rawAuthor": raw_author, "runAt": _iso(run_at)})
+                continue
+
+            if existing is not None:
+                existing.cancel()
+
+            delay = max(0.0, (run_at - now).total_seconds())
+            timer = threading.Timer(delay, self._run_activity_snapshot_timer, args=(raw_author,))
+            timer.daemon = True
+            timer.run_at = run_at  # type: ignore[attr-defined]
+            timers[raw_author] = timer
+            timer.start()
+            scheduled.append({"rawAuthor": raw_author, "runAt": _iso(run_at)})
+
+        return {"started": True, "scheduled": scheduled}
+
+    def _run_activity_snapshot_timer(self, raw_author: str) -> None:
+        try:
+            self.materialize_completed_author_day_snapshots_for_author(raw_author)
+        finally:
+            timers = getattr(self, "_activity_snapshot_timers", None) or {}
+            timers.pop(raw_author, None)
+            self.reschedule_activity_snapshot_timers()
+
+    def materialize_completed_author_day_snapshots_for_author(
+        self,
+        raw_author: str,
+        now: dt.datetime | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        now = now or dt.datetime.now(dt.UTC)
+        max_items = self.ACTIVITY_SNAPSHOT_BACKGROUND_DRAIN_LIMIT if limit is None else max(0, int(limit))
+        processed: list[dict[str, Any]] = []
+
+        for day_date in self._completed_snapshot_candidate_dates_for_author(raw_author, now):
+            if len(processed) >= max_items:
+                break
+
+            result = self.materialize_claimed_activity_author_day_snapshot(day_date, raw_author, now=now)
+            if result.get("processed"):
+                processed.append(result)
+
+        return {"processed": processed, "remaining": len(processed) >= max_items}
+
+    def materialize_completed_author_day_snapshot_if_ready(
+        self,
+        day_date: str,
+        raw_author: str,
+        now: dt.datetime | None = None,
+    ) -> dict[str, Any]:
+        now = now or dt.datetime.now(dt.UTC)
+        snapshot_date = str(day_date or "").strip()
+        resolved_author = composed(self).resolve_author_alias(str(raw_author or "Unknown User"))
+
+        if not snapshot_date or not resolved_author:
+            return {"processed": False, "reason": "missing_author_or_date"}
+
+        if resolved_author not in set(self._snapshot_input_authors_for_date(snapshot_date)):
+            return {"processed": False, "reason": "no_author_day_inputs", "rawAuthor": resolved_author, "date": snapshot_date}
+
+        if self._is_author_day_live(resolved_author, snapshot_date, now):
+            return {"processed": False, "reason": "author_day_live", "rawAuthor": resolved_author, "date": snapshot_date}
+
+        return self.materialize_claimed_activity_author_day_snapshot(snapshot_date, resolved_author, now=now)
+
+    def start_activity_snapshot_author_day_background_materialization(
+        self,
+        dates: list[str] | tuple[str, ...] | set[str],
+        authors: list[str] | tuple[str, ...] | set[str],
+    ) -> dict[str, Any]:
+        if getattr(self, "activity_snapshot_background_disabled", False):
+            return {"started": False, "reason": "background_disabled"}
+
+        date_values = sorted({str(day) for day in dates if str(day or "").strip()})
+        author_values = sorted({composed(self).resolve_author_alias(str(author or "Unknown User")) for author in authors if str(author or "").strip()})
+        author_values = [author for author in author_values if author]
+
+        if not date_values or not author_values:
+            return {"started": False, "reason": "missing_author_or_date"}
+
+        if getattr(self, "_rebuild_in_progress", False):
+            return {"started": False, "reason": "rebuild_in_progress"}
+
+        lock = getattr(self, "activity_snapshot_maintenance_lock", None)
+
+        if lock is not None and lock.locked():
+            return {"started": False, "reason": "maintenance_already_running"}
+
+        def run() -> None:
+            acquired = lock.acquire(blocking=False) if lock is not None else True
+
+            if not acquired:
+                return
+
+            try:
+                for day in date_values:
+                    for author in author_values:
+                        self.materialize_completed_author_day_snapshot_if_ready(day, author)
+            finally:
+                if lock is not None:
+                    lock.release()
+
+        thread = threading.Thread(target=run, name="activity-snapshot-author-day-maintenance", daemon=True)
+        thread.start()
+        return {"started": True, "dates": date_values, "authors": author_values}
+
+    def _activity_snapshot_timer_authors(self) -> list[dict[str, Any]]:
+        authors: dict[str, dict[str, Any]] = {}
+        profiles = composed(self)._profiles_by_raw_author()
+
+        for item in self.db.daily_author_activity.find({}, {"_id": 0, "author": 1, "timeZoneId": 1}):
+            raw_author = composed(self).resolve_author_alias(str(item.get("author") or "Unknown User"))
+            if not raw_author:
+                continue
+            profile = profiles.get(raw_author, {})
+            if _is_device_profile_raw_author(raw_author) or str(profile.get("profileType") or "person") == "publisher":
+                continue
+            authors[raw_author] = {
+                "rawAuthor": raw_author,
+                "timeZoneId": profile.get("timeZoneId") or item.get("timeZoneId") or "UTC",
+            }
+
+        return sorted(authors.values(), key=lambda item: str(item["rawAuthor"]).lower())
+
+    def _next_activity_snapshot_timer_at(self, time_zone_id: Any, now: dt.datetime) -> dt.datetime:
+        normalized_time_zone = _valid_time_zone_id(time_zone_id) or "UTC"
+        local_now = now.astimezone(ZoneInfo(normalized_time_zone))
+        next_midnight_date = local_now.date() + dt.timedelta(days=1)
+        next_midnight = dt.datetime.combine(next_midnight_date, dt.time.min, tzinfo=ZoneInfo(normalized_time_zone))
+        return next_midnight.astimezone(dt.UTC) + dt.timedelta(seconds=self.ACTIVITY_SNAPSHOT_LOCAL_MIDNIGHT_DELAY_SECONDS)
 
     def activity_day_summary_empty_completed_day_payload(self, day_date: str) -> dict[str, Any]:
         snapshot_date = str(day_date or "").strip()
@@ -315,6 +563,7 @@ class ActivityDaySummarySnapshotsMixin:
                 raw_author_scope=raw_author,
             )
             author_payload = self._author_day_payload_from_summary(payload, raw_author)
+            author_payload["reportsPage"] = self._reports_page_for_author_day_snapshot(day_date, raw_author)
             self.db.activity_author_day_summary_snapshots.delete_many(
                 {"date": day_date, "rawAuthor": raw_author, "snapshotVersion": {"$ne": version}}
             )
@@ -423,11 +672,16 @@ class ActivityDaySummarySnapshotsMixin:
         if not required_authors:
             return None
 
+        input_authors = set(self._snapshot_input_authors_for_date(snapshot_date))
+
         for raw_author in required_authors:
+            if raw_author not in input_authors:
+                continue
+
             if self._is_author_day_live(raw_author, snapshot_date, now):
                 return None
 
-        for raw_author in required_authors:
+        for raw_author in sorted(input_authors):
             if not self.db.activity_author_day_summary_snapshots.find_one(
                 {"date": snapshot_date, "rawAuthor": raw_author, "snapshotVersion": version},
                 {"_id": 1},
@@ -472,6 +726,7 @@ class ActivityDaySummarySnapshotsMixin:
                     raw_author_scope=raw_author,
                 )
                 author_payload = self._author_day_payload_from_summary(payload, raw_author)
+                author_payload["reportsPage"] = self._reports_page_for_author_day_snapshot(day_date, raw_author)
                 self.db.activity_author_day_summary_snapshots.delete_many(
                     {"date": day_date, "rawAuthor": raw_author, "snapshotVersion": {"$ne": version}}
                 )
@@ -618,11 +873,15 @@ class ActivityDaySummarySnapshotsMixin:
     def _is_completed_day_snapshot_ready(self, day_date: str, now: dt.datetime) -> bool:
         version = self.activity_day_summary_snapshot_version()
         required_authors = self._snapshot_authors_for_date(day_date)
+        input_authors = set(self._snapshot_input_authors_for_date(day_date))
 
         if not required_authors:
             return False
 
         for raw_author in required_authors:
+            if raw_author not in input_authors:
+                continue
+
             if self._is_author_day_live(raw_author, day_date, now):
                 return False
 
@@ -639,6 +898,7 @@ class ActivityDaySummarySnapshotsMixin:
         now = now or dt.datetime.now(dt.UTC)
         version = self.activity_day_summary_snapshot_version()
         required_authors = self._snapshot_authors_for_date(snapshot_date)
+        input_authors = set(self._snapshot_input_authors_for_date(snapshot_date))
         ready_authors: list[str] = []
         live_authors: list[str] = []
 
@@ -657,7 +917,7 @@ class ActivityDaySummarySnapshotsMixin:
         live = set(live_authors)
         return {
             "readyAuthors": sorted(ready_authors),
-            "pendingAuthors": [author for author in required_authors if author not in ready and author not in live],
+            "pendingAuthors": [author for author in required_authors if author in input_authors and author not in ready and author not in live],
             "liveAuthors": sorted(live_authors),
         }
 
@@ -779,6 +1039,136 @@ class ActivityDaySummarySnapshotsMixin:
             "hourlyActivityByAuthor": sorted(hourly, key=lambda item: str(item.get("author") or "")),
         }
 
+    def _compose_activity_author_day_snapshot_payload(
+        self,
+        day_date: str,
+        required_authors: list[str],
+        docs_by_author: dict[str, dict[str, Any]],
+        *,
+        ready_authors: list[str],
+        pending_authors: list[str],
+        live_authors: list[str],
+    ) -> dict[str, Any]:
+        profiles = composed(self)._profiles_by_raw_author()
+        totals = {
+            "daySeconds": 0,
+            "telegramDaySeconds": 0,
+            "pluginDaySeconds": 0,
+            "rawPluginDaySeconds": 0,
+            "telegramToFirstActivitySeconds": 0,
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "meetingSeconds": 0,
+            "overtimeActiveSeconds": 0,
+            "breakSeconds": 0,
+        }
+        activity_counts: dict[str, int] = {}
+        overtime_activity_counts: dict[str, int] = {}
+        saved_prefabs: dict[str, dict[str, Any]] = {}
+        overtime_saved_prefabs: dict[str, dict[str, Any]] = {}
+        authors: list[dict[str, Any]] = []
+        hourly: list[dict[str, Any]] = []
+
+        def merge_counts(target: dict[str, int], values: list[dict[str, Any]]) -> None:
+            for value in values or []:
+                key = str(value.get("type") or "")
+                if key:
+                    target[key] = target.get(key, 0) + int(value.get("count", 0))
+
+        def merge_saved(target: dict[str, dict[str, Any]], values: list[dict[str, Any]]) -> None:
+            for value in values or []:
+                path = str(value.get("path") or "")
+                if not path:
+                    continue
+                if path in target:
+                    target[path]["saveCount"] = int(target[path].get("saveCount", 0)) + int(value.get("saveCount", 0))
+                else:
+                    target[path] = dict(value)
+
+        for raw_author in ready_authors:
+            payload = docs_by_author.get(raw_author) or {}
+            author = dict(payload.get("author") or {})
+            if author:
+                author["snapshotStatus"] = "ready"
+                authors.append(author)
+
+            hourly_value = payload.get("hourlyActivity")
+            if isinstance(hourly_value, dict):
+                hourly_payload = dict(hourly_value)
+            elif isinstance(hourly_value, list):
+                profile = profiles.get(raw_author, {})
+                hourly_payload = {
+                    "author": author.get("displayName") or _display_name(raw_author, profile),
+                    "rawAuthor": raw_author,
+                    "timeZoneId": profile.get("timeZoneId"),
+                    "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
+                    "hourlyActivity": hourly_value,
+                }
+            else:
+                hourly_payload = {}
+            if hourly_payload:
+                hourly.append(hourly_payload)
+
+            for key in totals:
+                totals[key] += int((payload.get("totals") or {}).get(key, 0))
+            merge_counts(activity_counts, payload.get("activityCounts", []))
+            merge_counts(overtime_activity_counts, payload.get("overtimeActivityCounts", []))
+            merge_saved(saved_prefabs, payload.get("savedPrefabs", []))
+            merge_saved(overtime_saved_prefabs, payload.get("overtimeSavedPrefabs", []))
+
+        for raw_author in sorted(set(required_authors) - set(ready_authors)):
+            profile = profiles.get(raw_author, {})
+            author = self._empty_completed_day_author_row(raw_author, profile)
+            if raw_author in live_authors:
+                author["snapshotStatus"] = "live"
+            elif raw_author in pending_authors:
+                author["snapshotStatus"] = "preparing"
+            else:
+                author["snapshotStatus"] = "ready"
+            authors.append(author)
+            hourly.append(
+                {
+                    "author": author["displayName"],
+                    "rawAuthor": raw_author,
+                    "timeZoneId": profile.get("timeZoneId"),
+                    "timeZoneDisplayName": profile.get("timeZoneDisplayName"),
+                    "hourlyActivity": empty_hourly_activity(),
+                }
+            )
+
+        return {
+            "totals": totals,
+            "activityMix": sorted(_activity_mix_from_counts(activity_counts), key=lambda item: item["count"], reverse=True),
+            "savedPrefabs": sorted(saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True),
+            "overtimeActivityMix": sorted(_activity_mix_from_counts(overtime_activity_counts), key=lambda item: item["count"], reverse=True),
+            "overtimeSavedPrefabs": sorted(overtime_saved_prefabs.values(), key=lambda item: item.get("saveCount", 0), reverse=True),
+            "authors": sorted(authors, key=lambda item: str(item.get("displayName") or "").lower()),
+            "profiles": [],
+            "authorAliases": [],
+            "hourlyActivityByAuthor": sorted(hourly, key=lambda item: str(item.get("author") or "")),
+            "snapshot": {
+                "hit": bool(ready_authors),
+                "partial": bool(pending_authors or live_authors),
+                "status": "partial" if ready_authors and (pending_authors or live_authors) else ("ready" if ready_authors else "preparing"),
+                "date": day_date,
+                "readyAuthors": sorted(ready_authors),
+                "pendingAuthors": sorted(pending_authors),
+                "preparingAuthors": sorted(pending_authors),
+                "liveAuthors": sorted(live_authors),
+            },
+        }
+
+    def _reports_page_for_author_day_snapshot(self, day_date: str, raw_author: str) -> dict[str, Any]:
+        return self.reports_page(
+            start_date=day_date,
+            end_date=day_date,
+            date_mode=None,
+            author=raw_author,
+            limit=self.ACTIVITY_SNAPSHOT_REPORTS_LIMIT,
+            offset=0,
+            use_snapshots=False,
+        )
+
     def _completed_snapshot_candidate_authors_for_date(self, day_date: str, now: dt.datetime) -> list[str]:
         authors: set[str] = set()
 
@@ -794,7 +1184,51 @@ class ActivityDaySummarySnapshotsMixin:
 
         return sorted(authors)
 
+    def _completed_snapshot_candidate_dates_for_author(self, raw_author: str, now: dt.datetime) -> list[str]:
+        version = self.activity_day_summary_snapshot_version()
+        resolved_author = composed(self).resolve_author_alias(str(raw_author or "Unknown User"))
+        dates: set[str] = set()
+
+        for item in self.db.daily_author_activity.find({}, {"_id": 0, "author": 1, "date": 1, "timeZoneId": 1}):
+            source_raw_author = str(item.get("author") or "Unknown User")
+            if composed(self).resolve_author_alias(source_raw_author) != resolved_author:
+                continue
+
+            day_date = str(item.get("date") or "")
+            if not day_date:
+                continue
+
+            if self._is_author_day_live(resolved_author, day_date, now, item.get("timeZoneId")):
+                continue
+
+            if self.db.activity_author_day_summary_snapshots.find_one(
+                {"date": day_date, "rawAuthor": resolved_author, "snapshotVersion": version},
+                {"_id": 1},
+            ):
+                continue
+
+            dates.add(day_date)
+
+        return sorted(dates, reverse=True)
+
     def _snapshot_authors_for_date(self, day_date: str) -> list[str]:
+        authors: set[str] = set()
+
+        for item in self._empty_completed_day_authors():
+            raw_author = str(item.get("rawAuthor") or "")
+            if raw_author:
+                authors.add(raw_author)
+
+        for item in self.db.daily_author_activity.find({"date": day_date}, {"_id": 0, "author": 1}):
+            source_raw_author = str(item.get("author") or "Unknown User")
+            raw_author = composed(self).resolve_author_alias(source_raw_author)
+
+            if raw_author:
+                authors.add(raw_author)
+
+        return sorted(authors)
+
+    def _snapshot_input_authors_for_date(self, day_date: str) -> list[str]:
         authors: set[str] = set()
 
         for item in self.db.daily_author_activity.find({"date": day_date}, {"_id": 0, "author": 1}):
@@ -915,6 +1349,61 @@ class ActivityDaySummarySnapshotsMixin:
             "overtimeSavedPrefabs": author.get("overtimeSavedPrefabs", []),
         }
 
+    def snapshot_reports_page(
+        self,
+        *,
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        author: str | None,
+        source: str | None = None,
+        hour: int | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> dict[str, Any] | None:
+        if date_mode or not start_date or start_date != end_date or not author:
+            return None
+
+        if source or _normalize_report_hour_filter(hour) is not None or int(offset or 0) != 0:
+            return None
+
+        try:
+            dt.date.fromisoformat(str(start_date))
+        except ValueError:
+            return None
+
+        version = self.activity_day_summary_snapshot_version()
+        raw_author = composed(self).resolve_author_alias(author)
+        doc = self.db.activity_author_day_summary_snapshots.find_one(
+            {"date": start_date, "rawAuthor": raw_author, "snapshotVersion": version},
+            {"_id": 0, "payload.reportsPage": 1},
+        )
+        reports_page = (((doc or {}).get("payload") or {}).get("reportsPage") or None)
+
+        if not reports_page:
+            return None
+
+        snapshot_limit = max(1, int(reports_page.get("limit", len(reports_page.get("reports") or [])) or 1))
+        requested_limit = max(1, min(int(limit), 200))
+
+        if requested_limit > snapshot_limit:
+            return None
+
+        reports = list(reports_page.get("reports") or [])
+        total = int(reports_page.get("total", len(reports)))
+        offset = 0
+        limit = requested_limit
+        page_reports = reports[offset : offset + limit]
+
+        return {
+            "reports": page_reports,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "sources": list(reports_page.get("sources") or []),
+            "snapshot": {"hit": True, "date": start_date, "rawAuthor": raw_author},
+        }
+
     def _activity_day_summary_snapshot_date_for_request(
         self,
         *,
@@ -944,14 +1433,19 @@ class ActivityDaySummarySnapshotsMixin:
         except ValueError:
             return None
 
-        live_dates = set()
-        for profile in composed(self)._profiles_by_raw_author().values():
-            profile_time_zone_id = _valid_time_zone_id(profile.get("timeZoneId"))
-            if profile_time_zone_id:
-                live_dates.add(_local_date_for_time_zone(now, profile_time_zone_id))
-
-        if start_date in live_dates:
+        status_authors = self._snapshot_status_authors_for_date(start_date, now)
+        if status_authors and all(item["live"] for item in status_authors):
             return None
+
+        if not status_authors:
+            live_dates = set()
+            for profile in composed(self)._profiles_by_raw_author().values():
+                profile_time_zone_id = _valid_time_zone_id(profile.get("timeZoneId"))
+                if profile_time_zone_id:
+                    live_dates.add(_local_date_for_time_zone(now, profile_time_zone_id))
+
+            if start_date in live_dates:
+                return None
 
         if view == "activity" and (not include_hourly or not include_breakdowns):
             return None

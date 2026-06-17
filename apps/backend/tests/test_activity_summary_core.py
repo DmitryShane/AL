@@ -669,12 +669,16 @@ def test_historical_single_day_activity_summary_miss_returns_preparing_then_read
         "hit": False,
         "status": "preparing",
         "date": "2026-04-29",
+        "partial": True,
         "readyAuthors": [],
         "pendingAuthors": ["Future Artist"],
+        "preparingAuthors": ["Future Artist"],
         "liveAuthors": [],
     }
     assert snapshots == []
-    assert second["snapshot"] == {"hit": True, "date": "2026-04-29"}
+    assert second["snapshot"]["hit"] is True
+    assert second["snapshot"]["date"] == "2026-04-29"
+    assert second["snapshot"]["readyAuthors"] == ["Future Artist"]
     assert second["totals"]["activeSeconds"] == 120
 
 def test_empty_historical_single_day_returns_day_off_summary_with_zero_authors():
@@ -718,6 +722,129 @@ def test_empty_historical_single_day_returns_day_off_summary_with_zero_authors()
     )
     assert len(summary["hourlyActivityByAuthor"]) == 2
     assert repo.db.activity_day_summary_snapshots.count_documents({"date": "2026-04-26"}) == 0
+
+
+def test_historical_reports_page_reads_author_day_snapshot_payload():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "date": "2026-04-29",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "activityCounts": [{"type": "file_saved", "count": 1}],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "date": "2026-04-29",
+            "recordedAt": "2026-04-29T10:15:00+00:00",
+            "receivedAt": dt.datetime(2026, 4, 29, 10, 15, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 120,
+            "idleDeltaSeconds": 0,
+        }
+    )
+
+    repo.materialize_activity_author_day_summary_snapshots(limit=10, now=dt.datetime(2026, 5, 2, 12, tzinfo=dt.UTC))
+    repo.db.report_rows.delete_many({})
+
+    page = repo.reports_page(start_date="2026-04-29", end_date="2026-04-29", author="Future Artist")
+
+    assert page["snapshot"] == {"hit": True, "date": "2026-04-29", "rawAuthor": "Future Artist"}
+    assert page["total"] == 1
+    assert page["reports"][0]["source"] == "cur"
+    assert page["reports"][0]["displayName"] == "Future Artist"
+
+
+def test_historical_reports_page_falls_back_for_snapshot_filters_and_later_pages():
+    repo = fake_repository()
+    version = repo.activity_day_summary_snapshot_version()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
+    repo.db.activity_author_day_summary_snapshots.insert_one(
+        {
+            "date": "2026-04-29",
+            "rawAuthor": "Future Artist",
+            "snapshotVersion": version,
+            "payload": {
+                "reportsPage": {
+                    "reports": [
+                        {
+                            "source": "cur",
+                            "author": "Future Artist",
+                            "displayName": "Future Artist",
+                            "date": "2026-04-29",
+                            "recordedAt": "2026-04-29T10:15:00+00:00",
+                            "receivedAt": "2026-04-29T10:15:00+00:00",
+                        }
+                    ],
+                    "total": 2,
+                    "limit": 1,
+                    "offset": 0,
+                    "sources": ["cur", "ual"],
+                }
+            },
+        }
+    )
+    for index, source in enumerate(("cur", "ual")):
+        repo.db.report_rows.insert_one(
+            {
+                "source": source,
+                "author": "Future Artist",
+                "date": "2026-04-29",
+                "recordedAt": f"2026-04-29T10:{15 + index:02d}:00+00:00",
+                "receivedAt": dt.datetime(2026, 4, 29, 10, 15 + index, tzinfo=dt.UTC),
+                "activeDeltaSeconds": 60,
+                "idleDeltaSeconds": 0,
+            }
+        )
+
+    filtered_page = repo.reports_page(start_date="2026-04-29", end_date="2026-04-29", author="Future Artist", source="ual")
+    later_page = repo.reports_page(start_date="2026-04-29", end_date="2026-04-29", author="Future Artist", limit=1, offset=1)
+
+    assert "snapshot" not in filtered_page
+    assert filtered_page["reports"][0]["source"] == "ual"
+    assert "snapshot" not in later_page
+    assert later_page["offset"] == 1
+
+
+def test_author_scoped_snapshot_invalidation_keeps_other_author_day_snapshots():
+    repo = fake_repository()
+    version = repo.activity_day_summary_snapshot_version()
+    day_date = "2026-04-29"
+
+    for raw_author in ("Alpha Artist", "Beta Artist"):
+        repo.db.activity_author_day_summary_snapshots.insert_one(
+            {
+                "date": day_date,
+                "rawAuthor": raw_author,
+                "snapshotVersion": version,
+                "payload": {"author": {"rawAuthor": raw_author}},
+            }
+        )
+
+    repo.db.activity_day_summary_snapshots.insert_one(
+        {
+            "date": day_date,
+            "view": repo.ACTIVITY_DAY_SUMMARY_SNAPSHOT_VIEW,
+            "snapshotVersion": version,
+            "payload": {"authors": []},
+        }
+    )
+
+    repo.invalidate_activity_summary_cache([day_date], ["Alpha Artist"])
+
+    assert repo.db.activity_author_day_summary_snapshots.find_one({"date": day_date, "rawAuthor": "Alpha Artist"}) is None
+    assert repo.db.activity_author_day_summary_snapshots.find_one({"date": day_date, "rawAuthor": "Beta Artist"}) is not None
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": day_date, "snapshotVersion": version}) is None
 
 
 def test_future_single_day_returns_empty_summary_with_zero_authors():
@@ -796,7 +923,11 @@ def test_completed_day_snapshot_adds_zero_rows_for_inactive_people_when_one_auth
     )
 
     assert [item["rawAuthor"] for item in materialized["processed"]] == ["Dmitry Shane"]
-    assert summary["snapshot"] == {"hit": True, "date": day_date}
+    assert summary["snapshot"]["hit"] is True
+    assert summary["snapshot"]["date"] == day_date
+    assert summary["snapshot"]["status"] == "ready"
+    assert summary["snapshot"]["readyAuthors"] == ["Dmitry Shane"]
+    assert repo.db.activity_day_summary_snapshots.find_one({"date": day_date}) is not None
     assert [author["rawAuthor"] for author in summary["authors"]] == [
         "Denis Ostrovskiy",
         "Dmitry Shane",
@@ -852,11 +983,13 @@ def test_historical_hourly_summary_uses_day_snapshot_payload():
         "hit": False,
         "status": "preparing",
         "date": "2026-04-29",
+        "partial": True,
         "readyAuthors": [],
         "pendingAuthors": ["Future Artist"],
+        "preparingAuthors": ["Future Artist"],
         "liveAuthors": [],
     }
-    assert first["activityMix"] == []
+    assert first["hourlyActivityByAuthor"][0]["rawAuthor"] == "Future Artist"
     assert len(list(repo.db.activity_day_summary_snapshots.find({"date": "2026-04-29"}))) == 0
 
 def test_activity_day_summary_snapshot_is_ignored_for_live_and_ranges():
@@ -1583,8 +1716,10 @@ def test_activity_day_summary_snapshot_version_mismatch_returns_preparing():
         "hit": False,
         "status": "preparing",
         "date": "2026-04-29",
+        "partial": True,
         "readyAuthors": [],
         "pendingAuthors": ["Future Artist"],
+        "preparingAuthors": ["Future Artist"],
         "liveAuthors": [],
     }
     assert summary["totals"]["activeSeconds"] == 0
