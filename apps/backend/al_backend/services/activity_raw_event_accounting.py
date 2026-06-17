@@ -16,7 +16,7 @@ from ..overtime_rules import (
     is_vacation_overtime_window,
 )
 from .activity_status_intervals import status_interval_context_for_event
-from .raw_event_batching import REBUILD_FAST_ACCOUNTING_ENABLED
+from .raw_event_batching import REBUILD_FAST_ACCOUNTING_ENABLED, REBUILD_INTERVAL_ACCUMULATOR_ENABLED
 
 
 MIDNIGHT_OFFLINE_CARRYOVER_SUPPRESSION_SECONDS = 15 * 60
@@ -154,6 +154,7 @@ class ActivityRawEventAccountingMixin:
             "overtimeDaySessions": {},
             "authorTimeZones": set(),
             "fastAccountingEnabled": REBUILD_FAST_ACCOUNTING_ENABLED,
+            "intervalAccumulatorEnabled": REBUILD_INTERVAL_ACCUMULATOR_ENABLED,
             "eventDerived": {},
             "pendingDailyDeltas": {},
             "pendingDailyOrder": [],
@@ -217,6 +218,7 @@ class ActivityRawEventAccountingMixin:
                 "rawStateWrites": int(context.get("rawStateWrites") or 0),
                 "rawDailyWrites": int(context.get("rawDailyWrites") or 0),
                 "rawFastAccountingEnabled": bool(context.get("fastAccountingEnabled")),
+                "rawIntervalAccumulatorEnabled": bool(context.get("intervalAccumulatorEnabled")),
                 "rawFastContextBuildSeconds": float((context.get("rawTiming") or {}).get("stateLoad") or 0.0),
                 "rawDailyMergeFlushSeconds": float(context.get("rawDailyMergeFlushSeconds") or 0.0),
             }
@@ -432,6 +434,187 @@ class ActivityRawEventAccountingMixin:
         event_key = _raw_event_fast_cache_key(event)
         return context.setdefault("eventDerived", {}).setdefault(event_key, {})
 
+    def _try_apply_rebuild_interval_accumulator_event(self, event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        if not context or not context.get("intervalAccumulatorEnabled"):
+            return False, _empty_event_deltas()
+
+        event = dict(event)
+        event["author"] = composed(self).resolve_author_alias(event.get("author") or "Unknown User")
+        composed(self)._update_author_time_zone_for_raw_event_accounting(
+            event.get("author") or "Unknown User",
+            event.get("timeZoneId"),
+            event.get("timeZoneDisplayName"),
+        )
+        event_type = str(event.get("eventType") or "")
+        source = str(event.get("source") or "")
+
+        if source == "ual" and event_type == "events_dropped":
+            return True, self._apply_events_dropped_fast(event)
+
+        if event_type != "heartbeat" or source == "codex":
+            return False, _empty_event_deltas()
+
+        if self._batch_status_events(str(event.get("author") or "Unknown User"), str(event.get("date") or "")):
+            return False, _empty_event_deltas()
+
+        state_key = _raw_event_session_key(event)
+        state_doc = self._batch_state_doc(state_key) or {}
+        state = dict(state_doc.get("state", {}))
+        author_state_key = _raw_event_author_day_key(event)
+        author_state_doc = self._batch_state_doc(author_state_key) or {}
+        author_state = dict(author_state_doc.get("state", {}))
+        occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or event.get("occurredAt")
+        occurred_at = occurred_at if isinstance(occurred_at, dt.datetime) else None
+        last_activity_at = _coerce_datetime(state.get("lastActivityAt"))
+        last_accounting_at = _coerce_datetime(state.get("lastAccountingAt"))
+        last_activity_source = str(state.get("lastActivitySource") or "")
+        author_last_activity_scope = str(author_state.get("lastActivityScope") or "")
+        current_scope = _raw_event_activity_scope(event)
+
+        if not occurred_at or not last_activity_at or not last_accounting_at:
+            return False, _empty_event_deltas()
+
+        if occurred_at <= last_accounting_at:
+            return self._apply_heartbeat_noop_fast(event, state, author_state)
+
+        if last_activity_source and source != last_activity_source:
+            return self._apply_heartbeat_noop_fast(event, state, author_state)
+
+        if author_last_activity_scope and current_scope != author_last_activity_scope:
+            return self._apply_heartbeat_noop_fast(event, state, author_state)
+
+        idle_threshold_seconds = composed(self).get_idle_threshold_for_author(
+            str(event.get("author") or "Unknown User"),
+            source,
+        )
+
+        if (occurred_at - last_activity_at).total_seconds() < idle_threshold_seconds:
+            return self._apply_heartbeat_noop_fast(event, state, author_state)
+
+        return False, _empty_event_deltas()
+
+    def _apply_heartbeat_noop_fast(
+        self,
+        event: dict[str, Any],
+        state: dict[str, Any],
+        author_state: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or event.get("occurredAt")
+        occurred_at = occurred_at if isinstance(occurred_at, dt.datetime) else dt.datetime.now(dt.UTC)
+        snapshot = {
+            "source": event.get("source"),
+            "author": event.get("author") or "Unknown User",
+            "authorEmail": event.get("authorEmail", ""),
+            "pluginVersion": event.get("pluginVersion"),
+            "projectId": event.get("projectId") or "",
+            "sessionId": event.get("sessionId") or "",
+            "deviceId": event.get("deviceId") or "",
+            "date": event.get("date") or occurred_at.date().isoformat(),
+            "receivedAt": event.get("receivedAt"),
+            "recordedAt": event.get("occurredAtLocal") or event.get("occurredAtUtc"),
+            "timeZoneId": event.get("timeZoneId"),
+            "timeZoneDisplayName": event.get("timeZoneDisplayName"),
+            "workWindowSeconds": DEFAULT_PLUGIN_WORK_WINDOW_SECONDS,
+        }
+        deltas = _empty_event_deltas()
+        author_last_activity_at = _coerce_datetime(author_state.get("lastActivityAt"))
+        waiting_for_first_workday_activity = self._is_waiting_for_first_workday_activity(
+            event,
+            author_last_activity_at,
+            occurred_at,
+        )
+        materialize = self._should_materialize_aggregate_date(str(snapshot.get("date") or ""), str(snapshot.get("author") or "Unknown User"))
+        if materialize and not waiting_for_first_workday_activity:
+            self._update_daily_author_activity(snapshot, deltas)
+
+        state_key = _raw_event_session_key(event)
+        self._set_batch_state_doc(
+            state_key,
+            {
+                "author": event.get("author") or "Unknown User",
+                "date": event.get("date") or "",
+                "state": dict(state),
+                "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
+            },
+        )
+        author_state_key = _raw_event_author_day_key(event)
+        self._set_batch_state_doc(
+            author_state_key,
+            {
+                "author": event.get("author") or "Unknown User",
+                "date": event.get("date") or "",
+                "state": dict(author_state),
+                "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
+            },
+        )
+        return True, deltas
+
+    def _apply_events_dropped_fast(self, event: dict[str, Any]) -> dict[str, Any]:
+        state_key = _raw_event_session_key(event)
+        previous = self._batch_state_doc(state_key)
+        if previous is None:
+            previous = self.db.aggregate_session_state.find_one({"_id": state_key}) or {}
+        state = dict(previous.get("state", {}))
+        author_state_key = _raw_event_author_day_key(event)
+        author_previous = self._batch_state_doc(author_state_key)
+        if author_previous is None:
+            author_previous = self.db.aggregate_session_state.find_one({"_id": author_state_key}) or {}
+        author_state = dict(author_previous.get("state", {}))
+        occurred_at = _coerce_datetime(event.get("occurredAtUtc")) or event.get("occurredAt")
+        occurred_at = occurred_at if isinstance(occurred_at, dt.datetime) else dt.datetime.now(dt.UTC)
+        occurred_local_at = _parse_local_datetime(event.get("occurredAtLocal")) or occurred_at
+        first_activity_at = _coerce_datetime(state.get("firstActivityAt")) or occurred_at
+        author_first_activity_at = _coerce_datetime(author_state.get("firstActivityAt")) or occurred_at
+        current_source = str(event.get("source") or "")
+        current_scope = _raw_event_activity_scope(event)
+
+        self._set_batch_state_doc(
+            state_key,
+            {
+                "author": event.get("author") or "Unknown User",
+                "date": event.get("date") or "",
+                "state": {
+                    "firstActivityAt": first_activity_at.isoformat() if first_activity_at else None,
+                    "lastActivityAt": state.get("lastActivityAt"),
+                    "lastAccountingAt": occurred_at.isoformat(),
+                    "lastActivityLocalAt": state.get("lastActivityLocalAt"),
+                    "lastAccountingLocalAt": occurred_local_at.isoformat(),
+                    "lastActivitySource": state.get("lastActivitySource"),
+                    "lastAccountingSource": current_source or None,
+                    "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
+                    "lastHoldStartedAt": _hold_started_at_for_state(event),
+                    "lastSceneNavigationDurationSeconds": state.get("lastSceneNavigationDurationSeconds"),
+                    "lastSceneNavigationStartedAt": state.get("lastSceneNavigationStartedAt"),
+                    "isFocused": state.get("isFocused"),
+                },
+                "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
+            },
+        )
+        self._set_batch_state_doc(
+            author_state_key,
+            {
+                "author": event.get("author") or "Unknown User",
+                "date": event.get("date") or "",
+                "state": {
+                    "firstActivityAt": author_first_activity_at.isoformat() if author_first_activity_at else None,
+                    "lastActivityAt": author_state.get("lastActivityAt"),
+                    "lastAccountingAt": occurred_at.isoformat(),
+                    "lastActivityLocalAt": author_state.get("lastActivityLocalAt"),
+                    "lastAccountingLocalAt": occurred_local_at.isoformat(),
+                    "lastActivityScope": author_state.get("lastActivityScope"),
+                    "lastAccountingScope": current_scope or None,
+                    "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
+                    "lastHoldStartedAt": _hold_started_at_for_state(event),
+                    "lastSceneNavigationDurationSeconds": author_state.get("lastSceneNavigationDurationSeconds"),
+                    "lastSceneNavigationStartedAt": author_state.get("lastSceneNavigationStartedAt"),
+                    "statusIdleAccountedUntil": author_state.get("statusIdleAccountedUntil"),
+                },
+                "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
+            },
+        )
+        return _empty_event_deltas()
+
     def _update_author_time_zone_for_raw_event_accounting(
         self,
         raw_author: str,
@@ -628,6 +811,69 @@ class ActivityRawEventAccountingMixin:
         author_last_activity_scope = str(author_state.get("lastActivityScope") or "")
         author_last_accounting_scope = str(author_state.get("lastAccountingScope") or "")
         deltas = _empty_event_deltas()
+
+        if (
+            getattr(self, "_raw_event_batch_accounting", None)
+            and getattr(self, "_raw_event_batch_accounting", {}).get("fastAccountingEnabled")
+            and current_source == "ual"
+            and event_type == "events_dropped"
+        ):
+            if not first_activity_at:
+                first_activity_at = occurred_at
+            if not author_first_activity_at:
+                author_first_activity_at = occurred_at
+            last_accounting_at = occurred_at
+            last_accounting_local_at = occurred_local_at
+            last_accounting_source = current_source
+            author_last_accounting_at = occurred_at
+            author_last_accounting_local_at = occurred_local_at
+            author_last_accounting_scope = current_scope
+            self._set_batch_state_doc(
+                state_key,
+                {
+                    "author": event.get("author") or "Unknown User",
+                    "date": event.get("date") or "",
+                    "state": {
+                        "firstActivityAt": first_activity_at.isoformat() if first_activity_at else None,
+                        "lastActivityAt": last_activity_at.isoformat() if last_activity_at else None,
+                        "lastAccountingAt": last_accounting_at.isoformat() if last_accounting_at else None,
+                        "lastActivityLocalAt": last_activity_local_at.isoformat() if last_activity_local_at else None,
+                        "lastAccountingLocalAt": last_accounting_local_at.isoformat() if last_accounting_local_at else None,
+                        "lastActivitySource": last_activity_source or None,
+                        "lastAccountingSource": last_accounting_source or None,
+                        "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
+                        "lastHoldStartedAt": _hold_started_at_for_state(event),
+                        "lastSceneNavigationDurationSeconds": state.get("lastSceneNavigationDurationSeconds"),
+                        "lastSceneNavigationStartedAt": state.get("lastSceneNavigationStartedAt"),
+                        "isFocused": source_is_focused,
+                    },
+                    "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
+                },
+            )
+            self._set_batch_state_doc(
+                author_state_key,
+                {
+                    "author": event.get("author") or "Unknown User",
+                    "date": event.get("date") or "",
+                    "state": {
+                        "firstActivityAt": author_first_activity_at.isoformat() if author_first_activity_at else None,
+                        "lastActivityAt": author_last_activity_at.isoformat() if author_last_activity_at else None,
+                        "lastAccountingAt": author_last_accounting_at.isoformat() if author_last_accounting_at else None,
+                        "lastActivityLocalAt": author_last_activity_local_at.isoformat() if author_last_activity_local_at else None,
+                        "lastAccountingLocalAt": author_last_accounting_local_at.isoformat() if author_last_accounting_local_at else None,
+                        "lastActivityScope": author_last_activity_scope or None,
+                        "lastAccountingScope": author_last_accounting_scope or None,
+                        "lastHoldDurationSeconds": _hold_duration_seconds_for_state(event),
+                        "lastHoldStartedAt": _hold_started_at_for_state(event),
+                        "lastSceneNavigationDurationSeconds": author_state.get("lastSceneNavigationDurationSeconds"),
+                        "lastSceneNavigationStartedAt": author_state.get("lastSceneNavigationStartedAt"),
+                        "statusIdleAccountedUntil": author_state.get("statusIdleAccountedUntil"),
+                    },
+                    "updatedAt": event.get("receivedAt", dt.datetime.now(dt.UTC)),
+                },
+            )
+            return deltas
+
         raw_is_activity = _is_activity_event(event)
         is_activity = raw_is_activity and (source_is_focused is not False or event_type == "focus")
         is_time_accounting_activity = is_activity and not _is_unity_saved_file_event(event)

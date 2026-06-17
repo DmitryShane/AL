@@ -15,9 +15,10 @@ from .raw_event_batching import (
     REBUILD_BATCH_DELTA_CHUNK_SIZE,
     REBUILD_CURSOR_BATCH_SIZE,
     REBUILD_DELTA_SPILL_THRESHOLD,
+    REBUILD_FAST_ACCOUNTING_ENABLED,
+    REBUILD_INTERVAL_ACCUMULATOR_ENABLED,
     REBUILD_MEMORY_GUARD_ENABLED,
     REBUILD_MEMORY_SOFT_LIMIT_MB,
-    REBUILD_FAST_ACCOUNTING_ENABLED,
     REBUILD_RAW_FLUSH_BATCHES,
     REBUILD_SLOW_EVENT_THRESHOLD_MS,
 )
@@ -524,6 +525,144 @@ class ActivityAggregationRebuildMixin:
         LOGGER.info("Activity rebuild editor input compaction result=%s", result)
         return result
 
+    def compact_events_dropped_for_rebuild(
+        self,
+        target_dates: set[str],
+        target_authors: set[str],
+        progress_callback: Callable[[str, int, int], None] | None = None,
+    ) -> dict[str, Any]:
+        if not target_dates or not target_authors:
+            return {
+                "compactedEventsDropped": 0,
+                "insertedCompactedEventsDropped": 0,
+                "deletedEventsDropped": 0,
+            }
+
+        raw_event_query = self._aggregate_rebuild_query(target_dates, target_authors, "author")
+        query = {
+            **raw_event_query,
+            "source": "ual",
+            "eventType": "events_dropped",
+            "metadata.coalescedFromRawEvents": {"$ne": True},
+        }
+        total = self.db.raw_activity_events.count_documents(query)
+        processed = 0
+        inserted = 0
+        deleted = 0
+        compacted = 0
+        delete_ids: list[str] = []
+        insert_docs: list[dict[str, Any]] = []
+        current_group_key: tuple[Any, ...] | None = None
+        current_group: list[dict[str, Any]] = []
+
+        def dropped_count(event: dict[str, Any]) -> int:
+            metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+            try:
+                return max(1, int(metadata.get("clickCount") or metadata.get("coalescedEventCount") or 1))
+            except (TypeError, ValueError):
+                return 1
+
+        def flush_group() -> None:
+            nonlocal inserted, deleted, compacted, current_group
+
+            if len(current_group) <= 1:
+                current_group = []
+                return
+
+            first = current_group[0]
+            last = current_group[-1]
+            first_at = _coerce_datetime(first.get("occurredAtUtc")) or _coerce_datetime(first.get("occurredAtLocal"))
+            last_at = _coerce_datetime(last.get("occurredAtUtc")) or _coerce_datetime(last.get("occurredAtLocal")) or first_at
+            total_dropped = sum(dropped_count(item) for item in current_group)
+            metadata = dict(last.get("metadata") if isinstance(last.get("metadata"), dict) else {})
+            metadata.update(
+                {
+                    "state": "pending_events_overflow",
+                    "clickCount": total_dropped,
+                    "coalescedFromRawEvents": True,
+                    "coalescedEventCount": len(current_group),
+                    "coalescedDroppedEventCount": total_dropped,
+                    "coalescedFirstAtUtc": _isoformat_or_none(first_at),
+                    "coalescedLastAtUtc": _isoformat_or_none(last_at),
+                }
+            )
+            synthetic = dict(last)
+            synthetic.pop("_id", None)
+            synthetic.update(
+                {
+                    "eventId": f"rebuild-coalesced-events-dropped-{uuid.uuid4().hex}",
+                    "occurredAtUtc": first_at or last_at or last.get("occurredAtUtc"),
+                    "occurredAtLocal": first.get("occurredAtLocal") or last.get("occurredAtLocal"),
+                    "receivedAt": last.get("receivedAt"),
+                    "metadata": metadata,
+                }
+            )
+            insert_docs.append(synthetic)
+            delete_ids.extend(str(item.get("eventId") or "") for item in current_group if item.get("eventId"))
+            inserted += 1
+            deleted += len(current_group)
+            compacted += max(0, len(current_group) - 1)
+            current_group = []
+
+            if len(insert_docs) >= 500:
+                _insert_many_if_supported(self.db.raw_activity_events, insert_docs)
+                insert_docs.clear()
+
+            if len(delete_ids) >= 1_000:
+                self.db.raw_activity_events.delete_many({"eventId": {"$in": list(delete_ids)}})
+                delete_ids.clear()
+
+        sort_spec = [
+            ("author", ASCENDING),
+            ("date", ASCENDING),
+            ("source", ASCENDING),
+            ("projectId", ASCENDING),
+            ("sessionId", ASCENDING),
+            ("deviceId", ASCENDING),
+            ("batchId", ASCENDING),
+            ("timeZoneId", ASCENDING),
+            ("occurredAtUtc", ASCENDING),
+        ]
+        cursor = _cursor_with_batch_size(self.db.raw_activity_events.find(query).sort(sort_spec))
+        self._report_rebuild_progress(progress_callback, "Compacting dropped event summaries", 0, total)
+
+        for event in cursor:
+            group_key = (
+                event.get("author"),
+                event.get("date"),
+                event.get("source"),
+                event.get("projectId"),
+                event.get("sessionId"),
+                event.get("deviceId"),
+                event.get("batchId"),
+                event.get("timeZoneId"),
+            )
+
+            if current_group_key is not None and group_key != current_group_key:
+                flush_group()
+
+            current_group_key = group_key
+            current_group.append(event)
+            processed += 1
+            self._report_rebuild_progress(progress_callback, "Compacting dropped event summaries", processed, total)
+
+        flush_group()
+
+        if insert_docs:
+            _insert_many_if_supported(self.db.raw_activity_events, insert_docs)
+
+        if delete_ids:
+            self.db.raw_activity_events.delete_many({"eventId": {"$in": list(delete_ids)}})
+
+        result = {
+            "compactedEventsDropped": compacted,
+            "insertedCompactedEventsDropped": inserted,
+            "deletedEventsDropped": deleted,
+        }
+        self._set_rebuild_job_diagnostics(result)
+        LOGGER.info("Activity rebuild events_dropped compaction result=%s", result)
+        return result
+
     def rebuild_aggregates_if_needed(
         self,
         force: bool = False,
@@ -624,6 +763,19 @@ class ActivityAggregationRebuildMixin:
             target_authors,
             progress_callback=progress_callback,
         )
+        dropped_compaction_result = self.compact_events_dropped_for_rebuild(
+            set(target_dates),
+            target_authors,
+            progress_callback=progress_callback,
+        )
+        compaction_result.update(dropped_compaction_result)
+        compaction_result["rawEventsAfterCompaction"] = self.db.raw_activity_events.count_documents(scoped_query)
+        compaction_result["compactedEventsByType"] = {
+            "editor_input": int(compaction_result.get("compactedEvents") or 0),
+            "events_dropped": int(compaction_result.get("compactedEventsDropped") or 0),
+        }
+        compaction_result["compactedEventsTotal"] = sum(compaction_result["compactedEventsByType"].values())
+        self._set_rebuild_job_diagnostics(compaction_result)
         self._report_rebuild_progress(progress_callback, "Clearing scoped derived data", 0, 1)
         backfilled_live_meeting_events = self._backfill_live_meeting_events_from_report_rows(scoped_query)
         deleted_report_rows = self.db.report_rows.delete_many(scoped_query).deleted_count
@@ -915,8 +1067,22 @@ class ActivityAggregationRebuildMixin:
             phase_started_at = time.monotonic()
             slow_event_threshold_seconds = max(0.0, REBUILD_SLOW_EVENT_THRESHOLD_MS / 1000.0)
             metrics["rawFastAccountingEnabled"] = REBUILD_FAST_ACCOUNTING_ENABLED
+            metrics["rawIntervalAccumulatorEnabled"] = REBUILD_INTERVAL_ACCUMULATOR_ENABLED
             metrics.setdefault("rawSlowEvents", [])
-            self._set_rebuild_job_diagnostics({"rawFastAccountingEnabled": REBUILD_FAST_ACCOUNTING_ENABLED})
+            metrics.setdefault("rawSlowEventsByType", {})
+            metrics.setdefault("rawAccountingSecondsByEventType", {})
+            metrics.setdefault("rawAccumulatorEventsByType", {})
+            metrics.setdefault("rawLegacyFallbackEventsByType", {})
+            metrics["rawAccumulatorEvents"] = 0
+            metrics["rawAccumulatorSeconds"] = 0.0
+            metrics["rawAccumulatorEventsPerSecond"] = 0.0
+            metrics["rawPhaseWallSeconds"] = 0.0
+            self._set_rebuild_job_diagnostics(
+                {
+                    "rawFastAccountingEnabled": REBUILD_FAST_ACCOUNTING_ENABLED,
+                    "rawIntervalAccumulatorEnabled": REBUILD_INTERVAL_ACCUMULATOR_ENABLED,
+                }
+            )
 
             def process_raw_event_batch(events: list[dict[str, Any]]) -> None:
                 nonlocal raw_event_count
@@ -927,14 +1093,34 @@ class ActivityAggregationRebuildMixin:
                 try:
                     for event in events:
                         accounting_started_at = time.perf_counter()
-                        deltas = self._apply_raw_event_to_aggregates(event)
+                        event_type_key = f"{str(event.get('source') or '')}:{str(event.get('eventType') or '')}"
+                        accumulator_handled, deltas = self._try_apply_rebuild_interval_accumulator_event(event)
+                        if accumulator_handled:
+                            accumulator_elapsed = max(0.0, time.perf_counter() - accounting_started_at)
+                            metrics["rawAccumulatorEvents"] = int(metrics.get("rawAccumulatorEvents") or 0) + 1
+                            metrics["rawAccumulatorSeconds"] = float(metrics.get("rawAccumulatorSeconds") or 0.0) + accumulator_elapsed
+                            if metrics["rawAccumulatorSeconds"] > 0:
+                                metrics["rawAccumulatorEventsPerSecond"] = (
+                                    int(metrics.get("rawAccumulatorEvents") or 0)
+                                    / float(metrics.get("rawAccumulatorSeconds") or 1.0)
+                                )
+                            accumulator_by_type = metrics.setdefault("rawAccumulatorEventsByType", {})
+                            accumulator_by_type[event_type_key] = int(accumulator_by_type.get(event_type_key) or 0) + 1
+                        else:
+                            fallback_by_type = metrics.setdefault("rawLegacyFallbackEventsByType", {})
+                            fallback_by_type[event_type_key] = int(fallback_by_type.get(event_type_key) or 0) + 1
+                            deltas = self._apply_raw_event_to_aggregates(event)
                         accounting_elapsed = max(0.0, time.perf_counter() - accounting_started_at)
+                        accounting_by_type = metrics.setdefault("rawAccountingSecondsByEventType", {})
+                        accounting_by_type[event_type_key] = float(accounting_by_type.get(event_type_key) or 0.0) + accounting_elapsed
                         context = getattr(self, "_raw_event_batch_accounting", None)
                         if context:
                             timing = context.setdefault("rawTiming", {})
                             timing["rawEventAccounting"] = float(timing.get("rawEventAccounting") or 0.0) + accounting_elapsed
                         if slow_event_threshold_seconds and accounting_elapsed >= slow_event_threshold_seconds:
                             slow_events = metrics.setdefault("rawSlowEvents", [])
+                            slow_by_type = metrics.setdefault("rawSlowEventsByType", {})
+                            slow_by_type[event_type_key] = int(slow_by_type.get(event_type_key) or 0) + 1
                             slow_events.append(
                                 {
                                     "eventType": str(event.get("eventType") or ""),
@@ -948,13 +1134,22 @@ class ActivityAggregationRebuildMixin:
                             del slow_events[:-20]
                         raw_event_count += 1
                         raw_elapsed = max(0.001, time.monotonic() - phase_started_at)
-                        self._set_rebuild_job_diagnostics(
-                            {
-                                "rawEventsPerSecond": raw_event_count / raw_elapsed,
-                                "rawFlushSize": raw_flush_size,
-                                "rawSlowEvents": metrics.get("rawSlowEvents", []),
-                            }
-                        )
+                        metrics["rawPhaseWallSeconds"] = raw_elapsed
+                        if raw_event_count == raw_event_total or raw_event_count % 100 == 0:
+                            self._set_rebuild_job_diagnostics(
+                                {
+                                    "rawEventsPerSecond": raw_event_count / raw_elapsed,
+                                    "rawFlushSize": raw_flush_size,
+                                    "rawSlowEvents": metrics.get("rawSlowEvents", []),
+                                    "rawSlowEventsByType": metrics.get("rawSlowEventsByType", {}),
+                                    "rawPhaseWallSeconds": metrics.get("rawPhaseWallSeconds", 0.0),
+                                    "rawAccumulatorEvents": metrics.get("rawAccumulatorEvents", 0),
+                                    "rawAccumulatorEventsByType": metrics.get("rawAccumulatorEventsByType", {}),
+                                    "rawAccumulatorSeconds": metrics.get("rawAccumulatorSeconds", 0.0),
+                                    "rawAccumulatorEventsPerSecond": metrics.get("rawAccumulatorEventsPerSecond", 0.0),
+                                    "rawLegacyFallbackEventsByType": metrics.get("rawLegacyFallbackEventsByType", {}),
+                                }
+                            )
                         self._report_rebuild_progress(progress_callback, "Rebuilding raw activity events", raw_event_count, raw_event_total)
                         batch_id = str(event.get("batchId") or "")
 
@@ -988,9 +1183,21 @@ class ActivityAggregationRebuildMixin:
                             "rawStateWrites": metrics.get("rawStateWrites", 0),
                             "rawDailyWrites": metrics.get("rawDailyWrites", 0),
                             "rawFastAccountingEnabled": stats.get("rawFastAccountingEnabled", REBUILD_FAST_ACCOUNTING_ENABLED),
+                            "rawIntervalAccumulatorEnabled": stats.get(
+                                "rawIntervalAccumulatorEnabled",
+                                REBUILD_INTERVAL_ACCUMULATOR_ENABLED,
+                            ),
                             "rawFastContextBuildSeconds": metrics.get("rawFastContextBuildSeconds", 0.0),
                             "rawDailyMergeFlushSeconds": metrics.get("rawDailyMergeFlushSeconds", 0.0),
                             "rawSlowEvents": metrics.get("rawSlowEvents", []),
+                            "rawSlowEventsByType": metrics.get("rawSlowEventsByType", {}),
+                            "rawPhaseWallSeconds": metrics.get("rawPhaseWallSeconds", 0.0),
+                            "rawAccountingSecondsByEventType": metrics.get("rawAccountingSecondsByEventType", {}),
+                            "rawAccumulatorEvents": metrics.get("rawAccumulatorEvents", 0),
+                            "rawAccumulatorEventsByType": metrics.get("rawAccumulatorEventsByType", {}),
+                            "rawAccumulatorSeconds": metrics.get("rawAccumulatorSeconds", 0.0),
+                            "rawAccumulatorEventsPerSecond": metrics.get("rawAccumulatorEventsPerSecond", 0.0),
+                            "rawLegacyFallbackEventsByType": metrics.get("rawLegacyFallbackEventsByType", {}),
                         }
                     )
                     self._maybe_apply_rebuild_memory_guard(metrics)
@@ -1171,9 +1378,18 @@ class ActivityAggregationRebuildMixin:
             "rawStateWrites": metrics.get("rawStateWrites", 0),
             "rawDailyWrites": metrics.get("rawDailyWrites", 0),
             "rawFastAccountingEnabled": metrics.get("rawFastAccountingEnabled", REBUILD_FAST_ACCOUNTING_ENABLED),
+            "rawIntervalAccumulatorEnabled": metrics.get("rawIntervalAccumulatorEnabled", REBUILD_INTERVAL_ACCUMULATOR_ENABLED),
             "rawFastContextBuildSeconds": metrics.get("rawFastContextBuildSeconds", 0.0),
             "rawDailyMergeFlushSeconds": metrics.get("rawDailyMergeFlushSeconds", 0.0),
             "rawSlowEvents": metrics.get("rawSlowEvents", []),
+            "rawSlowEventsByType": metrics.get("rawSlowEventsByType", {}),
+            "rawPhaseWallSeconds": metrics.get("rawPhaseWallSeconds", 0.0),
+            "rawAccountingSecondsByEventType": metrics.get("rawAccountingSecondsByEventType", {}),
+            "rawAccumulatorEvents": metrics.get("rawAccumulatorEvents", 0),
+            "rawAccumulatorEventsByType": metrics.get("rawAccumulatorEventsByType", {}),
+            "rawAccumulatorSeconds": metrics.get("rawAccumulatorSeconds", 0.0),
+            "rawAccumulatorEventsPerSecond": metrics.get("rawAccumulatorEventsPerSecond", 0.0),
+            "rawLegacyFallbackEventsByType": metrics.get("rawLegacyFallbackEventsByType", {}),
         }
         self._set_rebuild_job_diagnostics(self._last_rebuild_metrics)
 

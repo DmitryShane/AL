@@ -309,6 +309,48 @@ def test_editor_input_compaction_is_idempotent_and_keeps_group_boundaries():
     assert all(event["metadata"]["coalescedEventCount"] == 2 for event in editor_inputs)
 
 
+def test_events_dropped_compaction_is_idempotent_and_sums_dropped_count():
+    repo = fake_repository()
+    author = "Future Artist"
+    day = "2026-06-16"
+    base_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+
+    for index in range(20):
+        occurred_at = base_at + dt.timedelta(milliseconds=index)
+        repo.db.raw_activity_events.insert_one(
+            {
+                "eventId": f"events-dropped-{index}",
+                "batchId": "batch-overflow",
+                "author": author,
+                "date": day,
+                "source": "ual",
+                "eventType": "events_dropped",
+                "projectId": "bike-rush-2",
+                "sessionId": "unity-session",
+                "deviceId": "unity-device",
+                "timeZoneId": "UTC",
+                "occurredAtUtc": occurred_at,
+                "occurredAtLocal": occurred_at.isoformat(),
+                "receivedAt": occurred_at,
+                "metadata": {"state": "pending_events_overflow", "clickCount": 2},
+            }
+        )
+
+    first = repo.compact_events_dropped_for_rebuild({day}, {author})
+    second = repo.compact_events_dropped_for_rebuild({day}, {author})
+    dropped_events = list(repo.db.raw_activity_events.find({"author": author, "date": day, "eventType": "events_dropped"}))
+
+    assert first["insertedCompactedEventsDropped"] == 1
+    assert first["deletedEventsDropped"] == 20
+    assert first["compactedEventsDropped"] == 19
+    assert second["insertedCompactedEventsDropped"] == 0
+    assert len(dropped_events) == 1
+    assert dropped_events[0]["metadata"]["coalescedFromRawEvents"] is True
+    assert dropped_events[0]["metadata"]["coalescedEventCount"] == 20
+    assert dropped_events[0]["metadata"]["coalescedDroppedEventCount"] == 40
+    assert dropped_events[0]["metadata"]["clickCount"] == 40
+
+
 def test_rebuild_raw_events_uses_batch_accounting_and_reports_progress():
     repo = fake_repository()
     total_events = RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE + 2
@@ -536,6 +578,133 @@ def test_fast_raw_accounting_matches_legacy_rebuild_outputs(monkeypatch):
     fast = run_with_fast_flag(True)
 
     assert fast == legacy
+
+
+def test_rebuild_interval_accumulator_matches_legacy_for_noop_heartbeat(monkeypatch):
+    author = "Denis Ostrovskiy"
+    day = "2026-06-16"
+    base_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+
+    def seed(repo):
+        repo.db.interval_settings.insert_one({"kind": "global", "idleThresholdSeconds": 60})
+        repo.db.raw_event_batches.insert_one(
+            {
+                "batchId": "batch-1",
+                "author": author,
+                "source": "ual",
+                "projectId": "bike-rush-2",
+                "receivedAt": base_at + dt.timedelta(seconds=30),
+            }
+        )
+        for index, (event_type, offset_seconds) in enumerate([("editor_input", 0), ("heartbeat", 30)], start=1):
+            occurred_at = base_at + dt.timedelta(seconds=offset_seconds)
+            repo.db.raw_activity_events.insert_one(
+                {
+                    "eventId": f"event-{index}",
+                    "batchId": "batch-1",
+                    "author": author,
+                    "date": day,
+                    "source": "ual",
+                    "eventType": event_type,
+                    "projectId": "bike-rush-2",
+                    "sessionId": "unity-session",
+                    "deviceId": "unity-device",
+                    "timeZoneId": "UTC",
+                    "occurredAtUtc": occurred_at,
+                    "occurredAtLocal": occurred_at.isoformat(),
+                    "receivedAt": occurred_at,
+                }
+            )
+
+    def run_with_accumulator(enabled):
+        monkeypatch.setattr(raw_accounting_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", enabled)
+        monkeypatch.setattr(rebuild_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", enabled)
+        repo = fake_repository()
+        seed(repo)
+        repo._materialize_status_report_rows = lambda: None
+        repo._rebuild_aggregates_from_sources({day}, {author})
+        return repo, {
+            "report_rows": _normalize_docs(repo.db.report_rows.items),
+            "daily_author_activity": _normalize_docs(repo.db.daily_author_activity.items),
+            "aggregate_session_state": _normalize_docs(repo.db.aggregate_session_state.items),
+        }
+
+    legacy_repo, legacy = run_with_accumulator(False)
+    fast_repo, fast = run_with_accumulator(True)
+
+    assert fast == legacy
+    assert fast_repo._last_rebuild_metrics["rawAccumulatorEventsByType"] == {"ual:heartbeat": 1}
+    assert legacy_repo._last_rebuild_metrics["rawAccumulatorEvents"] == 0
+
+
+def test_rebuild_interval_accumulator_kill_switch_routes_events_to_legacy(monkeypatch):
+    monkeypatch.setattr(raw_accounting_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", False)
+    monkeypatch.setattr(rebuild_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", False)
+    repo = fake_repository()
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    repo.db.raw_activity_events.insert_one(
+        {
+            "eventId": "overflow-1",
+            "batchId": "batch-overflow",
+            "author": "Future Artist",
+            "date": "2026-06-16",
+            "source": "ual",
+            "eventType": "events_dropped",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "deviceId": "unity-device",
+            "timeZoneId": "UTC",
+            "occurredAtUtc": event_at,
+            "occurredAtLocal": event_at.isoformat(),
+            "receivedAt": event_at,
+            "metadata": {"state": "pending_events_overflow", "clickCount": 40, "coalescedEventCount": 20},
+        }
+    )
+    repo.db.raw_event_batches.insert_one({"batchId": "batch-overflow", "author": "Future Artist", "source": "ual", "receivedAt": event_at})
+    repo._materialize_status_report_rows = lambda: None
+
+    repo._rebuild_aggregates_from_sources({"2026-06-16"}, {"Future Artist"})
+
+    assert repo._last_rebuild_metrics["rawIntervalAccumulatorEnabled"] is False
+    assert repo._last_rebuild_metrics["rawAccumulatorEvents"] == 0
+    assert repo._last_rebuild_metrics["rawLegacyFallbackEventsByType"] == {"ual:events_dropped": 1}
+
+
+def test_fast_events_dropped_accounting_updates_state_without_activity_totals():
+    repo = fake_repository()
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    repo._begin_raw_event_batch_accounting([])
+
+    deltas = repo._apply_raw_event_to_aggregates(
+        {
+            "eventId": "overflow-1",
+            "batchId": "batch-overflow",
+            "author": "Future Artist",
+            "date": "2026-06-16",
+            "source": "ual",
+            "eventType": "events_dropped",
+            "projectId": "bike-rush-2",
+            "sessionId": "unity-session",
+            "deviceId": "unity-device",
+            "timeZoneId": "UTC",
+            "occurredAtUtc": event_at,
+            "occurredAtLocal": event_at.isoformat(),
+            "receivedAt": event_at,
+            "metadata": {"state": "pending_events_overflow", "clickCount": 40, "coalescedEventCount": 20},
+        }
+    )
+    repo._finish_raw_event_batch_accounting()
+
+    assert deltas["activeDeltaMicroseconds"] == 0
+    assert deltas["idleDeltaMicroseconds"] == 0
+    assert deltas["breakDeltaSeconds"] == 0
+    assert deltas["overtimeActiveDeltaMicroseconds"] == 0
+    assert deltas["activityCountDeltas"] == []
+    assert deltas["savedPrefabDeltas"] == []
+    assert deltas["overtimeActivityCountDeltas"] == []
+    assert deltas["overtimeSavedPrefabDeltas"] == []
+    assert repo.db.daily_author_activity.items == []
+    assert repo.db.aggregate_session_state.items
 
 
 def test_coalesced_editor_input_preserves_activity_count():
