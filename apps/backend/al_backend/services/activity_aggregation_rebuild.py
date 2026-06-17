@@ -1072,6 +1072,7 @@ class ActivityAggregationRebuildMixin:
             metrics.setdefault("rawSlowEventsByType", {})
             metrics.setdefault("rawAccountingSecondsByEventType", {})
             metrics.setdefault("rawAccumulatorEventsByType", {})
+            metrics.setdefault("rawAccumulatorHandledEventsByType", {})
             metrics.setdefault("rawAccumulatorFallbackReasonsByType", {})
             metrics.setdefault("rawLegacyFallbackEventsByType", {})
             metrics["rawAccumulatorEvents"] = 0
@@ -1110,11 +1111,16 @@ class ActivityAggregationRebuildMixin:
                                 )
                             accumulator_by_type = metrics.setdefault("rawAccumulatorEventsByType", {})
                             accumulator_by_type[event_type_key] = int(accumulator_by_type.get(event_type_key) or 0) + 1
+                            handled_by_type = metrics.setdefault("rawAccumulatorHandledEventsByType", {})
+                            handled_by_type[event_type_key] = int(handled_by_type.get(event_type_key) or 0) + 1
                         else:
                             fallback_by_type = metrics.setdefault("rawLegacyFallbackEventsByType", {})
                             fallback_by_type[event_type_key] = int(fallback_by_type.get(event_type_key) or 0) + 1
                             fallback_reasons = metrics.setdefault("rawAccumulatorFallbackReasonsByType", {})
+                            context = getattr(self, "_raw_event_batch_accounting", None)
                             reason = "unsupported_branch"
+                            if context and context.get("lastAccumulatorFallbackReason"):
+                                reason = str(context.get("lastAccumulatorFallbackReason") or "unsupported_branch")
                             fallback_reasons[f"{event_type_key}:{reason}"] = int(fallback_reasons.get(f"{event_type_key}:{reason}") or 0) + 1
                             deltas = self._apply_raw_event_to_aggregates(event)
                         accounting_elapsed = max(0.0, time.perf_counter() - accounting_started_at)
@@ -1152,6 +1158,7 @@ class ActivityAggregationRebuildMixin:
                                     "rawPhaseWallSeconds": metrics.get("rawPhaseWallSeconds", 0.0),
                                     "rawAccumulatorEvents": metrics.get("rawAccumulatorEvents", 0),
                                     "rawAccumulatorEventsByType": metrics.get("rawAccumulatorEventsByType", {}),
+                                    "rawAccumulatorHandledEventsByType": metrics.get("rawAccumulatorHandledEventsByType", {}),
                                     "rawAccumulatorSeconds": metrics.get("rawAccumulatorSeconds", 0.0),
                                     "rawAccumulatorEventsPerSecond": metrics.get("rawAccumulatorEventsPerSecond", 0.0),
                                     "rawAccumulatorFallbackReasonsByType": metrics.get("rawAccumulatorFallbackReasonsByType", {}),
@@ -1212,6 +1219,7 @@ class ActivityAggregationRebuildMixin:
                             "rawAccountingSecondsByEventType": metrics.get("rawAccountingSecondsByEventType", {}),
                             "rawAccumulatorEvents": metrics.get("rawAccumulatorEvents", 0),
                             "rawAccumulatorEventsByType": metrics.get("rawAccumulatorEventsByType", {}),
+                            "rawAccumulatorHandledEventsByType": metrics.get("rawAccumulatorHandledEventsByType", {}),
                             "rawAccumulatorSeconds": metrics.get("rawAccumulatorSeconds", 0.0),
                             "rawAccumulatorFlushSeconds": metrics.get("rawAccumulatorFlushSeconds", 0.0),
                             "rawAccumulatorDailyWrites": metrics.get("rawAccumulatorDailyWrites", 0),
@@ -1408,6 +1416,7 @@ class ActivityAggregationRebuildMixin:
             "rawAccountingSecondsByEventType": metrics.get("rawAccountingSecondsByEventType", {}),
             "rawAccumulatorEvents": metrics.get("rawAccumulatorEvents", 0),
             "rawAccumulatorEventsByType": metrics.get("rawAccumulatorEventsByType", {}),
+            "rawAccumulatorHandledEventsByType": metrics.get("rawAccumulatorHandledEventsByType", {}),
             "rawAccumulatorSeconds": metrics.get("rawAccumulatorSeconds", 0.0),
             "rawAccumulatorFlushSeconds": metrics.get("rawAccumulatorFlushSeconds", 0.0),
             "rawAccumulatorDailyWrites": metrics.get("rawAccumulatorDailyWrites", 0),

@@ -474,6 +474,8 @@ def test_rebuild_raw_phase_records_timing_diagnostics():
 
 
 def test_rebuild_raw_phase_records_slow_event_diagnostics(monkeypatch):
+    monkeypatch.setattr(raw_accounting_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", False)
+    monkeypatch.setattr(rebuild_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", False)
     repo = fake_repository()
     job_id = "raw-slow-event-job"
     repo._active_rebuild_job_id = job_id
@@ -634,10 +636,84 @@ def test_rebuild_interval_accumulator_matches_legacy_for_noop_heartbeat(monkeypa
     fast_repo, fast = run_with_accumulator(True)
 
     assert fast == legacy
-    assert fast_repo._last_rebuild_metrics["rawAccumulatorEventsByType"] == {"ual:heartbeat": 1}
+    assert fast_repo._last_rebuild_metrics["rawAccumulatorEventsByType"] == {"ual:editor_input": 1, "ual:heartbeat": 1}
     assert "rawAccumulatorFlushSeconds" in fast_repo._last_rebuild_metrics
     assert "rawAccumulatorFallbackReasonsByType" in fast_repo._last_rebuild_metrics
     assert legacy_repo._last_rebuild_metrics["rawAccumulatorEvents"] == 0
+
+
+def test_rebuild_interval_accumulator_handles_high_volume_unity_events(monkeypatch):
+    author = "Denis Ostrovskiy"
+    day = "2026-06-16"
+    base_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    event_specs = [
+        ("editor_input", 0, {"coalescedEventCount": 3}),
+        ("selection", 20, {}),
+        ("scene_object_changed", 45, {}),
+        ("hold", 70, {}),
+        ("heartbeat", 160, {}),
+        ("selection", 190, {}),
+        ("scene_object_changed", 230, {}),
+        ("heartbeat", 360, {}),
+    ]
+
+    def seed(repo):
+        repo.db.interval_settings.insert_one({"kind": "global", "idleThresholdSeconds": 60})
+        repo.db.raw_event_batches.insert_one(
+            {
+                "batchId": "batch-high-volume",
+                "author": author,
+                "source": "ual",
+                "projectId": "bike-rush-2",
+                "receivedAt": base_at + dt.timedelta(seconds=360),
+            }
+        )
+        for index, (event_type, offset_seconds, metadata) in enumerate(event_specs, start=1):
+            occurred_at = base_at + dt.timedelta(seconds=offset_seconds)
+            repo.db.raw_activity_events.insert_one(
+                {
+                    "eventId": f"fast-event-{index}",
+                    "batchId": "batch-high-volume",
+                    "author": author,
+                    "date": day,
+                    "source": "ual",
+                    "eventType": event_type,
+                    "projectId": "bike-rush-2",
+                    "sessionId": "unity-session",
+                    "deviceId": "unity-device",
+                    "timeZoneId": "UTC",
+                    "occurredAtUtc": occurred_at,
+                    "occurredAtLocal": occurred_at.isoformat(),
+                    "receivedAt": occurred_at,
+                    "metadata": metadata,
+                }
+            )
+
+    def run_with_accumulator(enabled):
+        monkeypatch.setattr(raw_accounting_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", enabled)
+        monkeypatch.setattr(rebuild_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", enabled)
+        repo = fake_repository()
+        seed(repo)
+        repo._materialize_status_report_rows = lambda: None
+        repo._rebuild_aggregates_from_sources({day}, {author})
+        return repo, {
+            "report_rows": _normalize_docs(repo.db.report_rows.items),
+            "daily_author_activity": _normalize_docs(repo.db.daily_author_activity.items),
+            "aggregate_session_state": _normalize_docs(repo.db.aggregate_session_state.items),
+        }
+
+    legacy_repo, legacy = run_with_accumulator(False)
+    fast_repo, fast = run_with_accumulator(True)
+
+    assert fast == legacy
+    assert legacy_repo._last_rebuild_metrics["rawAccumulatorEvents"] == 0
+    handled = fast_repo._last_rebuild_metrics["rawAccumulatorHandledEventsByType"]
+    assert handled["ual:editor_input"] == 1
+    assert handled["ual:selection"] == 2
+    assert handled["ual:scene_object_changed"] == 2
+    assert handled["ual:hold"] == 1
+    assert handled["ual:heartbeat"] == 2
+    assert fast_repo._last_rebuild_metrics["rawLegacyFallbackEventsByType"] == {}
 
 
 def test_fast_daily_deltas_are_merged_before_flush():
@@ -952,7 +1028,9 @@ def test_raw_event_batch_accounting_fast_flag_disabled_keeps_immediate_batch_dai
     assert repo._last_raw_event_batch_accounting_stats["rawFastAccountingEnabled"] is False
 
 
-def test_rebuild_event_batches_do_not_use_live_ingest_batch_builder():
+def test_rebuild_event_batches_do_not_use_live_ingest_batch_builder(monkeypatch):
+    monkeypatch.setattr(raw_accounting_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", False)
+    monkeypatch.setattr(rebuild_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", False)
     repo = fake_repository()
     author = "Future Artist"
     day = "2026-06-16"
