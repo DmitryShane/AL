@@ -1072,9 +1072,13 @@ class ActivityAggregationRebuildMixin:
             metrics.setdefault("rawSlowEventsByType", {})
             metrics.setdefault("rawAccountingSecondsByEventType", {})
             metrics.setdefault("rawAccumulatorEventsByType", {})
+            metrics.setdefault("rawAccumulatorFallbackReasonsByType", {})
             metrics.setdefault("rawLegacyFallbackEventsByType", {})
             metrics["rawAccumulatorEvents"] = 0
             metrics["rawAccumulatorSeconds"] = 0.0
+            metrics["rawAccumulatorFlushSeconds"] = 0.0
+            metrics["rawAccumulatorDailyWrites"] = 0
+            metrics["rawAccumulatorStateWrites"] = 0
             metrics["rawAccumulatorEventsPerSecond"] = 0.0
             metrics["rawPhaseWallSeconds"] = 0.0
             self._set_rebuild_job_diagnostics(
@@ -1109,6 +1113,9 @@ class ActivityAggregationRebuildMixin:
                         else:
                             fallback_by_type = metrics.setdefault("rawLegacyFallbackEventsByType", {})
                             fallback_by_type[event_type_key] = int(fallback_by_type.get(event_type_key) or 0) + 1
+                            fallback_reasons = metrics.setdefault("rawAccumulatorFallbackReasonsByType", {})
+                            reason = "unsupported_branch"
+                            fallback_reasons[f"{event_type_key}:{reason}"] = int(fallback_reasons.get(f"{event_type_key}:{reason}") or 0) + 1
                             deltas = self._apply_raw_event_to_aggregates(event)
                         accounting_elapsed = max(0.0, time.perf_counter() - accounting_started_at)
                         accounting_by_type = metrics.setdefault("rawAccountingSecondsByEventType", {})
@@ -1147,6 +1154,7 @@ class ActivityAggregationRebuildMixin:
                                     "rawAccumulatorEventsByType": metrics.get("rawAccumulatorEventsByType", {}),
                                     "rawAccumulatorSeconds": metrics.get("rawAccumulatorSeconds", 0.0),
                                     "rawAccumulatorEventsPerSecond": metrics.get("rawAccumulatorEventsPerSecond", 0.0),
+                                    "rawAccumulatorFallbackReasonsByType": metrics.get("rawAccumulatorFallbackReasonsByType", {}),
                                     "rawLegacyFallbackEventsByType": metrics.get("rawLegacyFallbackEventsByType", {}),
                                 }
                             )
@@ -1170,8 +1178,17 @@ class ActivityAggregationRebuildMixin:
                     metrics["rawFlushCount"] = int(metrics.get("rawFlushCount") or 0) + int(stats.get("rawFlushCount") or 0)
                     metrics["rawStateWrites"] = int(metrics.get("rawStateWrites") or 0) + int(stats.get("rawStateWrites") or 0)
                     metrics["rawDailyWrites"] = int(metrics.get("rawDailyWrites") or 0) + int(stats.get("rawDailyWrites") or 0)
+                    metrics["rawAccumulatorDailyWrites"] = int(metrics.get("rawAccumulatorDailyWrites") or 0) + int(
+                        stats.get("rawAccumulatorDailyWrites") or 0
+                    )
+                    metrics["rawAccumulatorStateWrites"] = int(metrics.get("rawAccumulatorStateWrites") or 0) + int(
+                        stats.get("rawAccumulatorStateWrites") or 0
+                    )
                     metrics["rawDailyMergeFlushSeconds"] = float(metrics.get("rawDailyMergeFlushSeconds") or 0.0) + float(
                         stats.get("rawDailyMergeFlushSeconds") or 0.0
+                    )
+                    metrics["rawAccumulatorFlushSeconds"] = float(metrics.get("rawAccumulatorFlushSeconds") or 0.0) + float(
+                        stats.get("rawAccumulatorFlushSeconds") or 0.0
                     )
                     metrics["rawFastContextBuildSeconds"] = float(metrics.get("rawFastContextBuildSeconds") or 0.0) + float(
                         stats.get("rawFastContextBuildSeconds") or 0.0
@@ -1196,7 +1213,11 @@ class ActivityAggregationRebuildMixin:
                             "rawAccumulatorEvents": metrics.get("rawAccumulatorEvents", 0),
                             "rawAccumulatorEventsByType": metrics.get("rawAccumulatorEventsByType", {}),
                             "rawAccumulatorSeconds": metrics.get("rawAccumulatorSeconds", 0.0),
+                            "rawAccumulatorFlushSeconds": metrics.get("rawAccumulatorFlushSeconds", 0.0),
+                            "rawAccumulatorDailyWrites": metrics.get("rawAccumulatorDailyWrites", 0),
+                            "rawAccumulatorStateWrites": metrics.get("rawAccumulatorStateWrites", 0),
                             "rawAccumulatorEventsPerSecond": metrics.get("rawAccumulatorEventsPerSecond", 0.0),
+                            "rawAccumulatorFallbackReasonsByType": metrics.get("rawAccumulatorFallbackReasonsByType", {}),
                             "rawLegacyFallbackEventsByType": metrics.get("rawLegacyFallbackEventsByType", {}),
                         }
                     )
@@ -1388,7 +1409,11 @@ class ActivityAggregationRebuildMixin:
             "rawAccumulatorEvents": metrics.get("rawAccumulatorEvents", 0),
             "rawAccumulatorEventsByType": metrics.get("rawAccumulatorEventsByType", {}),
             "rawAccumulatorSeconds": metrics.get("rawAccumulatorSeconds", 0.0),
+            "rawAccumulatorFlushSeconds": metrics.get("rawAccumulatorFlushSeconds", 0.0),
+            "rawAccumulatorDailyWrites": metrics.get("rawAccumulatorDailyWrites", 0),
+            "rawAccumulatorStateWrites": metrics.get("rawAccumulatorStateWrites", 0),
             "rawAccumulatorEventsPerSecond": metrics.get("rawAccumulatorEventsPerSecond", 0.0),
+            "rawAccumulatorFallbackReasonsByType": metrics.get("rawAccumulatorFallbackReasonsByType", {}),
             "rawLegacyFallbackEventsByType": metrics.get("rawLegacyFallbackEventsByType", {}),
         }
         self._set_rebuild_job_diagnostics(self._last_rebuild_metrics)

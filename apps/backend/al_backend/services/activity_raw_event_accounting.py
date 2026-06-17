@@ -163,6 +163,9 @@ class ActivityRawEventAccountingMixin:
             "rawStateWrites": 0,
             "rawDailyWrites": 0,
             "rawDailyMergeFlushSeconds": 0.0,
+            "rawAccumulatorFlushSeconds": 0.0,
+            "rawAccumulatorDailyWrites": 0,
+            "rawAccumulatorStateWrites": 0,
         }
         _add_raw_timing(self._raw_event_batch_accounting, "stateLoad", time.perf_counter() - started_at)
 
@@ -191,6 +194,8 @@ class ActivityRawEventAccountingMixin:
                 self.db.aggregate_session_state.bulk_write(state_ops, ordered=False)
 
             context["rawStateWrites"] = int(context.get("rawStateWrites") or 0) + len(state_ops)
+            if context.get("intervalAccumulatorEnabled"):
+                context["rawAccumulatorStateWrites"] = int(context.get("rawAccumulatorStateWrites") or 0) + len(state_ops)
             _add_raw_timing(context, "stateFlush", time.perf_counter() - state_started_at)
             daily_started_at = time.perf_counter()
             daily_ops = []
@@ -217,10 +222,13 @@ class ActivityRawEventAccountingMixin:
                 "rawFlushCount": int(context.get("rawFlushCount") or 0),
                 "rawStateWrites": int(context.get("rawStateWrites") or 0),
                 "rawDailyWrites": int(context.get("rawDailyWrites") or 0),
+                "rawAccumulatorDailyWrites": int(context.get("rawAccumulatorDailyWrites") or 0),
+                "rawAccumulatorStateWrites": int(context.get("rawAccumulatorStateWrites") or 0),
                 "rawFastAccountingEnabled": bool(context.get("fastAccountingEnabled")),
                 "rawIntervalAccumulatorEnabled": bool(context.get("intervalAccumulatorEnabled")),
                 "rawFastContextBuildSeconds": float((context.get("rawTiming") or {}).get("stateLoad") or 0.0),
                 "rawDailyMergeFlushSeconds": float(context.get("rawDailyMergeFlushSeconds") or 0.0),
+                "rawAccumulatorFlushSeconds": float(context.get("rawAccumulatorFlushSeconds") or 0.0),
             }
         finally:
             self._raw_event_batch_accounting = None
@@ -233,6 +241,7 @@ class ActivityRawEventAccountingMixin:
             return
 
         started_at = time.perf_counter()
+        pending_count = len(order)
 
         for daily_key in order:
             item = pending.get(daily_key)
@@ -241,10 +250,7 @@ class ActivityRawEventAccountingMixin:
                 continue
 
             snapshot = dict(item.get("snapshot") or {})
-            merged = _empty_event_deltas()
-
-            for deltas in item.get("deltas") or []:
-                _merge_batch_deltas(merged, deltas)
+            merged = dict(item.get("mergedDeltas") or _empty_event_deltas())
 
             self._merge_daily_author_activity_now(snapshot, merged)
 
@@ -252,6 +258,8 @@ class ActivityRawEventAccountingMixin:
         order.clear()
         elapsed = time.perf_counter() - started_at
         context["rawDailyMergeFlushSeconds"] = float(context.get("rawDailyMergeFlushSeconds") or 0.0) + elapsed
+        context["rawAccumulatorFlushSeconds"] = float(context.get("rawAccumulatorFlushSeconds") or 0.0) + elapsed
+        context["rawAccumulatorDailyWrites"] = int(context.get("rawAccumulatorDailyWrites") or 0) + pending_count
         _add_raw_timing(context, "dailyMergeFlush", elapsed)
 
     def _batch_state_doc(self, state_key: str) -> dict[str, Any] | None:
@@ -1964,11 +1972,11 @@ class ActivityRawEventAccountingMixin:
             )
             pending = context.setdefault("pendingDailyDeltas", {})
             if daily_key not in pending:
-                pending[daily_key] = {"snapshot": dict(snapshot), "deltas": []}
+                pending[daily_key] = {"snapshot": dict(snapshot), "mergedDeltas": _empty_event_deltas()}
                 context.setdefault("pendingDailyOrder", []).append(daily_key)
             else:
                 pending[daily_key]["snapshot"] = dict(snapshot)
-            pending[daily_key].setdefault("deltas", []).append(dict(deltas))
+            _merge_batch_deltas(pending[daily_key].setdefault("mergedDeltas", _empty_event_deltas()), deltas)
             return
 
         self._merge_daily_author_activity_now(snapshot, deltas)

@@ -3,6 +3,7 @@ import datetime as dt
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 
+from al_backend.activity_math import _empty_event_deltas
 from al_backend.rebuild_jobs import (
     INTERRUPTED_REBUILD_JOB_ERROR,
     STALE_REBUILD_JOB_ERROR,
@@ -634,7 +635,40 @@ def test_rebuild_interval_accumulator_matches_legacy_for_noop_heartbeat(monkeypa
 
     assert fast == legacy
     assert fast_repo._last_rebuild_metrics["rawAccumulatorEventsByType"] == {"ual:heartbeat": 1}
+    assert "rawAccumulatorFlushSeconds" in fast_repo._last_rebuild_metrics
+    assert "rawAccumulatorFallbackReasonsByType" in fast_repo._last_rebuild_metrics
     assert legacy_repo._last_rebuild_metrics["rawAccumulatorEvents"] == 0
+
+
+def test_fast_daily_deltas_are_merged_before_flush():
+    repo = fake_repository()
+    event_at = dt.datetime(2026, 6, 16, 10, 0, tzinfo=dt.UTC)
+    snapshot = {
+        "source": "ual",
+        "author": "Future Artist",
+        "projectId": "bike-rush-2",
+        "date": "2026-06-16",
+        "receivedAt": event_at,
+        "recordedAt": event_at.isoformat(),
+        "workWindowSeconds": 32400,
+    }
+    first = _empty_event_deltas()
+    first["activityCountDeltas"].append({"type": "selection", "count": 1})
+    second = _empty_event_deltas()
+    second["activityCountDeltas"].append({"type": "selection", "count": 2})
+
+    repo._begin_raw_event_batch_accounting([])
+    repo._update_daily_author_activity(snapshot, first)
+    repo._update_daily_author_activity(snapshot, second)
+    context = repo._raw_event_batch_accounting
+    pending = next(iter(context["pendingDailyDeltas"].values()))
+
+    assert "deltas" not in pending
+    assert pending["mergedDeltas"]["activityCountDeltas"] == [{"type": "selection", "count": 3}]
+
+    repo._finish_raw_event_batch_accounting()
+    daily = repo.db.daily_author_activity.find_one({"author": "Future Artist", "date": "2026-06-16"})
+    assert daily["activityCounts"] == [{"type": "selection", "count": 3}]
 
 
 def test_rebuild_interval_accumulator_kill_switch_routes_events_to_legacy(monkeypatch):
