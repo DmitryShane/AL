@@ -578,6 +578,125 @@ def test_reports_queue_status_includes_chunk_progress(monkeypatch) -> None:
     assert processing_chunk["processingSeconds"] is None
 
 
+def test_reports_queue_status_sorts_chunked_and_raw_rows_together(monkeypatch) -> None:
+    repo = fake_repository()
+    now = dt.datetime.now(dt.UTC)
+
+    monkeypatch.setattr(
+        server_stats_service,
+        "_server_stats_service",
+        lambda key, label, unit: {
+            "key": key,
+            "label": label,
+            "unit": unit,
+            "status": "running",
+            "activeState": "active",
+            "subState": "running",
+            "loadState": "loaded",
+            "unitFileState": "enabled",
+            "activeEnteredAt": "Fri 2026-06-12 12:25:20 UTC",
+        },
+    )
+
+    repo.db.raw_report_chunks.insert_one(
+        {
+            "logicalReportId": "old-chunked",
+            "chunkIndex": 1,
+            "chunkCount": 2,
+            "totalEventCount": 100,
+            "rawReportId": "old-chunk-1",
+            "source": "ual",
+            "author": "Evgeniy Dotsenko",
+            "projectId": "Bike Rush 2",
+            "receivedAt": now - dt.timedelta(days=1),
+            "processedAt": now - dt.timedelta(days=1),
+            "status": "processed",
+            "attempts": 1,
+            "eventCount": 50,
+        }
+    )
+    repo.db.raw_reports.insert_one(
+        {
+            "_id": "new-raw",
+            "source": "codex",
+            "payload": {"author": "Dmitry Shane", "projectId": "AL"},
+            "receivedAt": now,
+            "queuedAt": now,
+            "processingStartedAt": now,
+            "processedAt": now,
+            "status": "processed",
+            "attempts": 1,
+        }
+    )
+
+    payload = repo.get_reports_queue_status()
+
+    assert [row["id"] for row in payload["recentReports"][:2]] == ["new-raw", "old-chunked"]
+
+
+def test_reports_queue_status_shows_single_chunk_unity_report_details(monkeypatch) -> None:
+    repo = fake_repository()
+    now = dt.datetime.now(dt.UTC)
+
+    monkeypatch.setattr(
+        server_stats_service,
+        "_server_stats_service",
+        lambda key, label, unit: {
+            "key": key,
+            "label": label,
+            "unit": unit,
+            "status": "running",
+            "activeState": "active",
+            "subState": "running",
+            "loadState": "loaded",
+            "unitFileState": "enabled",
+            "activeEnteredAt": "Fri 2026-06-12 12:25:20 UTC",
+        },
+    )
+
+    repo.db.raw_reports.insert_one(
+        {
+            "_id": "single-raw",
+            "source": "ual",
+            "payload": {
+                "author": "Evgeniy Dotsenko",
+                "projectId": "Bike Rush 2",
+                "logicalReportId": "single-logical",
+                "chunkIndex": 1,
+                "chunkCount": 1,
+                "chunkEventCount": 42,
+                "totalEventCount": 42,
+            },
+            "receivedAt": now,
+            "queuedAt": now,
+            "processingStartedAt": now - dt.timedelta(seconds=5),
+            "processedAt": now,
+            "status": "processed",
+            "attempts": 1,
+        }
+    )
+
+    payload = repo.get_reports_queue_status()
+    row = next(row for row in payload["recentReports"] if row["id"] == "single-logical")
+
+    assert row["kind"] == "chunked"
+    assert row["status"] == "processed"
+    assert row["stage"] == "processed"
+    assert row["stageLabel"] == "Processed"
+    assert row["assemblyStatus"] == "done"
+    assert row["processingStatus"] == "done"
+    assert row["chunksReceived"] == 1
+    assert row["chunksProcessed"] == 1
+    assert row["chunkCount"] == 1
+    assert row["eventsReceived"] == 42
+    assert row["totalEventCount"] == 42
+    assert row["assemblySeconds"] == 0
+    assert len(row["chunks"]) == 1
+    assert row["chunks"][0]["eventCount"] == 42
+    assert row["chunks"][0]["rawReportId"] == "single-raw"
+    assert row["chunks"][0]["status"] == "processed"
+
+
 def test_reports_queue_status_shows_assembled_report_processing_events(monkeypatch) -> None:
     repo = fake_repository()
     now = dt.datetime.now(dt.UTC)

@@ -290,6 +290,16 @@ def _is_chunk_raw_report(report: dict[str, Any]) -> bool:
     return bool(str(payload.get("logicalReportId") or "").strip()) and chunk_count > 1 and chunk_index > 0
 
 
+def _is_single_chunk_raw_report(report: dict[str, Any]) -> bool:
+    payload = report.get("payload") if isinstance(report.get("payload"), dict) else {}
+    try:
+        chunk_count = int(payload.get("chunkCount") or 0)
+        chunk_index = int(payload.get("chunkIndex") or 0)
+    except (TypeError, ValueError):
+        return False
+    return str(report.get("source") or "") == "ual" and bool(str(payload.get("logicalReportId") or "").strip()) and chunk_count == 1 and chunk_index == 1
+
+
 def _is_assembled_chunk_report(report: dict[str, Any]) -> bool:
     payload = report.get("payload") if isinstance(report.get("payload"), dict) else {}
     try:
@@ -360,6 +370,100 @@ def _chunk_detail_status(chunk: dict[str, Any]) -> str:
     if chunk.get("processedAt") or chunk.get("assembledAt") or status in {"processed", "assembled", "assembling"}:
         return "processed"
     return "received"
+
+
+def _reports_queue_sort_key(row: dict[str, Any], *, fallback_field: str = "receivedAt") -> dt.datetime:
+    return (
+        _coerce_datetime(row.get(fallback_field))
+        or _coerce_datetime(row.get("receivedAt"))
+        or _coerce_datetime(row.get("queuedAt"))
+        or dt.datetime.min.replace(tzinfo=dt.UTC)
+    )
+
+
+def _single_chunk_reports_queue_rows(
+    reports: list[dict[str, Any]],
+    profiles_by_author: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    for report in reports:
+        payload = report.get("payload") if isinstance(report.get("payload"), dict) else {}
+        logical_report_id = str(payload.get("logicalReportId") or report.get("_id") or "").strip()
+        if not logical_report_id:
+            continue
+
+        author = str(payload.get("author") or "")
+        project_id = str(payload.get("projectId") or "").strip() or _first_payload_event_project_id(payload)
+        events = payload.get("events") if isinstance(payload.get("events"), list) else []
+        event_count = int(payload.get("chunkEventCount") or payload.get("totalEventCount") or len(events) or 0)
+        status = str(report.get("status") or "unknown")
+        processing_status = {
+            "processed": "done",
+            "processing": "running",
+            "queued": "queued",
+            "failed": "failed",
+        }.get(status, "pending")
+        chunk_status = _chunk_detail_status(
+            {
+                "status": status,
+                "processedAt": report.get("processedAt"),
+                "failedAt": report.get("failedAt"),
+            }
+        )
+
+        rows.append(
+            {
+                "id": logical_report_id,
+                "kind": "chunked",
+                "receivedAt": _isoformat_datetime(report.get("receivedAt")),
+                "queuedAt": _isoformat_datetime(report.get("queuedAt")),
+                "processingStartedAt": _isoformat_datetime(report.get("processingStartedAt")),
+                "processedAt": _isoformat_datetime(report.get("processedAt")),
+                "failedAt": _isoformat_datetime(report.get("failedAt")),
+                "source": str(report.get("source") or ""),
+                "author": author,
+                "displayName": _display_name(author, (profiles_by_author or {}).get(author, {})),
+                "authorKey": str(report.get("authorKey") or author or ""),
+                "projectId": project_id,
+                "status": status,
+                "stage": status,
+                "stageLabel": status.replace("_", " ").title() if status else "Unknown",
+                "assemblyStatus": "done",
+                "processingStatus": processing_status,
+                "attempts": int(report.get("attempts") or 0),
+                "leaseOwner": str(report.get("leaseOwner") or ""),
+                "eventIngestTotal": int(report.get("eventIngestTotal") or 0),
+                "eventIngestProcessed": int(report.get("eventIngestProcessed") or 0),
+                "assemblySeconds": 0,
+                "processingSeconds": _processing_seconds(report),
+                "lastError": str(report.get("lastError") or ""),
+                "chunksReceived": 1,
+                "chunksProcessed": 1 if chunk_status == "processed" else 0,
+                "chunkCount": 1,
+                "eventsReceived": event_count,
+                "totalEventCount": event_count,
+                "chunks": [
+                    {
+                        "chunkIndex": 1,
+                        "eventCount": event_count,
+                        "rawReportId": str(report.get("_id") or ""),
+                        "receivedAt": _isoformat_datetime(report.get("receivedAt")),
+                        "queuedAt": _isoformat_datetime(report.get("queuedAt")),
+                        "processingStartedAt": _isoformat_datetime(report.get("processingStartedAt")),
+                        "status": chunk_status,
+                        "rawStatus": status,
+                        "processedAt": _isoformat_datetime(report.get("processedAt")),
+                        "failedAt": _isoformat_datetime(report.get("failedAt")),
+                        "attempts": int(report.get("attempts") or 0),
+                        "processingSeconds": _processing_seconds(report),
+                        "lastError": str(report.get("lastError") or ""),
+                    }
+                ],
+            }
+        )
+
+    return sorted(rows, key=_reports_queue_sort_key, reverse=True)
 
 
 def _chunk_reports_queue_rows(
@@ -473,7 +577,7 @@ def _chunk_reports_queue_rows(
             }
         )
 
-    return sorted(rows, key=lambda item: str(item.get("receivedAt") or ""), reverse=True)
+    return sorted(rows, key=_reports_queue_sort_key, reverse=True)
 
 
 def _pending_chunk_docs_from_raw_reports(reports: list[dict[str, Any]], existing_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -878,7 +982,12 @@ class ServerStatsServiceMixin:
             ).sort([("receivedAt", -1)]).limit(50)
         )
         assembled_recent_reports = [report for report in raw_recent_reports if _is_assembled_chunk_report(report)]
-        recent_reports = [report for report in raw_recent_reports if not _is_chunk_raw_report(report) and not _is_assembled_chunk_report(report)]
+        single_chunk_recent_reports = [report for report in raw_recent_reports if _is_single_chunk_raw_report(report)]
+        recent_reports = [
+            report
+            for report in raw_recent_reports
+            if not _is_chunk_raw_report(report) and not _is_single_chunk_raw_report(report) and not _is_assembled_chunk_report(report)
+        ]
         raw_failed_reports = list(
             self.db.raw_reports.find(
                 {"status": "failed"},
@@ -910,7 +1019,12 @@ class ServerStatsServiceMixin:
             ).sort([("failedAt", -1), ("receivedAt", -1)]).limit(20)
         )
         assembled_failed_reports = [report for report in raw_failed_reports if _is_assembled_chunk_report(report)]
-        failed_reports = [report for report in raw_failed_reports if not _is_chunk_raw_report(report) and not _is_assembled_chunk_report(report)]
+        single_chunk_failed_reports = [report for report in raw_failed_reports if _is_single_chunk_raw_report(report)]
+        failed_reports = [
+            report
+            for report in raw_failed_reports
+            if not _is_chunk_raw_report(report) and not _is_single_chunk_raw_report(report) and not _is_assembled_chunk_report(report)
+        ]
         chunk_docs = list(self.db.raw_report_chunks.find({}).sort([("receivedAt", -1)]).limit(200))
         raw_chunk_reports = [report for report in [*raw_recent_reports, *raw_failed_reports] if _is_chunk_raw_report(report)]
         assembled_reports = [*assembled_recent_reports, *assembled_failed_reports]
@@ -920,7 +1034,7 @@ class ServerStatsServiceMixin:
         chunk_failed_docs = [chunk for chunk in chunk_docs if str(chunk.get("status") or "") == "failed"]
         raw_authors = {
             str((report.get("payload") or {}).get("author") or "")
-            for report in [*recent_reports, *failed_reports]
+            for report in [*recent_reports, *failed_reports, *single_chunk_recent_reports, *single_chunk_failed_reports]
             if isinstance(report.get("payload"), dict) and str((report.get("payload") or {}).get("author") or "").strip()
         }
         raw_authors.update(
@@ -945,6 +1059,16 @@ class ServerStatsServiceMixin:
 
         chunk_rows = _chunk_reports_queue_rows(chunk_docs, profiles_by_author, assembled_reports)
         failed_chunk_rows = _chunk_reports_queue_rows(chunk_failed_docs, profiles_by_author, assembled_reports)
+        recent_rows = [
+            *chunk_rows,
+            *_single_chunk_reports_queue_rows(single_chunk_recent_reports, profiles_by_author),
+            *[_reports_queue_row(report, profiles_by_author) for report in recent_reports],
+        ]
+        failed_rows = [
+            *failed_chunk_rows,
+            *_single_chunk_reports_queue_rows(single_chunk_failed_reports, profiles_by_author),
+            *[_reports_queue_row(report, profiles_by_author) for report in failed_reports],
+        ]
 
         return {
             "generatedAt": now.isoformat(),
@@ -960,8 +1084,8 @@ class ServerStatsServiceMixin:
                 "processedLastHour": self.db.raw_reports.count_documents({"status": "processed", "processedAt": {"$gte": processed_since}}),
             },
             "oldestQueued": oldest_queued_payload,
-            "recentReports": [*chunk_rows, *[_reports_queue_row(report, profiles_by_author) for report in recent_reports]][:50],
-            "failedReports": [*failed_chunk_rows, *[_reports_queue_row(report, profiles_by_author) for report in failed_reports]][:20],
+            "recentReports": sorted(recent_rows, key=_reports_queue_sort_key, reverse=True)[:50],
+            "failedReports": sorted(failed_rows, key=lambda row: _reports_queue_sort_key(row, fallback_field="failedAt"), reverse=True)[:20],
         }
 
     def reboot_server(self) -> dict[str, Any]:
