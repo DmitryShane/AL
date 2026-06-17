@@ -4,7 +4,7 @@ import datetime as dt
 import os
 from typing import Any
 
-from pymongo import DESCENDING
+from pymongo import ASCENDING, DESCENDING
 
 from ..activity_math import (
     MICROSECONDS_PER_SECOND,
@@ -131,6 +131,49 @@ class DiscordMeetingService(MongoComposableMixin):
                 )
                 return {"ok": True, "status": "meeting_already_started"}
 
+            future_leave = self._find_matching_discord_meeting_leave(
+                normalized_discord_user_id,
+                str(channel_id or ""),
+                event_time,
+            )
+
+            if future_leave:
+                self._insert_discord_meeting_report_row(
+                    raw_author,
+                    normalized_discord_user_id,
+                    normalized_discord_username,
+                    event_type,
+                    event_time,
+                    event_date,
+                    time_zone_id,
+                    received_at,
+                    "meeting_started",
+                    guild_id,
+                    channel_id,
+                )
+                ended_at = _coerce_datetime(future_leave.get("timestamp")) or event_time
+                close_received_at = _coerce_datetime(future_leave.get("createdAt")) or received_at
+                meeting_result = self._close_discord_meeting_interval(
+                    {
+                        "discordUserId": normalized_discord_user_id,
+                        "discordUsername": normalized_discord_username,
+                        "rawAuthor": raw_author,
+                        "guildId": str(guild_id or ""),
+                        "channelId": str(channel_id or ""),
+                        "startedAt": event_time,
+                        "date": event_date,
+                        "timeZoneId": time_zone_id,
+                    },
+                    raw_author,
+                    normalized_discord_username,
+                    ended_at,
+                    close_received_at,
+                    guild_id,
+                    channel_id,
+                    delete_live_session=True,
+                )
+                return {"ok": True, "status": "meeting_closed", **meeting_result}
+
             self.db.meeting_sessions.update_one(
                 {"discordUserId": normalized_discord_user_id},
                 {
@@ -171,6 +214,16 @@ class DiscordMeetingService(MongoComposableMixin):
             guild_id,
             channel_id,
         )
+        if not meeting_result:
+            meeting_result = self._close_recent_unmatched_meeting_join(
+                normalized_discord_user_id,
+                raw_author,
+                normalized_discord_username,
+                event_time,
+                received_at,
+                guild_id,
+                channel_id,
+            )
         status = "meeting_closed" if meeting_result else "meeting_leave_without_join"
         self._insert_discord_meeting_report_row(
             raw_author,
@@ -188,6 +241,90 @@ class DiscordMeetingService(MongoComposableMixin):
         )
         return {"ok": True, "status": status, **meeting_result}
 
+    def _find_matching_discord_meeting_leave(
+        self,
+        discord_user_id: str,
+        channel_id: str,
+        started_at: dt.datetime,
+    ) -> dict[str, Any] | None:
+        query: dict[str, Any] = {
+            "discordUserId": discord_user_id,
+            "eventType": "leave",
+            "timestamp": {"$gte": started_at},
+        }
+        if channel_id:
+            query["channelId"] = channel_id
+        return self.db.meeting_events.find_one(query, {"_id": 0}, sort=[("timestamp", ASCENDING), ("createdAt", ASCENDING)])
+
+    def _close_recent_unmatched_meeting_join(
+        self,
+        discord_user_id: str,
+        raw_author: str,
+        discord_username: str,
+        event_time: dt.datetime,
+        received_at: dt.datetime,
+        guild_id: str | None,
+        channel_id: str | None,
+    ) -> dict[str, Any]:
+        query: dict[str, Any] = {
+            "discordUserId": discord_user_id,
+            "eventType": {"$in": ["join", "reconcile"]},
+            "timestamp": {"$lte": event_time},
+        }
+        if channel_id:
+            query["channelId"] = str(channel_id)
+        join_event = self.db.meeting_events.find_one(query, {"_id": 0}, sort=[("timestamp", DESCENDING), ("createdAt", DESCENDING)])
+
+        if not join_event:
+            return {}
+
+        started_at = _coerce_datetime(join_event.get("timestamp"))
+        if not started_at:
+            return {}
+
+        prior_leave_query: dict[str, Any] = {
+            "discordUserId": discord_user_id,
+            "eventType": "leave",
+            "timestamp": {"$gt": started_at, "$lt": event_time},
+        }
+        if channel_id:
+            prior_leave_query["channelId"] = str(channel_id)
+        if self.db.meeting_events.find_one(prior_leave_query, {"_id": 1}):
+            return {}
+
+        existing_interval = self.db.meeting_intervals.find_one(
+            {
+                "discordUserId": discord_user_id,
+                "startedAt": started_at,
+                "endedAt": event_time,
+            },
+            {"_id": 1},
+        )
+        if existing_interval:
+            self.db.meeting_sessions.delete_one({"discordUserId": discord_user_id})
+            return {"meetingSeconds": max(0, int((event_time - started_at).total_seconds()))}
+
+        time_zone_id = _valid_time_zone_id(join_event.get("timeZoneId")) or "UTC"
+        return self._close_discord_meeting_interval(
+            {
+                "discordUserId": discord_user_id,
+                "discordUsername": discord_username or str(join_event.get("discordUsername") or ""),
+                "rawAuthor": raw_author,
+                "guildId": str(guild_id or join_event.get("guildId") or ""),
+                "channelId": str(channel_id or join_event.get("channelId") or ""),
+                "startedAt": started_at,
+                "date": str(join_event.get("date") or _telegram_event_date(started_at, time_zone_id)),
+                "timeZoneId": time_zone_id,
+            },
+            raw_author,
+            discord_username,
+            event_time,
+            received_at,
+            guild_id,
+            channel_id,
+            delete_live_session=True,
+        )
+
     def _close_meeting_session(
         self,
         normalized_discord_user_id: str,
@@ -203,26 +340,61 @@ class DiscordMeetingService(MongoComposableMixin):
         if not session:
             return {}
 
+        return self._close_discord_meeting_interval(
+            session,
+            raw_author,
+            discord_username,
+            event_time,
+            received_at,
+            guild_id,
+            channel_id,
+            delete_live_session=True,
+        )
+
+    def _close_discord_meeting_interval(
+        self,
+        session: dict[str, Any],
+        raw_author: str,
+        discord_username: str,
+        event_time: dt.datetime,
+        received_at: dt.datetime,
+        guild_id: str | None,
+        channel_id: str | None,
+        *,
+        delete_live_session: bool,
+    ) -> dict[str, Any]:
+        normalized_discord_user_id = str(session.get("discordUserId") or "")
+
         started_at = _coerce_datetime(session["startedAt"]) or event_time
         meeting_seconds = max(0, int((event_time - started_at).total_seconds()))
         time_zone_id = _valid_time_zone_id(session.get("timeZoneId")) or "UTC"
         meeting_date = str(session.get("date") or _telegram_event_date(started_at, time_zone_id))
-        self.db.meeting_sessions.delete_one({"discordUserId": normalized_discord_user_id})
-        self.db.meeting_intervals.insert_one(
+        if delete_live_session:
+            self.db.meeting_sessions.delete_one({"discordUserId": normalized_discord_user_id})
+        existing_interval = self.db.meeting_intervals.find_one(
             {
                 "discordUserId": normalized_discord_user_id,
-                "discordUsername": discord_username or session.get("discordUsername", ""),
-                "rawAuthor": raw_author,
-                "guildId": str(guild_id or session.get("guildId") or ""),
-                "channelId": str(channel_id or session.get("channelId") or ""),
                 "startedAt": started_at,
                 "endedAt": event_time,
-                "date": meeting_date,
-                "timeZoneId": time_zone_id,
-                "meetingSeconds": meeting_seconds,
-                "createdAt": received_at,
-            }
+            },
+            {"_id": 1},
         )
+        if not existing_interval:
+            self.db.meeting_intervals.insert_one(
+                {
+                    "discordUserId": normalized_discord_user_id,
+                    "discordUsername": discord_username or session.get("discordUsername", ""),
+                    "rawAuthor": raw_author,
+                    "guildId": str(guild_id or session.get("guildId") or ""),
+                    "channelId": str(channel_id or session.get("channelId") or ""),
+                    "startedAt": started_at,
+                    "endedAt": event_time,
+                    "date": meeting_date,
+                    "timeZoneId": time_zone_id,
+                    "meetingSeconds": meeting_seconds,
+                    "createdAt": received_at,
+                }
+            )
         return {"meetingSeconds": meeting_seconds}
 
     def _insert_discord_meeting_report_row(

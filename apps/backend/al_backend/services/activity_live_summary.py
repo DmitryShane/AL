@@ -14,6 +14,22 @@ from ..mongo_composable import MongoComposableMixin
 
 
 class ActivityLiveSummaryService(MongoComposableMixin):
+    def _meeting_session_has_later_leave(self, session: dict[str, Any], started_at: dt.datetime) -> bool:
+        discord_user_id = str(session.get("discordUserId") or "")
+
+        if not discord_user_id:
+            return False
+
+        query: dict[str, Any] = {
+            "discordUserId": discord_user_id,
+            "eventType": "leave",
+            "timestamp": {"$gte": started_at},
+        }
+        channel_id = str(session.get("channelId") or "")
+        if channel_id:
+            query["channelId"] = channel_id
+        return bool(self.db.meeting_events.find_one(query, {"_id": 1}))
+
     def _break_buckets_for_daily_items(self, daily_items: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, int]]]:
         author_dates = {
             (str(item.get("author") or "Unknown User"), str(item.get("date") or ""))
@@ -329,6 +345,9 @@ class ActivityLiveSummaryService(MongoComposableMixin):
             if not started_at:
                 continue
 
+            if self._meeting_session_has_later_leave(session, started_at):
+                continue
+
             time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))
             meeting_date = str(session.get("date") or _telegram_event_date(started_at, time_zone_id))
 
@@ -474,6 +493,9 @@ class ActivityLiveSummaryService(MongoComposableMixin):
             started_at = _coerce_datetime(session.get("startedAt"))
 
             if not started_at:
+                continue
+
+            if self._meeting_session_has_later_leave(session, started_at):
                 continue
 
             time_zone_id = _author_time_zone_id(raw_author, profiles, session.get("timeZoneId"))

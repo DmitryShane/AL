@@ -492,6 +492,154 @@ def test_discord_voice_events_open_and_close_meeting_session():
     assert repo.db.report_rows.items[-1]["source"] == "discord"
     assert repo.db.report_rows.items[-1]["reportType"] == "meeting"
 
+
+def test_discord_leave_closes_recent_unmatched_join_event():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+    repo.db.meeting_events.insert_one(
+        {
+            "discordUserId": "123",
+            "discordUsername": "future",
+            "rawAuthor": "Future Artist",
+            "eventType": "join",
+            "guildId": "guild",
+            "channelId": "meeting",
+            "timestamp": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "UTC",
+            "createdAt": dt.datetime(2026, 4, 29, 10, 0, 1, tzinfo=dt.UTC),
+        }
+    )
+
+    leave = repo.record_discord_voice_event("123", "future", "leave", guild_id="guild", channel_id="meeting", timestamp="2026-04-29T10:00:02+00:00")
+
+    assert leave["status"] == "meeting_closed"
+    assert _hour_metric(leave, "meetingSeconds") == 2
+    assert repo.db.meeting_sessions.items == []
+    assert len(repo.db.meeting_intervals.items) == 1
+    assert repo.db.meeting_intervals.items[0]["startedAt"] == dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC)
+    assert repo.db.meeting_intervals.items[0]["endedAt"] == dt.datetime(2026, 4, 29, 10, 0, 2, tzinfo=dt.UTC)
+
+
+def test_discord_join_does_not_leave_live_session_when_later_leave_already_exists():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+    repo.db.meeting_events.insert_one(
+        {
+            "discordUserId": "123",
+            "discordUsername": "future",
+            "rawAuthor": "Future Artist",
+            "eventType": "leave",
+            "guildId": "guild",
+            "channelId": "meeting",
+            "timestamp": dt.datetime(2026, 4, 29, 10, 0, 2, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "UTC",
+            "createdAt": dt.datetime(2026, 4, 29, 10, 0, 2, 100000, tzinfo=dt.UTC),
+        }
+    )
+
+    join = repo.record_discord_voice_event("123", "future", "join", guild_id="guild", channel_id="meeting", timestamp="2026-04-29T10:00:00+00:00")
+
+    assert join["status"] == "meeting_closed"
+    assert _hour_metric(join, "meetingSeconds") == 2
+    assert repo.db.meeting_sessions.items == []
+    assert len(repo.db.meeting_intervals.items) == 1
+
+
+def test_scoped_rebuild_replays_discord_meeting_events_without_stale_live_session():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+    repo.db.meeting_sessions.insert_one(
+        {
+            "discordUserId": "123",
+            "discordUsername": "future",
+            "rawAuthor": "Future Artist",
+            "guildId": "guild",
+            "channelId": "meeting",
+            "startedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.meeting_events.insert_many(
+        [
+            {
+                "discordUserId": "123",
+                "discordUsername": "future",
+                "rawAuthor": "Future Artist",
+                "eventType": "join",
+                "guildId": "guild",
+                "channelId": "meeting",
+                "timestamp": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+                "date": "2026-04-29",
+                "timeZoneId": "UTC",
+                "createdAt": dt.datetime(2026, 4, 29, 10, 0, 1, tzinfo=dt.UTC),
+            },
+            {
+                "discordUserId": "123",
+                "discordUsername": "future",
+                "rawAuthor": "Future Artist",
+                "eventType": "leave",
+                "guildId": "guild",
+                "channelId": "meeting",
+                "timestamp": dt.datetime(2026, 4, 29, 10, 0, 2, tzinfo=dt.UTC),
+                "date": "2026-04-29",
+                "timeZoneId": "UTC",
+                "createdAt": dt.datetime(2026, 4, 29, 10, 0, 2, 100000, tzinfo=dt.UTC),
+            },
+        ]
+    )
+
+    repo.rebuild_aggregates_for_dates("2026-04-29", dates=["2026-04-29"], authors=["Future Artist"])
+
+    statuses = [item.get("discordStatus") for item in repo.db.report_rows.items if item.get("source") == "discord"]
+    assert statuses == ["meeting_started", "meeting_closed"]
+    assert repo.db.meeting_sessions.items == []
+    assert len(repo.db.meeting_intervals.items) == 1
+    assert repo.db.meeting_intervals.items[0]["meetingSeconds"] == 2
+
+
+def test_live_summary_ignores_stale_discord_session_with_later_leave_event():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "discordUserId": "123", "timeZoneId": "UTC"})
+    repo.db.meeting_sessions.insert_one(
+        {
+            "discordUserId": "123",
+            "discordUsername": "future",
+            "rawAuthor": "Future Artist",
+            "guildId": "guild",
+            "channelId": "meeting",
+            "startedAt": dt.datetime(2026, 4, 29, 10, 0, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.meeting_events.insert_one(
+        {
+            "discordUserId": "123",
+            "discordUsername": "future",
+            "rawAuthor": "Future Artist",
+            "eventType": "leave",
+            "guildId": "guild",
+            "channelId": "meeting",
+            "timestamp": dt.datetime(2026, 4, 29, 10, 0, 2, tzinfo=dt.UTC),
+            "date": "2026-04-29",
+            "timeZoneId": "UTC",
+            "createdAt": dt.datetime(2026, 4, 29, 10, 0, 2, tzinfo=dt.UTC),
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        now=dt.datetime(2026, 4, 29, 10, 30, tzinfo=dt.UTC),
+    )
+
+    author = next((item for item in summary["authors"] if item["rawAuthor"] == "Future Artist"), None)
+    assert author is None or author.get("activeMeeting") is not True
+
+
 def test_open_discord_meeting_does_not_create_live_report_rows_but_counts_live_time():
     repo = fake_repository()
     repo.db.interval_settings.insert_one({"kind": "global", "sendIntervalSeconds": 300})

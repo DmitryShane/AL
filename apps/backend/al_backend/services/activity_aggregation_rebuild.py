@@ -781,6 +781,7 @@ class ActivityAggregationRebuildMixin:
         backfilled_live_meeting_events = self._backfill_live_meeting_events_from_report_rows(scoped_query)
         deleted_report_rows = self.db.report_rows.delete_many(scoped_query).deleted_count
         deleted_daily = self.db.daily_author_activity.delete_many(scoped_query).deleted_count
+        deleted_meeting_sessions = self.db.meeting_sessions.delete_many(raw_author_query).deleted_count
         deleted_state = self.db.aggregate_session_state.delete_many(scoped_query).deleted_count
         deleted_day_state = self.db.aggregate_day_state.delete_many(scoped_query).deleted_count
 
@@ -824,6 +825,7 @@ class ActivityAggregationRebuildMixin:
             "authors": sorted(target_authors),
             "deletedReportRows": deleted_report_rows,
             "deletedDailyAuthorActivity": deleted_daily,
+            "deletedMeetingSessions": deleted_meeting_sessions,
             "deletedAggregateSessionState": deleted_state,
             "deletedAggregateDayState": deleted_day_state,
             "capturedAggregateDayState": state_count,
@@ -1370,39 +1372,13 @@ class ActivityAggregationRebuildMixin:
             self._report_rebuild_progress(progress_callback, "Rebuilding Telegram activity", 0, 0)
 
         meeting_total = self.db.meeting_events.count_documents(raw_author_query)
-        meeting_count = 0
-
         phase_started_at = time.monotonic()
-        for event in _cursor_with_batch_size(self.db.meeting_events.find(raw_author_query).sort("timestamp", ASCENDING)):
-            meeting_count += 1
-            self._report_rebuild_progress(progress_callback, "Rebuilding Discord meetings", meeting_count, meeting_total)
-            event_time = _coerce_datetime(event.get("timestamp"))
-
-            if not event_time:
-                continue
-
-            received_at = _coerce_datetime(event.get("createdAt")) or event_time
-            time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
-            event_type = str(event.get("eventType") or "reconcile")
-            if event_type == "live":
-                continue
-            metadata = {}
-
-            composed(self)._insert_discord_meeting_report_row(
-                str(event.get("rawAuthor") or "Unknown User"),
-                str(event.get("discordUserId") or ""),
-                str(event.get("discordUsername") or ""),
-                event_type,
-                event_time,
-                str(event.get("date") or _telegram_event_date(event_time, time_zone_id)),
-                time_zone_id,
-                received_at,
-                str(event.get("eventType") or "meeting"),
-                str(event.get("guildId") or ""),
-                str(event.get("channelId") or ""),
-                metadata,
-            )
-            self._maybe_apply_rebuild_memory_guard(metrics)
+        meeting_count = self._rebuild_discord_meetings_from_events(
+            raw_author_query,
+            meeting_total,
+            progress_callback,
+            metrics,
+        )
 
         self._record_rebuild_observation(metrics, "Rebuilding Discord meetings", phase_started_at, meeting_count)
 
@@ -1446,6 +1422,125 @@ class ActivityAggregationRebuildMixin:
             "rawLegacyFallbackEventsByType": metrics.get("rawLegacyFallbackEventsByType", {}),
         }
         self._set_rebuild_job_diagnostics(self._last_rebuild_metrics)
+
+    def _rebuild_discord_meetings_from_events(
+        self,
+        raw_author_query: dict[str, Any],
+        meeting_total: int,
+        progress_callback: Callable[[str, int, int], None] | None,
+        metrics: dict[str, Any],
+    ) -> int:
+        open_sessions: dict[tuple[str, str], dict[str, Any]] = {}
+        meeting_count = 0
+        cursor = self.db.meeting_events.find(raw_author_query).sort([("timestamp", ASCENDING), ("createdAt", ASCENDING)])
+
+        for event in _cursor_with_batch_size(cursor):
+            meeting_count += 1
+            self._report_rebuild_progress(progress_callback, "Rebuilding Discord meetings", meeting_count, meeting_total)
+            event_time = _coerce_datetime(event.get("timestamp"))
+
+            if not event_time:
+                continue
+
+            event_type = str(event.get("eventType") or "reconcile")
+            if event_type == "live":
+                continue
+
+            discord_user_id = str(event.get("discordUserId") or "")
+            channel_id = str(event.get("channelId") or "")
+            session_key = (discord_user_id, channel_id)
+            raw_author = str(event.get("rawAuthor") or "Unknown User")
+            discord_username = str(event.get("discordUsername") or "")
+            guild_id = str(event.get("guildId") or "")
+            received_at = _coerce_datetime(event.get("createdAt")) or event_time
+            time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
+            event_date = str(event.get("date") or _telegram_event_date(event_time, time_zone_id))
+
+            if event_type in {"join", "reconcile"}:
+                if session_key in open_sessions:
+                    composed(self)._insert_discord_meeting_report_row(
+                        raw_author,
+                        discord_user_id,
+                        discord_username,
+                        event_type,
+                        event_time,
+                        event_date,
+                        time_zone_id,
+                        received_at,
+                        "meeting_already_started",
+                        guild_id,
+                        channel_id,
+                        {},
+                    )
+                else:
+                    open_sessions[session_key] = {
+                        "discordUserId": discord_user_id,
+                        "discordUsername": discord_username,
+                        "rawAuthor": raw_author,
+                        "guildId": guild_id,
+                        "channelId": channel_id,
+                        "startedAt": event_time,
+                        "date": event_date,
+                        "timeZoneId": time_zone_id,
+                    }
+                    composed(self)._insert_discord_meeting_report_row(
+                        raw_author,
+                        discord_user_id,
+                        discord_username,
+                        event_type,
+                        event_time,
+                        event_date,
+                        time_zone_id,
+                        received_at,
+                        "meeting_started",
+                        guild_id,
+                        channel_id,
+                        {},
+                    )
+                self._maybe_apply_rebuild_memory_guard(metrics)
+                continue
+
+            session = open_sessions.pop(session_key, None)
+            meeting_result = {}
+
+            if session:
+                meeting_result = composed(self)._close_discord_meeting_interval(
+                    session,
+                    raw_author,
+                    discord_username,
+                    event_time,
+                    received_at,
+                    guild_id,
+                    channel_id,
+                    delete_live_session=False,
+                )
+
+            composed(self)._insert_discord_meeting_report_row(
+                raw_author,
+                discord_user_id,
+                discord_username,
+                event_type,
+                event_time,
+                event_date,
+                time_zone_id,
+                received_at,
+                "meeting_closed" if meeting_result else "meeting_leave_without_join",
+                guild_id,
+                channel_id,
+                meeting_result,
+            )
+            self._maybe_apply_rebuild_memory_guard(metrics)
+
+        for session in open_sessions.values():
+            if not session.get("discordUserId"):
+                continue
+            self.db.meeting_sessions.update_one(
+                {"discordUserId": session.get("discordUserId")},
+                {"$set": session},
+                upsert=True,
+            )
+
+        return meeting_count
 
     def _report_rebuild_progress(
         self,
