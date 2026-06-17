@@ -10,7 +10,7 @@ from al_backend.app import PUBLIC_API_PATHS
 from al_backend.discord_author_mappings import apply_discord_author_mappings
 from al_backend.discord_bot import MeetingAudioSink, MeetingClient, RecordingSession, UserPcmTrack, cleanup_old_retained_recordings, retain_recording_recovery_files
 from al_backend.meeting_summary import DEFAULT_MEETING_SUMMARY_PROMPT, DEFAULT_MEETING_SUMMARY_TELEGRAM_TEMPLATE, meeting_summary_sections, render_meeting_summary_prompt
-from al_backend.routers.reports import plugin_config
+from al_backend.routers.reports import plugin_config, reports_summary
 from al_backend.activity_math import (
     _date_query,
     _empty_event_deltas,
@@ -680,6 +680,42 @@ def test_historical_single_day_activity_summary_miss_returns_preparing_then_read
     assert second["snapshot"]["date"] == "2026-04-29"
     assert second["snapshot"]["readyAuthors"] == ["Future Artist"]
     assert second["totals"]["activeSeconds"] == 120
+
+def test_activity_reports_summary_does_not_call_global_list_authors():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist"})
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "cur",
+            "author": "Future Artist",
+            "projectId": "al",
+            "date": "2026-04-29",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "activityCounts": [],
+            "savedPrefabs": [],
+            "overtimeActivityCounts": [],
+            "overtimeSavedPrefabs": [],
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    def fail_list_authors():
+        raise AssertionError("activity summary should derive top-level authors from activitySummary")
+
+    repo.list_authors = fail_list_authors
+    response = reports_summary(
+        start_date="2026-04-29",
+        end_date="2026-04-29",
+        date_mode=None,
+        view="activity",
+        author_service=repo,
+        settings_service=repo,
+        summary_service=repo,
+    )
+
+    assert response.authors == ["Future Artist"]
+    assert response.activity_summary["authors"][0]["rawAuthor"] == "Future Artist"
 
 def test_empty_historical_single_day_returns_day_off_summary_with_zero_authors():
     repo = fake_repository()

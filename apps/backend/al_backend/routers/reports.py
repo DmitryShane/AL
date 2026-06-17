@@ -179,22 +179,28 @@ def reports_summary(
     include_profiles = view == "settings"
     include_hourly = view == "activity"
     include_breakdowns = view == "activity"
+    activity_summary = summary_service.cached_activity_summary(
+        view=view,
+        start_date=start_date,
+        end_date=end_date,
+        date_mode=date_mode,
+        include_profiles=include_profiles,
+        include_hourly=include_hourly,
+        include_breakdowns=include_breakdowns,
+    )
+    authors = (
+        sorted({str(author.get("rawAuthor") or "") for author in activity_summary.get("authors", []) if author.get("rawAuthor")})
+        if view == "activity"
+        else author_service.list_authors()
+    )
 
     return SummaryResponse(
-        authors=author_service.list_authors(),
+        authors=authors,
         reports=[],
         intervalSettings=settings_service.get_interval_settings(),
         discordSettings=settings_service.get_discord_settings(),
         meetingNotificationSettings=settings_service.get_meeting_notification_settings(),
-        activitySummary=summary_service.cached_activity_summary(
-            view=view,
-            start_date=start_date,
-            end_date=end_date,
-            date_mode=date_mode,
-            include_profiles=include_profiles,
-            include_hourly=include_hourly,
-            include_breakdowns=include_breakdowns,
-        ),
+        activitySummary=activity_summary,
     )
 
 
