@@ -2512,6 +2512,50 @@ def test_plugin_counts_create_daily_aggregate_after_night_overtime_before_telegr
     assert daily["activityCounts"] == [{"type": "select", "count": 1}]
 
 
+def test_plugin_time_before_telegram_online_after_late_start_is_suppressed():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "date": "2026-06-20",
+            "startedAt": dt.datetime(2026, 6, 20, 12, 56, 59, tzinfo=dt.UTC),
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    first = {
+        "eventId": "unity-focus-before-online",
+        "source": "ual",
+        "author": "Dmitry Shane",
+        "projectId": "bike-rush-2",
+        "deviceId": "mac-mini",
+        "date": "2026-06-20",
+        "eventType": "focus",
+        "occurredAtUtc": dt.datetime(2026, 6, 20, 11, 48, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-06-20T13:48:00+02:00",
+        "receivedAt": dt.datetime(2026, 6, 20, 13, 28, tzinfo=dt.UTC),
+        "timeZoneId": "Europe/Madrid",
+        "timeZoneDisplayName": "Europe/Madrid",
+    }
+    second = {
+        **first,
+        "eventId": "unity-selection-before-online",
+        "eventType": "selection",
+        "occurredAtUtc": dt.datetime(2026, 6, 20, 11, 49, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-06-20T13:49:00+02:00",
+    }
+
+    repo._apply_raw_event_to_aggregates(first)
+    second_deltas = repo._apply_raw_event_to_aggregates(second)
+
+    assert second_deltas["activeDeltaSeconds"] == 0
+    assert second_deltas["activityCountDeltas"] == [{"type": "select", "count": 1}]
+    daily = repo.db.daily_author_activity.find_one({"source": "ual", "author": "Dmitry Shane"})
+    assert daily is not None
+    assert daily["activeSeconds"] == 0
+    assert all(int(hour.get("activeSeconds", 0)) == 0 for hour in daily["hourlyActivity"])
+
+
 def test_codex_counts_before_telegram_online_after_night_overtime():
     repo = fake_repository()
     set_idle_threshold(repo, 300)

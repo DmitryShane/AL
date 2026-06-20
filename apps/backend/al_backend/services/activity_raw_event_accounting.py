@@ -646,7 +646,7 @@ class ActivityRawEventAccountingMixin:
         started_at = _coerce_datetime(plan.get("startedAt"))
         if started_at:
             if at <= started_at:
-                return False
+                return True
             return not author_last_activity_at or author_last_activity_at < started_at
         return False
 
@@ -2441,7 +2441,7 @@ class ActivityRawEventAccountingMixin:
 
         if started_at:
             if at <= started_at:
-                return False
+                return True
 
             return not author_last_activity_at or author_last_activity_at < started_at
 
