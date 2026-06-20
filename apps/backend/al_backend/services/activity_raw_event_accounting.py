@@ -646,7 +646,7 @@ class ActivityRawEventAccountingMixin:
         started_at = _coerce_datetime(plan.get("startedAt"))
         if started_at:
             if at <= started_at:
-                return True
+                return False
             return not author_last_activity_at or author_last_activity_at < started_at
         return False
 
@@ -667,6 +667,33 @@ class ActivityRawEventAccountingMixin:
                 latest_event_type = str(event.get("eventType") or "")
 
         return latest_event_type == "offline"
+
+    def _plan_interval_is_before_workday_start(
+        self,
+        plan: dict[str, Any],
+        start: dt.datetime,
+        end: dt.datetime,
+        overtime_window: tuple[dt.datetime, dt.datetime] | None,
+    ) -> bool:
+        started_at = _coerce_datetime(plan.get("startedAt"))
+        return bool(started_at and end <= started_at and overtime_window is None)
+
+    def _interval_is_before_workday_start(
+        self,
+        event: dict[str, Any],
+        start: dt.datetime,
+        end: dt.datetime,
+        overtime_window: tuple[dt.datetime, dt.datetime] | None,
+    ) -> bool:
+        raw_author = str(event.get("author") or "Unknown User")
+        day_date = str(event.get("date") or "")
+
+        if not raw_author or not day_date:
+            return False
+
+        session = self._batch_day_session_doc(raw_author, day_date)
+        started_at = _coerce_datetime((session or {}).get("startedAt"))
+        return bool(started_at and end <= started_at and overtime_window is None)
 
     def _try_apply_rebuild_interval_accumulator_event(self, event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         context = getattr(self, "_raw_event_batch_accounting", None)
@@ -854,16 +881,17 @@ class ActivityRawEventAccountingMixin:
                     if context is not None:
                         context["lastAccumulatorFallbackReason"] = "reports_stopped_overlap"
                     return False, _empty_event_deltas()
-                interval_deltas = _interval_deltas(
-                    accounting_start_at,
-                    interval_end_at,
-                    accounting_start_local_at,
-                    interval_end_local_at,
-                    interval_is_active,
-                    consumed_normal_microseconds,
-                    None,
-                )
-                _merge_batch_deltas(deltas, interval_deltas)
+                if not self._plan_interval_is_before_workday_start(plan, accounting_start_at, interval_end_at, None):
+                    interval_deltas = _interval_deltas(
+                        accounting_start_at,
+                        interval_end_at,
+                        accounting_start_local_at,
+                        interval_end_local_at,
+                        interval_is_active,
+                        consumed_normal_microseconds,
+                        None,
+                    )
+                    _merge_batch_deltas(deltas, interval_deltas)
 
             last_accounting_at = occurred_at
             last_accounting_local_at = occurred_local_at
@@ -999,7 +1027,12 @@ class ActivityRawEventAccountingMixin:
             return False, _empty_event_deltas()
 
         consumed_normal_microseconds = int(plan.get("consumedNormalMicroseconds") or 0)
-        deltas = _interval_deltas(
+        deltas = _empty_event_deltas() if self._plan_interval_is_before_workday_start(
+            plan,
+            interval_start_at,
+            interval_end_at,
+            None,
+        ) else _interval_deltas(
             interval_start_at,
             interval_end_at,
             interval_start_local_at,
@@ -1814,16 +1847,17 @@ class ActivityRawEventAccountingMixin:
                     interval_overtime_window = self._overtime_window_for_interval(event, accounting_start_at, interval_end_at)
                     if self._has_reports_stopped_gap_overlap(event, accounting_start_at, interval_end_at):
                         interval_overtime_window = None
-                    interval_deltas = _interval_deltas(
-                        accounting_start_at,
-                        interval_end_at,
-                        accounting_start_local_at,
-                        interval_end_local_at,
-                        interval_is_active,
-                        consumed_normal_microseconds,
-                        interval_overtime_window,
-                    )
-                    _merge_batch_deltas(deltas, interval_deltas)
+                    if not self._interval_is_before_workday_start(event, accounting_start_at, interval_end_at, interval_overtime_window):
+                        interval_deltas = _interval_deltas(
+                            accounting_start_at,
+                            interval_end_at,
+                            accounting_start_local_at,
+                            interval_end_local_at,
+                            interval_is_active,
+                            consumed_normal_microseconds,
+                            interval_overtime_window,
+                        )
+                        _merge_batch_deltas(deltas, interval_deltas)
 
                 last_accounting_at = occurred_at
                 last_accounting_local_at = occurred_local_at
@@ -1930,16 +1964,17 @@ class ActivityRawEventAccountingMixin:
                         interval_end_at,
                     ):
                         interval_overtime_window = None
-                    interval_deltas = _interval_deltas(
-                        interval_start_at,
-                        interval_end_at,
-                        interval_start_local_at,
-                        interval_end_local_at,
-                        interval_is_active,
-                        consumed_normal_microseconds,
-                        interval_overtime_window,
-                    )
-                    _merge_batch_deltas(deltas, interval_deltas)
+                    if not self._interval_is_before_workday_start(event, interval_start_at, interval_end_at, interval_overtime_window):
+                        interval_deltas = _interval_deltas(
+                            interval_start_at,
+                            interval_end_at,
+                            interval_start_local_at,
+                            interval_end_local_at,
+                            interval_is_active,
+                            consumed_normal_microseconds,
+                            interval_overtime_window,
+                        )
+                        _merge_batch_deltas(deltas, interval_deltas)
                 last_accounting_at = heartbeat_end
                 last_accounting_local_at = heartbeat_local_end
                 last_accounting_source = current_source
@@ -2441,7 +2476,7 @@ class ActivityRawEventAccountingMixin:
 
         if started_at:
             if at <= started_at:
-                return True
+                return False
 
             return not author_last_activity_at or author_last_activity_at < started_at
 

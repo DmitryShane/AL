@@ -2523,6 +2523,36 @@ def test_plugin_time_before_telegram_online_after_late_start_is_suppressed():
             "timeZoneId": "Europe/Madrid",
         }
     )
+    night_first = {
+        "eventId": "unity-night-focus",
+        "source": "ual",
+        "author": "Dmitry Shane",
+        "projectId": "bike-rush-2",
+        "deviceId": "mac-mini",
+        "date": "2026-06-20",
+        "eventType": "focus",
+        "occurredAtUtc": dt.datetime(2026, 6, 20, 1, 10, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-06-20T03:10:00+02:00",
+        "receivedAt": dt.datetime(2026, 6, 20, 1, 10, 1, tzinfo=dt.UTC),
+        "timeZoneId": "Europe/Madrid",
+        "timeZoneDisplayName": "Europe/Madrid",
+    }
+    night_second = {
+        **night_first,
+        "eventId": "unity-night-selection",
+        "eventType": "selection",
+        "occurredAtUtc": dt.datetime(2026, 6, 20, 1, 10, 30, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-06-20T03:10:30+02:00",
+        "receivedAt": dt.datetime(2026, 6, 20, 1, 10, 31, tzinfo=dt.UTC),
+    }
+    night_third = {
+        **night_first,
+        "eventId": "unity-night-selection-2",
+        "eventType": "selection",
+        "occurredAtUtc": dt.datetime(2026, 6, 20, 1, 12, 30, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-06-20T03:12:30+02:00",
+        "receivedAt": dt.datetime(2026, 6, 20, 1, 12, 31, tzinfo=dt.UTC),
+    }
     first = {
         "eventId": "unity-focus-before-online",
         "source": "ual",
@@ -2545,15 +2575,21 @@ def test_plugin_time_before_telegram_online_after_late_start_is_suppressed():
         "occurredAtLocal": "2026-06-20T13:49:00+02:00",
     }
 
+    repo._apply_raw_event_to_aggregates(night_first)
+    repo._apply_raw_event_to_aggregates(night_second)
+    night_deltas = repo._apply_raw_event_to_aggregates(night_third)
     repo._apply_raw_event_to_aggregates(first)
     second_deltas = repo._apply_raw_event_to_aggregates(second)
 
+    assert night_deltas["overtimeActiveDeltaSeconds"] == 120
     assert second_deltas["activeDeltaSeconds"] == 0
     assert second_deltas["activityCountDeltas"] == [{"type": "select", "count": 1}]
     daily = repo.db.daily_author_activity.find_one({"source": "ual", "author": "Dmitry Shane"})
     assert daily is not None
     assert daily["activeSeconds"] == 0
+    assert daily["overtimeActiveSeconds"] == 120
     assert all(int(hour.get("activeSeconds", 0)) == 0 for hour in daily["hourlyActivity"])
+    assert daily["hourlyActivity"][3]["overtimeActiveSeconds"] == 120
 
 
 def test_codex_counts_before_telegram_online_after_night_overtime():
