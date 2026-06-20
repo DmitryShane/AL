@@ -2562,11 +2562,12 @@ def test_codex_counts_before_telegram_online_after_night_overtime():
     second_deltas = repo._apply_raw_event_to_aggregates(second)
 
     assert first_deltas["activityCountDeltas"] == [{"type": "codex_session_started", "count": 1}]
-    assert second_deltas["activeDeltaSeconds"] == 120
+    assert second_deltas["activeDeltaSeconds"] == 0
     assert second_deltas["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
     daily = repo.db.daily_author_activity.find_one({"source": "codex", "author": "Dmitry Shane"})
     assert daily is not None
-    assert daily["activeSeconds"] == 120
+    assert daily["activeSeconds"] == 0
+    assert all(int(hour.get("activeSeconds", 0)) == 0 for hour in daily["hourlyActivity"])
     assert daily["activityCounts"] == [
         {"type": "codex_session_started", "count": 1},
         {"type": "codex_task_progress", "count": 1},

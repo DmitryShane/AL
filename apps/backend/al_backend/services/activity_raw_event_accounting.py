@@ -1738,7 +1738,25 @@ class ActivityRawEventAccountingMixin:
                 author_last_activity_at,
                 occurred_at,
             )
-            waiting_blocks_interval_accounting = waiting_for_first_workday_activity and current_source != "codex"
+            waiting_blocks_interval_accounting = waiting_for_first_workday_activity
+            waiting_workday_started_at = None
+            if (
+                waiting_blocks_interval_accounting
+                and current_source == "codex"
+                and last_activity_at
+                and last_accounting_at
+                and occurred_at > last_activity_at
+            ):
+                accounting_probe_start = last_accounting_at
+                if author_last_accounting_at and author_last_accounting_at > accounting_probe_start:
+                    accounting_probe_start = author_last_accounting_at
+                waiting_workday_started_at = self._workday_started_at_for_event_interval(
+                    event,
+                    accounting_probe_start,
+                    occurred_at,
+                )
+                if waiting_workday_started_at:
+                    waiting_blocks_interval_accounting = False
             if not first_activity_at:
                 first_activity_at = occurred_at
                 last_accounting_at = occurred_at
@@ -1764,7 +1782,7 @@ class ActivityRawEventAccountingMixin:
                     interval_activity_at = author_last_activity_at
 
                 if accounting_start_at < occurred_at:
-                    workday_started_at = self._workday_started_at_for_event_interval(event, accounting_start_at, occurred_at)
+                    workday_started_at = waiting_workday_started_at or self._workday_started_at_for_event_interval(event, accounting_start_at, occurred_at)
 
                     if workday_started_at and accounting_start_at < workday_started_at < occurred_at:
                         accounting_start_at = workday_started_at
