@@ -1246,6 +1246,7 @@ def apply_plugin_hour_idle_gaps(
     authors_by_raw: dict[str, dict[str, Any]],
     hourly_by_author: dict[str, dict[str, Any]],
     latest_report_by_author_date: dict[tuple[str, str], dt.datetime],
+    first_report_by_author_date: dict[tuple[str, str], dt.datetime],
     sessions: list[dict[str, Any]],
     *,
     time_zone_id_for_author: Any,
@@ -1296,6 +1297,11 @@ def apply_plugin_hour_idle_gaps(
             continue
 
         session_started_at = session_start_by_key.get((raw_author, day_date))
+        first_report_at = first_report_by_author_date.get((raw_author, day_date))
+        if session_started_at and first_report_at:
+            local_first_report_at = _to_local_datetime(first_report_at, time_zone_id)
+            if local_first_report_at < session_started_at:
+                session_started_at = local_first_report_at
         start_hour = 0
 
         if session_started_at:

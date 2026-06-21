@@ -2770,6 +2770,75 @@ def test_auto_break_uses_completed_plugin_hour_idle_gaps():
     assert _hour_metric(hourly[8], "idleSeconds") == 3540
     assert _hour_metric(hourly[8], "breakSeconds") == 0
 
+
+def test_plugin_hour_idle_gaps_start_from_first_report_when_telegram_online_is_late():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "displayName": "Future Artist",
+            "telegramUsername": "future_artist",
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Future Artist",
+            "date": "2026-05-02",
+            "startedAt": dt.datetime(2026, 5, 2, 16, 1, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.report_rows.insert_many(
+        [
+            {
+                "author": "Future Artist",
+                "date": "2026-05-02",
+                "source": "ual",
+                "reportType": "auto",
+                "recordedAt": "2026-05-02T13:16:45+00:00",
+                "receivedAt": dt.datetime(2026, 5, 2, 13, 16, 45, tzinfo=dt.UTC),
+                "activeDeltaSeconds": 177,
+            },
+            {
+                "author": "Future Artist",
+                "date": "2026-05-02",
+                "source": "codex",
+                "reportType": "auto",
+                "recordedAt": "2026-05-02T16:02:22+00:00",
+                "receivedAt": dt.datetime(2026, 5, 2, 16, 2, 22, tzinfo=dt.UTC),
+                "activeDeltaSeconds": 0,
+            },
+        ]
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[15]["activeSeconds"] = 2851
+    hourly_activity[15]["activeMicroseconds"] = 2_851_000_000
+    hourly_activity[15]["fillSegments"] = [{"kind": "active", "startSecond": 0, "endSecond": 2851}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "author": "Future Artist",
+            "date": "2026-05-02",
+            "source": "ual",
+            "activeSeconds": 2851,
+            "activeMicroseconds": 2_851_000_000,
+            "idleSeconds": 0,
+            "daySeconds": 0,
+            "hourlyActivity": hourly_activity,
+            "lastRecordedAt": "2026-05-02T15:47:31+00:00",
+            "lastReceivedAt": dt.datetime(2026, 5, 2, 15, 47, 31, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-05-02", end_date="2026-05-02")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Future Artist")["hourlyActivity"]
+
+    assert _hour_metric(hourly[15], "activeSeconds") == 2851
+    assert _hour_metric(hourly[15], "idleSeconds") == 749
+    assert _hour_segments(hourly[15], "idle") == [{"startSecond": 2851, "endSecond": 3600}]
+
+
 def test_auto_break_skips_incomplete_plugin_hour_idle_gaps():
     repo = fake_repository()
     hourly_activity = empty_hourly_activity()
