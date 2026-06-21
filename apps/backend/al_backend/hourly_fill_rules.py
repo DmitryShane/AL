@@ -974,6 +974,7 @@ def apply_visual_missed_hours(
     hourly_by_author: dict[str, dict[str, Any]],
     sessions: list[dict[str, Any]],
     latest_report_by_author_date: dict[tuple[str, str], dt.datetime],
+    first_report_by_author_date: dict[tuple[str, str], dt.datetime] | None = None,
     *,
     include_start: bool = True,
     include_end: bool = True,
@@ -996,9 +997,11 @@ def apply_visual_missed_hours(
         started_at = _coerce_datetime(session.get("startedAt"))
         ended_at = _coerce_datetime(session.get("lastOfflineAt"))
         latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
+        first_report_at = (first_report_by_author_date or {}).get((raw_author, day_date))
+        missed_start_at = first_report_at if first_report_at and (not started_at or first_report_at < started_at) else started_at
         latest_signal_at = (latest_report_at or ended_at) if ended_at else None
 
-        if not started_at and not latest_signal_at:
+        if not missed_start_at and not latest_signal_at:
             continue
 
         hourly_author = hourly_by_author.get(raw_author)
@@ -1015,7 +1018,7 @@ def apply_visual_missed_hours(
 
         hourly_activity = hourly_author.get("hourlyActivity", [])
         if include_start:
-            add_visual_missed_start(hourly_activity, started_at, time_zone_id)
+            add_visual_missed_start(hourly_activity, missed_start_at, time_zone_id)
         if include_end:
             add_visual_missed_end(
                 hourly_activity,

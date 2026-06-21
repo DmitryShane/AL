@@ -212,6 +212,55 @@ def test_activity_summary_marks_visual_missed_time_before_online_hour_without_af
     assert _hour_metric(author, "idleSeconds") == 0
     assert author["pluginDaySeconds"] == 60
 
+
+def test_activity_summary_marks_visual_missed_before_first_report_when_online_is_late():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "displayName": "Dmitry Shane",
+            "telegramUsername": "dmitryshane",
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    repo.record_break_event("dmitryshane", "online", "2026-06-21T14:01:22Z")
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[13]["activeSeconds"] = 44 * 60
+    hourly_activity[13]["fillSegments"] = [{"kind": "active", "startSecond": 16 * 60, "endSecond": 3600}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "codex",
+            "author": "Dmitry Shane",
+            "projectId": "AL",
+            "date": "2026-06-21",
+            "activeSeconds": 44 * 60,
+            "idleSeconds": 0,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "codex",
+            "author": "Dmitry Shane",
+            "date": "2026-06-21",
+            "recordedAt": "2026-06-21T13:16:00+02:00",
+            "receivedAt": dt.datetime(2026, 6, 21, 11, 16, 1, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 60,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 0,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-06-21", end_date="2026-06-21")
+    hourly_author = next(author for author in summary["hourlyActivityByAuthor"] if author["rawAuthor"] == "Dmitry Shane")
+    hourly_by_hour = {hour["hour"]: hour for hour in hourly_author["hourlyActivity"]}
+
+    assert _missed_start_seconds(hourly_by_hour[13]) == 16 * 60
+    assert _missed_start_seconds(hourly_by_hour[16]) == 0
+    assert _hour_segments(hourly_by_hour[13], "active")[0]["startSecond"] == 16 * 60
+
+
 def test_activity_summary_marks_visual_missed_time_after_offline_hour_without_affecting_totals():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist", "timeZoneId": "UTC"})

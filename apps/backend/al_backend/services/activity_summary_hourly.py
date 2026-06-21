@@ -13,6 +13,7 @@ from ..hourly_fill_rules import (
     convert_hourly_to_vacation_overtime,
     empty_hourly_activity,
     hourly_activity_has_workday_signal,
+    is_night_overtime_hour,
     public_hourly_activity,
     transfer_summary_idle_to_auto_break,
     _to_local_datetime,
@@ -485,11 +486,13 @@ class ActivitySummaryHourlyMixin:
         include_end: bool = True,
     ) -> None:
         latest_report_by_author_date = self._latest_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
+        first_report_by_author_date = self._first_daytime_report_times_by_author_date(start_date, end_date, date_mode, profiles, now)
         session_query = _report_date_query(start_date, end_date, date_mode, profiles, now)
         apply_visual_missed_hours(
             hourly_by_author,
             list(self.db.day_sessions.find(session_query, {"_id": 0})),
             latest_report_by_author_date,
+            first_report_by_author_date,
             include_start=include_start,
             include_end=include_end,
             time_zone_id_for_author=lambda raw_author, session_time_zone_id: _author_time_zone_id(
@@ -562,6 +565,72 @@ class ActivitySummaryHourlyMixin:
                 latest_by_key[key] = occurred_at
 
         return latest_by_key
+
+    def _first_daytime_report_times_by_author_date(
+        self,
+        start_date: str | None,
+        end_date: str | None,
+        date_mode: str | None,
+        profiles: dict[str, dict[str, Any]],
+        now: dt.datetime,
+    ) -> dict[tuple[str, str], dt.datetime]:
+        first_by_key: dict[tuple[str, str], dt.datetime] = {}
+        query = _report_date_query(start_date, end_date, date_mode, profiles, now)
+
+        for report in self.db.report_rows.find(
+            query,
+            {
+                "_id": 0,
+                "author": 1,
+                "date": 1,
+                "source": 1,
+                "reportType": 1,
+                "recordedAt": 1,
+                "lastRecordedAt": 1,
+                "receivedAt": 1,
+                "lastReceivedAt": 1,
+                "activeDeltaSeconds": 1,
+                "activeDeltaMicroseconds": 1,
+                "idleDeltaSeconds": 1,
+                "idleDeltaMicroseconds": 1,
+                "breakDeltaSeconds": 1,
+                "breakDeltaMicroseconds": 1,
+                "overtimeActiveDeltaSeconds": 1,
+                "overtimeActiveDeltaMicroseconds": 1,
+            },
+        ):
+            if report.get("source") in {"telegram", "discord", "status"} or report.get("reportType") in {"telegram", "meeting", "status"}:
+                continue
+            if not _has_time_delta(report):
+                continue
+
+            raw_author = str(report.get("author") or "Unknown User")
+            report_date = str(report.get("date") or "")
+
+            if not report_date:
+                continue
+
+            occurred_at = (
+                _coerce_datetime(report.get("recordedAt"))
+                or _coerce_datetime(report.get("lastRecordedAt"))
+                or _coerce_datetime(report.get("receivedAt"))
+                or _coerce_datetime(report.get("lastReceivedAt"))
+            )
+
+            if not occurred_at:
+                continue
+
+            time_zone_id = _author_time_zone_id(raw_author, profiles, None)
+            if is_night_overtime_hour(_to_local_datetime(occurred_at, time_zone_id).hour):
+                continue
+
+            key = (raw_author, report_date)
+            current = first_by_key.get(key)
+
+            if not current or occurred_at < current:
+                first_by_key[key] = occurred_at
+
+        return first_by_key
 
     def _latest_activity_signal_times_by_author_date(
         self,
