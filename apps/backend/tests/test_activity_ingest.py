@@ -2592,6 +2592,52 @@ def test_plugin_time_before_telegram_online_after_late_start_is_suppressed():
     assert daily["hourlyActivity"][3]["overtimeActiveSeconds"] == 120
 
 
+def test_plugin_time_received_before_late_telegram_online_is_counted():
+    repo = fake_repository()
+    set_idle_threshold(repo, 300)
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "date": "2026-06-21",
+            "startedAt": dt.datetime(2026, 6, 21, 14, 1, 22, tzinfo=dt.UTC),
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    first = {
+        "eventId": "codex-session-before-late-online",
+        "source": "codex",
+        "author": "Dmitry Shane",
+        "projectId": "AL",
+        "deviceId": "mac-mini",
+        "date": "2026-06-21",
+        "eventType": "external",
+        "occurredAtUtc": dt.datetime(2026, 6, 21, 11, 16, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-06-21T13:16:00+02:00",
+        "receivedAt": dt.datetime(2026, 6, 21, 11, 16, 1, tzinfo=dt.UTC),
+        "timeZoneId": "Europe/Madrid",
+        "timeZoneDisplayName": "Europe/Madrid",
+        "metadata": {"codexEventType": "session_started"},
+    }
+    second = {
+        **first,
+        "eventId": "codex-progress-before-late-online",
+        "occurredAtUtc": dt.datetime(2026, 6, 21, 11, 20, tzinfo=dt.UTC),
+        "occurredAtLocal": "2026-06-21T13:20:00+02:00",
+        "receivedAt": dt.datetime(2026, 6, 21, 11, 20, 1, tzinfo=dt.UTC),
+        "metadata": {"codexEventType": "task_progress"},
+    }
+
+    repo._apply_raw_event_to_aggregates(first)
+    second_deltas = repo._apply_raw_event_to_aggregates(second)
+
+    assert second_deltas["activeDeltaSeconds"] == 240
+    assert second_deltas["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
+    daily = repo.db.daily_author_activity.find_one({"source": "codex", "author": "Dmitry Shane"})
+    assert daily is not None
+    assert daily["activeSeconds"] == 240
+    assert daily["hourlyActivity"][13]["activeSeconds"] == 240
+
+
 def test_codex_counts_and_schedules_online_prompt_after_night_overtime():
     repo = fake_repository()
     set_idle_threshold(repo, 300)

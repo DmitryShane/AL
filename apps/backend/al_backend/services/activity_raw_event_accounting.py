@@ -674,9 +674,12 @@ class ActivityRawEventAccountingMixin:
         start: dt.datetime,
         end: dt.datetime,
         overtime_window: tuple[dt.datetime, dt.datetime] | None,
+        received_at: dt.datetime | None = None,
     ) -> bool:
         started_at = _coerce_datetime(plan.get("startedAt"))
-        return bool(started_at and end <= started_at and overtime_window is None)
+        if not started_at or end > started_at or overtime_window is not None:
+            return False
+        return not bool(received_at and received_at < started_at)
 
     def _interval_is_before_workday_start(
         self,
@@ -693,7 +696,10 @@ class ActivityRawEventAccountingMixin:
 
         session = self._batch_day_session_doc(raw_author, day_date)
         started_at = _coerce_datetime((session or {}).get("startedAt"))
-        return bool(started_at and end <= started_at and overtime_window is None)
+        if not started_at or end > started_at or overtime_window is not None:
+            return False
+        received_at = _coerce_datetime(event.get("receivedAt"))
+        return not bool(received_at and received_at < started_at)
 
     def _try_apply_rebuild_interval_accumulator_event(self, event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         context = getattr(self, "_raw_event_batch_accounting", None)
@@ -881,7 +887,13 @@ class ActivityRawEventAccountingMixin:
                     if context is not None:
                         context["lastAccumulatorFallbackReason"] = "reports_stopped_overlap"
                     return False, _empty_event_deltas()
-                if not self._plan_interval_is_before_workday_start(plan, accounting_start_at, interval_end_at, None):
+                if not self._plan_interval_is_before_workday_start(
+                    plan,
+                    accounting_start_at,
+                    interval_end_at,
+                    None,
+                    _coerce_datetime(event.get("receivedAt")),
+                ):
                     interval_deltas = _interval_deltas(
                         accounting_start_at,
                         interval_end_at,
@@ -1032,6 +1044,7 @@ class ActivityRawEventAccountingMixin:
             interval_start_at,
             interval_end_at,
             None,
+            _coerce_datetime(event.get("receivedAt")),
         ) else _interval_deltas(
             interval_start_at,
             interval_end_at,
