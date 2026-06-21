@@ -2592,9 +2592,12 @@ def test_plugin_time_before_telegram_online_after_late_start_is_suppressed():
     assert daily["hourlyActivity"][3]["overtimeActiveSeconds"] == 120
 
 
-def test_codex_counts_before_telegram_online_after_night_overtime():
+def test_codex_counts_and_schedules_online_prompt_after_night_overtime():
     repo = fake_repository()
     set_idle_threshold(repo, 300)
+    repo.db.author_profiles.insert_one(
+        {"rawAuthor": "Dmitry Shane", "telegramUsername": "dmitryshane", "timeZoneId": "Europe/Madrid"}
+    )
     hourly = empty_hourly_activity()
     hourly[1]["overtimeActiveSeconds"] = 120
     repo.db.daily_author_activity.insert_one(
@@ -2642,16 +2645,22 @@ def test_codex_counts_before_telegram_online_after_night_overtime():
     second_deltas = repo._apply_raw_event_to_aggregates(second)
 
     assert first_deltas["activityCountDeltas"] == [{"type": "codex_session_started", "count": 1}]
-    assert second_deltas["activeDeltaSeconds"] == 0
+    assert second_deltas["activeDeltaSeconds"] == 120
     assert second_deltas["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
     daily = repo.db.daily_author_activity.find_one({"source": "codex", "author": "Dmitry Shane"})
     assert daily is not None
-    assert daily["activeSeconds"] == 0
-    assert all(int(hour.get("activeSeconds", 0)) == 0 for hour in daily["hourlyActivity"])
+    assert daily["activeSeconds"] == 120
+    assert daily["hourlyActivity"][18]["activeSeconds"] == 120
     assert daily["activityCounts"] == [
         {"type": "codex_session_started", "count": 1},
         {"type": "codex_task_progress", "count": 1},
     ]
+    assert len(repo.db.telegram_online_prompts.items) == 1
+    prompt = repo.db.telegram_online_prompts.items[0]
+    assert prompt["rawAuthor"] == "Dmitry Shane"
+    assert prompt["date"] == "2026-05-23"
+    assert prompt["telegramUsername"] == "dmitryshane"
+    assert prompt["firstReportReceivedAt"] == second["receivedAt"]
 
 
 def test_codex_native_event_type_creates_activity_count():

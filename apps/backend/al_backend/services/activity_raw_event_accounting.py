@@ -2102,6 +2102,14 @@ class ActivityRawEventAccountingMixin:
                 occurred_at,
             )
 
+        if not suppress_deltas and materialize and not suppress_rebuild_notifications and _has_active_or_overtime_delta(deltas):
+            composed(self)._schedule_telegram_online_prompt_if_needed(
+                str(snapshot.get("author") or "Unknown User"),
+                str(snapshot.get("date") or ""),
+                str(snapshot.get("source") or ""),
+                received_at or occurred_at,
+            )
+
         self._set_batch_state_doc(
             state_key,
             {
@@ -2479,9 +2487,6 @@ class ActivityRawEventAccountingMixin:
                 return False
 
             return not author_last_activity_at or author_last_activity_at < started_at
-
-        if self._is_waiting_for_telegram_online_after_night_overtime(event, raw_author, day_date, at):
-            return True
 
         return False
 
