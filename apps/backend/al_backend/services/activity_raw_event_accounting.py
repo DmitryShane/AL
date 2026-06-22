@@ -643,11 +643,22 @@ class ActivityRawEventAccountingMixin:
         at: dt.datetime,
     ) -> bool:
         self._increment_precomputed_interval_check("waitingForFirstActivity")
+        night_window = plan.get("nightWindow")
+        follows_night_activity = bool(
+            author_last_activity_at
+            and night_window
+            and at >= night_window[1]
+            and night_window[0] <= author_last_activity_at < night_window[1]
+        )
         started_at = _coerce_datetime(plan.get("startedAt"))
         if started_at:
             if at <= started_at:
-                return False
+                return follows_night_activity
             return not author_last_activity_at or author_last_activity_at < started_at
+
+        if follows_night_activity:
+            return True
+
         return False
 
     def _plan_author_offline_after_latest_telegram_state(self, plan: dict[str, Any], at: dt.datetime) -> bool:
@@ -2420,10 +2431,33 @@ class ActivityRawEventAccountingMixin:
 
         session = self._batch_day_session_doc(raw_author, day_date)
         started_at = _coerce_datetime((session or {}).get("startedAt"))
+        time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
+        follows_night_activity = False
+
+        if author_last_activity_at:
+            try:
+                day = dt.date.fromisoformat(day_date)
+                zone = ZoneInfo(time_zone_id)
+                night_start_at = dt.datetime.combine(
+                    day,
+                    dt.time(hour=NIGHT_OVERTIME_START_HOUR),
+                    zone,
+                ).astimezone(dt.UTC)
+                night_end_at = dt.datetime.combine(
+                    day,
+                    dt.time(hour=NIGHT_OVERTIME_END_HOUR),
+                    zone,
+                ).astimezone(dt.UTC)
+                follows_night_activity = (
+                    at >= night_end_at
+                    and night_start_at <= author_last_activity_at < night_end_at
+                )
+            except ValueError:
+                follows_night_activity = False
 
         if started_at:
             if at <= started_at:
-                return False
+                return follows_night_activity
 
             return not author_last_activity_at or author_last_activity_at < started_at
 

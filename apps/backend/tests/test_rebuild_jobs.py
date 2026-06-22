@@ -651,6 +651,79 @@ def test_rebuild_interval_accumulator_matches_legacy_for_noop_heartbeat(monkeypa
     assert legacy_repo._last_rebuild_metrics["rawAccumulatorEvents"] == 0
 
 
+def test_rebuild_suppresses_unity_heartbeat_idle_before_online_after_night_overtime(monkeypatch):
+    author = "Dmitry Shane"
+    day = "2026-06-22"
+    time_zone_id = "Europe/Madrid"
+
+    event_specs = [
+        ("night-selection", "selection", dt.datetime(2026, 6, 21, 22, 30, tzinfo=dt.UTC)),
+        ("night-hold", "hold", dt.datetime(2026, 6, 22, 3, 28, tzinfo=dt.UTC)),
+        ("morning-heartbeat-1", "heartbeat", dt.datetime(2026, 6, 22, 5, 22, 31, tzinfo=dt.UTC)),
+        ("morning-heartbeat-2", "heartbeat", dt.datetime(2026, 6, 22, 7, 24, 32, tzinfo=dt.UTC)),
+        ("morning-heartbeat-3", "heartbeat", dt.datetime(2026, 6, 22, 9, 16, 1, tzinfo=dt.UTC)),
+    ]
+
+    repo = fake_repository()
+    repo.db.interval_settings.insert_one({"kind": "global", "idleThresholdSeconds": 300})
+    repo.db.raw_event_batches.insert_one(
+        {
+            "batchId": "batch-night-heartbeats",
+            "author": author,
+            "source": "ual",
+            "projectId": "bike-rush-2",
+            "receivedAt": event_specs[-1][2] + dt.timedelta(seconds=1),
+        }
+    )
+    repo.db.break_events.insert_one(
+        {
+            "rawAuthor": author,
+            "date": day,
+            "eventType": "online",
+            "timestamp": dt.datetime(2026, 6, 22, 9, 18, 56, tzinfo=dt.UTC),
+            "timeZoneId": time_zone_id,
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": author,
+            "date": day,
+            "startedAt": dt.datetime(2026, 6, 22, 9, 18, 56, tzinfo=dt.UTC),
+            "lastOnlineAt": dt.datetime(2026, 6, 22, 9, 18, 56, tzinfo=dt.UTC),
+            "timeZoneId": time_zone_id,
+        }
+    )
+    for event_id, event_type, occurred_at in event_specs:
+        repo.db.raw_activity_events.insert_one(
+            {
+                "eventId": event_id,
+                "batchId": "batch-night-heartbeats",
+                "author": author,
+                "date": day,
+                "source": "ual",
+                "eventType": event_type,
+                "projectId": "bike-rush-2",
+                "sessionId": "unity-session",
+                "deviceId": "unity-device",
+                "timeZoneId": time_zone_id,
+                "occurredAtUtc": occurred_at,
+                "occurredAtLocal": occurred_at.astimezone(dt.timezone(dt.timedelta(hours=2))).isoformat(),
+                "receivedAt": occurred_at + dt.timedelta(seconds=1),
+            }
+        )
+
+    monkeypatch.setattr(raw_accounting_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", True)
+    monkeypatch.setattr(rebuild_module, "REBUILD_INTERVAL_ACCUMULATOR_ENABLED", True)
+    repo._materialize_status_report_rows = lambda: None
+    repo._rebuild_aggregates_from_sources({day}, {author})
+
+    daily = repo.db.daily_author_activity.find_one({"author": author, "date": day, "source": "ual"})
+    hourly = {int(hour["hour"]): hour for hour in daily["hourlyActivity"]}
+
+    assert daily["idleSeconds"] == 0
+    assert all(int(hourly[hour]["idleSeconds"]) == 0 for hour in range(7, 12))
+
+
 def test_rebuild_interval_accumulator_handles_high_volume_unity_events(monkeypatch):
     author = "Denis Ostrovskiy"
     day = "2026-06-16"
