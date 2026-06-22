@@ -2512,138 +2512,9 @@ def test_plugin_counts_create_daily_aggregate_after_night_overtime_before_telegr
     assert daily["activityCounts"] == [{"type": "select", "count": 1}]
 
 
-def test_plugin_time_before_telegram_online_after_late_start_is_suppressed():
+def test_codex_counts_before_telegram_online_after_night_overtime():
     repo = fake_repository()
     set_idle_threshold(repo, 300)
-    repo.db.day_sessions.insert_one(
-        {
-            "rawAuthor": "Dmitry Shane",
-            "date": "2026-06-20",
-            "startedAt": dt.datetime(2026, 6, 20, 12, 56, 59, tzinfo=dt.UTC),
-            "timeZoneId": "Europe/Madrid",
-        }
-    )
-    night_first = {
-        "eventId": "unity-night-focus",
-        "source": "ual",
-        "author": "Dmitry Shane",
-        "projectId": "bike-rush-2",
-        "deviceId": "mac-mini",
-        "date": "2026-06-20",
-        "eventType": "focus",
-        "occurredAtUtc": dt.datetime(2026, 6, 20, 1, 10, tzinfo=dt.UTC),
-        "occurredAtLocal": "2026-06-20T03:10:00+02:00",
-        "receivedAt": dt.datetime(2026, 6, 20, 1, 10, 1, tzinfo=dt.UTC),
-        "timeZoneId": "Europe/Madrid",
-        "timeZoneDisplayName": "Europe/Madrid",
-    }
-    night_second = {
-        **night_first,
-        "eventId": "unity-night-selection",
-        "eventType": "selection",
-        "occurredAtUtc": dt.datetime(2026, 6, 20, 1, 10, 30, tzinfo=dt.UTC),
-        "occurredAtLocal": "2026-06-20T03:10:30+02:00",
-        "receivedAt": dt.datetime(2026, 6, 20, 1, 10, 31, tzinfo=dt.UTC),
-    }
-    night_third = {
-        **night_first,
-        "eventId": "unity-night-selection-2",
-        "eventType": "selection",
-        "occurredAtUtc": dt.datetime(2026, 6, 20, 1, 12, 30, tzinfo=dt.UTC),
-        "occurredAtLocal": "2026-06-20T03:12:30+02:00",
-        "receivedAt": dt.datetime(2026, 6, 20, 1, 12, 31, tzinfo=dt.UTC),
-    }
-    first = {
-        "eventId": "unity-focus-before-online",
-        "source": "ual",
-        "author": "Dmitry Shane",
-        "projectId": "bike-rush-2",
-        "deviceId": "mac-mini",
-        "date": "2026-06-20",
-        "eventType": "focus",
-        "occurredAtUtc": dt.datetime(2026, 6, 20, 11, 48, tzinfo=dt.UTC),
-        "occurredAtLocal": "2026-06-20T13:48:00+02:00",
-        "receivedAt": dt.datetime(2026, 6, 20, 13, 28, tzinfo=dt.UTC),
-        "timeZoneId": "Europe/Madrid",
-        "timeZoneDisplayName": "Europe/Madrid",
-    }
-    second = {
-        **first,
-        "eventId": "unity-selection-before-online",
-        "eventType": "selection",
-        "occurredAtUtc": dt.datetime(2026, 6, 20, 11, 49, tzinfo=dt.UTC),
-        "occurredAtLocal": "2026-06-20T13:49:00+02:00",
-    }
-
-    repo._apply_raw_event_to_aggregates(night_first)
-    repo._apply_raw_event_to_aggregates(night_second)
-    night_deltas = repo._apply_raw_event_to_aggregates(night_third)
-    repo._apply_raw_event_to_aggregates(first)
-    second_deltas = repo._apply_raw_event_to_aggregates(second)
-
-    assert night_deltas["overtimeActiveDeltaSeconds"] == 120
-    assert second_deltas["activeDeltaSeconds"] == 0
-    assert second_deltas["activityCountDeltas"] == [{"type": "select", "count": 1}]
-    daily = repo.db.daily_author_activity.find_one({"source": "ual", "author": "Dmitry Shane"})
-    assert daily is not None
-    assert daily["activeSeconds"] == 0
-    assert daily["overtimeActiveSeconds"] == 120
-    assert all(int(hour.get("activeSeconds", 0)) == 0 for hour in daily["hourlyActivity"])
-    assert daily["hourlyActivity"][3]["overtimeActiveSeconds"] == 120
-
-
-def test_plugin_time_received_before_late_telegram_online_is_counted():
-    repo = fake_repository()
-    set_idle_threshold(repo, 300)
-    repo.db.day_sessions.insert_one(
-        {
-            "rawAuthor": "Dmitry Shane",
-            "date": "2026-06-21",
-            "startedAt": dt.datetime(2026, 6, 21, 14, 1, 22, tzinfo=dt.UTC),
-            "timeZoneId": "Europe/Madrid",
-        }
-    )
-    first = {
-        "eventId": "codex-session-before-late-online",
-        "source": "codex",
-        "author": "Dmitry Shane",
-        "projectId": "AL",
-        "deviceId": "mac-mini",
-        "date": "2026-06-21",
-        "eventType": "external",
-        "occurredAtUtc": dt.datetime(2026, 6, 21, 11, 16, tzinfo=dt.UTC),
-        "occurredAtLocal": "2026-06-21T13:16:00+02:00",
-        "receivedAt": dt.datetime(2026, 6, 21, 11, 16, 1, tzinfo=dt.UTC),
-        "timeZoneId": "Europe/Madrid",
-        "timeZoneDisplayName": "Europe/Madrid",
-        "metadata": {"codexEventType": "session_started"},
-    }
-    second = {
-        **first,
-        "eventId": "codex-progress-before-late-online",
-        "occurredAtUtc": dt.datetime(2026, 6, 21, 11, 20, tzinfo=dt.UTC),
-        "occurredAtLocal": "2026-06-21T13:20:00+02:00",
-        "receivedAt": dt.datetime(2026, 6, 21, 11, 20, 1, tzinfo=dt.UTC),
-        "metadata": {"codexEventType": "task_progress"},
-    }
-
-    repo._apply_raw_event_to_aggregates(first)
-    second_deltas = repo._apply_raw_event_to_aggregates(second)
-
-    assert second_deltas["activeDeltaSeconds"] == 240
-    assert second_deltas["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
-    daily = repo.db.daily_author_activity.find_one({"source": "codex", "author": "Dmitry Shane"})
-    assert daily is not None
-    assert daily["activeSeconds"] == 240
-    assert daily["hourlyActivity"][13]["activeSeconds"] == 240
-
-
-def test_codex_counts_and_schedules_online_prompt_after_night_overtime():
-    repo = fake_repository()
-    set_idle_threshold(repo, 300)
-    repo.db.author_profiles.insert_one(
-        {"rawAuthor": "Dmitry Shane", "telegramUsername": "dmitryshane", "timeZoneId": "Europe/Madrid"}
-    )
     hourly = empty_hourly_activity()
     hourly[1]["overtimeActiveSeconds"] = 120
     repo.db.daily_author_activity.insert_one(
@@ -2696,17 +2567,10 @@ def test_codex_counts_and_schedules_online_prompt_after_night_overtime():
     daily = repo.db.daily_author_activity.find_one({"source": "codex", "author": "Dmitry Shane"})
     assert daily is not None
     assert daily["activeSeconds"] == 120
-    assert daily["hourlyActivity"][18]["activeSeconds"] == 120
     assert daily["activityCounts"] == [
         {"type": "codex_session_started", "count": 1},
         {"type": "codex_task_progress", "count": 1},
     ]
-    assert len(repo.db.telegram_online_prompts.items) == 1
-    prompt = repo.db.telegram_online_prompts.items[0]
-    assert prompt["rawAuthor"] == "Dmitry Shane"
-    assert prompt["date"] == "2026-05-23"
-    assert prompt["telegramUsername"] == "dmitryshane"
-    assert prompt["firstReportReceivedAt"] == second["receivedAt"]
 
 
 def test_codex_native_event_type_creates_activity_count():
