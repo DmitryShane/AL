@@ -1,6 +1,8 @@
 import datetime as dt
 import json
 import tempfile
+import threading
+import time
 import unicodedata
 from pathlib import Path
 from urllib.parse import quote
@@ -489,6 +491,65 @@ def test_report_worker_run_once_processes_one_queued_report():
     assert worker.run_once() == 1
     assert repo.db.raw_reports.find_one({"_id": report_id})["status"] == "processed"
     assert len(repo.db.raw_activity_events.items) == 2
+
+def test_report_worker_lane_recovers_after_iteration_failure():
+    repo = fake_repository()
+    set_idle_threshold(repo, 60)
+    report_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.10",
+        encrypted_packet="packet",
+        challenge_id="challenge-worker-recovery",
+        device_id="device-worker-recovery",
+        payload=_event_payload(event_count=1),
+    )
+
+    class BrokenReportIngest:
+        def claim_next_queued_report(self, **_kwargs):
+            raise RuntimeError("temporary mongo disconnect")
+
+    class Container:
+        def __init__(self, report_ingest):
+            self.report_ingest = report_ingest
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    broken_container = Container(BrokenReportIngest())
+    recovered_container = Container(repo)
+    root_container = Container(repo)
+    containers = [broken_container, recovered_container]
+
+    def container_factory():
+        return containers.pop(0)
+
+    worker = ReportWorker(
+        root_container,
+        ReportWorkerConfig(
+            poll_interval_seconds=0.01,
+            lease_seconds=300,
+            max_attempts=5,
+            batch_limit=1,
+        ),
+        container_factory=container_factory,
+    )
+    thread = threading.Thread(target=worker._run_lane_worker, args=(1,))
+    thread.start()
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if repo.db.raw_reports.find_one({"_id": report_id})["status"] == "processed":
+            break
+        time.sleep(0.01)
+
+    worker.stop()
+    thread.join(timeout=1)
+
+    assert repo.db.raw_reports.find_one({"_id": report_id})["status"] == "processed"
+    assert broken_container.closed is True
+    assert recovered_container.closed is True
+    assert not thread.is_alive()
 
 def test_queued_report_retry_reuses_existing_raw_event_batch():
     repo = fake_repository()

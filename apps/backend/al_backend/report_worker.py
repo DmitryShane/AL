@@ -100,20 +100,43 @@ class ReportWorker:
         LOGGER.info("Report worker stopped worker_id=%s", self.worker_id)
 
     def _run_lane_worker(self, lane_index: int) -> None:
-        container = self.container_factory() if self.container_factory is not None else self.container
         lane_worker_id = f"{self.worker_id}:lane-{lane_index}"
         LOGGER.info("Report worker lane started worker_id=%s", lane_worker_id)
 
+        container: BackendContainer | None = None
         try:
             while not self._stopping:
-                processed = self._run_once_with_container(container, lane_worker_id)
+                if container is None:
+                    try:
+                        container = self.container_factory() if self.container_factory is not None else self.container
+                    except Exception:
+                        LOGGER.exception("Report worker lane failed to create container worker_id=%s", lane_worker_id)
+                        time.sleep(self.config.poll_interval_seconds)
+                        continue
+
+                try:
+                    processed = self._run_once_with_container(container, lane_worker_id)
+                except Exception:
+                    LOGGER.exception("Report worker lane iteration failed worker_id=%s; restarting lane container", lane_worker_id)
+                    self._close_lane_container(container, lane_worker_id)
+                    container = None
+                    time.sleep(self.config.poll_interval_seconds)
+                    continue
 
                 if processed == 0:
                     time.sleep(self.config.poll_interval_seconds)
         finally:
-            if container is not self.container:
-                container.close()
+            self._close_lane_container(container, lane_worker_id)
             LOGGER.info("Report worker lane stopped worker_id=%s", lane_worker_id)
+
+    def _close_lane_container(self, container: BackendContainer | None, worker_id: str) -> None:
+        if container is None or container is self.container:
+            return
+
+        try:
+            container.close()
+        except Exception:
+            LOGGER.exception("Report worker lane failed to close container worker_id=%s", worker_id)
 
     def run_once(self) -> int:
         return self._run_once_with_container(self.container, self.worker_id)
