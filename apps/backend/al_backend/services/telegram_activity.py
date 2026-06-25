@@ -1022,6 +1022,11 @@ class TelegramActivityService(MongoComposableMixin):
             if not reminder_id or not raw_author or not day_date:
                 continue
 
+            anchor = _coerce_datetime(doc.get("firstReportReceivedAt"))
+
+            if anchor and (now - anchor).total_seconds() < TELEGRAM_POST_OFFLINE_PROMPT_DELAY_SECONDS:
+                continue
+
             self.db.telegram_post_offline_prompts.update_one(
                 {"reminderId": reminder_id},
                 {"$set": {"status": "claimed", "lastClaimedAt": now, "updatedAt": now}},

@@ -1150,9 +1150,13 @@ def test_post_offline_activity_schedules_one_prompt_and_counts_overtime():
     prompt = repo.db.telegram_post_offline_prompts.items[0]
     assert prompt["status"] == "pending"
     due = repo.claim_due_telegram_post_offline_prompts(dt.datetime(2026, 4, 28, 18, 1, tzinfo=dt.UTC))
+    assert due == []
+    assert prompt["status"] == "pending"
+
+    due = repo.claim_due_telegram_post_offline_prompts(dt.datetime(2026, 4, 28, 18, 6, tzinfo=dt.UTC))
     assert len(due) == 1
     assert due[0]["reminderId"] == prompt["reminderId"]
-    assert repo.claim_due_telegram_post_offline_prompts(dt.datetime(2026, 4, 28, 18, 2, tzinfo=dt.UTC)) == []
+    assert repo.claim_due_telegram_post_offline_prompts(dt.datetime(2026, 4, 28, 18, 7, tzinfo=dt.UTC)) == []
 
 def test_overtime_reminder_suppresses_post_offline_prompt_but_counts_overtime():
     repo = fake_repository()
