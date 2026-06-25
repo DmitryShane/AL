@@ -371,7 +371,7 @@ function pageSubtitle(page: Page | null) {
   }
 
   if (page === "calendar") {
-    return "Mark vacation, days off, absences, and notes on the yearly author calendar.";
+    return "Mark vacation, sick leave, days off, absences, and notes on the yearly author calendar.";
   }
 
   if (page === "alerts") {

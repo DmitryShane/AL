@@ -154,9 +154,6 @@ class CalendarService(MongoComposableMixin):
         return {"ok": True, "deletedCount": result.deleted_count}
 
     def _ensure_calendar_reasons(self) -> None:
-        if self.db.calendar_reasons.count_documents({}):
-            return
-
         now = dt.datetime.now(dt.UTC)
 
         for reason in DEFAULT_CALENDAR_REASONS:
@@ -165,4 +162,3 @@ class CalendarService(MongoComposableMixin):
                 {"$set": {**reason, "updatedAt": now}, "$setOnInsert": {"createdAt": now}},
                 upsert=True,
             )
-

@@ -148,6 +148,7 @@ def _metadata_bool(value: Any) -> bool:
 NON_ACTIVITY_EVENT_TYPES = {"heartbeat", "blur"}
 DEFAULT_CALENDAR_REASONS = [
     {"id": "vacation", "label": "Vacation"},
+    {"id": "sick_leave", "label": "Sick leave"},
     {"id": "day_off", "label": "Day off"},
     {"id": "absence", "label": "Absence"},
 ]
