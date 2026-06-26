@@ -369,6 +369,15 @@ class MeetingClient(discord.Client):
 
             await asyncio.wait_for(recording.cleanup_future, timeout=10)
             await recording.voice_client.disconnect(force=force)
+            end_result = await asyncio.to_thread(submit_recording_ended, self.config, recording, ended_at)
+
+            if not end_result.get("ok"):
+                LOGGER.warning(
+                    "Discord meeting recording %s ended notification failed: %s",
+                    recording.recording_id,
+                    end_result.get("error") or end_result,
+                )
+
             await self.update_recording_status(recording.recording_id, "compressing_audio")
             await asyncio.to_thread(recording.sink.finalize)
             corruption_ratio = corrupted_packet_ratio(recording.sink.frames_written)
@@ -794,6 +803,19 @@ def submit_recording_started(config: DiscordBotConfig, recording: RecordingSessi
         "participantNames": [recording.participant_names[item] for item in sorted(recording.participant_names.keys())],
     }
     return submit_backend_event(config, "/api/v1/discord/meeting-recordings/start", payload)
+
+
+def submit_recording_ended(config: DiscordBotConfig, recording: RecordingSession, ended_at: datetime) -> dict[str, Any]:
+    payload = {
+        "recordingId": recording.recording_id,
+        "guildId": str(config.guild_id),
+        "channelId": str(config.meeting_channel_id),
+        "startedAt": recording.started_at.isoformat(),
+        "endedAt": ended_at.isoformat(),
+        "participantDiscordUserIds": [str(item) for item in sorted(recording.participant_ids)],
+        "participantNames": [recording.participant_names[item] for item in sorted(recording.participant_names.keys())],
+    }
+    return submit_backend_event(config, "/api/v1/discord/meeting-recordings/end", payload)
 
 
 def submit_recording_finished(config: DiscordBotConfig, recording: RecordingSession, ended_at: datetime) -> dict[str, Any]:

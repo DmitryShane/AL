@@ -251,6 +251,50 @@ def test_meeting_recording_start_and_finish_create_telegram_notifications():
 
     assert len(repo.db.telegram_meeting_recording_notifications.items) == 2
 
+def test_meeting_recording_end_creates_telegram_notification_before_summary_processing():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "displayName": "Dmitry Shane",
+            "telegramUsername": "dmitryshane",
+            "discordUserId": "1",
+        }
+    )
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Igor Mats",
+            "displayName": "Igor Mats",
+            "telegramUsername": "igormats",
+            "discordUserId": "2",
+        }
+    )
+    repo.record_meeting_recording_started(
+        recording_id="recording-ended-early",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        participant_discord_user_ids=["1", "2"],
+        participant_names=["Dmitry", "Igor"],
+    )
+
+    result = repo.record_meeting_recording_ended(
+        recording_id="recording-ended-early",
+        guild_id="guild",
+        channel_id="channel",
+        started_at="2026-04-29T10:00:00+00:00",
+        ended_at="2026-04-29T10:03:00+00:00",
+        participant_discord_user_ids=["1", "2"],
+        participant_names=["Dmitry", "Igor"],
+    )
+    notifications = repo.claim_due_telegram_meeting_recording_notifications()
+
+    assert result["status"] == "meeting_ended"
+    assert [item["kind"] for item in notifications] == ["started", "ended"]
+    assert notifications[1]["participantTelegramUsernames"] == ["dmitryshane", "igormats"]
+    assert notifications[1]["durationSeconds"] == 180
+    assert repo.db.meeting_summaries.count_documents({}) == 0
+
 def test_meeting_recording_notification_mark_sent():
     repo = fake_repository()
     repo.db.telegram_meeting_recording_notifications.insert_one(

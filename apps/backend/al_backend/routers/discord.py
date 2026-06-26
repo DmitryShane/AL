@@ -13,6 +13,7 @@ from ..dependencies import get_discord_service, get_settings
 from ..meeting_summary import generate_meeting_summary
 from ..models import (
     DiscordMeetingAutoAfkIn,
+    DiscordMeetingRecordingEndIn,
     DiscordMeetingRecordingFailIn,
     DiscordMeetingRecordingStartIn,
     DiscordMeetingRecordingStatusIn,
@@ -84,6 +85,24 @@ def record_discord_meeting_recording_started(
         guild_id=event.guild_id,
         channel_id=event.channel_id,
         started_at=event.started_at,
+        participant_discord_user_ids=event.participant_discord_user_ids,
+        participant_names=event.participant_names,
+    )
+
+
+@router.post("/api/v1/discord/meeting-recordings/end")
+def record_discord_meeting_recording_ended(
+    event: DiscordMeetingRecordingEndIn,
+    request: Request,
+    service: BackendServices = Depends(get_discord_service),
+) -> dict:
+    require_discord_bot_secret(request)
+    return service.record_meeting_recording_ended(
+        recording_id=event.recording_id,
+        guild_id=event.guild_id,
+        channel_id=event.channel_id,
+        started_at=event.started_at,
+        ended_at=event.ended_at,
         participant_discord_user_ids=event.participant_discord_user_ids,
         participant_names=event.participant_names,
     )

@@ -231,6 +231,10 @@ class DiscordMeetingRecordingStartIn(ApiModel):
     participant_names: list[str] = Field(default_factory=list, alias="participantNames")
 
 
+class DiscordMeetingRecordingEndIn(DiscordMeetingRecordingStartIn):
+    ended_at: str = Field(alias="endedAt", min_length=1)
+
+
 class DiscordMeetingRecordingFailIn(ApiModel):
     recording_id: str = Field(alias="recordingId", min_length=1)
     ended_at: str = Field(alias="endedAt", min_length=1)

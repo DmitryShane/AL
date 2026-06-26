@@ -763,6 +763,57 @@ class DiscordMeetingService(MongoComposableMixin):
         )
         return {"ok": True, "status": "recording_started"}
 
+    def record_meeting_recording_ended(
+        self,
+        *,
+        recording_id: str,
+        guild_id: str | None,
+        channel_id: str | None,
+        started_at: str,
+        ended_at: str,
+        participant_discord_user_ids: list[str],
+        participant_names: list[str],
+    ) -> dict[str, Any]:
+        now = dt.datetime.now(dt.UTC)
+        started = _parse_timestamp(started_at)
+        ended = _parse_timestamp(ended_at)
+        started, ended, participant_discord_user_ids, participant_names = self._resolve_meeting_recording_activity_window(
+            guild_id=guild_id,
+            channel_id=channel_id,
+            started_at=started,
+            ended_at=ended,
+            participant_discord_user_ids=participant_discord_user_ids,
+            participant_names=participant_names,
+        )
+        duration_seconds = max(0, int((ended - started).total_seconds()))
+        self._schedule_telegram_meeting_recording_notification(
+            recording_id=recording_id,
+            kind="ended",
+            guild_id=guild_id,
+            channel_id=channel_id,
+            started_at=started,
+            ended_at=ended,
+            duration_seconds=duration_seconds,
+            participant_discord_user_ids=participant_discord_user_ids,
+            participant_names=participant_names,
+            now=now,
+        )
+        self._update_meeting_recording_pipeline_status(
+            recording_id,
+            "meeting_ended",
+            ended_at=ended,
+            duration_seconds=duration_seconds,
+            updated_at=now,
+            extra_fields={
+                "guildId": str(guild_id or ""),
+                "channelId": str(channel_id or ""),
+                "startedAt": started,
+                "participantDiscordUserIds": participant_discord_user_ids,
+                "participantNames": participant_names,
+            },
+        )
+        return {"ok": True, "status": "meeting_ended"}
+
     def process_meeting_recording_finished(
         self,
         *,
