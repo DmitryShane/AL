@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from al_backend.indexes import IndexManager, RAW_REPORTS_RETENTION_INDEX_NAME, RAW_REPORTS_RETENTION_SECONDS
+from tests.fakes import FakeCollection
 
 
 def test_raw_reports_retention_index_replaces_plain_received_at_index() -> None:
@@ -38,6 +39,18 @@ def test_rebuild_hot_path_indexes_are_created() -> None:
     assert {"keys": [("batchId", 1)]} in db.raw_event_batches.created_indexes
     assert {"keys": [("token", 1), ("batchId", 1)]} in db.aggregate_rebuild_event_deltas.created_indexes
     assert {"keys": [("rawAuthor", 1), ("date", 1), ("reasonId", 1)]} in db.calendar_marks.created_indexes
+
+
+def test_status_report_rows_are_deduplicated_before_unique_index() -> None:
+    report_rows = FakeCollection()
+    report_rows.insert_one({"_id": "first", "source": "status", "author": "A", "date": "2026-07-22", "statusEventType": "offline", "recordedAt": "2026-07-22T09:00:00+00:00"})
+    report_rows.insert_one({"_id": "second", "source": "status", "author": "A", "date": "2026-07-22", "statusEventType": "offline", "recordedAt": "2026-07-22T09:00:00+00:00"})
+    manager = IndexManager(SimpleNamespace(report_rows=report_rows))
+
+    manager._deduplicate_status_report_rows()
+
+    assert len(report_rows.items) == 1
+    assert report_rows.items[0]["statusEventKey"] == "A|2026-07-22|offline|2026-07-22T09:00:00+00:00"
 
 
 class FakeIndexCollection:

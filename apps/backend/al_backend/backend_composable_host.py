@@ -128,6 +128,14 @@ class BackendComposableHost(Protocol):
         track_plugin_staleness: bool,
     ) -> None: ...
 
+    def resume_reports_for_plugin_report(
+        self,
+        raw_author: str,
+        received_at: dt.datetime,
+        time_zone_id: str | None = None,
+        report_row_recorded_at: dt.datetime | None = None,
+    ) -> bool: ...
+
     def _schedule_telegram_break_activity_prompt_if_needed(
         self,
         raw_author: str,

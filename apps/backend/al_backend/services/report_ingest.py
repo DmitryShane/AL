@@ -875,8 +875,19 @@ class ReportIngestService(MongoComposableMixin):
                     else:
                         inserted_event_ids.add(event_id)
 
+        accepted_events = [event for event in normalized_events if str(event.get("eventId") or "") in inserted_event_ids]
+
+        if accepted_events and not self._is_unassigned_device_report_author(source, author):
+            report_row_recorded_at = _raw_event_time(accepted_events[-1])
+            composed(self).resume_reports_for_plugin_report(
+                author,
+                received_at,
+                payload.get("timeZoneId"),
+                report_row_recorded_at,
+            )
+
         accounting_started_at = dt.datetime.now(dt.UTC)
-        events_to_account = [event for event in normalized_events if str(event.get("eventId") or "") in inserted_event_ids]
+        events_to_account = accepted_events
         assembled_metadata = assembled_chunk_metadata(payload, source)
         if assembled_metadata:
             self.db.raw_reports.update_one(

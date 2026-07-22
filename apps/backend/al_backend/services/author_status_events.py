@@ -27,6 +27,7 @@ class AuthorStatusEventsService(MongoComposableMixin):
         time_zone_id: str | None = None,
         reason: str = "reports_stopped",
         received_at: dt.datetime | None = None,
+        report_row_recorded_at: dt.datetime | None = None,
     ) -> dict[str, Any]:
         event_type = status_event_type if status_event_type in {"offline", "online"} else ""
 
@@ -48,6 +49,15 @@ class AuthorStatusEventsService(MongoComposableMixin):
             "reason": reason,
             "createdAt": dt.datetime.now(dt.UTC),
         }
+        row_recorded_at = _coerce_datetime(report_row_recorded_at)
+
+        if row_recorded_at:
+            event["reportRowRecordedAt"] = row_recorded_at
+        update: dict[str, Any] = {"$setOnInsert": event}
+
+        if row_recorded_at:
+            update["$set"] = {"reportRowRecordedAt": row_recorded_at}
+
         self.db.status_events.update_one(
             {
                 "rawAuthor": raw_author,
@@ -55,11 +65,46 @@ class AuthorStatusEventsService(MongoComposableMixin):
                 "statusEventType": event_type,
                 "transitionAt": transition_at,
             },
-            {"$setOnInsert": event},
+            update,
             upsert=True,
         )
         self._insert_status_report_row(event)
         return {"ok": True, "event": event}
+
+    def resume_reports_for_plugin_report(
+        self,
+        raw_author: str,
+        received_at: dt.datetime,
+        time_zone_id: str | None = None,
+        report_row_recorded_at: dt.datetime | None = None,
+    ) -> bool:
+        """Close a reports_stopped interval before the first accepted plugin report is materialized."""
+        previous_state = self.db.status_states.find_one({"rawAuthor": raw_author}, {"_id": 0}) or {}
+        latest_status_event = self._latest_status_event_for_author(raw_author)
+
+        if (
+            str(previous_state.get("status") or "online") != "offline"
+            and str(latest_status_event.get("statusEventType") or "") != "offline"
+        ):
+            return False
+
+        transition_at = _coerce_datetime(received_at) or dt.datetime.now(dt.UTC)
+        normalized_time_zone_id = _valid_time_zone_id(time_zone_id) or _author_configured_time_zone_id(raw_author) or "UTC"
+        self.record_status_event(
+            raw_author,
+            "online",
+            transition_at,
+            normalized_time_zone_id,
+            "reports_resumed",
+            transition_at,
+            report_row_recorded_at,
+        )
+        self.db.status_states.update_one(
+            {"rawAuthor": raw_author},
+            {"$set": {"rawAuthor": raw_author, "status": "online", "updatedAt": transition_at, "transitionAt": transition_at}},
+            upsert=True,
+        )
+        return True
 
     def _latest_status_event_for_author(self, raw_author: str) -> dict[str, Any]:
         latest = list(
@@ -126,16 +171,7 @@ class AuthorStatusEventsService(MongoComposableMixin):
                 upsert=True,
             )
 
-        should_record_reports_resumed = previous_status == "offline" or latest_status_event_type == "offline"
-
-        if author.get("status") == "online" and should_record_reports_resumed and composed(self).get_plugin_ingest_enabled():
-            transition_at = (_coerce_datetime(author.get("lastReceivedAt")) or now) + dt.timedelta(microseconds=1)
-            self.record_status_event(raw_author, "online", transition_at, time_zone_id, "reports_resumed")
-            self.db.status_states.update_one(
-                {"rawAuthor": raw_author},
-                {"$set": {"rawAuthor": raw_author, "status": "online", "updatedAt": now, "transitionAt": transition_at}},
-                upsert=True,
-            )
+        # reports_resumed is recorded by the ingest path before the first new plugin row.
 
     def _materialize_status_report_rows(self) -> None:
         target_dates = getattr(self, "_aggregate_rebuild_target_dates", None)
@@ -170,17 +206,11 @@ class AuthorStatusEventsService(MongoComposableMixin):
         if not self._should_materialize_status_report_row(raw_author, event_date, event_type, transition_at, str(event.get("reason") or "")):
             return
 
-        self.db.report_rows.delete_many(
-            {
-                "source": "status",
-                "author": raw_author,
-                "date": event_date,
-                "statusEventType": event_type,
-                "recordedAt": transition_at.isoformat(),
-            }
-        )
-        self.db.report_rows.insert_one(
-            {
+        row_recorded_at = _coerce_datetime(event.get("reportRowRecordedAt")) or transition_at
+        status_event_key = self._status_event_key(raw_author, event_date, event_type, transition_at)
+        self.db.report_rows.update_one(
+            {"statusEventKey": status_event_key},
+            {"$set": {
                 "source": "status",
                 "pluginVersion": "status",
                 "author": raw_author,
@@ -189,9 +219,9 @@ class AuthorStatusEventsService(MongoComposableMixin):
                 "sessionId": raw_author,
                 "deviceId": "",
                 "date": event_date,
-                "recordedAt": transition_at.isoformat(),
+                "recordedAt": row_recorded_at.isoformat(),
                 "receivedAt": received_at,
-                "lastRecordedAt": transition_at.isoformat(),
+                "lastRecordedAt": row_recorded_at.isoformat(),
                 "lastReceivedAt": received_at,
                 "timeZoneId": time_zone_id,
                 "timeZoneDisplayName": time_zone_id,
@@ -200,9 +230,15 @@ class AuthorStatusEventsService(MongoComposableMixin):
                 "statusEventType": event_type,
                 "statusReason": str(event.get("reason") or ""),
                 "metadata": {"reason": str(event.get("reason") or "")},
+                "statusEventKey": status_event_key,
                 **_empty_event_deltas(),
-            }
+            }},
+            upsert=True,
         )
+
+    @staticmethod
+    def _status_event_key(raw_author: str, event_date: str, event_type: str, transition_at: dt.datetime) -> str:
+        return "|".join((raw_author, event_date, event_type, transition_at.isoformat()))
 
     def _should_materialize_status_report_row(
         self,

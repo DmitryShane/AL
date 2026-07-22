@@ -828,28 +828,15 @@ def test_historical_stale_does_not_create_status_report_row():
     assert author["stalePresence"] == "telegram"
     assert repo.db.status_events.count_documents({}) == 0
 
-def test_status_online_row_sorts_before_returning_plugin_report():
+def test_ingest_resume_status_sorts_immediately_before_returning_plugin_report():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})
     repo.db.status_states.insert_one({"rawAuthor": "Future Artist", "status": "offline"})
-    repo.db.daily_author_activity.insert_one(
-        {
-            "source": "ual",
-            "pluginVersion": "unity-plugin",
-            "author": "Future Artist",
-            "projectId": "unity",
-            "date": "2026-04-29",
-            "lastRecordedAt": "2026-04-29T09:05:00+00:00",
-            "lastReceivedAt": dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC),
-            "activeSeconds": 60,
-            "idleSeconds": 0,
-            "workWindowSeconds": 32400,
-            "hourlyActivity": empty_hourly_activity(),
-        }
-    )
-    repo.activity_summary(
-        date_mode="authorLocalToday",
-        now=dt.datetime(2026, 4, 29, 9, 5, 30, tzinfo=dt.UTC),
+    repo.resume_reports_for_plugin_report(
+        "Future Artist",
+        dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC),
+        "UTC",
+        dt.datetime(2026, 4, 29, 9, 4, 59, 999999, tzinfo=dt.UTC),
     )
     repo.db.report_rows.insert_one(
         {
@@ -866,8 +853,8 @@ def test_status_online_row_sorts_before_returning_plugin_report():
     )
     page = repo.reports_page(start_date="2026-04-29", end_date="2026-04-29")
 
-    assert [report["source"] for report in page["reports"][:2]] == ["status", "ual"]
-    assert page["reports"][0]["statusEventType"] == "online"
+    assert [report["source"] for report in page["reports"][:2]] == ["ual", "status"]
+    assert page["reports"][1]["statusEventType"] == "online"
 
 def test_fresh_daily_activity_without_report_row_resumes_reports_stopped_status():
     repo = fake_repository()
@@ -920,8 +907,7 @@ def test_fresh_daily_activity_without_report_row_resumes_reports_stopped_status(
 
     assert author["status"] == "online"
     assert author["lastReceivedAt"] == "2026-04-29T09:05:00+00:00"
-    assert repo.db.status_events.items[-1]["statusEventType"] == "online"
-    assert repo.db.status_events.items[-1]["reason"] == "reports_resumed"
+    assert repo.db.status_events.items == []
     assert repo.db.status_states.items[0]["status"] == "online"
 
 def test_fresh_daily_activity_resumes_when_status_state_online_but_latest_event_offline():
@@ -958,8 +944,8 @@ def test_fresh_daily_activity_resumes_when_status_state_online_but_latest_event_
     status_events = [event for event in repo.db.status_events.items if event.get("rawAuthor") == "Future Artist"]
 
     assert author["status"] == "online"
-    assert status_events[-1]["statusEventType"] == "online"
-    assert status_events[-1]["reason"] == "reports_resumed"
+    assert status_events[-1]["statusEventType"] == "offline"
+    assert status_events[-1]["reason"] == "reports_stopped"
     assert repo.db.status_states.items[0]["status"] == "online"
 
 def test_stale_daily_activity_without_report_row_does_not_resume_reports_stopped_status():

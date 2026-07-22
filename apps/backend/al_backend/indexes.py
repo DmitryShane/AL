@@ -49,6 +49,13 @@ class IndexManager:
         self.db.report_rows.create_index([("author", ASCENDING), ("date", ASCENDING), ("source", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.report_rows.create_index([("date", ASCENDING), ("author", ASCENDING), ("source", ASCENDING), ("receivedAt", DESCENDING)])
         self.db.report_rows.create_index([("source", ASCENDING), ("author", ASCENDING), ("sessionId", ASCENDING), ("date", ASCENDING)])
+        self._deduplicate_status_report_rows()
+        self.db.report_rows.create_index(
+            "statusEventKey",
+            unique=True,
+            partialFilterExpression={"source": "status", "statusEventKey": {"$type": "string"}},
+            name="status_report_rows_event_unique",
+        )
         self.db.activity_summary_cache.create_index("cacheKey", unique=True)
         self.db.activity_summary_cache.create_index("expiresAt", expireAfterSeconds=0)
         self.db.activity_summary_cache.create_index("dateMode")
@@ -191,3 +198,36 @@ class IndexManager:
             expireAfterSeconds=RAW_REPORTS_RETENTION_SECONDS,
             name=RAW_REPORTS_RETENTION_INDEX_NAME,
         )
+
+    def _deduplicate_status_report_rows(self) -> None:
+        """Backfill the status event key and retain one row per status event before indexing."""
+        find = getattr(self.db.report_rows, "find", None)
+
+        if not callable(find):
+            return
+
+        groups: dict[str, list[dict]] = {}
+
+        for row in find({"source": "status"}):
+            author = str(row.get("author") or "")
+            date = str(row.get("date") or "")
+            event_type = str(row.get("statusEventType") or row.get("activityType") or "")
+            recorded_at = str(row.get("recordedAt") or "")
+
+            if not author or not date or event_type not in {"online", "offline"} or not recorded_at:
+                continue
+
+            key = "|".join((author, date, event_type, recorded_at))
+            groups.setdefault(key, []).append(row)
+
+        for key, rows in groups.items():
+            keeper = rows[0]
+            keeper_id = keeper.get("_id")
+
+            if keeper_id is not None:
+                self.db.report_rows.update_one({"_id": keeper_id}, {"$set": {"statusEventKey": key}})
+
+            duplicate_ids = [row.get("_id") for row in rows[1:] if row.get("_id") is not None]
+
+            if duplicate_ids:
+                self.db.report_rows.delete_many({"_id": {"$in": duplicate_ids}})
