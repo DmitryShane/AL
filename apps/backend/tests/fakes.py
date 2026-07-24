@@ -314,6 +314,13 @@ class FakeCollection:
             if key not in item or item[key] < value:
                 item[key] = value
 
+        for key, value in operation.get("$addToSet", {}).items():
+            target = item.setdefault(key, [])
+            values = value.get("$each", []) if isinstance(value, dict) and "$each" in value else [value]
+            for candidate in values:
+                if candidate not in target:
+                    target.append(candidate)
+
         for key in operation.get("$unset", {}).keys():
             item.pop(key, None)
 

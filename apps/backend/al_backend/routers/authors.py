@@ -106,14 +106,20 @@ def _run_full_rebuild_job(service: BackendServices, job_id: str) -> None:
         _finish_rebuild_job(service, job_id, "failed", error=f"{exc}\n{traceback.format_exc()}")
 
 
-def _run_scoped_rebuild_job(service: BackendServices, job_id: str, raw_author: str, start_date: str, end_date: str) -> None:
+def _run_scoped_rebuild_job(
+    service: BackendServices,
+    job_id: str,
+    raw_author: str | None,
+    start_date: str,
+    end_date: str,
+) -> None:
     previous_job_id = getattr(service, "_active_rebuild_job_id", None)
     service._active_rebuild_job_id = job_id
     try:
         result = service.rebuild_aggregates_for_dates(
             start_date=start_date,
             end_date=end_date,
-            authors=[raw_author],
+            authors=[raw_author] if raw_author else None,
             progress_callback=lambda phase, current, total: _update_rebuild_job_progress(service, job_id, phase, current, total),
         )
         _finish_rebuild_job(service, job_id, "completed", result)
@@ -216,6 +222,32 @@ def rebuild_activity_status(
         return {"ok": True, "job": None}
 
     return {"ok": True, "job": job}
+
+
+@router.post("/api/v1/authors/activity/rebuild-range")
+def rebuild_activity_all_authors_for_range(
+    background_tasks: BackgroundTasks,
+    start_date: str = Query(..., alias="startDate"),
+    end_date: str = Query(..., alias="endDate"),
+    _: dict = Depends(require_permission("manageSettings")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    active_job = _active_rebuild_job(service)
+
+    if active_job:
+        raise HTTPException(status_code=409, detail="Another rebuild is already running")
+
+    dt.date.fromisoformat(start_date)
+    dt.date.fromisoformat(end_date)
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="endDate must not be before startDate")
+
+    job_id = uuid.uuid4().hex
+    service.db.aggregate_rebuild_jobs.insert_one(
+        _rebuild_job_doc(job_id, f"Rebuild all authors {start_date} to {end_date}", "dateRange")
+    )
+    background_tasks.add_task(_run_scoped_rebuild_job, service, job_id, None, start_date, end_date)
+    return {"ok": True, "jobId": job_id}
 
 
 @router.post("/api/v1/authors/{raw_author}/activity/rebuild")

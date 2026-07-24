@@ -391,6 +391,13 @@ class ReportIngestService(MongoComposableMixin):
         try:
             self._process_raw_report_doc(report)
         except Exception as exc:
+            LOGGER.exception(
+                "Failed queued report processing report_id=%s source=%s author=%s attempt=%s",
+                report.get("_id"),
+                report.get("source"),
+                report.get("authorKey"),
+                report.get("attempts"),
+            )
             self.mark_queued_report_failed(report, exc, max_attempts=max_attempts)
             return False
 
@@ -817,9 +824,19 @@ class ReportIngestService(MongoComposableMixin):
             normalized_events.append(event)
 
         raw_write_started_at = dt.datetime.now(dt.UTC)
-        inserted_event_ids = {str(event.get("eventId") or "") for event in normalized_events}
+        ingest_state = self.db.raw_reports.find_one(
+            {"_id": raw_report_id},
+            {"eventIngestTotal": 1, "eventIngestProcessed": 1, "eventIngestAffectedDates": 1},
+        ) or {}
+        processed_event_count = max(0, int(ingest_state.get("eventIngestProcessed") or 0))
+        recovering_incomplete_ingest = int(ingest_state.get("eventIngestTotal") or 0) > processed_event_count
+        inserted_event_ids = (
+            set()
+            if recovering_incomplete_ingest
+            else {str(event.get("eventId") or "") for event in normalized_events}
+        )
 
-        if normalized_events:
+        if normalized_events and not recovering_incomplete_ingest:
             try:
                 insert_many = getattr(self.db.raw_activity_events, "insert_many", None)
                 if insert_many:
@@ -876,29 +893,38 @@ class ReportIngestService(MongoComposableMixin):
                         inserted_event_ids.add(event_id)
 
         accepted_events = [event for event in normalized_events if str(event.get("eventId") or "") in inserted_event_ids]
+        events_to_account = accepted_events
 
-        if accepted_events and not self._is_unassigned_device_report_author(source, author):
-            report_row_recorded_at = _raw_event_time(accepted_events[-1])
+        if not events_to_account and int(ingest_state.get("eventIngestTotal") or 0) > processed_event_count:
+            persisted_events = list(
+                self.db.raw_activity_events.find({"rawReportId": raw_report_id}).sort(
+                    [("occurredAtUtc", 1), ("occurredAtLocal", 1), ("eventId", 1)]
+                )
+            )
+            events_to_account = persisted_events[processed_event_count:]
+
+        accounting_started_at = dt.datetime.now(dt.UTC)
+        if accepted_events:
+            self.db.raw_reports.update_one(
+                {"_id": raw_report_id},
+                {
+                    "$set": {
+                        "eventIngestTotal": len(accepted_events),
+                        "eventIngestProcessed": 0,
+                        "eventIngestAffectedDates": [],
+                        "eventIngestStartedAt": accounting_started_at,
+                    }
+                },
+            )
+            processed_event_count = 0
+
+        if events_to_account and not self._is_unassigned_device_report_author(source, author):
+            report_row_recorded_at = _raw_event_time(events_to_account[-1])
             composed(self).resume_reports_for_plugin_report(
                 author,
                 received_at,
                 payload.get("timeZoneId"),
                 report_row_recorded_at,
-            )
-
-        accounting_started_at = dt.datetime.now(dt.UTC)
-        events_to_account = accepted_events
-        assembled_metadata = assembled_chunk_metadata(payload, source)
-        if assembled_metadata:
-            self.db.raw_reports.update_one(
-                {"_id": raw_report_id},
-                {
-                    "$set": {
-                        "eventIngestTotal": len(events_to_account),
-                        "eventIngestProcessed": 0,
-                        "eventIngestStartedAt": accounting_started_at,
-                    }
-                },
             )
 
         for offset in range(0, len(events_to_account), RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE):
@@ -923,22 +949,31 @@ class ReportIngestService(MongoComposableMixin):
                 }
                 self._invalidate_and_wake_activity_snapshots(sub_batch_dates, sub_batch_authors)
 
-            if assembled_metadata:
-                self.db.raw_reports.update_one(
-                    {"_id": raw_report_id},
-                    {
-                        "$set": {
-                            "eventIngestProcessed": min(offset + len(sub_batch), len(events_to_account)),
-                            "eventIngestCursor": min(offset + len(sub_batch), len(events_to_account)),
-                        }
+            completed_event_count = processed_event_count + offset + len(sub_batch)
+            self.db.raw_reports.update_one(
+                {"_id": raw_report_id},
+                {
+                    "$set": {
+                        "eventIngestProcessed": completed_event_count,
+                        "eventIngestCursor": completed_event_count,
                     },
-                )
+                    "$addToSet": {"eventIngestAffectedDates": {"$each": sorted(sub_batch_dates)}},
+                },
+            )
 
         rows_started_at = dt.datetime.now(dt.UTC)
         rows = self._build_event_batch_report_rows(batch, batch_delta_items)
 
         if not rows:
-            return []
+            return sorted(
+                {
+                    str(date)
+                    for date in (
+                        self.db.raw_reports.find_one({"_id": raw_report_id}, {"eventIngestAffectedDates": 1}) or {}
+                    ).get("eventIngestAffectedDates", [])
+                    if str(date).strip()
+                }
+            )
 
         _insert_many_if_supported(self.db.report_rows, rows)
         finished_at = dt.datetime.now(dt.UTC)

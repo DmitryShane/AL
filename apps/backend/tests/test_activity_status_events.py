@@ -856,6 +856,34 @@ def test_ingest_resume_status_sorts_immediately_before_returning_plugin_report()
     assert [report["source"] for report in page["reports"][:2]] == ["ual", "status"]
     assert page["reports"][1]["statusEventType"] == "online"
 
+def test_status_event_update_does_not_write_report_row_time_with_conflicting_operators():
+    repo = fake_repository()
+    captured_operations = []
+    original_update_one = repo.db.status_events.update_one
+
+    def capture_update(query, operation, upsert=False):
+        captured_operations.append(operation)
+        return original_update_one(query, operation, upsert=upsert)
+
+    repo.db.status_events.update_one = capture_update
+    transition_at = dt.datetime(2026, 4, 29, 9, 5, tzinfo=dt.UTC)
+    row_recorded_at = transition_at - dt.timedelta(microseconds=1)
+
+    repo.record_status_event(
+        "Future Artist",
+        "online",
+        transition_at,
+        "UTC",
+        "reports_resumed",
+        transition_at,
+        row_recorded_at,
+    )
+
+    operation = captured_operations[0]
+    assert "reportRowRecordedAt" not in operation["$setOnInsert"]
+    assert operation["$set"]["reportRowRecordedAt"] == row_recorded_at
+    assert set(operation["$setOnInsert"]).isdisjoint(operation["$set"])
+
 def test_fresh_daily_activity_without_report_row_resumes_reports_stopped_status():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "timeZoneId": "UTC"})

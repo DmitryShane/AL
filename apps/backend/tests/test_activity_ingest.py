@@ -583,6 +583,42 @@ def test_queued_report_retry_reuses_existing_raw_event_batch():
     assert len(repo.db.raw_event_batches.items) == 1
     assert {event["batchId"] for event in repo.db.raw_activity_events.items} == {"existing-batch"}
 
+def test_queued_report_retry_accounts_events_inserted_before_resume_failure():
+    repo = fake_repository()
+    repo.db.status_states.insert_one({"rawAuthor": "Queue Author", "status": "offline"})
+    report_id = repo.queue_decoded_report(
+        source="ual",
+        plugin_version="0.1.10",
+        encrypted_packet="packet",
+        challenge_id="challenge-retry-accounting",
+        device_id="device-retry-accounting",
+        payload=_event_payload(event_count=2),
+    )
+    original_resume = repo.resume_reports_for_plugin_report
+
+    def fail_resume(*_args, **_kwargs):
+        raise RuntimeError("resume failed")
+
+    repo.resume_reports_for_plugin_report = fail_resume
+    first = repo.claim_next_queued_report(worker_id="worker-1", max_attempts=3)
+    assert repo.process_claimed_report(first, max_attempts=3) is False
+    failed = repo.db.raw_reports.find_one({"_id": report_id})
+    assert failed["eventIngestTotal"] == 2
+    assert failed["eventIngestProcessed"] == 0
+    assert len(repo.db.raw_activity_events.items) == 2
+    assert repo.db.daily_author_activity.items == []
+
+    repo.resume_reports_for_plugin_report = original_resume
+    second = repo.claim_next_queued_report(worker_id="worker-1", max_attempts=3)
+    assert repo.process_claimed_report(second, max_attempts=3) is True
+
+    processed = repo.db.raw_reports.find_one({"_id": report_id})
+    assert processed["status"] == "processed"
+    assert processed["eventIngestProcessed"] == 2
+    assert processed["affectedDates"] == ["2026-06-12"]
+    assert len(repo.db.raw_activity_events.items) == 2
+    assert len(repo.db.daily_author_activity.items) == 1
+
 def test_submit_report_source_mismatch_rejects_without_queue_write():
     from al_backend.models import ReportIn
     from al_backend.routers.reports import submit_report

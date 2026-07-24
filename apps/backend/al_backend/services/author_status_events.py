@@ -53,7 +53,8 @@ class AuthorStatusEventsService(MongoComposableMixin):
 
         if row_recorded_at:
             event["reportRowRecordedAt"] = row_recorded_at
-        update: dict[str, Any] = {"$setOnInsert": event}
+        insert_event = {key: value for key, value in event.items() if key != "reportRowRecordedAt"}
+        update: dict[str, Any] = {"$setOnInsert": insert_event}
 
         if row_recorded_at:
             update["$set"] = {"reportRowRecordedAt": row_recorded_at}

@@ -10,7 +10,7 @@ from al_backend.rebuild_jobs import (
     mark_running_rebuild_jobs_interrupted,
     mark_stale_rebuild_jobs_failed,
 )
-from al_backend.routers.authors import _active_rebuild_job, rebuild_author_activity
+from al_backend.routers.authors import _active_rebuild_job, rebuild_activity_all_authors_for_range, rebuild_author_activity
 from al_backend.services import activity_raw_event_accounting as raw_accounting_module
 from al_backend.services import activity_aggregation_rebuild as rebuild_module
 from al_backend.services.raw_event_batching import RAW_EVENT_ACCOUNTING_SUB_BATCH_SIZE, REBUILD_CURSOR_BATCH_SIZE, REBUILD_RAW_FLUSH_BATCHES
@@ -96,6 +96,37 @@ def test_stale_running_rebuild_job_is_failed_and_new_rebuild_can_start():
     assert stale_job["finishedAt"] is not None
     assert stale_job["updatedAt"] > old
     assert new_job["status"] == "running"
+
+def test_date_range_rebuild_queues_all_authors_scope():
+    repo = fake_repository()
+    background_tasks = BackgroundTasks()
+
+    result = rebuild_activity_all_authors_for_range(
+        background_tasks,
+        start_date="2026-07-24",
+        end_date="2026-07-24",
+        service=repo,
+    )
+
+    job = repo.db.aggregate_rebuild_jobs.find_one({"jobId": result["jobId"]})
+    assert result["ok"] is True
+    assert job["scope"] == "dateRange"
+    assert "2026-07-24 to 2026-07-24" in job["label"]
+    assert len(background_tasks.tasks) == 1
+    assert background_tasks.tasks[0].args[2:] == (None, "2026-07-24", "2026-07-24")
+
+def test_date_range_rebuild_rejects_reversed_dates():
+    repo = fake_repository()
+
+    with pytest.raises(HTTPException) as exc_info:
+        rebuild_activity_all_authors_for_range(
+            BackgroundTasks(),
+            start_date="2026-07-25",
+            end_date="2026-07-24",
+            service=repo,
+        )
+
+    assert exc_info.value.status_code == 400
 
 
 def test_running_rebuild_job_without_updated_at_uses_created_at_for_stale_check():
