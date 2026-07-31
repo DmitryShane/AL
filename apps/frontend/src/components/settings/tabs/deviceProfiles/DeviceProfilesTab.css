@@ -1,5 +1,13 @@
 .profile-table--device-profiles {
-  --device-profile-columns: 92px 190px 96px minmax(190px, 1fr) minmax(190px, 1fr) minmax(150px, 0.8fr) 72px 130px 150px 150px 176px;
+  --device-profile-columns: 92px minmax(170px, 1fr) 190px 96px minmax(190px, 1fr) minmax(190px, 1fr) minmax(150px, 0.8fr) 72px 130px 150px 150px 176px;
+}
+
+.device-profiles-table-section + .device-profiles-table-section {
+  margin-top: 24px;
+}
+
+.device-profiles-table-section > h3 {
+  margin: 20px 0 10px;
 }
 
 .device-profiles-panel-head {
@@ -22,7 +30,7 @@
 .profile-table--device-profiles > .profile-table-head,
 .profile-table--device-profiles > .profile-row {
   grid-template-columns: var(--device-profile-columns);
-  min-width: 1754px;
+  min-width: 1940px;
 }
 
 .profile-table-empty {

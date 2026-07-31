@@ -2,6 +2,8 @@ import { formatBrowserDateTime, formatDeviceDateTime, formatDeviceTracking } fro
 import type { DeviceProfile, DeviceProfileAuthorOption } from "./types";
 
 type DeviceProfilesTableProps = {
+  title: string;
+  emptyLabel: string;
   deviceProfiles: DeviceProfile[];
   authorOptions: DeviceProfileAuthorOption[];
   loading: boolean;
@@ -14,6 +16,8 @@ type DeviceProfilesTableProps = {
 };
 
 export function DeviceProfilesTable({
+  title,
+  emptyLabel,
   deviceProfiles,
   authorOptions,
   loading,
@@ -25,10 +29,13 @@ export function DeviceProfilesTable({
   onDeleteProfile,
 }: DeviceProfilesTableProps) {
   return (
-    <div className="profile-table-shell">
+    <section className="device-profiles-table-section">
+      <h3>{title}</h3>
+      <div className="profile-table-shell">
       <div className="profile-table profile-table--device-profiles">
         <div className="profile-table-head">
           <span>Raw Device</span>
+          <span>Device Name</span>
           <span>Linked Author</span>
           <span>Runtime</span>
           <span>IDFA</span>
@@ -43,7 +50,7 @@ export function DeviceProfilesTable({
         {loading ? (
           <p className="profile-table-empty">Loading device profiles...</p>
         ) : deviceProfiles.length === 0 ? (
-          <p className="profile-table-empty">No device profiles found.</p>
+          <p className="profile-table-empty">{emptyLabel}</p>
         ) : (
           deviceProfiles.map((profile) => {
             const draftValue = aliasDrafts[profile.rawDevice] ?? profile.linkedAuthor ?? "";
@@ -57,6 +64,7 @@ export function DeviceProfilesTable({
                   <strong>{profile.rawDevice || "-"}</strong>
                   {profile.createdAt ? <small>Linked: {formatBrowserDateTime(profile.createdAt)}</small> : null}
                 </span>
+                <span className="profile-readonly-cell" title={profile.deviceName || ""}>{profile.deviceName || "-"}</span>
                 <div className="device-profile-author-cell">
                   <select
                     value={draftValue}
@@ -108,7 +116,8 @@ export function DeviceProfilesTable({
           })
         )}
       </div>
-    </div>
+      </div>
+    </section>
   );
 }
 

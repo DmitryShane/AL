@@ -112,6 +112,8 @@ class ActivitySummaryService(
                 and requested_date <= now.astimezone(dt.UTC).date()
             )
         hidden_device_authors = self._hidden_device_authors()
+        if date_mode == "authorLocalToday":
+            hidden_device_authors |= self._inactive_unlinked_device_authors_for_live_utc_day(now)
         if historical_single_day:
             selected_daily_device_authors = {
                 str(author or "")

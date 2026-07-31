@@ -117,14 +117,28 @@ function mergeDeviceProfiles(current: DeviceProfile[], changes: DeviceProfile[])
 }
 
 function sortDeviceProfiles(profiles: DeviceProfile[]) {
-  return [...profiles].sort((left, right) => {
-    const sourceCompare = (left.source ?? "").localeCompare(right.source ?? "");
-    if (sourceCompare !== 0) {
-      return sourceCompare;
-    }
+  const linked = profiles.filter((profile) => Boolean(profile.linkedAuthor));
+  const unlinked = profiles.filter((profile) => !profile.linkedAuthor);
 
-    return naturalDeviceKey(left.rawDevice).localeCompare(naturalDeviceKey(right.rawDevice));
+  linked.sort((left, right) => {
+    const authorCompare = deviceProfileAuthorLabel(left).localeCompare(deviceProfileAuthorLabel(right));
+    return authorCompare || naturalDeviceKey(left.rawDevice).localeCompare(naturalDeviceKey(right.rawDevice));
   });
+  unlinked.sort((left, right) => {
+    const lastSeenCompare = deviceProfileLastSeenMs(right) - deviceProfileLastSeenMs(left);
+    return lastSeenCompare || naturalDeviceKey(left.rawDevice).localeCompare(naturalDeviceKey(right.rawDevice));
+  });
+
+  return [...linked, ...unlinked];
+}
+
+function deviceProfileAuthorLabel(profile: DeviceProfile) {
+  return (profile.linkedAuthorDisplayName || profile.linkedAuthor || "").toLocaleLowerCase();
+}
+
+function deviceProfileLastSeenMs(profile: DeviceProfile) {
+  const timestamp = Date.parse(profile.deviceLastSeenAt ?? profile.lastSeenAt ?? "");
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function naturalDeviceKey(value: string) {
@@ -169,6 +183,8 @@ export function DeviceProfilesTab() {
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkDeleteFailed, setBulkDeleteFailed] = useState(false);
+  const linkedDeviceProfiles = deviceProfiles.filter((profile) => Boolean(profile.linkedAuthor));
+  const unlinkedDeviceProfiles = deviceProfiles.filter((profile) => !profile.linkedAuthor);
 
   useEffect(() => {
     let cancelled = false;
@@ -318,7 +334,22 @@ export function DeviceProfilesTab() {
       </div>
       {error ? <p className="settings-error">{error}</p> : null}
       <DeviceProfilesTable
-        deviceProfiles={deviceProfiles}
+        title="Linked Devices"
+        emptyLabel="No linked device profiles found."
+        deviceProfiles={linkedDeviceProfiles}
+        authorOptions={authorOptions}
+        loading={loading}
+        savingRawDevice={savingRawDevice}
+        deletingRawDevice={deletingRawDevice}
+        aliasDrafts={aliasDrafts}
+        onLinkedAuthorDraftChange={handleLinkedAuthorDraftChange}
+        onSaveLinkedAuthor={(rawDevice) => void handleLinkedAuthorSave(rawDevice)}
+        onDeleteProfile={setDeleteTarget}
+      />
+      <DeviceProfilesTable
+        title="Unlinked Devices"
+        emptyLabel="No unlinked device profiles found."
+        deviceProfiles={unlinkedDeviceProfiles}
         authorOptions={authorOptions}
         loading={loading}
         savingRawDevice={savingRawDevice}
@@ -366,6 +397,7 @@ function sanitizeDeviceProfile(value: unknown): DeviceProfile[] {
     rawDevice,
     source: optionalString(item.source),
     runtime: optionalString(item.runtime),
+    deviceName: optionalString(item.deviceName),
     linkedAuthor: optionalString(item.linkedAuthor),
     linkedAuthorDisplayName: optionalString(item.linkedAuthorDisplayName),
     idfa: optionalString(item.idfa),

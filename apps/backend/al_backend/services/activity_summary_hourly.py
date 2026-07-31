@@ -81,6 +81,27 @@ class ActivitySummaryHourlyMixin:
         }
         return device_authors - active_device_authors - alias_device_authors
 
+    def _inactive_unlinked_device_authors_for_live_utc_day(self, now: dt.datetime) -> set[str]:
+        utc_day_start = now.astimezone(dt.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        linked_device_authors = {
+            str(item.get("sourceRawAuthor") or "")
+            for item in self.db.author_aliases.find({}, {"_id": 0, "sourceRawAuthor": 1})
+            if _is_device_profile_raw_author(str(item.get("sourceRawAuthor") or ""))
+        }
+        inactive_authors = set()
+
+        for identity in self.db.device_report_identities.find({}, {"_id": 0, "rawAuthor": 1, "lastSeenAt": 1}):
+            raw_author = str(identity.get("rawAuthor") or "")
+
+            if not _is_device_profile_raw_author(raw_author) or raw_author in linked_device_authors:
+                continue
+
+            last_seen_at = _coerce_datetime(identity.get("lastSeenAt"))
+            if not last_seen_at or last_seen_at < utc_day_start:
+                inactive_authors.add(raw_author)
+
+        return inactive_authors
+
     def _apply_summary_auto_breaks(
         self,
         authors_by_raw: dict[str, dict[str, Any]],

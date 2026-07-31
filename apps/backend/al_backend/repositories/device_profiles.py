@@ -164,6 +164,12 @@ def _device_profiles_from_identities(repo: DeviceProfileRepository, identities: 
         latest_batch_metadata = latest_batch.get("metadata") if isinstance((latest_batch or {}).get("metadata"), dict) else {}
         identity_metadata = identity.get("lastMetadata") if isinstance(identity.get("lastMetadata"), dict) else {}
         latest_metadata = identity_metadata or latest_event_metadata or latest_batch_metadata
+        device_name = str(
+            identity_metadata.get("deviceName")
+            or latest_event_metadata.get("deviceName")
+            or latest_batch_metadata.get("deviceName")
+            or ""
+        )
         time_zone_id = str(
             identity.get("lastTimeZoneId")
             or latest_event.get("timeZoneId")
@@ -195,6 +201,7 @@ def _device_profiles_from_identities(repo: DeviceProfileRepository, identities: 
                 "rawDevice": raw_author,
                 "source": source,
                 "runtime": _device_runtime_label(platform),
+                "deviceName": device_name,
                 "linkedAuthor": linked_author,
                 "linkedAuthorDisplayName": _display_name(linked_author, linked_profile or {}) if linked_author else "",
                 "idfa": advertising_id if "iphone" in platform_key or "ios" in platform_key else "",

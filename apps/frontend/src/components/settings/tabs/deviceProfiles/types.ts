@@ -2,6 +2,7 @@ export type DeviceProfile = {
   rawDevice: string;
   source?: string;
   runtime?: string;
+  deviceName?: string;
   linkedAuthor?: string;
   linkedAuthorDisplayName?: string;
   idfa?: string;

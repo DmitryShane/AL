@@ -28,6 +28,7 @@ def test_device_profiles_list_includes_latest_identity_metadata():
             "timeZoneDisplayName": "EEST",
             "metadata": {
                 "deviceAdvertisingId": "idfa-1",
+                "deviceName": "QA iPhone",
                 "platform": "IPhonePlayer",
                 "trackingAuthorizationStatus": "denied",
             },
@@ -40,6 +41,7 @@ def test_device_profiles_list_includes_latest_identity_metadata():
     assert profile["linkedAuthor"] == "Dmitry Shane"
     assert profile["linkedAuthorDisplayName"] == "Dmitry Shane"
     assert profile["runtime"] == "iOS"
+    assert profile["deviceName"] == "QA iPhone"
     assert profile["idfa"] == "idfa-1"
     assert profile["gaid"] == ""
     assert profile["trackingAuthorizationStatus"] == "denied"
@@ -106,6 +108,7 @@ def test_device_profiles_prefer_identity_latest_metadata():
             "lastTimeZoneDisplayName": "PDT",
             "lastMetadata": {
                 "deviceAdvertisingId": "gaid-1",
+                "deviceName": "Pixel QA",
                 "platform": "Android",
                 "trackingAuthorizationStatus": "authorized",
             },
@@ -117,6 +120,7 @@ def test_device_profiles_prefer_identity_latest_metadata():
     assert profile["projectId"] == "Bike Rush 2"
     assert profile["pluginVersion"] == "0.1.0"
     assert profile["gaid"] == "gaid-1"
+    assert profile["deviceName"] == "Pixel QA"
     assert profile["trackingAuthorizationStatus"] == "authorized"
     assert profile["createdTimeZoneId"] == "America/Vancouver"
     assert profile["createdTimeZoneDisplayName"] == "PDT"
@@ -152,6 +156,84 @@ def test_device_profiles_skip_raw_event_queries_when_identity_has_latest_metadat
     repo.db.raw_activity_events.find = fail_find
 
     assert repo.device_profiles()[0]["rawDevice"] == "Device1"
+
+
+def test_device_profiles_fall_back_to_raw_event_device_name_when_identity_metadata_lacks_it():
+    repo = fake_repository()
+    repo.db.device_report_identities.insert_one(
+        {
+            "source": "dev-android",
+            "deviceIdHash": "hash-android",
+            "rawAuthor": "Device1",
+            "lastMetadata": {"platform": "Android"},
+        }
+    )
+    repo.db.raw_activity_events.insert_one(
+        {
+            "source": "dev-android",
+            "author": "Device1",
+            "receivedAt": dt.datetime(2026, 5, 4, 10, 0, tzinfo=dt.UTC),
+            "metadata": {"platform": "Android", "deviceName": "S21 de Thomas"},
+        }
+    )
+
+    assert repo.device_profiles()[0]["deviceName"] == "S21 de Thomas"
+
+
+def test_device_profiles_return_empty_device_name_when_metadata_has_none():
+    repo = fake_repository()
+    repo.db.device_report_identities.insert_one(
+        {
+            "source": "dev-android",
+            "deviceIdHash": "hash-android",
+            "rawAuthor": "Device1",
+            "lastMetadata": {"platform": "Android"},
+        }
+    )
+
+    assert repo.device_profiles()[0]["deviceName"] == ""
+
+
+def test_live_activity_hides_unlinked_devices_not_seen_since_utc_midnight():
+    repo = fake_repository()
+    now = dt.datetime(2026, 7, 31, 9, 0, tzinfo=dt.UTC)
+    repo.db.device_report_identities.insert_one(
+        {
+            "source": "dev-android",
+            "deviceIdHash": "old-device",
+            "rawAuthor": "Device1",
+            "lastSeenAt": dt.datetime(2026, 7, 30, 23, 59, 59, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.device_report_identities.insert_one(
+        {
+            "source": "dev-android",
+            "deviceIdHash": "new-device",
+            "rawAuthor": "Device2",
+            "lastSeenAt": dt.datetime(2026, 7, 31, 0, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.device_report_identities.insert_one(
+        {
+            "source": "dev-android",
+            "deviceIdHash": "linked-device",
+            "rawAuthor": "Device3",
+            "lastSeenAt": dt.datetime(2026, 7, 30, 22, 0, tzinfo=dt.UTC),
+        }
+    )
+    repo.db.author_profiles.insert_one({"rawAuthor": "QA Author", "displayName": "QA Author"})
+    repo.db.author_aliases.insert_one({"sourceRawAuthor": "Device3", "targetRawAuthor": "QA Author"})
+
+    for raw_author in ("Device1", "Device2", "Device3"):
+        repo.db.raw_activity_events.insert_one(
+            {"source": "dev-android", "author": raw_author, "date": "2026-07-30", "eventId": raw_author}
+        )
+
+    authors = {item["rawAuthor"] for item in repo.activity_summary(date_mode="authorLocalToday", now=now)["authors"]}
+
+    assert "Device1" not in authors
+    assert "Device2" in authors
+    assert "QA Author" in authors
 
 
 def test_device_profile_changes_returns_only_identities_after_cursor():

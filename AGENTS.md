@@ -97,7 +97,7 @@ For a narrower check, still run it through `uv run` from `apps/backend`, for exa
 
 When code changes need local verification, decide whether rebuild/restart is actually required and perform it yourself only when necessary.
 
-- After any backend Python runtime change under `apps/backend`, if the local backend is running or the change affects what the local API/UI should show, the agent must restart the local app before claiming the change is ready or locally verified: run `stop`, then `start`, then verify `http://127.0.0.1:8000/api/v1/health`. Do not rely only on direct repository calls, scripts, or unit tests as proof that the running server has loaded the new code.
+- Do not restart or start the local app after backend changes by default. Run `stop`/`start` only when the owner explicitly requests it or when a local runtime verification genuinely requires it; in that case, verify `http://127.0.0.1:8000/api/v1/health` after startup.
 - Frontend React/CSS changes under `apps/frontend` do not usually require restarting Vite dev server; hot reload should update the browser. If viewing production `dist`, run `npm run build` and restart the process serving `dist`.
 - After UI/frontend changes or UI-focused tasks, do **not** run browser/UI verification by default. Only perform browser-based UI checks when the owner explicitly asks for UI verification.
 - Dependency, lockfile, env, config, startup script, or build pipeline changes require the relevant install/build/restart step.
