@@ -1293,7 +1293,7 @@ def test_author_local_today_hides_inactive_publisher_after_twenty_four_hours():
     assert "Ketchapp" not in {item["rawAuthor"] for item in summary["hourlyActivityByAuthor"]}
 
 
-def test_author_local_today_keeps_recent_stale_publisher_with_last_seen():
+def test_author_local_today_hides_publisher_without_a_report_in_current_utc_day():
     repo = fake_repository()
     now = dt.datetime(2026, 5, 15, 12, tzinfo=dt.UTC)
     repo.db.author_profiles.insert_one({"rawAuthor": "Ketchapp", "displayName": "Ketchapp", "profileType": "publisher"})
@@ -1312,12 +1312,9 @@ def test_author_local_today_keeps_recent_stale_publisher_with_last_seen():
     )
 
     summary = repo.activity_summary(date_mode="authorLocalToday", now=now)
-    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Ketchapp")
 
-    assert author["status"] == "stale"
-    assert author["stalePresence"] == "device"
-    assert author["lastReceivedAt"] == "2026-05-14T13:30:00+00:00"
-    assert author["lastRecordedAt"] == "2026-05-14T15:30:00+02:00"
+    assert "Ketchapp" not in {item["rawAuthor"] for item in summary["authors"]}
+    assert "Ketchapp" not in {item["rawAuthor"] for item in summary["hourlyActivityByAuthor"]}
 
 
 def test_author_local_today_aggregates_publisher_device_activity_today():

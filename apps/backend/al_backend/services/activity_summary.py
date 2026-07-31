@@ -40,20 +40,16 @@ def _is_device_profile_raw_author(value: str) -> bool:
     return normalized.startswith("Device") and normalized[6:].isdigit()
 
 
-_STALE_PUBLISHER_HIDE_SECONDS = 24 * 60 * 60
-
-
-def _remove_old_inactive_live_publishers(
+def _remove_inactive_live_publishers_before_utc_day(
     authors_by_raw: dict[str, dict[str, Any]],
     hourly_by_author: dict[str, dict[str, Any]],
     profiles: dict[str, dict[str, Any]],
     now: dt.datetime,
 ) -> None:
+    utc_day_start = now.astimezone(dt.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
     for raw_author, author in list(authors_by_raw.items()):
         if str((profiles.get(raw_author) or {}).get("profileType") or author.get("profileType") or "person") != "publisher":
-            continue
-
-        if _author_has_summary_activity(author):
             continue
 
         last_seen_at = _coerce_datetime(author.get("_lastReportReceivedAt")) or _coerce_datetime(author.get("lastReceivedAt"))
@@ -61,7 +57,7 @@ def _remove_old_inactive_live_publishers(
         if not last_seen_at:
             continue
 
-        if max(0, int((now - last_seen_at).total_seconds())) <= _STALE_PUBLISHER_HIDE_SECONDS:
+        if last_seen_at >= utc_day_start:
             continue
 
         authors_by_raw.pop(raw_author, None)
@@ -112,7 +108,8 @@ class ActivitySummaryService(
                 and requested_date <= now.astimezone(dt.UTC).date()
             )
         hidden_device_authors = self._hidden_device_authors()
-        if date_mode == "authorLocalToday":
+        live_utc_date = now.astimezone(dt.UTC).date().isoformat()
+        if date_mode == "authorLocalToday" and (not end_date or end_date <= live_utc_date):
             hidden_device_authors |= self._inactive_unlinked_device_authors_for_live_utc_day(now)
         if historical_single_day:
             selected_daily_device_authors = {
@@ -827,7 +824,7 @@ class ActivitySummaryService(
         self._sync_author_idle_totals_from_hourly(authors_by_raw, hourly_by_author, totals)
         _clear_inactive_author_report_metadata(authors_by_raw.values())
         if date_mode == "authorLocalToday":
-            _remove_old_inactive_live_publishers(authors_by_raw, hourly_by_author, profiles, now)
+            _remove_inactive_live_publishers_before_utc_day(authors_by_raw, hourly_by_author, profiles, now)
         presence_overrides = self._author_presence_overrides(
             authors_by_raw.keys(),
             profiles,

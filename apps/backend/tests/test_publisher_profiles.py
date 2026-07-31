@@ -42,7 +42,7 @@ def test_publisher_profiles_are_hidden_from_calendar_summary():
     assert [item["rawAuthor"] for item in summary["stats"]] == ["Real Author"]
 
 
-def test_publisher_device_stale_is_grey_device_offline_without_reports_stopped_event():
+def test_live_activity_hides_inactive_publisher_devices_from_previous_utc_day():
     repo = fake_repository()
     now = dt.datetime(2026, 5, 14, 1, 0, tzinfo=dt.UTC)
     repo.db.author_profiles.insert_one(
@@ -68,11 +68,38 @@ def test_publisher_device_stale_is_grey_device_offline_without_reports_stopped_e
     )
 
     summary = repo.activity_summary(date_mode="authorLocalToday", now=now)
-    author = next(item for item in summary["authors"] if item["rawAuthor"] == "Publisher QA")
-
-    assert author["status"] == "stale"
-    assert author["stalePresence"] == "device"
+    assert "Publisher QA" not in {item["rawAuthor"] for item in summary["authors"]}
     assert repo.db.status_events.items == []
+
+
+def test_live_activity_keeps_publisher_device_seen_after_utc_midnight():
+    repo = fake_repository()
+    now = dt.datetime(2026, 5, 14, 1, 0, tzinfo=dt.UTC)
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Publisher QA",
+            "displayName": "Publisher QA",
+            "profileType": "publisher",
+        }
+    )
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "dev-android",
+            "author": "Publisher QA",
+            "projectId": "Bike Rush 2",
+            "date": "2026-05-14",
+            "timeZoneId": "UTC",
+            "lastReceivedAt": dt.datetime(2026, 5, 14, 0, 5, tzinfo=dt.UTC),
+            "lastRecordedAt": "2026-05-14T00:05:00+00:00",
+            "activeSeconds": 120,
+            "idleSeconds": 0,
+            "hourlyActivity": empty_hourly_activity(),
+        }
+    )
+
+    summary = repo.activity_summary(date_mode="authorLocalToday", now=now)
+
+    assert "Publisher QA" in {item["rawAuthor"] for item in summary["authors"]}
 
 
 def test_publisher_device_alias_hides_raw_device_author_in_activity_summary():
