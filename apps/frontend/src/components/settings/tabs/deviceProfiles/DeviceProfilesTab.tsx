@@ -7,7 +7,7 @@ import { clearDashboardCaches, localBrowserStorage, readStorageItem, writeStorag
 import type { DeviceProfile, DeviceProfileAuthorOption } from "./types";
 import "./DeviceProfilesTab.css";
 
-const DEVICE_PROFILES_CACHE_KEY = "AL.Dashboard.DeviceProfiles";
+const DEVICE_PROFILES_CACHE_KEY = "AL.Dashboard.DeviceProfiles.v2";
 
 let cachedDeviceProfiles: DeviceProfile[] | null = null;
 let cachedAuthorOptions: DeviceProfileAuthorOption[] | null = null;
