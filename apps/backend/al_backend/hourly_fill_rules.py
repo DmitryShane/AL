@@ -753,9 +753,13 @@ def apply_visual_missed_end_fallbacks(
             continue
 
         offline_at = _coerce_datetime(session.get("lastOfflineAt"))
+        latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
         hourly_author = hourly_by_author.get(raw_author)
 
         if not offline_at or not hourly_author:
+            continue
+
+        if _is_ongoing_overtime_session(session, offline_at, latest_report_at):
             continue
 
         hourly_activity = hourly_author.get("hourlyActivity", [])
@@ -772,7 +776,6 @@ def apply_visual_missed_end_fallbacks(
         if visual_hour_available_seconds(hourly_activity[offline_hour_index]) > 0:
             continue
 
-        latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
         latest_report_hour_index = None
 
         if latest_report_at and latest_report_at > offline_at:
@@ -996,7 +999,8 @@ def apply_visual_missed_hours(
         started_at = _coerce_datetime(session.get("startedAt"))
         ended_at = _coerce_datetime(session.get("lastOfflineAt"))
         latest_report_at = latest_report_by_author_date.get((raw_author, day_date))
-        latest_signal_at = (latest_report_at or ended_at) if ended_at else None
+        overtime_is_ongoing = _is_ongoing_overtime_session(session, ended_at, latest_report_at)
+        latest_signal_at = None if overtime_is_ongoing else (latest_report_at or ended_at) if ended_at else None
 
         if not started_at and not latest_signal_at:
             continue
@@ -1024,6 +1028,19 @@ def apply_visual_missed_hours(
                 fill_to_hour=latest_report_at is not None,
                 offline_at=ended_at,
             )
+
+
+def _is_ongoing_overtime_session(
+    session: dict[str, Any],
+    ended_at: dt.datetime | None,
+    latest_report_at: dt.datetime | None,
+) -> bool:
+    return (
+        str(session.get("reminderAction") or "") == "overtime"
+        and ended_at is not None
+        and latest_report_at is not None
+        and latest_report_at > ended_at
+    )
 
 
 def add_visual_missed_start(

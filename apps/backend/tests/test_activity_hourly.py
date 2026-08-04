@@ -1492,7 +1492,7 @@ def test_post_telegram_overtime_in_next_hour_uses_first_report_boundary_without_
     assert _missed_end_seconds(hourly_by_hour[18]) == 0
 
 
-def test_post_overtime_missed_end_moves_after_filled_latest_report_hour():
+def test_ongoing_overtime_does_not_add_missed_after_latest_report():
     repo = fake_repository()
     repo.db.author_profiles.insert_one(
         {
@@ -1552,8 +1552,130 @@ def test_post_overtime_missed_end_moves_after_filled_latest_report_hour():
     assert sum(hourly[18]["totals"].values()) == 3600
     assert _hour_metric(hourly[18], "overtimeActiveSeconds") > 0
     assert _missed_end_seconds(hourly[18]) == 0
-    assert _hour_metric(hourly[19], "missedSeconds") == 3600
-    assert _missed_end_seconds(hourly[19]) == 3600
+    assert _hour_metric(hourly[19], "missedSeconds") == 0
+    assert _missed_end_seconds(hourly[19]) == 0
+
+
+def test_ongoing_overtime_at_23_does_not_add_missed_tail():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "displayName": "Dmitry Shane",
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "date": "2026-08-04",
+            "startedAt": dt.datetime(2026, 8, 4, 8, 45, 42, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 8, 4, 18, 48, 39, tzinfo=dt.UTC),
+            "reminderAction": "overtime",
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[23]["overtimeActiveSeconds"] = 300
+    hourly_activity[23]["overtimeActiveMicroseconds"] = 300_000_000
+    hourly_activity[23]["fillSegments"] = [{"kind": "overtime", "startSecond": 0, "endSecond": 300}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "codex",
+            "author": "Dmitry Shane",
+            "projectId": "AL",
+            "date": "2026-08-04",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 300,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "codex",
+            "author": "Dmitry Shane",
+            "date": "2026-08-04",
+            "recordedAt": "2026-08-04T23:09:25+02:00",
+            "receivedAt": dt.datetime(2026, 8, 4, 21, 9, 26, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 300,
+        }
+    )
+
+    summary = repo.activity_summary(
+        start_date="2026-08-04",
+        end_date="2026-08-04",
+        date_mode="authorLocalToday",
+        now=dt.datetime(2026, 8, 4, 21, 10, tzinfo=dt.UTC),
+    )
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Dmitry Shane")[
+        "hourlyActivity"
+    ]
+
+    assert _hour_metric(hourly[23], "overtimeActiveSeconds") == 300
+    assert _hour_metric(hourly[23], "missedSeconds") == 0
+    assert _hour_segments(hourly[23], "missed") == []
+
+
+def test_completed_overtime_keeps_missed_tail_after_latest_report():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "displayName": "Dmitry Shane",
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "date": "2026-08-04",
+            "startedAt": dt.datetime(2026, 8, 4, 8, 45, 42, tzinfo=dt.UTC),
+            "lastOfflineAt": dt.datetime(2026, 8, 4, 21, 30, tzinfo=dt.UTC),
+            "timeZoneId": "Europe/Madrid",
+        }
+    )
+    hourly_activity = empty_hourly_activity()
+    hourly_activity[23]["overtimeActiveSeconds"] = 300
+    hourly_activity[23]["overtimeActiveMicroseconds"] = 300_000_000
+    hourly_activity[23]["fillSegments"] = [{"kind": "overtime", "startSecond": 0, "endSecond": 300}]
+    repo.db.daily_author_activity.insert_one(
+        {
+            "source": "codex",
+            "author": "Dmitry Shane",
+            "projectId": "AL",
+            "date": "2026-08-04",
+            "activeSeconds": 0,
+            "idleSeconds": 0,
+            "overtimeActiveSeconds": 300,
+            "workWindowSeconds": 32400,
+            "hourlyActivity": hourly_activity,
+        }
+    )
+    repo.db.report_rows.insert_one(
+        {
+            "source": "codex",
+            "author": "Dmitry Shane",
+            "date": "2026-08-04",
+            "recordedAt": "2026-08-04T23:09:25+02:00",
+            "receivedAt": dt.datetime(2026, 8, 4, 21, 9, 26, tzinfo=dt.UTC),
+            "activeDeltaSeconds": 0,
+            "idleDeltaSeconds": 0,
+            "overtimeActiveDeltaSeconds": 300,
+        }
+    )
+
+    summary = repo.activity_summary(start_date="2026-08-04", end_date="2026-08-04")
+    hourly = next(item for item in summary["hourlyActivityByAuthor"] if item["rawAuthor"] == "Dmitry Shane")[
+        "hourlyActivity"
+    ]
+
+    assert _hour_metric(hourly[23], "overtimeActiveSeconds") == 300
+    assert _hour_metric(hourly[23], "missedSeconds") == 1800
+    assert _hour_segments(hourly[23], "missed") == [{"startSecond": 1800, "endSecond": 3600}]
 
 
 def test_post_overtime_missed_end_does_not_override_next_occupied_hour():
