@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from ..activity_math import dt, _isoformat_or_none, _new_id, _normalize_author, _normalize_telegram_username, _valid_time_zone_id
+from ..activity_math import dt, _coerce_datetime, _isoformat_or_none, _new_id, _normalize_author, _normalize_telegram_username, _valid_time_zone_id
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
 
@@ -109,6 +109,20 @@ class TelegramMeetingDeliveryService(MongoComposableMixin):
                 continue
 
             if self.db.calendar_marks.find_one({"rawAuthor": normalized_author, "date": local_date}, {"_id": 1}):
+                continue
+
+            day_session = self.db.day_sessions.find_one(
+                {"rawAuthor": normalized_author, "date": local_date},
+                {"_id": 0, "startedAt": 1, "lastOfflineAt": 1, "lastOnlineAt": 1},
+            ) or {}
+            started_at = _coerce_datetime(day_session.get("startedAt"))
+            last_online_at = _coerce_datetime(day_session.get("lastOnlineAt"))
+            last_offline_at = _coerce_datetime(day_session.get("lastOfflineAt"))
+            if not started_at or not last_online_at:
+                continue
+
+            # An offline event closes the workday until the author explicitly comes online again.
+            if last_offline_at and last_online_at <= last_offline_at:
                 continue
 
             mention_authors.append(
