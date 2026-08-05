@@ -1568,6 +1568,32 @@ def test_meeting_notification_closes_when_mention_list_empty():
     assert doc["status"] == "closed"
     assert doc["closeAction"] == "empty_mention_list"
 
+def test_meeting_notification_closes_when_meeting_started_earlier_that_day():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "Author A", "telegramUsername": "ta"})
+    repo.db.day_sessions.insert_one({"rawAuthor": "A", "date": "2026-04-30", "startedAt": dt.datetime(2026, 4, 30, 7, 0, tzinfo=dt.UTC), "lastOnlineAt": dt.datetime(2026, 4, 30, 7, 0, tzinfo=dt.UTC)})
+    repo.db.meeting_recordings.insert_one(
+        {
+            "recordingId": "early-meeting",
+            "startedAt": dt.datetime(2026, 4, 30, 7, 30, tzinfo=dt.UTC),
+            "status": "meeting_ended",
+        }
+    )
+    repo.upsert_meeting_notification_settings(
+        enabled=True,
+        author_raw_authors=["A"],
+        time="10:00",
+        time_zone_id="Europe/Madrid",
+        days_of_week=[3],
+    )
+
+    assert repo.claim_due_telegram_meeting_notifications(dt.datetime(2026, 4, 30, 8, 0, tzinfo=dt.UTC)) == []
+
+    doc = repo.db.telegram_meeting_notifications.items[0]
+    assert doc["status"] == "closed"
+    assert doc["closeAction"] == "meeting_already_started"
+    assert doc["meetingRecordingId"] == "early-meeting"
+
 def test_mark_meeting_notification_sent():
     repo = fake_repository()
     repo.db.author_profiles.insert_one({"rawAuthor": "A", "displayName": "Author A", "telegramUsername": "ta"})

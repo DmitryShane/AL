@@ -35,6 +35,33 @@ class TelegramMeetingDeliveryService(MongoComposableMixin):
             return []
 
         existing = self.db.telegram_meeting_notifications.find_one({"date": local_date}, {"_id": 0})
+        meeting_recording = self._meeting_recording_started_today(local_now, now)
+        if meeting_recording:
+            if existing and existing.get("status") == "sent":
+                return []
+
+            reminder_id = str((existing or {}).get("reminderId") or _new_id())
+            self.db.telegram_meeting_notifications.update_one(
+                {"date": local_date},
+                {
+                    "$set": {
+                        "date": local_date,
+                        "status": "closed",
+                        "closeAction": "meeting_already_started",
+                        "meetingRecordingId": meeting_recording.get("recordingId"),
+                        "meetingStartedAt": meeting_recording.get("startedAt"),
+                        "closedAt": now,
+                        "updatedAt": now,
+                    },
+                    "$setOnInsert": {
+                        "reminderId": reminder_id,
+                        "createdAt": now,
+                    },
+                },
+                upsert=True,
+            )
+            return []
+
         if existing:
             if existing.get("status") != "pending":
                 return []
@@ -134,6 +161,19 @@ class TelegramMeetingDeliveryService(MongoComposableMixin):
             )
 
         return mention_authors
+
+    def _meeting_recording_started_today(self, local_now: dt.datetime, now: dt.datetime) -> dict[str, Any] | None:
+        local_day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return self.db.meeting_recordings.find_one(
+            {
+                "startedAt": {
+                    "$gte": local_day_start.astimezone(dt.UTC),
+                    "$lte": now,
+                }
+            },
+            {"_id": 0, "recordingId": 1, "startedAt": 1},
+            sort=[("startedAt", -1)],
+        )
 
     def _telegram_meeting_notification_payload(self, doc: dict[str, Any]) -> dict[str, Any]:
         mention_authors = list(doc.get("mentionAuthors") or [])
