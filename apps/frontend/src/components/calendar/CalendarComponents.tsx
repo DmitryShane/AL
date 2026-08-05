@@ -36,11 +36,12 @@ export function MonthCalendar({
           const selected = selectedDates.includes(date);
           const today = toDateInputValue(new Date());
           const isToday = date === today;
+          const isPast = date < today;
           const title = marks.map((mark) => `${mark.displayName}: ${mark.reasonLabel} - ${mark.note}`).join("\n");
 
           return (
             <button
-              className={calendarDayClassName(selected, isToday)}
+              className={calendarDayClassName(selected, isToday, isPast)}
               key={date}
               title={title || date}
               onClick={(event) => onSelect(date, event.shiftKey)}

@@ -4941,6 +4941,17 @@ p {
   text-transform: uppercase;
 }
 
+.calendar-day.locked {
+  cursor: not-allowed;
+  color: rgb(33 43 54 / 42%);
+  border-color: rgb(229 234 240 / 42%);
+  background: rgb(249 251 253 / 42%);
+}
+
+.calendar-day.locked .day-mark-stack {
+  opacity: 1;
+}
+
 .empty-day {
   border: 0;
   background: transparent;

@@ -1459,10 +1459,10 @@ export const DOCUMENTATION_CATEGORIES: DocumentationCategory[] = [
         ]
       },
       {
-        title: { en: "Month grid supports historical and upcoming marks", ru: "Month grid поддерживает historical и upcoming marks" },
+        title: { en: "Past days look locked but remain selectable", ru: "Past days выглядят locked, но остаются selectable" },
         summary: {
-          en: "Past, current, and upcoming days are selectable; today is labelled, marks appear as author-colored dots, and tooltips show mark labels and notes.",
-          ru: "Past, current и upcoming days можно выбирать; today labeled, marks отображаются author-colored dots, tooltips показывают labels и notes."
+          en: "Past days use a muted locked appearance but remain selectable for historical marks; author-colored mark dots keep their full opacity.",
+          ru: "Past days используют muted locked appearance, но остаются selectable для historical marks; author-colored mark dots сохраняют full opacity."
         },
         details: [
           { en: "Use month grid for exact dates and stats for totals by author/reason.", ru: "Используй month grid для exact dates и stats для totals by author/reason." }
