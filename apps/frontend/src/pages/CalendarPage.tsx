@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api/client";
-import { CALENDAR_SUMMARY_CACHE_KEY } from "../constants/dashboard";
+import { CALENDAR_SELECTED_AUTHOR_STORAGE_KEY, CALENDAR_SUMMARY_CACHE_KEY } from "../constants/dashboard";
 import type { CalendarMark, CalendarSummary } from "../types/dashboard";
 import { AuthorAvatar } from "../components/AuthorAvatar";
-import { readStorageItem, sessionBrowserStorage, writeStorageCache } from "../utils/browserStorage";
+import { localBrowserStorage, readStorageItem, sessionBrowserStorage, writeStorageCache, writeStorageState } from "../utils/browserStorage";
 import { dateRangeList, monthIndexes, uniqueDates } from "./pageHelpers";
 import { CalendarClearEditor, CalendarLegend, CalendarMarkEditor, CalendarStats, MonthCalendar, ReasonEditor } from "../components/calendar/CalendarComponents";
 export function CalendarPage() {
   const year = new Date().getFullYear();
   const [calendar, setCalendar] = useState<CalendarSummary | null>(() => loadCachedCalendarSummary(year));
-  const [selectedAuthor, setSelectedAuthor] = useState("all");
+  const [selectedAuthor, setSelectedAuthor] = useState(() => loadSelectedCalendarAuthor());
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
   const [rangeStart, setRangeStart] = useState<string | null>(null);
   const [rangeMode, setRangeMode] = useState(false);
@@ -58,6 +58,14 @@ export function CalendarPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!calendar || selectedAuthor === "all" || calendar.authors.some((author) => author.rawAuthor === selectedAuthor)) {
+      return;
+    }
+
+    selectAuthor("all");
+  }, [calendar, selectedAuthor]);
+
   const visibleMarks = useMemo(
     () => (calendar?.marks ?? []).filter((mark) => selectedAuthor === "all" || mark.rawAuthor === selectedAuthor),
     [calendar?.marks, selectedAuthor]
@@ -88,6 +96,11 @@ export function CalendarPage() {
     }
 
     setSelectedDates((items) => (items.includes(date) ? items.filter((item) => item !== date) : [...items, date].sort()));
+  }
+
+  function selectAuthor(rawAuthor: string) {
+    setSelectedAuthor(rawAuthor);
+    writeStorageState(localBrowserStorage(), CALENDAR_SELECTED_AUTHOR_STORAGE_KEY, rawAuthor);
   }
 
   function openMarkEditor() {
@@ -207,7 +220,7 @@ export function CalendarPage() {
           </div>
 
           <div className="author-card-strip calendar-author-strip" data-doc-target="calendar-author-filter">
-            <button className={selectedAuthor === "all" ? "author-card active" : "author-card"} onClick={() => setSelectedAuthor("all")}>
+            <button className={selectedAuthor === "all" ? "author-card active" : "author-card"} onClick={() => selectAuthor("all")}>
               <span className="avatar-stack" aria-hidden="true">
                 {calendar.authors.slice(0, 5).map((author) => (
                   <AuthorAvatar
@@ -223,7 +236,7 @@ export function CalendarPage() {
               <small>Show all marks</small>
             </button>
             {calendar.authors.map((author) => (
-              <button className={selectedAuthor === author.rawAuthor ? "author-card active" : "author-card"} key={author.rawAuthor} onClick={() => setSelectedAuthor(author.rawAuthor)}>
+              <button className={selectedAuthor === author.rawAuthor ? "author-card active" : "author-card"} key={author.rawAuthor} onClick={() => selectAuthor(author.rawAuthor)}>
                 <AuthorAvatar displayName={author.displayName} authorColor={author.authorColor} avatarUrl={author.avatarUrl} />
                 <strong>{author.displayName}</strong>
                 <small>{author.team || "No team"}</small>
@@ -337,4 +350,8 @@ function saveCachedCalendarSummary(summary: CalendarSummary) {
 
 function calendarCacheKey(year: number) {
   return `${CALENDAR_SUMMARY_CACHE_KEY}.${year}`;
+}
+
+function loadSelectedCalendarAuthor() {
+  return readStorageItem(localBrowserStorage(), CALENDAR_SELECTED_AUTHOR_STORAGE_KEY) || "all";
 }

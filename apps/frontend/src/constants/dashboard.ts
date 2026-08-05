@@ -9,6 +9,7 @@ export const SESSION_USER_PREVIEW_STORAGE_KEY = "AL.Session.UserPreview";
 export const DASHBOARD_SUMMARY_CACHE_PREFIX = "AL.Dashboard.Summary.";
 export const ANALYTICS_SUMMARY_CACHE_KEY = "AL.Dashboard.AnalyticsSummary";
 export const CALENDAR_SUMMARY_CACHE_KEY = "AL.Dashboard.CalendarSummary";
+export const CALENDAR_SELECTED_AUTHOR_STORAGE_KEY = "AL.Dashboard.CalendarSelectedAuthor";
 
 export const MEETING_SUMMARY_LANGUAGES = [
   "English",
