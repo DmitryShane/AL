@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CURRENT_DIR="$(pwd -P)"
+PROJECT_ROOT="$(git -C "$CURRENT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+
+case "$PROJECT_ROOT" in
+  /Volumes/MacMiniExternal2TB/Development/corecry)
+    exec "$PROJECT_ROOT/run.server" "$@"
+    ;;
+  /Volumes/MacMiniExternal2TB/Development/AL)
+    ;;
+  *)
+    echo "start: unsupported project directory: $CURRENT_DIR" >&2
+    echo "Supported projects: AL and corecry" >&2
+    exit 1
+    ;;
+esac
+
 ROOT_DIR="/Volumes/MacMiniExternal2TB/Development/AL"
 BACKEND_DIR="$ROOT_DIR/apps/backend"
 FRONTEND_DIR="$ROOT_DIR/apps/frontend"
