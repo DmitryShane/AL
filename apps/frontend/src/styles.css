@@ -5149,6 +5149,19 @@ p {
   font-weight: 800;
 }
 
+.latest-mark-stack {
+  display: grid;
+  max-height: 220px;
+  gap: 7px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.latest-mark-stack small {
+  line-height: 1.35;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

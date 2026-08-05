@@ -62,8 +62,7 @@ class CalendarService(MongoComposableMixin):
             stats["totalMarkedDays"] += 1
             stats["byReason"][mark.get("reasonId")] = int(stats["byReason"].get(mark.get("reasonId"), 0)) + 1
 
-            if len(stats["latestMarks"]) < 5:
-                stats["latestMarks"].append(item)
+            stats["latestMarks"].append(item)
 
         return {
             "year": year,
