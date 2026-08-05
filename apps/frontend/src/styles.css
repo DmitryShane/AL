@@ -4941,11 +4941,6 @@ p {
   text-transform: uppercase;
 }
 
-.calendar-day.locked {
-  cursor: not-allowed;
-  opacity: 0.42;
-}
-
 .empty-day {
   border: 0;
   background: transparent;

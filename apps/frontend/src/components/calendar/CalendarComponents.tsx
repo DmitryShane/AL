@@ -36,15 +36,13 @@ export function MonthCalendar({
           const selected = selectedDates.includes(date);
           const today = toDateInputValue(new Date());
           const isToday = date === today;
-          const isPast = date < today;
           const title = marks.map((mark) => `${mark.displayName}: ${mark.reasonLabel} - ${mark.note}`).join("\n");
 
           return (
             <button
-              className={calendarDayClassName(selected, isToday, isPast)}
-              disabled={isPast}
+              className={calendarDayClassName(selected, isToday)}
               key={date}
-              title={title || (isPast ? `${date} is locked` : date)}
+              title={title || date}
               onClick={(event) => onSelect(date, event.shiftKey)}
             >
               <span>{day}</span>
@@ -278,4 +276,3 @@ export function CalendarClearEditor({
     </div>
   );
 }
-

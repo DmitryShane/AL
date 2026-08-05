@@ -360,7 +360,7 @@ export function toCalendarDate(year: number, month: number, day: number) {
   return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-export function calendarDayClassName(selected: boolean, isToday: boolean, isPast: boolean) {
+export function calendarDayClassName(selected: boolean, isToday: boolean) {
   const classNames = ["calendar-day"];
 
   if (selected) {
@@ -369,10 +369,6 @@ export function calendarDayClassName(selected: boolean, isToday: boolean, isPast
 
   if (isToday) {
     classNames.push("today");
-  }
-
-  if (isPast) {
-    classNames.push("locked");
   }
 
   return classNames.join(" ");
