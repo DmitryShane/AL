@@ -5,6 +5,8 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import quote
 
+import pytest
+
 import al_backend.discord_bot as discord_bot_module
 from al_backend.app import PUBLIC_API_PATHS
 from al_backend.discord_author_mappings import apply_discord_author_mappings
@@ -967,13 +969,48 @@ def test_telegram_reminder_close_closes_open_break_session():
     repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
     repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
     repo.record_break_event("future_artist", "afk", "2026-04-28T18:45:00Z")
+    break_session = repo.db.break_sessions.find_one({"telegramUsername": "future_artist"})
+    assert break_session["expiresAt"] == dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC)
+
     reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC))[0]
+    interval = repo.db.break_intervals.items[0]
 
     result = repo.close_telegram_day_from_reminder(reminder["reminderId"], "offline", "2026-04-28T19:15:00Z")
 
-    assert result["breakSeconds"] == 30 * 60
+    assert result["status"] == "reminder_offline"
     assert repo.db.break_sessions.items == []
-    assert repo.db.break_intervals.items[0]["breakSeconds"] == 30 * 60
+    assert len(repo.db.break_intervals.items) == 1
+    assert interval["endedAt"] == dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC)
+    assert interval["breakSeconds"] == 15 * 60
+    assert interval["metadata"] == {"reason": "workday_end"}
+
+
+def test_late_telegram_reminder_poll_closes_afk_at_workday_expiry():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "afk", "2026-04-28T18:45:00Z")
+
+    reminders = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 7, tzinfo=dt.UTC))
+
+    assert len(reminders) == 1
+    assert repo.db.break_sessions.items == []
+    assert repo.db.break_intervals.items[0]["endedAt"] == dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC)
+    assert repo.db.break_intervals.items[0]["breakSeconds"] == 15 * 60
+
+
+@pytest.mark.parametrize("action", ["offline", "overtime"])
+def test_late_telegram_reminder_callback_does_not_extend_closed_afk(action):
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Future Artist", "displayName": "Future Artist", "telegramUsername": "future_artist"})
+    repo.record_break_event("future_artist", "online", "2026-04-28T09:00:00Z")
+    repo.record_break_event("future_artist", "afk", "2026-04-28T18:45:00Z")
+    reminder = repo.claim_due_telegram_day_reminders(dt.datetime(2026, 4, 28, 19, 5, tzinfo=dt.UTC))[0]
+
+    repo.close_telegram_day_from_reminder(reminder["reminderId"], action, "2026-04-28T19:15:00Z")
+
+    assert len(repo.db.break_intervals.items) == 1
+    assert repo.db.break_intervals.items[0]["breakSeconds"] == 15 * 60
 
 def test_telegram_reminder_close_is_idempotent():
     repo = fake_repository()
@@ -2236,11 +2273,15 @@ def test_afk_crossing_midnight_counts_only_before_night_overtime():
     repo.db.daily_author_activity.insert_one({"author": "Denis Ostrovskiy", "date": "2026-06-05", "breakSeconds": 0})
 
     repo.record_break_event("vedamir_infinum", "afk", "2026-06-04T20:40:00Z")
+    session = repo.db.break_sessions.find_one({"telegramUsername": "vedamir_infinum"})
+    assert session["expiresAt"] == dt.datetime(2026, 6, 4, 21, 0, tzinfo=dt.UTC)
+
     closed = repo.record_break_event("vedamir_infinum", "online", "2026-06-04T21:40:00Z")
 
     assert closed["status"] == "break_closed_ignored"
     assert closed["breakSeconds"] == 20 * 60
     assert closed["ignoredBreakSeconds"] == 40 * 60
+    assert closed["ignoreReason"] == "night_overtime"
     assert repo.db.day_sessions.items == []
     assert len(repo.db.break_intervals.items) == 1
     interval = repo.db.break_intervals.items[0]
@@ -2455,3 +2496,49 @@ def test_live_telegram_summary_adds_open_day_and_break():
     assert totals["breakSeconds"] == 1800
     assert authors["Dmitry Shane"]["telegramDaySeconds"] == 3600
     assert authors["Dmitry Shane"]["breakSeconds"] == 1800
+
+
+def test_live_telegram_summary_caps_open_break_at_expiry():
+    repo = fake_repository()
+    repo.db.author_profiles.insert_one({"rawAuthor": "Dmitry Shane", "telegramUsername": "dmitry_shane", "timeZoneId": "UTC"})
+    repo.db.day_sessions.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "telegramUsername": "dmitry_shane",
+            "date": "2026-04-28",
+            "startedAt": dt.datetime(2026, 4, 28, 9, 0, tzinfo=dt.UTC),
+            "daySeconds": 0,
+            "timeZoneId": "UTC",
+        }
+    )
+    repo.db.break_sessions.insert_one(
+        {
+            "rawAuthor": "Dmitry Shane",
+            "telegramUsername": "dmitry_shane",
+            "date": "2026-04-28",
+            "startedAt": dt.datetime(2026, 4, 28, 18, 45, tzinfo=dt.UTC),
+            "expiresAt": dt.datetime(2026, 4, 28, 19, 0, tzinfo=dt.UTC),
+            "timeZoneId": "UTC",
+        }
+    )
+    totals = {"daySeconds": 0, "telegramDaySeconds": 0, "breakSeconds": 0}
+    authors = {}
+
+    repo._apply_live_telegram_summary(
+        authors,
+        {},
+        totals,
+        repo._profiles_by_raw_author(),
+        {},
+        {},
+        "2026-04-28",
+        "2026-04-28",
+        None,
+        dt.datetime(2026, 4, 28, 20, 0, tzinfo=dt.UTC),
+    )
+    buckets = repo._break_buckets_for_daily_items([{"author": "Dmitry Shane", "date": "2026-04-28"}])
+
+    assert totals["breakSeconds"] == 15 * 60
+    assert authors["Dmitry Shane"]["breakSeconds"] == 15 * 60
+    assert buckets[("Dmitry Shane", "2026-04-28")][18]["breakSeconds"] == 15 * 60
+    assert sum(hour["breakSeconds"] for hour in buckets[("Dmitry Shane", "2026-04-28")]) == 15 * 60

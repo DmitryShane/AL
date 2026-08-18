@@ -70,11 +70,14 @@ class ActivityLiveSummaryService(MongoComposableMixin):
             if not started_at:
                 continue
 
+            expires_at = self._break_session_expiry(session)
+            ended_at = min(now, expires_at) if expires_at else now
+
             add_break_interval_to_buckets(
                 buckets,
                 session.get("rawAuthor"),
                 started_at,
-                now,
+                ended_at,
                 _author_time_zone_id(session.get("rawAuthor"), profiles, session.get("timeZoneId")),
             )
 
@@ -519,7 +522,9 @@ class ActivityLiveSummaryService(MongoComposableMixin):
             if not _date_in_summary_scope(break_date, raw_author, profiles, session.get("timeZoneId"), now, start_date, end_date, date_mode):
                 continue
 
-            live_break_seconds = max(0, int((now - started_at).total_seconds()))
+            expires_at = self._break_session_expiry(session)
+            ended_at = min(now, expires_at) if expires_at else now
+            live_break_seconds = max(0, int((ended_at - started_at).total_seconds()))
             existing_break_seconds = break_seconds_by_author_date.get((raw_author, break_date), 0)
             break_delta_seconds = max(0, live_break_seconds - existing_break_seconds)
 

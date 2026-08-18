@@ -342,17 +342,17 @@ class TelegramActivityService(MongoComposableMixin):
         self.db.break_events.insert_one(break_event_doc)
 
         if event_type == "afk":
+            break_session = {
+                "telegramUsername": normalized_telegram,
+                "rawAuthor": raw_author,
+                "startedAt": event_time,
+                "date": event_date,
+                "timeZoneId": time_zone_id,
+            }
+            break_session["expiresAt"] = self._break_session_expiry(break_session)
             self.db.break_sessions.update_one(
                 {"telegramUsername": normalized_telegram},
-                {
-                    "$set": {
-                        "telegramUsername": normalized_telegram,
-                        "rawAuthor": raw_author,
-                        "startedAt": event_time,
-                        "date": event_date,
-                        "timeZoneId": time_zone_id,
-                    }
-                },
+                {"$set": break_session},
                 upsert=True,
             )
             self._insert_telegram_report_row(raw_author, normalized_telegram, event_type, event_time, event_date, time_zone_id, row_received_at, "break_started")
@@ -461,6 +461,32 @@ class TelegramActivityService(MongoComposableMixin):
         now = now or dt.datetime.now(dt.UTC)
         reminders: list[dict[str, Any]] = []
         profiles = self._profiles_by_raw_author()
+        finalized_dates: set[str] = set()
+
+        for break_session in self.db.break_sessions.find({}, {"_id": 0}):
+            expires_at = self._break_session_expiry(break_session)
+
+            if not expires_at or now < expires_at:
+                continue
+
+            telegram_username = _normalize_telegram_username(break_session.get("telegramUsername"))
+            raw_author = str(break_session.get("rawAuthor") or "")
+
+            if not telegram_username or not raw_author:
+                continue
+
+            close_result = self._close_break_session(
+                telegram_username,
+                raw_author,
+                expires_at,
+                close_reason="workday_end",
+            )
+
+            if close_result:
+                finalized_dates.add(str(break_session.get("date") or ""))
+
+        if finalized_dates:
+            composed(self).invalidate_activity_summary_cache(sorted(date for date in finalized_dates if date))
 
         for session in self.db.day_sessions.find({}, {"_id": 0}):
             if session.get("lastOfflineAt"):
