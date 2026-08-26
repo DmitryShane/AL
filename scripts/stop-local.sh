@@ -1,13 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CURRENT_DIR="$(pwd -P)"
+PROJECT_ROOT="$(git -C "$CURRENT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+
+case "$PROJECT_ROOT" in
+  /Volumes/MacMiniExternal2TB/Development/corecry)
+    exec "$PROJECT_ROOT/stop.server" "$@"
+    ;;
+  /Volumes/MacMiniExternal2TB/Development/AL)
+    ;;
+  *)
+    echo "stop: unsupported project directory: $CURRENT_DIR" >&2
+    echo "Supported projects: AL and corecry" >&2
+    exit 1
+    ;;
+esac
+
 UID_VALUE="$(id -u)"
 BACKEND_LABEL="com.al.backend"
 REPORT_WORKER_LABEL="com.al.report-worker"
 FRONTEND_LABEL="com.al.frontend"
-BACKEND_PLIST="$HOME/Library/LaunchAgents/$BACKEND_LABEL.plist"
-REPORT_WORKER_PLIST="$HOME/Library/LaunchAgents/$REPORT_WORKER_LABEL.plist"
-FRONTEND_PLIST="$HOME/Library/LaunchAgents/$FRONTEND_LABEL.plist"
+LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
+BACKEND_PLIST="$LAUNCH_AGENTS_DIR/$BACKEND_LABEL.plist"
+REPORT_WORKER_PLIST="$LAUNCH_AGENTS_DIR/$REPORT_WORKER_LABEL.plist"
+FRONTEND_PLIST="$LAUNCH_AGENTS_DIR/$FRONTEND_LABEL.plist"
 RUNTIME_DIR="/tmp/al-runtime"
 
 stop_service() {
