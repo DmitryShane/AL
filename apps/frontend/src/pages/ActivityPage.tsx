@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Coffee, RefreshCw } from "lucide-react";
 import { AuthorsTable } from "../components/AuthorsTable";
 import { HourlyActivityChart } from "../components/HourlyActivityChart";
@@ -10,12 +10,28 @@ import { ReportsTable } from "../components/activity/ReportsTable";
 import { DateRangePicker } from "../components/layout/DateRangePicker";
 import { apiFetch } from "../api/client";
 import { PAGE_SCROLL_STORAGE_PREFIX, REPORTS_PAGE_STORAGE_KEY } from "../constants/dashboard";
-import type { ActivitySummary, AuthorHourlyActivity, AuthorRow, DateRange, Report, ReportsPage, ReportsPageCache } from "../types/dashboard";
+import type {
+  ActivityHourlyDisplayFreshness,
+  ActivityHourlyFreshness,
+  ActivitySummary,
+  AuthorHourlyActivity,
+  AuthorRow,
+  DateRange,
+  Report,
+  ReportsPage,
+  ReportsPageCache
+} from "../types/dashboard";
 import { localBrowserStorage, readStorageItem, sessionBrowserStorage, writeStorageCache, writeStorageState } from "../utils/browserStorage";
 import { compareAuthorCardStatus, loadSavedReportsPage } from "./pageHelpers";
 
 const ACTIVITY_HOURLY_CACHE_PREFIX = "AL.Dashboard.ActivityHourly.";
 const ACTIVITY_REPORTS_CACHE_PREFIX = "AL.Dashboard.ActivityReports.v2.";
+const ACTIVITY_HOURLY_STATUS_POLL_MS = 3000;
+
+type ActivityHourlyResponse = {
+  hourlyActivityByAuthor: AuthorHourlyActivity[];
+  freshness?: ActivityHourlyFreshness;
+};
 
 export function ActivityPage({
   summary,
@@ -52,6 +68,12 @@ export function ActivityPage({
   }), [dateRange.startDate, dateRange.endDate, dateRange.preset]);
   const [hourlyRows, setHourlyRows] = useState<AuthorHourlyActivity[]>(() => loadCachedActivityHourly(hourlyCacheKey) ?? summary.hourlyActivityByAuthor);
   const hourlyCacheRef = useRef<Record<string, AuthorHourlyActivity[]>>({});
+  const [hourlyFreshness, setHourlyFreshness] = useState<ActivityHourlyDisplayFreshness | null>(null);
+  const hourlyDataVersionRef = useRef<string | null>(null);
+  const hourlyDataLoadedRef = useRef(false);
+  const hourlyLoadRequestIdRef = useRef(0);
+  const hourlyLoadInFlightKeyRef = useRef<string | null>(null);
+  const hourlyRequestKey = `${hourlyCacheKey}:${author?.rawAuthor ?? ""}`;
   const authorHourly = useMemo(() => {
     const hourlySource = hourlyRows.length ? hourlyRows : summary.hourlyActivityByAuthor;
     const hourly = hourlySource
@@ -183,20 +205,36 @@ export function ActivityPage({
   }, [cardAuthors.length, floatingAuthors.length, loading, summary.authors.length]);
 
   useEffect(() => {
-    let ignore = false;
+    hourlyLoadRequestIdRef.current += 1;
+    hourlyDataVersionRef.current = null;
+    hourlyDataLoadedRef.current = false;
+    setHourlyFreshness(
+      dateRange.preset === "live" && author
+        ? { status: "checking", dataThrough: null, timeZoneId: author.timeZoneId }
+        : null
+    );
+  }, [author?.rawAuthor, dateRange.preset, hourlyRequestKey]);
 
-    async function loadHourly() {
-      if (isHistoricalSingleDay && (snapshotPreparing || snapshotEmpty || summary.hourlyActivityByAuthor.length)) {
-        setHourlyRows(summary.hourlyActivityByAuthor);
-        return;
-      }
+  const loadHourly = useCallback(async (useCachedRows: boolean) => {
+    if (isHistoricalSingleDay && (snapshotPreparing || snapshotEmpty || summary.hourlyActivityByAuthor.length)) {
+      setHourlyRows(summary.hourlyActivityByAuthor);
+      return;
+    }
 
-      if (loading && !summary.hourlyActivityByAuthor.length) {
-        return;
-      }
+    if (loading && !summary.hourlyActivityByAuthor.length) {
+      return;
+    }
 
+    const requestKey = hourlyRequestKey;
+
+    if (hourlyLoadInFlightKeyRef.current === requestKey) {
+      return;
+    }
+
+    let hasCachedRows = false;
+
+    if (useCachedRows && !hourlyDataLoadedRef.current) {
       const cachedRows = hourlyCacheRef.current[hourlyCacheKey];
-      let hasCachedRows = false;
 
       if (cachedRows) {
         setHourlyRows(cachedRows);
@@ -213,50 +251,169 @@ export function ActivityPage({
         setHourlyRows(persistedRows);
         hasCachedRows = true;
       }
+    }
 
-      const params = new URLSearchParams({
-        startDate: dateRange.startDate,
-        endDate: dateRange.endDate
-      });
+    const params = new URLSearchParams({
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate
+    });
 
-      if (dateRange.preset === "live") {
-        params.set("dateMode", "authorLocalToday");
+    if (dateRange.preset === "live") {
+      params.set("dateMode", "authorLocalToday");
+      if (author?.rawAuthor) {
+        params.set("author", author.rawAuthor);
+      }
+    }
+
+    const requestId = ++hourlyLoadRequestIdRef.current;
+    hourlyLoadInFlightKeyRef.current = requestKey;
+
+    try {
+      const response = await apiFetch(`/api/v1/reports/activity-hourly?${params.toString()}`);
+
+      if (!response.ok) {
+        throw new Error("Hourly activity request failed");
       }
 
+      const payload = (await response.json()) as ActivityHourlyResponse;
+
+      if (requestId !== hourlyLoadRequestIdRef.current || requestKey !== hourlyRequestKey) {
+        return;
+      }
+
+      hourlyCacheRef.current = {
+        ...hourlyCacheRef.current,
+        [hourlyCacheKey]: payload.hourlyActivityByAuthor
+      };
+      saveCachedActivityHourly(hourlyCacheKey, payload.hourlyActivityByAuthor);
+      setHourlyRows(payload.hourlyActivityByAuthor);
+
+      if (dateRange.preset === "live" && author) {
+        hourlyDataLoadedRef.current = true;
+        hourlyDataVersionRef.current = payload.freshness?.dataVersion ?? null;
+        setHourlyFreshness({
+          status: payload.freshness?.status ?? "unavailable",
+          dataThrough: payload.freshness?.dataThrough ?? null,
+          timeZoneId: author.timeZoneId
+        });
+      }
+    } catch {
+      if (requestId !== hourlyLoadRequestIdRef.current || requestKey !== hourlyRequestKey) {
+        return;
+      }
+
+      if (summary.hourlyActivityByAuthor.length || !hasCachedRows) {
+        setHourlyRows(summary.hourlyActivityByAuthor);
+      }
+
+      if (dateRange.preset === "live" && author) {
+        setHourlyFreshness((current) => ({
+          status: "delayed",
+          dataThrough: current?.dataThrough ?? null,
+          timeZoneId: author.timeZoneId
+        }));
+      }
+    } finally {
+      if (hourlyLoadInFlightKeyRef.current === requestKey) {
+        hourlyLoadInFlightKeyRef.current = null;
+      }
+    }
+  }, [author, dateRange.endDate, dateRange.preset, dateRange.startDate, hourlyCacheKey, hourlyRequestKey, isHistoricalSingleDay, loading, snapshotEmpty, snapshotPreparing, summary.hourlyActivityByAuthor]);
+
+  useEffect(() => {
+    void loadHourly(true);
+  }, [loadHourly]);
+
+  useEffect(() => {
+    if (dateRange.preset !== "live" || !author?.rawAuthor) {
+      return;
+    }
+
+    const selectedAuthor = author;
+    let ignore = false;
+    let statusRequestInFlight = false;
+
+    async function checkHourlyStatus() {
+      if (statusRequestInFlight) {
+        return;
+      }
+
+      statusRequestInFlight = true;
+
       try {
-        const response = await apiFetch(`/api/v1/reports/activity-hourly?${params.toString()}`);
+        const params = new URLSearchParams({ author: selectedAuthor.rawAuthor });
+        const response = await apiFetch(`/api/v1/reports/activity-hourly/status?${params.toString()}`);
 
         if (!response.ok) {
-          throw new Error("Hourly activity request failed");
+          throw new Error("Hourly activity status request failed");
         }
 
-        const payload = (await response.json()) as { hourlyActivityByAuthor: AuthorHourlyActivity[] };
+        const freshness = (await response.json()) as ActivityHourlyFreshness;
 
         if (ignore) {
           return;
         }
 
-        hourlyCacheRef.current = {
-          ...hourlyCacheRef.current,
-          [hourlyCacheKey]: payload.hourlyActivityByAuthor
-        };
-        saveCachedActivityHourly(hourlyCacheKey, payload.hourlyActivityByAuthor);
-        setHourlyRows(payload.hourlyActivityByAuthor);
+        if (freshness.status === "delayed") {
+          setHourlyFreshness((current) => ({
+            status: "delayed",
+            dataThrough: current?.dataThrough ?? null,
+            timeZoneId: selectedAuthor.timeZoneId
+          }));
+          return;
+        }
+
+        const dataVersionChanged = freshness.dataVersion !== hourlyDataVersionRef.current;
+
+        if (freshness.status === "updating" || dataVersionChanged) {
+          setHourlyFreshness((current) => ({
+            status: "updating",
+            dataThrough: current?.dataThrough ?? null,
+            timeZoneId: selectedAuthor.timeZoneId
+          }));
+
+          if (freshness.status === "current" && dataVersionChanged) {
+            void loadHourly(false);
+          }
+          return;
+        }
+
+        if (!hourlyDataLoadedRef.current) {
+          setHourlyFreshness((current) => ({
+            status: "checking",
+            dataThrough: current?.dataThrough ?? null,
+            timeZoneId: selectedAuthor.timeZoneId
+          }));
+          void loadHourly(false);
+          return;
+        }
+
+        setHourlyFreshness((current) => ({
+          status: "current",
+          dataThrough: current?.dataThrough ?? freshness.dataThrough,
+          timeZoneId: selectedAuthor.timeZoneId
+        }));
       } catch {
         if (!ignore) {
-          if (summary.hourlyActivityByAuthor.length || !hasCachedRows) {
-            setHourlyRows(summary.hourlyActivityByAuthor);
-          }
+          setHourlyFreshness((current) => ({
+            status: "unavailable",
+            dataThrough: current?.dataThrough ?? null,
+            timeZoneId: selectedAuthor.timeZoneId
+          }));
         }
+      } finally {
+        statusRequestInFlight = false;
       }
     }
 
-    void loadHourly();
+    void checkHourlyStatus();
+    const intervalId = window.setInterval(() => void checkHourlyStatus(), ACTIVITY_HOURLY_STATUS_POLL_MS);
 
     return () => {
       ignore = true;
+      window.clearInterval(intervalId);
     };
-  }, [dateRange.startDate, dateRange.endDate, dateRange.preset, hourlyCacheKey, isHistoricalSingleDay, loading, snapshotEmpty, snapshotPreparing, summary.hourlyActivityByAuthor]);
+  }, [author?.rawAuthor, author?.timeZoneId, dateRange.preset, loadHourly]);
 
   useEffect(() => {
     if (!author?.rawAuthor) {
@@ -476,7 +633,7 @@ export function ActivityPage({
             <ActivityMetricsGrid author={author} />
 
             <div className="dashboard-insights-row">
-              <HourlyActivityChart authors={authorHourly} />
+              <HourlyActivityChart authors={authorHourly} freshness={hourlyFreshness} />
               <ActivityBreakdownCards author={author} />
             </div>
 

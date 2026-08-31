@@ -5943,6 +5943,72 @@ p {
   gap: 14px;
 }
 
+.hourly-activity-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.panel .hourly-activity-title-row h2 {
+  margin: 0;
+}
+
+.hourly-activity-freshness {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.hourly-activity-freshness i {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.hourly-activity-freshness.is-current {
+  background: #e8f7ef;
+  color: #20794d;
+}
+
+.hourly-activity-freshness.is-updating {
+  background: #fff4d6;
+  color: #a15c00;
+}
+
+.hourly-activity-freshness.is-updating i,
+.hourly-activity-freshness.is-checking i {
+  animation: hourlyFreshnessPulse 1.2s ease-in-out infinite;
+}
+
+.hourly-activity-freshness.is-delayed {
+  background: #fde8e8;
+  color: #b42318;
+}
+
+@keyframes hourlyFreshnessPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
 .hourly-chart-card {
   display: grid;
   gap: 8px;

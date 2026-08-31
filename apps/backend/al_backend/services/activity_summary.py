@@ -25,6 +25,7 @@ from ..hourly_fill_rules import (
 )
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+from .activity_hourly_freshness import ActivityHourlyFreshnessMixin
 from .activity_summary_analytics import ActivitySummaryAnalyticsMixin
 from .activity_summary_cache import ActivitySummaryCacheMixin
 from .activity_day_summary_snapshots import ActivityDaySummarySnapshotsMixin
@@ -65,6 +66,7 @@ def _remove_inactive_live_publishers_before_utc_day(
 
 
 class ActivitySummaryService(
+    ActivityHourlyFreshnessMixin,
     ActivitySummaryReportsMixin,
     ActivitySummaryCacheMixin,
     ActivityDaySummarySnapshotsMixin,

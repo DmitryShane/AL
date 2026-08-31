@@ -38,6 +38,10 @@ def test_rebuild_hot_path_indexes_are_created() -> None:
     } in db.raw_activity_events.created_indexes
     assert {"keys": [("batchId", 1)]} in db.raw_event_batches.created_indexes
     assert {"keys": [("token", 1), ("batchId", 1)]} in db.aggregate_rebuild_event_deltas.created_indexes
+    assert {
+        "keys": [("authorKey", 1), ("status", 1), ("affectedDates", 1), ("processedAt", -1)]
+    } in db.raw_reports.created_indexes
+    assert {"keys": [("authorKey", 1), ("status", 1), ("receivedAt", -1)]} in db.raw_reports.created_indexes
     assert {"keys": [("rawAuthor", 1), ("date", 1), ("reasonId", 1)]} in db.calendar_marks.created_indexes
 
 

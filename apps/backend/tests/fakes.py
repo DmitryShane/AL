@@ -268,8 +268,13 @@ class FakeCollection:
                 if "$ne" in value and item_value == value["$ne"]:
                     return False
 
-                if "$in" in value and item_value not in value["$in"]:
-                    return False
+                if "$in" in value:
+                    candidates = value["$in"]
+                    if isinstance(item_value, list):
+                        if not any(item in candidates for item in item_value):
+                            return False
+                    elif item_value not in candidates:
+                        return False
 
                 if "$nin" in value and item_value in value["$nin"]:
                     return False

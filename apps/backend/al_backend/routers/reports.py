@@ -209,8 +209,10 @@ def reports_activity_hourly(
     start_date: str | None = Query(default=None, alias="startDate"),
     end_date: str | None = Query(default=None, alias="endDate"),
     date_mode: str | None = Query(default=None, alias="dateMode"),
+    author: str | None = Query(default=None),
     service: BackendServices = Depends(get_summary_service),
 ) -> dict:
+    freshness = service.activity_hourly_freshness(author) if author else None
     summary = service.cached_activity_summary(
         view="activity-hourly",
         start_date=start_date,
@@ -220,8 +222,20 @@ def reports_activity_hourly(
         include_hourly=True,
         include_breakdowns=False,
     )
-    return {
+    payload = {
         "hourlyActivityByAuthor": summary.get("hourlyActivityByAuthor", []),
         "cache": summary.get("cache", {}),
         "snapshot": summary.get("snapshot", {}),
     }
+    if freshness:
+        payload["freshness"] = freshness
+
+    return payload
+
+
+@router.get("/api/v1/reports/activity-hourly/status")
+def reports_activity_hourly_status(
+    author: str = Query(min_length=1),
+    service: BackendServices = Depends(get_summary_service),
+) -> dict:
+    return service.activity_hourly_freshness(author)

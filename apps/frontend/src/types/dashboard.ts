@@ -240,6 +240,20 @@ export type AuthorHourlyActivity = {
   hourlyActivity: HourlyActivity[];
 };
 
+export type ActivityHourlyFreshness = {
+  status: "current" | "updating" | "delayed";
+  checkedAt: string;
+  dataVersion: string | null;
+  dataThrough: string | null;
+  pendingReportCount: number;
+};
+
+export type ActivityHourlyDisplayFreshness = {
+  status: "checking" | "current" | "updating" | "delayed" | "unavailable";
+  dataThrough: string | null;
+  timeZoneId?: string;
+};
+
 export type Summary = {
   authors: string[];
   reports: Report[];

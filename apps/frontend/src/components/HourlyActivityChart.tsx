@@ -1,3 +1,5 @@
+import type { ActivityHourlyDisplayFreshness } from "../types/dashboard";
+
 type FillKind = "active" | "overtime" | "overtime-fill" | "afk" | "auto-afk" | "meeting" | "telegram-idle" | "idle" | "missed";
 
 type HourlyFillTotals = {
@@ -31,16 +33,25 @@ type AuthorHourlyActivity = {
 
 export type HourlyActivityChartProps = {
   authors: AuthorHourlyActivity[];
+  freshness?: ActivityHourlyDisplayFreshness | null;
 };
 
 const FILL_KINDS: FillKind[] = ["active", "overtime", "overtime-fill", "afk", "auto-afk", "meeting", "telegram-idle", "idle", "missed"];
 
-export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
+export function HourlyActivityChart({ authors, freshness }: HourlyActivityChartProps) {
   const authorCharts = authors.map(toAuthorHourlyActivity);
 
   return (
     <section className="panel table-panel" data-doc-target="hourly-activity" id="hourly-activity">
-      <h2>Hourly Activity</h2>
+      <div className="hourly-activity-title-row">
+        <h2>Hourly Activity</h2>
+        {freshness ? (
+          <span className={`hourly-activity-freshness is-${freshness.status}`} role="status">
+            <i aria-hidden="true" />
+            {hourlyFreshnessLabel(freshness)}
+          </span>
+        ) : null}
+      </div>
       {authorCharts.length ? (
         <div className="hourly-chart-list">
           {authorCharts.map((author) => (
@@ -106,6 +117,54 @@ export function HourlyActivityChart({ authors }: HourlyActivityChartProps) {
       )}
     </section>
   );
+}
+
+function hourlyFreshnessLabel(freshness: ActivityHourlyDisplayFreshness) {
+  if (freshness.status === "checking") {
+    return "Checking…";
+  }
+
+  if (freshness.status === "updating") {
+    return "Updating…";
+  }
+
+  if (freshness.status === "delayed") {
+    return "Update delayed";
+  }
+
+  if (freshness.status === "unavailable") {
+    return "Status unavailable";
+  }
+
+  const time = formatFreshnessTime(freshness.dataThrough, freshness.timeZoneId);
+  return time ? `Up to date · ${time}` : "Up to date";
+}
+
+function formatFreshnessTime(value: string | null, timeZoneId?: string) {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      ...(timeZoneId ? { timeZone: timeZoneId } : {})
+    }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).format(date);
+  }
 }
 
 function createEmptyHourlyActivity(): HourlyActivity[] {
