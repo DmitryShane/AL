@@ -1,11 +1,11 @@
-import type { AuthorRow } from "../types/dashboard";
+import type { ActivityAuthorIdentity } from "./activityDirectory";
 
 export type ActivityAuthorSlugLookup = {
   ambiguous: boolean;
   rawAuthor: string | null;
 };
 
-export function authorUrlSlug(author: AuthorRow) {
+export function authorUrlSlug(author: ActivityAuthorIdentity) {
   return author.displayName.trim().replace(/\s+/g, " ").toLocaleLowerCase();
 }
 
@@ -33,12 +33,12 @@ export function writeActivityAuthorSlugToUrl(slug: string) {
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
-export function activityAuthorSlugForRawAuthor(authors: AuthorRow[], rawAuthor: string) {
+export function activityAuthorSlugForRawAuthor(authors: ActivityAuthorIdentity[], rawAuthor: string) {
   const author = authors.find((item) => item.rawAuthor === rawAuthor);
   return author ? authorUrlSlug(author) : null;
 }
 
-export function rawAuthorForActivityAuthorSlug(authors: AuthorRow[], slug: string | null): ActivityAuthorSlugLookup {
+export function rawAuthorForActivityAuthorSlug(authors: ActivityAuthorIdentity[], slug: string | null): ActivityAuthorSlugLookup {
   const normalized = normalizeAuthorSlug(slug ?? "");
 
   if (!normalized) {

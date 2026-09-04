@@ -20,11 +20,13 @@ export function BreakdownPanel({
   title,
   items,
   groups = [],
+  emptyMessage = "No data yet.",
   showSummaryBar = true
 }: {
   title: string;
   items: BreakdownPanelItem[];
   groups?: BreakdownPanelGroup[];
+  emptyMessage?: string;
   showSummaryBar?: boolean;
 }) {
   const flatForBar = items.length > 0 ? items : groups.flatMap((group) => group.items);
@@ -43,7 +45,7 @@ export function BreakdownPanel({
           ) : items.length ? (
             <BreakdownRows items={items} />
           ) : (
-            <p className="empty">No data yet.</p>
+            <p className="empty">{emptyMessage}</p>
           )}
         </div>
       </div>
@@ -61,18 +63,20 @@ export function OvertimeBreakdownPanel({
   activityItems,
   savedItems,
   activityGroups = [],
+  emptyMessage = "No data yet.",
   savedGroups = []
 }: {
   activityItems: BreakdownPanelItem[];
   savedItems: BreakdownPanelItem[];
   activityGroups?: BreakdownPanelGroup[];
   savedGroups?: BreakdownPanelGroup[];
+  emptyMessage?: string;
 }) {
   return (
     <div className="panel breakdown-panel overtime-breakdown-panel">
       <h2>Overtime</h2>
-      <MiniBreakdownList title="Activity Mix" items={activityItems} groups={activityGroups} emptyMessage="No data yet." />
-      <MiniBreakdownList title="Worked Files" items={savedItems} groups={savedGroups} emptyMessage="No data yet." />
+      <MiniBreakdownList title="Activity Mix" items={activityItems} groups={activityGroups} emptyMessage={emptyMessage} />
+      <MiniBreakdownList title="Worked Files" items={savedItems} groups={savedGroups} emptyMessage={emptyMessage} />
     </div>
   );
 }

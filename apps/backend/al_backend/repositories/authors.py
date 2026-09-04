@@ -40,6 +40,31 @@ def _latest_author_activity_by_author(collection: Any, authors: list[str]) -> di
 
 
 class AuthorRepository(MongoComposableMixin):
+    def activity_author_directory(self) -> list[dict[str, str]]:
+        profiles = composed(self)._profiles_by_raw_author()
+        aliases = {
+            str(row.get("sourceRawAuthor") or "")
+            for row in self.db.author_aliases.find({}, {"_id": 0, "sourceRawAuthor": 1})
+        }
+        devices = {
+            str(row.get("rawAuthor") or "")
+            for row in self.db.device_report_identities.find({}, {"_id": 0, "rawAuthor": 1})
+        }
+        names = set(profiles) | set(self.db.daily_author_activity.distinct("author"))
+        result = {}
+        for name in sorted(str(name) for name in names if name):
+            if _is_device_profile_raw_author(name) and name not in devices and name not in aliases:
+                continue
+            raw = composed(self).resolve_author_alias(name)
+            profile = profiles.get(raw, {})
+            result[raw] = {
+                "rawAuthor": raw,
+                "displayName": _display_name(raw, profile),
+                "team": str(profile.get("team") or ""),
+                "avatarUrl": _cached_author_avatar_api_url(raw, _github_username_for_avatar_fetch(raw, profile), profile),
+            }
+        return sorted(result.values(), key=lambda row: (row["displayName"].casefold(), row["rawAuthor"]))
+
     def list_authors(self) -> list[str]:
         alias_sources = {item.get("sourceRawAuthor") for item in composed(self).author_aliases()}
         authors = set()

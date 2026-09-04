@@ -1,3 +1,4 @@
+import type { ActivityAuthorIdentity } from "../utils/activityDirectory";
 import { useEffect, useState } from "react";
 import {
   activityAuthorSlugForRawAuthor,
@@ -5,9 +6,9 @@ import {
   readActivityAuthorSlugFromUrl,
   writeActivityAuthorSlugToUrl
 } from "../utils/activityAuthorUrl";
-import type { AuthorRow, Page } from "../types/dashboard";
+import type { Page } from "../types/dashboard";
 
-export function useActivityAuthorSelection(page: Page | null, authors: AuthorRow[]) {
+export function useActivityAuthorSelection(page: Page | null, authors: ActivityAuthorIdentity[]) {
   const initialSlug = page === "activity" ? readActivityAuthorSlugFromUrl() : null;
   const initialLookup = rawAuthorForActivityAuthorSlug(authors, initialSlug);
   const initialAuthor = initialLookup.rawAuthor;

@@ -1726,6 +1726,12 @@ p {
   line-height: 1.1;
 }
 
+.duration .activity-data-message {
+  color: #718093;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .panel {
   min-width: 0;
   padding: 18px;

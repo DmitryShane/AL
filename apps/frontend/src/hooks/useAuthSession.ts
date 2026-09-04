@@ -1,3 +1,4 @@
+import { clearDirectory } from "../utils/activityDirectory";
 import { useEffect, useState } from "react";
 import { apiFetch, IS_LOCAL_DASHBOARD } from "../api/client";
 import { AUTH_HINT_STORAGE_KEY } from "../constants/dashboard";
@@ -50,6 +51,8 @@ export function useAuthSession() {
   }, [authUser]);
 
   function clearAuthState() {
+    clearDirectory();
+    clearDashboardSessionCaches();
     setAuthUser(null);
     setHasAuthHint(false);
     removeStorageItem(localBrowserStorage(), AUTH_HINT_STORAGE_KEY);

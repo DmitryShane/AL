@@ -1,3 +1,5 @@
+import { directoryAccount } from "./utils/activityDirectory";
+import { useActivityDirectory } from "./hooks/useActivityDirectory";
 import { useEffect, useMemo, useState } from "react";
 import { Activity, BarChart3, Bell, BookOpen, CalendarDays, LogOut, Settings, UsersRound } from "lucide-react";
 import { DateRangePicker } from "./components/layout/DateRangePicker";
@@ -73,9 +75,18 @@ function App() {
     }),
     [activityDisplaySummary, appliedDateRange]
   );
-  const firstVisibleActivityAuthor = useMemo(
-    () => [...visibleActivitySummary.authors].sort((left, right) => compareAuthorCardStatus(left, right, appliedDateRange))[0]?.rawAuthor ?? null,
+  const sortedDirectoryAuthors = useMemo(
+    () => [...visibleActivitySummary.authors].sort((left, right) => compareAuthorCardStatus(left, right, appliedDateRange)),
     [visibleActivitySummary.authors, appliedDateRange]
+  );
+  const { directory, directoryReady, directoryError } = useActivityDirectory(
+    authUser?.email ?? sessionUserPreview?.email ?? (hasAuthHint ? directoryAccount() : undefined), Boolean(authUser), sortedDirectoryAuthors,
+    Boolean(summary) && !loading && summary?.activitySummary.snapshot?.status !== "preparing" && summary?.activitySummary.snapshot?.status !== "empty", clearAuthState
+  );
+  const selectionAuthors = visibleActivitySummary.authors.length ? visibleActivitySummary.authors : directory;
+  const firstVisibleActivityAuthor = useMemo(
+    () => [...visibleActivitySummary.authors].sort((left, right) => compareAuthorCardStatus(left, right, appliedDateRange))[0]?.rawAuthor ?? directory[0]?.rawAuthor ?? null,
+    [visibleActivitySummary.authors, appliedDateRange, directory]
   );
   const {
     selectedAuthor,
@@ -83,7 +94,7 @@ function App() {
     lastSelectedActivityAuthorSlug,
     authorSelectionError,
     setSelectedAuthor
-  } = useActivityAuthorSelection(page, visibleActivitySummary.authors);
+  } = useActivityAuthorSelection(page, selectionAuthors);
   const settingsDisplaySummary = canShowCachedDashboard ? (summary ?? cachedSettingsSummary) : null;
   const isVisualLoading = canShowCachedDashboard && hasKnownPage && pageUsesDashboardSummary(page) && !summary && (loading || authLoading || !authUser);
   const hasDashboardDisplayData =
@@ -288,12 +299,15 @@ function App() {
         ) : null}
         {page === "activity" ? (
           <ActivityPage
+            key={authUser?.email ?? sessionUserPreview?.email ?? directoryAccount() ?? "pending"}
             summary={visibleActivitySummary}
             dateRange={appliedDateRange}
             datePickerValue={dateRange}
             onDatePickerChange={setDateRange}
             selectedAuthor={selectedAuthor}
-            authorSelectionError={authorSelectionError}
+            authorSelectionError={directoryReady ? authorSelectionError : null}
+            directory={selectionAuthors}
+            dataError={error ?? directoryError}
             setSelectedAuthor={setSelectedAuthor}
             loading={isVisualLoading}
             refreshing={refreshingReports}

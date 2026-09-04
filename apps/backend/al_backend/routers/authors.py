@@ -307,6 +307,14 @@ def upsert_author_profile(
     )
 
 
+@router.get("/api/v1/activity/authors")
+def activity_author_directory(
+    _: dict = Depends(require_permission("viewDashboard")),
+    service: BackendServices = Depends(get_author_service),
+) -> dict:
+    return {"authors": service.activity_author_directory()}
+
+
 @router.get("/api/v1/authors/profiles")
 def author_profiles(
     _: dict = Depends(require_permission("manageSettings")),

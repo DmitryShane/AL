@@ -22,6 +22,7 @@ type ReportsTableProps = {
   sourceOptions: string[];
   hourFilter: string;
   loading: boolean;
+  emptyMessage?: string;
   error: string | null;
   setPage: (value: number | ((current: number) => number)) => void;
   setPageSize: (value: number) => void;
@@ -38,6 +39,7 @@ export function ReportsTable({
   sourceOptions,
   hourFilter,
   loading,
+  emptyMessage,
   error,
   setPage,
   setPageSize,
@@ -53,7 +55,7 @@ export function ReportsTable({
   const timeZoneLabelByAuthor = useMemo(() => preferredTimeZoneLabelsByAuthor(reports), [reports]);
 
   useEffect(() => {
-    if (!sourceFilter) {
+    if (!sourceFilter || loading || !sourceOptions.length) {
       return;
     }
 
@@ -62,7 +64,7 @@ export function ReportsTable({
     if (!available.has(sourceFilter)) {
       setSourceFilter("");
     }
-  }, [sourceOptions, sourceFilter, setSourceFilter]);
+  }, [sourceOptions, sourceFilter, setSourceFilter, loading]);
 
   return (
     <section className="panel table-panel" data-doc-target="plugin-reports" id="plugin-reports">
@@ -105,10 +107,10 @@ export function ReportsTable({
           <span>Timezone</span>
         </div>
         <div className="table-body">
-          {loading ? <div className="table-state">Loading reports...</div> : null}
+          {loading ? <div className="table-state">{emptyMessage ?? "Loading reports..."}</div> : null}
           {error ? <div className="table-state">{error}</div> : null}
-          {!loading && !error && reports.length === 0 ? <div className="table-state">No reports for this period.</div> : null}
-          {!loading && !error ? reports.map((report, index) => (
+          {!loading && !error && reports.length === 0 ? <div className="table-state">{emptyMessage ?? "No reports for this period."}</div> : null}
+          {reports.map((report, index) => (
             <div className="table-row" key={`${report.recordedAt ?? "report"}-${index}`}>
               <span className="source-cell"><SourceIcon source={report.source} />{formatSource(report.source)}</span>
               <span>{report.pluginVersion || "-"}</span>
@@ -121,7 +123,7 @@ export function ReportsTable({
               <span className={reportTypeBadgeClassName(report.reportType)}>{formatReportType(report)}</span>
               <span>{timeZoneLabelByAuthor.get(reportAuthorKey(report)) ?? formatTimeZoneLabel(report) ?? "-"}</span>
             </div>
-          )) : null}
+          ))}
         </div>
       </div>
       <div className="table-pagination">

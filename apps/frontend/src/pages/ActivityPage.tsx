@@ -1,5 +1,6 @@
+import { identities, type ActivityAuthorIdentity } from "../utils/activityDirectory";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Coffee, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { AuthorsTable } from "../components/AuthorsTable";
 import { HourlyActivityChart } from "../components/HourlyActivityChart";
 import { ActivityBreakdownCards } from "../components/activity/ActivityBreakdownCards";
@@ -35,6 +36,8 @@ type ActivityHourlyResponse = {
 
 export function ActivityPage({
   summary,
+  directory = [],
+  dataError = null,
   dateRange,
   datePickerValue,
   onDatePickerChange,
@@ -46,6 +49,8 @@ export function ActivityPage({
   onRefreshAuthor
 }: {
   summary: ActivitySummary;
+  directory?: ActivityAuthorIdentity[];
+  dataError?: string | null;
   dateRange: DateRange;
   datePickerValue: DateRange;
   onDatePickerChange: (range: DateRange) => void;
@@ -66,6 +71,7 @@ export function ActivityPage({
     endDate: dateRange.endDate,
     dateMode: dateRange.preset === "live" ? "authorLocalToday" : ""
   }), [dateRange.startDate, dateRange.endDate, dateRange.preset]);
+  const [hourlyDisplayKey, setHourlyDisplayKey] = useState(hourlyCacheKey);
   const [hourlyRows, setHourlyRows] = useState<AuthorHourlyActivity[]>(() => loadCachedActivityHourly(hourlyCacheKey) ?? summary.hourlyActivityByAuthor);
   const hourlyCacheRef = useRef<Record<string, AuthorHourlyActivity[]>>({});
   const [hourlyFreshness, setHourlyFreshness] = useState<ActivityHourlyDisplayFreshness | null>(null);
@@ -103,6 +109,7 @@ export function ActivityPage({
   const floatingAuthors = cardAuthors.length > 0 ? cardAuthors : lastFloatingAuthorsRef.current;
   const authorCardStripRef = useRef<HTMLDivElement>(null);
   const [showFloatingAuthorStrip, setShowFloatingAuthorStrip] = useState(false);
+  const [reportsDisplayKey, setReportsDisplayKey] = useState<string | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
   const [reportsTotal, setReportsTotal] = useState(0);
   const [reportSources, setReportSources] = useState<string[]>([]);
@@ -218,6 +225,7 @@ export function ActivityPage({
   const loadHourly = useCallback(async (useCachedRows: boolean) => {
     if (isHistoricalSingleDay && (snapshotPreparing || snapshotEmpty || summary.hourlyActivityByAuthor.length)) {
       setHourlyRows(summary.hourlyActivityByAuthor);
+      setHourlyDisplayKey(hourlyCacheKey);
       return;
     }
 
@@ -238,6 +246,7 @@ export function ActivityPage({
 
       if (cachedRows) {
         setHourlyRows(cachedRows);
+        setHourlyDisplayKey(hourlyCacheKey);
         hasCachedRows = true;
       }
 
@@ -249,6 +258,7 @@ export function ActivityPage({
           [hourlyCacheKey]: persistedRows
         };
         setHourlyRows(persistedRows);
+        setHourlyDisplayKey(hourlyCacheKey);
         hasCachedRows = true;
       }
     }
@@ -287,6 +297,7 @@ export function ActivityPage({
       };
       saveCachedActivityHourly(hourlyCacheKey, payload.hourlyActivityByAuthor);
       setHourlyRows(payload.hourlyActivityByAuthor);
+      setHourlyDisplayKey(hourlyCacheKey);
 
       if (dateRange.preset === "live" && author) {
         hourlyDataLoadedRef.current = true;
@@ -304,6 +315,7 @@ export function ActivityPage({
 
       if (summary.hourlyActivityByAuthor.length || !hasCachedRows) {
         setHourlyRows(summary.hourlyActivityByAuthor);
+        setHourlyDisplayKey(hourlyCacheKey);
       }
 
       if (dateRange.preset === "live" && author) {
@@ -477,6 +489,7 @@ export function ActivityPage({
 
       if (cachedPage) {
         setReports(cachedPage.reports);
+        setReportsDisplayKey(reportsCacheKey);
         setReportsTotal(cachedPage.total);
         setReportSources(cachedPage.sources);
         setReportsLoading(false);
@@ -488,6 +501,7 @@ export function ActivityPage({
 
       if (persistedPage) {
         setReports(persistedPage.reports);
+        setReportsDisplayKey(reportsCacheKey);
         setReportsTotal(persistedPage.total);
         setReportSources(persistedPage.sources);
         reportsPageCacheRef.current = {
@@ -534,6 +548,7 @@ export function ActivityPage({
         }
 
         setReports(payload.reports);
+        setReportsDisplayKey(reportsCacheKey);
         setReportsTotal(payload.total);
         setReportSources(payload.sources);
         reportsPageCacheRef.current = {
@@ -561,6 +576,49 @@ export function ActivityPage({
     };
   }, [author?.rawAuthor, authorSnapshotPreparing, dateRange.startDate, dateRange.endDate, dateRange.preset, loading, reportsPage, reportsPageSize, reportSourceFilter, reportHourFilter, reportsCacheKey, snapshotEmpty]);
 
+  const samePeriod = dateRange.startDate === datePickerValue.startDate
+    && dateRange.endDate === datePickerValue.endDate && dateRange.preset === datePickerValue.preset;
+  const displayKey = `${hourlyCacheKey}:${selectedAuthor ?? ""}`;
+  const lastDisplay = useRef<{ key: string; author: AuthorRow } | null>(null);
+  const preparing = snapshotPreparing || authorSnapshotPreparing;
+  if (samePeriod && !loading && !preparing && !dataError && (snapshotEmpty || !author)) lastDisplay.current = null;
+  if (samePeriod && author && !preparing && !snapshotEmpty) lastDisplay.current = { key: displayKey, author };
+  const displayAuthor = samePeriod && !snapshotEmpty
+    ? (!preparing && author ? author : (loading || preparing || dataError) && lastDisplay.current?.key === displayKey ? lastDisplay.current.author : null)
+    : null;
+  const identity = directory.find(item => item.rawAuthor === selectedAuthor);
+  const message = dataError ?? (preparing ? "Preparing data…" : snapshotEmpty ? "No activity data" : authorSelectionError ?? (loading || !samePeriod ? "Loading data…" : "No activity data"));
+  const lastReports = useRef<{ key: string; reports: Report[]; total: number; sources: string[] } | null>(null);
+  const lastHourly = useRef<{ key: string; rows: AuthorHourlyActivity[] } | null>(null);
+  if (samePeriod && displayAuthor && !preparing && !snapshotEmpty) {
+    if (reportsDisplayKey === reportsCacheKey && !reportsLoading && !reportsError) {
+      lastReports.current = { key: reportsCacheKey, reports, total: reportsTotal, sources: reportSources };
+    }
+    if (hourlyDisplayKey === hourlyCacheKey && authorHourly.length) lastHourly.current = { key: displayKey, rows: authorHourly };
+  }
+  const retainedReports = preparing && lastReports.current?.key === reportsCacheKey ? lastReports.current : null;
+  const displayReports = samePeriod && displayAuthor
+    ? retainedReports?.reports ?? (reportsDisplayKey === reportsCacheKey ? reports : []) : [];
+  const displayHourly = samePeriod && displayAuthor
+    ? preparing && lastHourly.current?.key === displayKey ? lastHourly.current.rows
+      : hourlyDisplayKey === hourlyCacheKey ? authorHourly : [] : [];
+  const cardsPreparing = preparing || cardAuthors.some(item => item.snapshotStatus === "preparing" || item.snapshotStatus === "live");
+  const lastCards = useRef<{ key: string; authors: AuthorRow[] } | null>(null);
+  if (samePeriod && !cardsPreparing && !snapshotEmpty && cardAuthors.length) {
+    lastCards.current = { key: hourlyCacheKey, authors: cardAuthors };
+  } else if (samePeriod && !loading && !preparing && !dataError && !cardAuthors.length) {
+    lastCards.current = null;
+  }
+  const retainedCards = samePeriod && (loading || cardsPreparing || dataError) && lastCards.current?.key === hourlyCacheKey
+    ? lastCards.current.authors : [];
+  const availableCards = samePeriod && cardAuthors.length ? cardAuthors : retainedCards;
+  const displayCardAuthors = availableCards.length ? availableCards.map(item =>
+    item.snapshotStatus === "preparing" || item.snapshotStatus === "live"
+      ? retainedCards.find(previous => previous.rawAuthor === item.rawAuthor) ?? identities([item])[0]
+      : item
+  ) : identities(directory);
+
+
   return (
     <>
       <div
@@ -572,7 +630,7 @@ export function ActivityPage({
       >
         <div className="activity-author-floating-strip-inner">
           <div className="activity-author-floating-strip-scroll">
-            {floatingAuthors.map((item) => (
+            {(samePeriod ? floatingAuthors : []).map((item) => (
               <ActivityAuthorMiniCard
                 key={`float-${item.rawAuthor}`}
                 author={item}
@@ -588,79 +646,52 @@ export function ActivityPage({
       </div>
       <section className="page-section" data-doc-target="activity-overview" id="activity-overview">
         <div ref={authorCardStripRef} className="author-card-strip" data-doc-target="activity-author-cards" id="activity-author-cards">
-          {cardAuthors.map((item) => (
-            <ActivityCard
-              key={item.rawAuthor}
-              author={item}
-              active={item.rawAuthor === author?.rawAuthor}
-              onSelect={(selected) => setSelectedAuthor(selected.rawAuthor)}
-            />
+          {displayCardAuthors.map(item => (
+            <ActivityCard key={item.rawAuthor} author={item} active={item.rawAuthor === selectedAuthor}
+              onSelect={item => setSelectedAuthor(item.rawAuthor)} />
           ))}
+          {!displayCardAuthors.length ? <p className="empty">{dataError ?? "Loading authors…"}</p> : null}
         </div>
 
-        {snapshotPreparing ? (
-          <p className="empty" data-doc-target="activity-snapshot-preparing">Preparing historical activity snapshot for {summary.snapshot?.date ?? dateRange.startDate}...</p>
-        ) : snapshotEmpty ? (
-          <div className="activity-empty-day-state" data-doc-target="activity-empty-day">
-            <div className="activity-empty-day-illustration" aria-hidden="true">
-              <Coffee size={42} strokeWidth={1.8} />
-            </div>
-            <strong>No activity data for this day</strong>
-            <p>This was a day off, so nobody worked and no activity reports were recorded.</p>
+        <div className="toolbar" data-doc-target="activity-selected-author" id="activity-selected-author">
+          <div>
+            <strong>{identity?.displayName ?? displayAuthor?.displayName ?? "Activity details"}</strong>
+            <p className="toolbar-caption">Request a fresh Unity report for this author.</p>
           </div>
-        ) : authorSnapshotPreparing ? (
-          <p className="empty" data-doc-target="activity-snapshot-preparing">
-            {author?.snapshotStatus === "live"
-              ? `Historical activity snapshot for ${author.displayName} will be prepared after their local day ends.`
-              : `Preparing historical activity snapshot for ${author?.displayName ?? "this author"}...`}
-          </p>
-        ) : author ? (
-          <>
-            <div className="toolbar" data-doc-target="activity-selected-author" id="activity-selected-author">
-              <div>
-                <strong>{author.displayName}</strong>
-                <p className="toolbar-caption">Request a fresh Unity report for this author.</p>
-              </div>
-              <div className="toolbar-spacer" />
-              <button className="primary-outline-button" data-doc-target="activity-refresh-author" onClick={() => onRefreshAuthor(author.rawAuthor)} disabled={refreshing}>
-                <RefreshCw size={16} />
-                {refreshing ? "Requesting..." : "Refresh"}
-              </button>
-            </div>
+          <div className="toolbar-spacer" />
+          <button className="primary-outline-button" data-doc-target="activity-refresh-author" onClick={() => selectedAuthor && onRefreshAuthor(selectedAuthor)} disabled={refreshing || !selectedAuthor}>
+            <RefreshCw size={16} />
+            {refreshing ? "Requesting..." : "Refresh"}
+          </button>
+        </div>
 
-            <AuthorsTable authors={[author]} emptyMessage="No selected author activity for this period." />
+        <AuthorsTable authors={displayAuthor ? [displayAuthor] : []} emptyMessage={message} />
+        {(dataError || preparing) && displayAuthor ? <p role="status">{dataError ?? "Preparing data…"}</p> : null}
 
-            <ActivityMetricsGrid author={author} />
+        <ActivityMetricsGrid author={displayAuthor} message={message} />
 
-            <div className="dashboard-insights-row">
-              <HourlyActivityChart authors={authorHourly} freshness={hourlyFreshness} />
-              <ActivityBreakdownCards author={author} />
-            </div>
+        <div className="dashboard-insights-row">
+          <HourlyActivityChart authors={displayHourly} freshness={hourlyFreshness} emptyMessage={message} />
+          <ActivityBreakdownCards author={displayAuthor} message={message} />
+        </div>
 
-            <ReportsTable
-              reports={reports}
-              total={reportsTotal}
-              page={reportsPage}
-              pageSize={reportsPageSize}
-              sourceFilter={reportSourceFilter}
-              sourceOptions={reportSources}
-              hourFilter={reportHourFilter}
-              loading={reportsLoading}
-              error={reportsError}
-              setPage={setReportsPage}
-              setPageSize={setReportsPageSize}
-              setSourceFilter={setReportSourceFilter}
-              setHourFilter={setReportHourFilter}
-            />
-          </>
-        ) : authorSelectionError ? (
-          <p className="empty">{authorSelectionError}</p>
-        ) : selectedAuthor ? (
-          <p className="empty">Selected author is not available in the current activity data.</p>
-        ) : loading ? null : (
-          <p className="empty">Select an author.</p>
-        )}
-    </section>
+        <ReportsTable
+          reports={displayReports}
+          total={samePeriod && displayAuthor ? retainedReports?.total ?? (reportsDisplayKey === reportsCacheKey ? reportsTotal : 0) : 0}
+          page={reportsPage}
+          pageSize={reportsPageSize}
+          sourceFilter={reportSourceFilter}
+          sourceOptions={retainedReports?.sources ?? reportSources}
+          hourFilter={reportHourFilter}
+          loading={reportsLoading || (!displayAuthor && (loading || !samePeriod))}
+          emptyMessage={!displayAuthor ? message : undefined}
+          error={reportsError}
+          setPage={setReportsPage}
+          setPageSize={setReportsPageSize}
+          setSourceFilter={setReportSourceFilter}
+          setHourFilter={setReportHourFilter}
+        />
+      </section>
     </>
   );
 }

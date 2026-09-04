@@ -4,33 +4,34 @@ import { activityColor, formatActivityType, paletteColor, savedFileLabel } from 
 import { BreakdownPanel, OvertimeBreakdownPanel, type BreakdownPanelItem } from "./BreakdownPanels";
 
 type ActivityBreakdownCardsProps = {
-  author: AuthorRow;
+  author?: AuthorRow | null;
+  message?: string;
 };
 
-export function ActivityBreakdownCards({ author }: ActivityBreakdownCardsProps) {
-  const activityMixItems = (author.activityMix ?? []).map((item) => activityMixPanelItem(item.type, item.count, item.percent, author.source));
-  const savedPrefabItems = (author.savedPrefabs ?? []).map((prefab, index) => savedPrefabPanelItem(prefab, index));
-  const overtimeActivityMixItems = (author.overtimeActivityMix ?? []).map((item) => activityMixPanelItem(item.type, item.count, item.percent, author.source));
-  const overtimeSavedPrefabItems = (author.overtimeSavedPrefabs ?? []).map((prefab, index) => savedPrefabPanelItem(prefab, index));
-  const activityMixGroups = (author.activityMixBySource ?? []).map((group) => ({
+export function ActivityBreakdownCards({ author, message }: ActivityBreakdownCardsProps) {
+  const activityMixItems = (author?.activityMix ?? []).map((item) => activityMixPanelItem(item.type, item.count, item.percent, author?.source));
+  const savedPrefabItems = (author?.savedPrefabs ?? []).map((prefab, index) => savedPrefabPanelItem(prefab, index));
+  const overtimeActivityMixItems = (author?.overtimeActivityMix ?? []).map((item) => activityMixPanelItem(item.type, item.count, item.percent, author?.source));
+  const overtimeSavedPrefabItems = (author?.overtimeSavedPrefabs ?? []).map((prefab, index) => savedPrefabPanelItem(prefab, index));
+  const activityMixGroups = (author?.activityMixBySource ?? []).map((group) => ({
     source: group.source,
     label: formatSource(group.source),
     totalDisplayValue: formatCompactSourceDuration(group.activeSeconds ?? 0),
     items: group.activityMix.map((item) => activityMixPanelItem(item.type, item.count, item.percent, group.source))
   }));
-  const savedPrefabGroups = (author.savedPrefabsBySource ?? []).map((group) => ({
+  const savedPrefabGroups = (author?.savedPrefabsBySource ?? []).map((group) => ({
     source: group.source,
     label: formatSource(group.source),
     totalDisplayValue: String(group.totalSaveCount),
     items: group.savedPrefabs.map((prefab, index) => savedPrefabPanelItem(prefab, index, group.source))
   }));
-  const overtimeActivityMixGroups = (author.overtimeActivityMixBySource ?? []).map((group) => ({
+  const overtimeActivityMixGroups = (author?.overtimeActivityMixBySource ?? []).map((group) => ({
     source: group.source,
     label: formatSource(group.source),
     totalDisplayValue: formatCompactSourceDuration(group.activeSeconds ?? 0),
     items: group.activityMix.map((item) => activityMixPanelItem(item.type, item.count, item.percent, group.source))
   }));
-  const overtimeSavedPrefabGroups = (author.overtimeSavedPrefabsBySource ?? []).map((group) => ({
+  const overtimeSavedPrefabGroups = (author?.overtimeSavedPrefabsBySource ?? []).map((group) => ({
     source: group.source,
     label: formatSource(group.source),
     totalDisplayValue: String(group.totalSaveCount),
@@ -39,21 +40,18 @@ export function ActivityBreakdownCards({ author }: ActivityBreakdownCardsProps) 
 
   return (
     <div className="activity-breakdown-card-set" data-doc-target="activity-breakdowns" id="activity-breakdowns">
-      <BreakdownPanel
-        key={`${author.rawAuthor}-activity-mix`}
+      <BreakdownPanel emptyMessage={message}
         title="Activity Mix"
         items={activityMixItems}
         groups={activityMixGroups}
         showSummaryBar={false}
       />
-      <BreakdownPanel
-        key={`${author.rawAuthor}-saved-files`}
+      <BreakdownPanel emptyMessage={message}
         title="Worked Files"
         items={savedPrefabItems}
         groups={savedPrefabGroups}
       />
-      <OvertimeBreakdownPanel
-        key={`${author.rawAuthor}-overtime`}
+      <OvertimeBreakdownPanel emptyMessage={message}
         activityItems={overtimeActivityMixItems}
         savedItems={overtimeSavedPrefabItems}
         activityGroups={overtimeActivityMixGroups}

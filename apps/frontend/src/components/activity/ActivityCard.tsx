@@ -1,3 +1,4 @@
+import type { ActivityAuthorIdentity } from "../../utils/activityDirectory";
 import type { AuthorRow } from "../../types/dashboard";
 import { AuthorAvatar } from "../AuthorAvatar";
 import {
@@ -8,12 +9,20 @@ import {
 } from "../../pages/pageHelpers";
 
 type ActivityCardProps = {
-  author: AuthorRow;
+  author: AuthorRow | ActivityAuthorIdentity;
   active: boolean;
-  onSelect: (author: AuthorRow) => void;
+  onSelect: (author: AuthorRow | ActivityAuthorIdentity) => void;
 };
 
 export function ActivityCard({ author, active, onSelect }: ActivityCardProps) {
+  if (!("activeSeconds" in author)) {
+    return <button className={`author-card is-telegram-offline${active ? " active" : ""}`} onClick={() => onSelect(author)}>
+      <span className="author-card-status" aria-hidden="true" />
+      <span className="author-card-identity"><AuthorAvatar displayName={author.displayName} avatarUrl={author.avatarUrl} /></span>
+      <strong>{author.displayName}</strong><small>{author.team || "No team"}</small>
+      <div className="author-card-footer"><span>Loading data…</span></div>
+    </button>;
+  }
   const isVacationDay = author.dayOverride?.type === "vacation" || author.calendarDayMark?.reasonId === "vacation";
   const productivity = Number.isFinite(author.productivity) ? author.productivity : 0;
 

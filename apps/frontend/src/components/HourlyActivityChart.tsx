@@ -33,12 +33,13 @@ type AuthorHourlyActivity = {
 
 export type HourlyActivityChartProps = {
   authors: AuthorHourlyActivity[];
+  emptyMessage?: string;
   freshness?: ActivityHourlyDisplayFreshness | null;
 };
 
 const FILL_KINDS: FillKind[] = ["active", "overtime", "overtime-fill", "afk", "auto-afk", "meeting", "telegram-idle", "idle", "missed"];
 
-export function HourlyActivityChart({ authors, freshness }: HourlyActivityChartProps) {
+export function HourlyActivityChart({ authors, freshness, emptyMessage }: HourlyActivityChartProps) {
   const authorCharts = authors.map(toAuthorHourlyActivity);
 
   return (
@@ -113,7 +114,7 @@ export function HourlyActivityChart({ authors, freshness }: HourlyActivityChartP
           ))}
         </div>
       ) : (
-        <p className="empty">No authors yet.</p>
+        <p className="empty">{emptyMessage ?? "No authors yet."}</p>
       )}
     </section>
   );
