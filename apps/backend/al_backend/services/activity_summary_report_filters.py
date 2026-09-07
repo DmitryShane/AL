@@ -8,12 +8,17 @@ def _status_transition_datetime(row: dict[str, Any]) -> dt.datetime | None:
     if reason in {"reports_stopped", "reports_resumed"}:
         event_type = str(row.get("statusEventType") or row.get("activityType") or "")
         prefix = f"{row.get('author') or 'Unknown User'}|{row.get('date') or ''}|{event_type}|"
+        received_at = _coerce_datetime(row.get("receivedAt"))
         event_key = row.get("statusEventKey")
         if isinstance(event_key, str) and event_key.startswith(prefix):
             transition_at = _coerce_datetime(event_key[len(prefix):])
             if transition_at:
+                # Legacy materialization can copy the delayed report time into the key.
+                # A resumed transition is observed when that report reaches the server.
+                if (reason == "reports_resumed" and received_at and transition_at < received_at
+                        and transition_at == _report_sort_datetime(row)):
+                    return received_at
                 return transition_at
-        received_at = _coerce_datetime(row.get("receivedAt"))
         if received_at:
             return received_at
     return _report_sort_datetime(row)

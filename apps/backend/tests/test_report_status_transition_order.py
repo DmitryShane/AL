@@ -15,10 +15,13 @@ def status(kind, transition, recorded=None, author="A", day=DAY):
             "receivedAt": transition}
 
 
-def test_resumed_old_report_does_not_hide_fresh_reports_in_table():
+@pytest.mark.parametrize("legacy_key", [False, True])
+def test_resumed_old_report_does_not_hide_fresh_reports_in_table(legacy_key):
     repo = fake_repository()
     rows = [status("offline", "2026-09-07T10:31:11+00:00"),
             status("online", "2026-09-07T11:21:07+00:00", "2026-09-07T10:14:41+00:00")]
+    if legacy_key:
+        rows[1]["statusEventKey"] = f"A|{DAY}|online|2026-09-07T10:14:41+00:00"
     for row in rows:
         repo.db.report_rows.insert_one(row)
     for recorded in ["2026-09-07T14:23:42+03:00", "2026-09-07T16:53:42+03:00"]:
