@@ -3,10 +3,29 @@ from __future__ import annotations
 from ..activity_math import *
 
 
+def _status_transition_datetime(row: dict[str, Any]) -> dt.datetime | None:
+    reason = str(row.get("statusReason") or (row.get("metadata") or {}).get("reason") or "")
+    if reason in {"reports_stopped", "reports_resumed"}:
+        event_type = str(row.get("statusEventType") or row.get("activityType") or "")
+        prefix = f"{row.get('author') or 'Unknown User'}|{row.get('date') or ''}|{event_type}|"
+        event_key = row.get("statusEventKey")
+        if isinstance(event_key, str) and event_key.startswith(prefix):
+            transition_at = _coerce_datetime(event_key[len(prefix):])
+            if transition_at:
+                return transition_at
+        received_at = _coerce_datetime(row.get("receivedAt"))
+        if received_at:
+            return received_at
+    return _report_sort_datetime(row)
+
+
 class ActivitySummaryReportFiltersMixin:
     def _status_intervals_for_reports(self, status_rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]]:
         intervals_by_key: dict[tuple[str, str], list[tuple[dt.datetime, dt.datetime | None]]] = {}
-        ordered_rows = sorted(status_rows, key=lambda row: _report_sort_datetime(row) or dt.datetime.min.replace(tzinfo=dt.UTC))
+        ordered_rows = sorted(status_rows, key=lambda row: (
+            _status_transition_datetime(row) or dt.datetime.min.replace(tzinfo=dt.UTC),
+            0 if (row.get("statusEventType") or row.get("activityType")) == "offline" else 1,
+        ))
         open_offline_by_key: dict[tuple[str, str], tuple[dt.datetime, str]] = {}
 
         for row in ordered_rows:
@@ -17,7 +36,7 @@ class ActivitySummaryReportFiltersMixin:
             report_date = str(row.get("date") or "")
             event_type = str(row.get("statusEventType") or row.get("activityType") or "")
             reason = str(row.get("statusReason") or (row.get("metadata") or {}).get("reason") or "")
-            sort_at = _report_sort_datetime(row)
+            sort_at = _status_transition_datetime(row)
 
             if not report_date or not sort_at:
                 continue
