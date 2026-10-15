@@ -1857,7 +1857,6 @@ class ActivityRawEventAccountingMixin:
             if (occurred_at - last_activity_at).total_seconds() >= idle_threshold_seconds:
                 heartbeat_end = occurred_at
                 heartbeat_local_end = occurred_local_at
-                stale_heartbeat_capped = False
 
                 received_at = _coerce_datetime(event.get("receivedAt"))
                 skew_floor = idle_threshold_seconds * STALE_HEARTBEAT_RECEIVE_SKEW_MULTIPLIER
@@ -1880,7 +1879,6 @@ class ActivityRawEventAccountingMixin:
                             heartbeat_local_end = (
                                 last_accounting_local_at or last_accounting_at
                             ) + dt.timedelta(seconds=max_accounting_seconds)
-                            stale_heartbeat_capped = True
 
                 interval_seconds = int((heartbeat_end - last_accounting_at).total_seconds())
 
@@ -1917,7 +1915,8 @@ class ActivityRawEventAccountingMixin:
 
                 if not self._is_waiting_for_first_workday_activity(event, author_last_activity_at, interval_end_at):
                     interval_overtime_window = self._overtime_window_for_interval(event, interval_start_at, interval_end_at)
-                    if (stale_heartbeat_capped and overtime_window_kind == "night") or self._has_reports_stopped_gap_overlap(
+                    # Delivery delay can cap the interval, but cannot turn night overtime into idle.
+                    if self._has_reports_stopped_gap_overlap(
                         event,
                         interval_start_at,
                         interval_end_at,
