@@ -887,7 +887,7 @@ def test_deleted_author_profile_blocks_raw_report_writes():
     assert repo.db.report_rows.items == []
     assert repo.db.author_profiles.items == []
 
-def test_idle_only_plugin_batch_does_not_schedule_telegram_online_prompt():
+def test_idle_only_plugin_batch_before_online_does_not_accrue_time_or_schedule_prompt():
     repo = fake_repository()
     set_idle_threshold(repo, 60)
     repo.db.author_profiles.insert_one({"rawAuthor": "A", "telegramUsername": "ta", "timeZoneId": "Europe/Madrid"})
@@ -919,9 +919,7 @@ def test_idle_only_plugin_batch_does_not_schedule_telegram_online_prompt():
 
     repo._save_event_batch("ual", "1.0.0", payload, "raw-1", "auto", received_at, "challenge-1", None)
 
-    assert repo.db.report_rows.items
-    assert repo.db.report_rows.items[0]["idleDeltaSeconds"] == 600
-    assert repo.db.report_rows.items[0]["activeDeltaSeconds"] == 0
+    assert all(row["idleDeltaSeconds"] == row["activeDeltaSeconds"] == 0 for row in repo.db.report_rows.items)
     assert repo.db.telegram_online_prompts.items == []
 
 def test_raw_event_state_isolated_by_source_project_and_device():
@@ -2133,9 +2131,9 @@ def test_heartbeat_idle_does_not_account_entire_delivery_gap_when_huge():
             "deviceId": "mac-mini",
             "date": "2026-05-02",
             "eventType": "focus",
-            "occurredAtUtc": "2026-05-02T01:18:47Z",
-            "occurredAtLocal": "2026-05-02T03:18:47+02:00",
-            "receivedAt": dt.datetime(2026, 5, 2, 1, 18, 47, tzinfo=dt.UTC),
+            "occurredAtUtc": "2026-05-02T11:18:47Z",
+            "occurredAtLocal": "2026-05-02T13:18:47+02:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 11, 18, 47, tzinfo=dt.UTC),
         }
     )
     deltas = repo._apply_raw_event_to_aggregates(
@@ -2146,9 +2144,9 @@ def test_heartbeat_idle_does_not_account_entire_delivery_gap_when_huge():
             "deviceId": "mac-mini",
             "date": "2026-05-02",
             "eventType": "heartbeat",
-            "occurredAtUtc": "2026-05-02T02:06:53Z",
-            "occurredAtLocal": "2026-05-02T04:06:53+02:00",
-            "receivedAt": dt.datetime(2026, 5, 2, 2, 10, 54, tzinfo=dt.UTC),
+            "occurredAtUtc": "2026-05-02T12:06:53Z",
+            "occurredAtLocal": "2026-05-02T14:06:53+02:00",
+            "receivedAt": dt.datetime(2026, 5, 2, 12, 10, 54, tzinfo=dt.UTC),
         }
     )
 
@@ -2659,11 +2657,11 @@ def test_codex_counts_before_telegram_online_after_night_overtime():
     second_deltas = repo._apply_raw_event_to_aggregates(second)
 
     assert first_deltas["activityCountDeltas"] == [{"type": "codex_session_started", "count": 1}]
-    assert second_deltas["activeDeltaSeconds"] == 120
+    assert second_deltas["activeDeltaSeconds"] == 0
     assert second_deltas["activityCountDeltas"] == [{"type": "codex_task_progress", "count": 1}]
     daily = repo.db.daily_author_activity.find_one({"source": "codex", "author": "Dmitry Shane"})
     assert daily is not None
-    assert daily["activeSeconds"] == 120
+    assert daily["activeSeconds"] == 0
     assert daily["activityCounts"] == [
         {"type": "codex_session_started", "count": 1},
         {"type": "codex_task_progress", "count": 1},
@@ -2831,13 +2829,13 @@ def test_cross_midnight_raw_event_batch_splits_report_rows_by_local_date():
     rows_by_date = {row["date"]: row for row in repo.db.report_rows.items if row.get("source") == "cur"}
     assert sorted(rows_by_date) == ["2026-05-02", "2026-05-03"]
     assert rows_by_date["2026-05-02"]["overtimeActiveDeltaSeconds"] == 10
-    assert rows_by_date["2026-05-03"]["overtimeActiveDeltaSeconds"] == 0
-    assert rows_by_date["2026-05-03"]["activeDeltaSeconds"] == 10
+    assert rows_by_date["2026-05-03"]["overtimeActiveDeltaSeconds"] == 10
+    assert rows_by_date["2026-05-03"]["activeDeltaSeconds"] == 0
 
     repo.rebuild_aggregates_if_needed(force=True)
 
     rebuilt_rows_by_date = {row["date"]: row for row in repo.db.report_rows.items if row.get("source") == "cur"}
-    assert rebuilt_rows_by_date["2026-05-03"]["overtimeActiveDeltaSeconds"] == 0
+    assert rebuilt_rows_by_date["2026-05-03"]["overtimeActiveDeltaSeconds"] == 10
 
 def test_night_overtime_after_previous_day_offline_counts_new_day_activity():
     repo = fake_repository()

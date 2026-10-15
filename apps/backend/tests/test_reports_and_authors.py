@@ -729,7 +729,7 @@ def test_delete_author_data_for_date_range_keeps_outside_dates_and_profile():
                 "rawAuthor": raw_author,
                 "telegramUsername": "range_tester",
                 "date": day,
-                "startedAt": dt.datetime.fromisoformat(f"{day}T09:00:00+00:00"),
+                "startedAt": dt.datetime.fromisoformat(f"{day}T07:00:00+00:00"),
                 "daySeconds": 3600,
             }
         )

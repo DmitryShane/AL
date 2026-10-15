@@ -524,6 +524,7 @@ class ActivityRawEventAccountingMixin:
             "idleThresholdSeconds": idle_threshold_seconds,
             "materialize": materialize,
             "startedAt": started_at_utc,
+            "requiresTelegramOnline": self._requires_telegram_online(raw_author),
             "statusEvents": status_events,
             "reportsStoppedEvents": reports_stopped_events,
             "breakEvents": break_events,
@@ -535,6 +536,56 @@ class ActivityRawEventAccountingMixin:
         context["executionPlanBuildSeconds"] = float(context.get("executionPlanBuildSeconds") or 0.0) + elapsed
         _add_raw_timing(context, "executionPlanBuild", elapsed)
         return plan
+
+    def _requires_telegram_online(self, raw_author: str) -> bool:
+        context = getattr(self, "_raw_event_batch_accounting", None)
+        cache = context.setdefault("requiresTelegramOnline", {}) if context is not None else {}
+        if raw_author not in cache:
+            profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"telegramUsername": 1}) or {}
+            cache[raw_author] = bool(str(profile.get("telegramUsername") or "").strip())
+        return cache[raw_author]
+
+    def _workday_interval_deltas(
+        self,
+        event: dict[str, Any],
+        start: dt.datetime,
+        end: dt.datetime,
+        local_start: dt.datetime,
+        local_end: dt.datetime,
+        is_active: bool,
+        consumed_normal_microseconds: int,
+        overtime_window: tuple[dt.datetime, dt.datetime] | None = None,
+    ) -> dict[str, Any]:
+        plan = self._execution_plan_for_event(event)
+        raw_author = str(event.get("author") or "Unknown User")
+        session = plan if plan is not None else self._batch_day_session_doc(raw_author, str(event.get("date") or ""))
+        started_at = _coerce_datetime(session.get("startedAt"))
+        requires_online = bool(plan.get("requiresTelegramOnline")) if plan is not None else self._requires_telegram_online(raw_author)
+        if (not started_at and not requires_online) or (started_at and start >= started_at):
+            return _interval_deltas(start, end, local_start, local_end, is_active, consumed_normal_microseconds, overtime_window)
+
+        # Before Telegram online, retain overtime only. Clip normal time even for
+        # duration events and intervals whose final event arrives after online.
+        deltas = _empty_event_deltas()
+        before_end = min(end, started_at) if started_at else end
+        if overtime_window is None:
+            overtime_window = is_night_overtime_window({**event, "occurredAtUtc": start})
+        if overtime_window:
+            overtime_start = max(start, overtime_window[0])
+            overtime_end = min(before_end, overtime_window[1])
+            if overtime_end > overtime_start:
+                _merge_batch_deltas(deltas, _interval_deltas(
+                    overtime_start, overtime_end,
+                    local_start + (overtime_start - start), local_start + (overtime_end - start),
+                    is_active, consumed_normal_microseconds, overtime_window,
+                ))
+        if started_at and end > started_at:
+            normal_start = max(start, started_at)
+            _merge_batch_deltas(deltas, _interval_deltas(
+                normal_start, end, local_start + (normal_start - start), local_end,
+                is_active, consumed_normal_microseconds, overtime_window,
+            ))
+        return deltas
 
     def _normal_microseconds_consumed_for_event_fast_baseline(self, raw_author: str, day_date: str) -> int:
         cache = getattr(self, "_daily_consumed_microseconds_cache", None)
@@ -653,8 +704,13 @@ class ActivityRawEventAccountingMixin:
         started_at = _coerce_datetime(plan.get("startedAt"))
         if started_at:
             if at <= started_at:
-                return follows_night_activity
+                return not (night_window and night_window[0] <= at < night_window[1])
+            if plan.get("source") == "codex":
+                return False
             return not author_last_activity_at or author_last_activity_at < started_at
+
+        if plan.get("requiresTelegramOnline"):
+            return not (night_window and night_window[0] <= at < night_window[1])
 
         if follows_night_activity:
             return True
@@ -865,7 +921,8 @@ class ActivityRawEventAccountingMixin:
                     if context is not None:
                         context["lastAccumulatorFallbackReason"] = "reports_stopped_overlap"
                     return False, _empty_event_deltas()
-                interval_deltas = _interval_deltas(
+                interval_deltas = self._workday_interval_deltas(
+                    event,
                     accounting_start_at,
                     interval_end_at,
                     accounting_start_local_at,
@@ -1010,7 +1067,8 @@ class ActivityRawEventAccountingMixin:
             return False, _empty_event_deltas()
 
         consumed_normal_microseconds = int(plan.get("consumedNormalMicroseconds") or 0)
-        deltas = _interval_deltas(
+        deltas = self._workday_interval_deltas(
+            event,
             interval_start_at,
             interval_end_at,
             interval_start_local_at,
@@ -1611,7 +1669,8 @@ class ActivityRawEventAccountingMixin:
                 or "UTC"
             )
             interval_overtime_window = self._overtime_window_for_interval(event, status_offline_at, status_online_at)
-            status_idle_deltas = _interval_deltas(
+            status_idle_deltas = self._workday_interval_deltas(
+                event,
                 status_offline_at,
                 status_online_at,
                 _to_local_datetime(status_offline_at, status_time_zone_id),
@@ -1718,7 +1777,8 @@ class ActivityRawEventAccountingMixin:
                         )
                         if self._has_reports_stopped_gap_overlap(event, accounting_start_at, navigation_start_at):
                             interval_overtime_window = None
-                        interval_deltas = _interval_deltas(
+                        interval_deltas = self._workday_interval_deltas(
+                            event,
                             accounting_start_at,
                             navigation_start_at,
                             accounting_start_local_at,
@@ -1749,7 +1809,7 @@ class ActivityRawEventAccountingMixin:
                 author_last_activity_at,
                 occurred_at,
             )
-            waiting_blocks_interval_accounting = waiting_for_first_workday_activity and current_source != "codex"
+            waiting_blocks_interval_accounting = waiting_for_first_workday_activity
             if not first_activity_at:
                 first_activity_at = occurred_at
                 last_accounting_at = occurred_at
@@ -1807,7 +1867,8 @@ class ActivityRawEventAccountingMixin:
                     interval_overtime_window = self._overtime_window_for_interval(event, accounting_start_at, interval_end_at)
                     if self._has_reports_stopped_gap_overlap(event, accounting_start_at, interval_end_at):
                         interval_overtime_window = None
-                    interval_deltas = _interval_deltas(
+                    interval_deltas = self._workday_interval_deltas(
+                        event,
                         accounting_start_at,
                         interval_end_at,
                         accounting_start_local_at,
@@ -1922,7 +1983,8 @@ class ActivityRawEventAccountingMixin:
                         interval_end_at,
                     ):
                         interval_overtime_window = None
-                    interval_deltas = _interval_deltas(
+                    interval_deltas = self._workday_interval_deltas(
+                        event,
                         interval_start_at,
                         interval_end_at,
                         interval_start_local_at,
@@ -2161,7 +2223,8 @@ class ActivityRawEventAccountingMixin:
         interval_start_local_at = (occurred_local_at or occurred_at) - duration_delta
         interval_end_local_at = occurred_local_at or occurred_at
         hold_overtime_window = overtime_window or self._overtime_window_for_interval(event, interval_start_at, occurred_at)
-        hold_deltas = _interval_deltas(
+        hold_deltas = self._workday_interval_deltas(
+            event,
             interval_start_at,
             occurred_at,
             interval_start_local_at,
@@ -2195,7 +2258,8 @@ class ActivityRawEventAccountingMixin:
             interval_start_at = accounted_start_at
             interval_start_local_at = accounted_start_local_at or interval_start_at
         navigation_overtime_window = overtime_window or self._overtime_window_for_interval(event, interval_start_at, occurred_at)
-        navigation_deltas = _interval_deltas(
+        navigation_deltas = self._workday_interval_deltas(
+            event,
             interval_start_at,
             occurred_at,
             interval_start_local_at,
@@ -2430,35 +2494,18 @@ class ActivityRawEventAccountingMixin:
 
         session = self._batch_day_session_doc(raw_author, day_date)
         started_at = _coerce_datetime((session or {}).get("startedAt"))
-        time_zone_id = _valid_time_zone_id(event.get("timeZoneId")) or "UTC"
-        follows_night_activity = False
-
-        if author_last_activity_at:
-            try:
-                day = dt.date.fromisoformat(day_date)
-                zone = ZoneInfo(time_zone_id)
-                night_start_at = dt.datetime.combine(
-                    day,
-                    dt.time(hour=NIGHT_OVERTIME_START_HOUR),
-                    zone,
-                ).astimezone(dt.UTC)
-                night_end_at = dt.datetime.combine(
-                    day,
-                    dt.time(hour=NIGHT_OVERTIME_END_HOUR),
-                    zone,
-                ).astimezone(dt.UTC)
-                follows_night_activity = (
-                    at >= night_end_at
-                    and night_start_at <= author_last_activity_at < night_end_at
-                )
-            except ValueError:
-                follows_night_activity = False
-
         if started_at:
             if at <= started_at:
-                return follows_night_activity
+                probe = {**event, "occurredAtUtc": at}
+                return is_night_overtime_window(probe) is None
 
+            if event.get("source") == "codex":
+                return False
             return not author_last_activity_at or author_last_activity_at < started_at
+
+        if self._requires_telegram_online(raw_author):
+            probe = {**event, "occurredAtUtc": at}
+            return is_night_overtime_window(probe) is None
 
         if self._is_waiting_for_telegram_online_after_night_overtime(event, raw_author, day_date, at):
             return True
