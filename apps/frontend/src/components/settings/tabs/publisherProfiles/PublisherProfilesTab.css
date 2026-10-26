@@ -8,6 +8,7 @@
   --profile-columns:
     minmax(260px, 1.2fr)
     minmax(210px, 0.95fr)
+    minmax(260px, 1fr)
     minmax(280px, 1.25fr)
     minmax(220px, 1fr)
     minmax(130px, 0.55fr);
@@ -15,7 +16,7 @@
 
 .publisher-profile-table .profile-table-head,
 .publisher-profile-table .profile-row {
-  min-width: 1120px;
+  min-width: 1380px;
 }
 
 .publisher-profile-avatar-input {
@@ -71,4 +72,12 @@
   .publisher-profile-create-card {
     grid-template-columns: 1fr;
   }
+}
+
+.publisher-profile-linked-authors,
+.publisher-author-assignment {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 160px;
 }

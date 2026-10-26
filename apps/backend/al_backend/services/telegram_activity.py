@@ -209,8 +209,8 @@ class TelegramActivityService(MongoComposableMixin):
         row_received_at = ingest_received_at if ingest_received_at is not None else audit_now
         profile = self.db.author_profiles.find_one({"telegramUsername": normalized_telegram})
 
-        if not profile:
-            return {"ok": False, "error": "Unknown telegram username"}
+        if not profile or profile.get("publisherRawAuthor"):
+            return {"ok": False, "error": "Unknown telegram username or author linked to publisher"}
 
         raw_author = profile["rawAuthor"]
         time_zone_id = _valid_time_zone_id(profile.get("timeZoneId")) or "UTC"
@@ -471,6 +471,8 @@ class TelegramActivityService(MongoComposableMixin):
 
             telegram_username = _normalize_telegram_username(break_session.get("telegramUsername"))
             raw_author = str(break_session.get("rawAuthor") or "")
+            if composed(self).is_publisher_member(raw_author):
+                continue
 
             if not telegram_username or not raw_author:
                 continue
@@ -493,6 +495,8 @@ class TelegramActivityService(MongoComposableMixin):
                 continue
 
             raw_author = str(session.get("rawAuthor") or "")
+            if composed(self).is_publisher_member(raw_author):
+                continue
             telegram_username = _normalize_telegram_username(session.get("telegramUsername") or profiles.get(raw_author, {}).get("telegramUsername"))
             day_date = str(session.get("date") or "")
             started_at = _coerce_datetime(session.get("startedAt"))
@@ -779,6 +783,9 @@ class TelegramActivityService(MongoComposableMixin):
     def _schedule_telegram_online_prompt_if_needed(
         self, raw_author: str, day_date: str, source: str, received_at: dt.datetime
     ) -> None:
+        if composed(self).is_publisher_member(raw_author):
+            return
+
         if not raw_author or not day_date:
             return
 
@@ -863,6 +870,9 @@ class TelegramActivityService(MongoComposableMixin):
         source: str,
         report_time: dt.datetime,
     ) -> None:
+        if composed(self).is_publisher_member(raw_author):
+            return
+
         if source in {"telegram", "discord"} or not raw_author or not day_date:
             return
 
@@ -920,6 +930,9 @@ class TelegramActivityService(MongoComposableMixin):
         source: str,
         report_time: dt.datetime,
     ) -> None:
+        if composed(self).is_publisher_member(raw_author):
+            return
+
         if source in {"telegram", "discord", "status"} or not raw_author or not day_date:
             return
 
@@ -963,6 +976,8 @@ class TelegramActivityService(MongoComposableMixin):
 
         for doc in list(self.db.telegram_online_prompts.find({"status": "pending"}, {"_id": 0})):
             raw_author = str(doc.get("rawAuthor") or "")
+            if composed(self).is_publisher_member(raw_author):
+                continue
             day_date = str(doc.get("date") or "")
             anchor = _coerce_datetime(doc.get("firstReportReceivedAt"))
 
@@ -1043,6 +1058,8 @@ class TelegramActivityService(MongoComposableMixin):
         for doc in list(self.db.telegram_post_offline_prompts.find({"status": "pending"}, {"_id": 0})):
             reminder_id = str(doc.get("reminderId") or "")
             raw_author = str(doc.get("rawAuthor") or "")
+            if composed(self).is_publisher_member(raw_author):
+                continue
             day_date = str(doc.get("date") or "")
 
             if not reminder_id or not raw_author or not day_date:
@@ -1154,6 +1171,8 @@ class TelegramActivityService(MongoComposableMixin):
 
         for doc in list(self.db.telegram_break_activity_prompts.find({"status": "pending"}, {"_id": 0})):
             raw_author = str(doc.get("rawAuthor") or "")
+            if composed(self).is_publisher_member(raw_author):
+                continue
             break_started_at = _coerce_datetime(doc.get("breakStartedAt"))
 
             if not raw_author or not break_started_at:

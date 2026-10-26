@@ -1,18 +1,20 @@
 import { apiFetch } from "../../../../api/client";
 import type { DeviceProfile } from "../deviceProfiles/types";
-import type { PublisherProfile } from "./types";
+import type { PublisherProfile, PublisherAuthor, PublisherAuthorJob } from "./types";
 
-export async function loadPublisherProfiles(): Promise<{ publisherProfiles: PublisherProfile[]; deviceProfiles: DeviceProfile[] }> {
+export async function loadPublisherProfiles(): Promise<{ publisherProfiles: PublisherProfile[]; deviceProfiles: DeviceProfile[]; authorProfiles: PublisherAuthor[]; authorLinkJob: PublisherAuthorJob | null }> {
   const response = await apiFetch("/api/v1/publisher-profiles");
 
   if (!response.ok) {
     throw new Error(await apiErrorDetail(response, "Could not load publisher profiles"));
   }
 
-  const data = await response.json() as { publisherProfiles?: PublisherProfile[]; deviceProfiles?: DeviceProfile[] };
+  const data = await response.json() as { publisherProfiles?: PublisherProfile[]; deviceProfiles?: DeviceProfile[]; authorProfiles?: PublisherAuthor[]; authorLinkJob?: PublisherAuthorJob };
   return {
     publisherProfiles: Array.isArray(data.publisherProfiles) ? data.publisherProfiles : [],
-    deviceProfiles: Array.isArray(data.deviceProfiles) ? data.deviceProfiles : []
+    deviceProfiles: Array.isArray(data.deviceProfiles) ? data.deviceProfiles : [],
+    authorProfiles: data.authorProfiles ?? [],
+    authorLinkJob: data.authorLinkJob ?? null
   };
 }
 
@@ -73,4 +75,22 @@ async function apiErrorDetail(response: Response, fallback: string): Promise<str
   }
 
   return `${fallback} (HTTP ${response.status})`;
+}
+
+export async function assignPublisherAuthor(publisher: string, author: string, linked: boolean): Promise<string> {
+  const response = await apiFetch(`/api/v1/publisher-profiles/${encodeURIComponent(publisher)}/authors/${encodeURIComponent(author)}`, { method: linked ? "PUT" : "DELETE" });
+  if (!response.ok) throw new Error(await apiErrorDetail(response, "Could not update publisher author"));
+  return (await response.json() as { jobId: string }).jobId;
+}
+
+export async function publisherAuthorJob(jobId: string): Promise<PublisherAuthorJob | null> {
+  const response = await apiFetch(`/api/v1/authors/activity/rebuild/status?jobId=${encodeURIComponent(jobId)}`);
+  if (!response.ok) throw new Error(await apiErrorDetail(response, "Could not load rebuild progress"));
+  return (await response.json() as { job: PublisherAuthorJob | null }).job;
+}
+
+export async function retryPublisherAuthorJob(jobId: string): Promise<string> {
+  const response = await apiFetch(`/api/v1/publisher-profiles/author-jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST" });
+  if (!response.ok) throw new Error(await apiErrorDetail(response, "Could not retry publisher author update"));
+  return (await response.json() as { jobId: string }).jobId;
 }

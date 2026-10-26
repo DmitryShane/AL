@@ -12,7 +12,7 @@ class ActivityHourlyFreshnessMixin:
         now: dt.datetime | None = None,
     ) -> dict[str, Any]:
         checked_at = now or dt.datetime.now(dt.UTC)
-        raw_author = composed(self).resolve_author_alias(_normalize_author(author))
+        raw_author = composed(self).resolve_activity_author(_normalize_author(author))
         author_keys = self._activity_hourly_freshness_author_keys(raw_author)
         profiles = composed(self)._profiles_by_raw_author()
         time_zone_id = _author_time_zone_id(raw_author, profiles)
@@ -108,11 +108,4 @@ class ActivityHourlyFreshnessMixin:
         }
 
     def _activity_hourly_freshness_author_keys(self, raw_author: str) -> list[str]:
-        author_keys = {raw_author}
-
-        for alias in self.db.author_aliases.find({}, {"_id": 0, "sourceRawAuthor": 1}):
-            source_author = str(alias.get("sourceRawAuthor") or "").strip()
-            if source_author and composed(self).resolve_author_alias(source_author) == raw_author:
-                author_keys.add(source_author)
-
-        return sorted(author_keys)
+        return composed(self).activity_author_keys(raw_author)

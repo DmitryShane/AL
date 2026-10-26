@@ -8,4 +8,14 @@ export type PublisherProfile = {
   authorColor?: string;
   avatarUrl?: string;
   devices: DeviceProfile[];
+  authors: PublisherAuthor[];
+};
+
+export type PublisherAuthor = { rawAuthor: string; displayName: string };
+export type PublisherAuthorJob = {
+  jobId: string;
+  status: "running" | "completed" | "failed";
+  phase: string;
+  progress: number;
+  error?: string;
 };

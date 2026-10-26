@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from copy import deepcopy
 from typing import Any
 
 from ..activity_math import _author_color, _cached_author_avatar_api_url, _coerce_datetime, _display_name, _iso, _normalize_author, _valid_color
 from ..author_avatar_cache import author_avatar_cache_file_path
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+from ..hourly_fill_rules import merge_hourly_activity
 
 PUBLISHER_PROFILE_TYPE = "publisher"
 PUBLISHER_AVATAR_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
@@ -15,6 +17,68 @@ PUBLISHER_AVATAR_MAX_BYTES = 8_000_000
 
 
 class PublisherProfileService(MongoComposableMixin):
+    def is_publisher_member(self, raw_author: str) -> bool:
+        profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"publisherRawAuthor": 1}) or {}
+        return bool(profile.get("publisherRawAuthor"))
+
+    def resolve_activity_author(self, raw_author: str | None) -> str:
+        """Group display activity without changing the identity stored in raw data."""
+        author = composed(self).resolve_author_alias(raw_author)
+        profile = self.db.author_profiles.find_one({"rawAuthor": author}, {"publisherRawAuthor": 1}) or {}
+        return str(profile.get("publisherRawAuthor") or author)
+
+    def activity_author_keys(self, raw_author: str | None) -> list[str]:
+        author = self.resolve_activity_author(raw_author)
+        members = {author}
+        members.update(str(p["rawAuthor"]) for p in self.db.author_profiles.find({"publisherRawAuthor": author}, {"rawAuthor": 1}))
+        keys = set(members)
+        for member in members:
+            keys.update(composed(self).author_alias_keys(member))
+        return sorted(keys)
+
+    def group_activity_buckets(self, buckets: dict[tuple[str, str], list[dict[str, Any]]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+        result = {}
+        for (author, date), hours in buckets.items():
+            key = (self.resolve_activity_author(author), date)
+            if key not in result:
+                result[key] = deepcopy(hours)
+            else:
+                merge_hourly_activity(result[key], hours)
+        return result
+
+    def publisher_author_candidates(self) -> list[dict[str, Any]]:
+        return [p for p in composed(self).author_profiles() if p.get("profileType") != PUBLISHER_PROFILE_TYPE]
+
+    def set_publisher_author(self, publisher: str, author: str, linked: bool, *, apply: bool = True) -> dict[str, Any]:
+        publisher, author = _normalize_author(publisher), _normalize_author(author)
+        target = self.db.author_profiles.find_one({"rawAuthor": publisher, "profileType": PUBLISHER_PROFILE_TYPE})
+        profile = self.db.author_profiles.find_one({"rawAuthor": author}) or {}
+        if not target or publisher == author or composed(self).resolve_author_alias(publisher) != publisher:
+            return {"ok": False, "error": "Publisher profile does not exist or is the source author"}
+        if (profile.get("profileType") == PUBLISHER_PROFILE_TYPE
+                or re.fullmatch(r"Device\d+", author)
+                or self.db.device_report_identities.find_one({"rawAuthor": author})
+                or composed(self).resolve_author_alias(author) != author
+                or author not in composed(self).list_authors()):
+            return {"ok": False, "error": "Select an existing person profile"}
+        current = profile.get("publisherRawAuthor")
+        if current and current != publisher:
+            return {"ok": False, "error": "Unlink the author from their current publisher first"}
+        keys = set(self.activity_author_keys(publisher)) | set(composed(self).author_alias_keys(author))
+        dates = set()
+        for collection, field in ((self.db.daily_author_activity, "author"), (self.db.report_rows, "author"), (self.db.raw_activity_events, "author"), (self.db.activity_snapshots, "author"), (self.db.break_events, "rawAuthor"), (self.db.meeting_events, "rawAuthor"), (self.db.status_events, "rawAuthor")):
+            dates.update(str(d) for d in collection.distinct("date", {field: {"$in": sorted(keys)}}) if d)
+        if not apply:
+            return {"ok": True, "authors": sorted(keys), "dates": sorted(dates)}
+        update: dict[str, Any] = {"$set": {"rawAuthor": author, "updatedAt": dt.datetime.now(dt.UTC)}}
+        if linked:
+            update["$set"]["publisherRawAuthor"] = publisher
+        else:
+            update["$unset"] = {"publisherRawAuthor": ""}
+        self.db.author_profiles.update_one({"rawAuthor": author}, update, upsert=True)
+        composed(self).invalidate_activity_summary_cache(sorted(dates), sorted(keys))
+        return {"ok": True, "authors": sorted(keys), "dates": sorted(dates)}
+
     def publisher_profiles(self) -> list[dict[str, Any]]:
         device_profiles = {item["rawDevice"]: item for item in composed(self).device_profiles()}
         devices_by_author: dict[str, list[dict[str, Any]]] = {}
@@ -41,6 +105,8 @@ class PublisherProfileService(MongoComposableMixin):
                     "profileType": PUBLISHER_PROFILE_TYPE,
                     "authorColor": str(profile.get("authorColor") or _author_color(raw_author)),
                     "avatarUrl": _cached_author_avatar_api_url(raw_author, "", profile),
+                    "authors": [{"rawAuthor": p["rawAuthor"], "displayName": _display_name(p["rawAuthor"], p)}
+                                for p in self.db.author_profiles.find({"publisherRawAuthor": raw_author}, {"_id": 0})],
                     "devices": sorted(devices_by_author.get(raw_author, []), key=lambda item: str(item.get("rawDevice") or "")),
                 }
             )
@@ -137,7 +203,7 @@ class PublisherProfileService(MongoComposableMixin):
         return str((profiles.get(str(raw_author or "")) or {}).get("profileType") or "person") == PUBLISHER_PROFILE_TYPE
 
     def publisher_live_date_in_scope(self, item: dict[str, Any], profiles: dict[str, dict[str, Any]], now: dt.datetime, start_date: str | None, end_date: str | None) -> bool:
-        raw_author = composed(self).resolve_author_alias(str(item.get("author") or ""))
+        raw_author = self.resolve_activity_author(str(item.get("author") or ""))
         if not self.is_publisher_profile(raw_author, profiles):
             return False
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .activity_mutation_lock import serialized_activity_mutation
+
 import hashlib
 import logging
 import re
@@ -146,7 +148,7 @@ class ReportIngestService(MongoComposableMixin):
         payload_author = str(payload.get("author") or "").strip()
 
         if payload_author:
-            authors.add(composed(self).resolve_author_alias(payload_author))
+            authors.add(composed(self).resolve_activity_author(payload_author))
 
         for event in payload.get("events") or []:
             if not isinstance(event, dict):
@@ -154,7 +156,7 @@ class ReportIngestService(MongoComposableMixin):
 
             event_author = str(event.get("author") or payload_author or "").strip()
             if event_author:
-                authors.add(composed(self).resolve_author_alias(event_author))
+                authors.add(composed(self).resolve_activity_author(event_author))
 
         return sorted({author for author in authors if author})
 
@@ -165,7 +167,7 @@ class ReportIngestService(MongoComposableMixin):
     ) -> None:
         author_values = sorted(
             {
-                composed(self).resolve_author_alias(str(author or "Unknown User"))
+                composed(self).resolve_activity_author(str(author or "Unknown User"))
                 for author in authors or []
                 if str(author or "").strip()
             }
@@ -453,6 +455,7 @@ class ReportIngestService(MongoComposableMixin):
             },
         )
 
+    @serialized_activity_mutation
     def _process_raw_report_doc(self, report: dict[str, Any]) -> None:
         if report.get("status") == "processed":
             return

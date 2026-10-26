@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .activity_mutation_lock import serialized_activity_mutation
+
 import threading
 
 from ..activity_math import *
@@ -254,6 +256,7 @@ class ActivityDaySummarySnapshotsMixin:
 
         return {"processed": processed, "remaining": len(processed) >= max_items}
 
+    @serialized_activity_mutation
     def materialize_completed_author_day_snapshot_if_ready(
         self,
         day_date: str,
@@ -262,7 +265,7 @@ class ActivityDaySummarySnapshotsMixin:
     ) -> dict[str, Any]:
         now = now or dt.datetime.now(dt.UTC)
         snapshot_date = str(day_date or "").strip()
-        resolved_author = composed(self).resolve_author_alias(str(raw_author or "Unknown User"))
+        resolved_author = composed(self).resolve_activity_author(str(raw_author or "Unknown User"))
 
         if not snapshot_date or not resolved_author:
             return {"processed": False, "reason": "missing_author_or_date"}
@@ -284,7 +287,7 @@ class ActivityDaySummarySnapshotsMixin:
             return {"started": False, "reason": "background_disabled"}
 
         date_values = sorted({str(day) for day in dates if str(day or "").strip()})
-        author_values = sorted({composed(self).resolve_author_alias(str(author or "Unknown User")) for author in authors if str(author or "").strip()})
+        author_values = sorted({composed(self).resolve_activity_author(str(author or "Unknown User")) for author in authors if str(author or "").strip()})
         author_values = [author for author in author_values if author]
 
         if not date_values or not author_values:
@@ -321,7 +324,7 @@ class ActivityDaySummarySnapshotsMixin:
         profiles = composed(self)._profiles_by_raw_author()
 
         for item in self.db.daily_author_activity.find({}, {"_id": 0, "author": 1, "timeZoneId": 1}):
-            raw_author = composed(self).resolve_author_alias(str(item.get("author") or "Unknown User"))
+            raw_author = composed(self).resolve_activity_author(str(item.get("author") or "Unknown User"))
             if not raw_author:
                 continue
             profile = profiles.get(raw_author, {})
@@ -487,6 +490,7 @@ class ActivityDaySummarySnapshotsMixin:
         thread.start()
         return {"started": True}
 
+    @serialized_activity_mutation
     def materialize_next_completed_author_day_snapshot(self, now: dt.datetime | None = None) -> dict[str, Any]:
         claimed = self.claim_next_activity_author_day_snapshot(now=now)
 
@@ -536,6 +540,7 @@ class ActivityDaySummarySnapshotsMixin:
             "startedAt": _iso(started_at),
         }
 
+    @serialized_activity_mutation
     def materialize_claimed_activity_author_day_snapshot(
         self,
         day_date: str,
@@ -543,7 +548,7 @@ class ActivityDaySummarySnapshotsMixin:
         snapshot_version: int | None = None,
         now: dt.datetime | None = None,
     ) -> dict[str, Any]:
-        raw_author = str(raw_author)
+        raw_author = composed(self).resolve_activity_author(raw_author)
         day_date = str(day_date)
         version = self.activity_day_summary_snapshot_version()
 
@@ -692,6 +697,7 @@ class ActivityDaySummarySnapshotsMixin:
         self.store_activity_day_summary_snapshot(snapshot_date, payload)
         return payload
 
+    @serialized_activity_mutation
     def rebuild_activity_day_summary_snapshots_for_dates(
         self,
         dates: list[str] | tuple[str, ...] | set[str],
@@ -843,7 +849,7 @@ class ActivityDaySummarySnapshotsMixin:
 
         for item in self.db.daily_author_activity.find({}, {"_id": 0, "author": 1, "date": 1, "timeZoneId": 1}):
             source_raw_author = str(item.get("author") or "Unknown User")
-            raw_author = composed(self).resolve_author_alias(source_raw_author)
+            raw_author = composed(self).resolve_activity_author(source_raw_author)
             day_date = str(item.get("date") or "")
 
             if not raw_author or not day_date:
@@ -1011,7 +1017,7 @@ class ActivityDaySummarySnapshotsMixin:
             if _is_device_profile_raw_author(raw_author):
                 continue
 
-            if str(profile.get("profileType") or "person") == "publisher":
+            if profile.get("publisherRawAuthor") or str(profile.get("profileType") or "person") == "publisher":
                 continue
 
             empty_author = self._empty_completed_day_author_row(raw_author, profile)
@@ -1174,7 +1180,7 @@ class ActivityDaySummarySnapshotsMixin:
 
         for item in self.db.daily_author_activity.find({"date": day_date}, {"_id": 0, "author": 1, "timeZoneId": 1}):
             source_raw_author = str(item.get("author") or "Unknown User")
-            raw_author = composed(self).resolve_author_alias(source_raw_author)
+            raw_author = composed(self).resolve_activity_author(source_raw_author)
 
             if not raw_author:
                 continue
@@ -1186,12 +1192,12 @@ class ActivityDaySummarySnapshotsMixin:
 
     def _completed_snapshot_candidate_dates_for_author(self, raw_author: str, now: dt.datetime) -> list[str]:
         version = self.activity_day_summary_snapshot_version()
-        resolved_author = composed(self).resolve_author_alias(str(raw_author or "Unknown User"))
+        resolved_author = composed(self).resolve_activity_author(str(raw_author or "Unknown User"))
         dates: set[str] = set()
 
         for item in self.db.daily_author_activity.find({}, {"_id": 0, "author": 1, "date": 1, "timeZoneId": 1}):
             source_raw_author = str(item.get("author") or "Unknown User")
-            if composed(self).resolve_author_alias(source_raw_author) != resolved_author:
+            if composed(self).resolve_activity_author(source_raw_author) != resolved_author:
                 continue
 
             day_date = str(item.get("date") or "")
@@ -1221,7 +1227,7 @@ class ActivityDaySummarySnapshotsMixin:
 
         for item in self.db.daily_author_activity.find({"date": day_date}, {"_id": 0, "author": 1}):
             source_raw_author = str(item.get("author") or "Unknown User")
-            raw_author = composed(self).resolve_author_alias(source_raw_author)
+            raw_author = composed(self).resolve_activity_author(source_raw_author)
 
             if raw_author:
                 authors.add(raw_author)
@@ -1233,7 +1239,7 @@ class ActivityDaySummarySnapshotsMixin:
 
         for item in self.db.daily_author_activity.find({"date": day_date}, {"_id": 0, "author": 1}):
             source_raw_author = str(item.get("author") or "Unknown User")
-            raw_author = composed(self).resolve_author_alias(source_raw_author)
+            raw_author = composed(self).resolve_activity_author(source_raw_author)
 
             if raw_author:
                 authors.add(raw_author)
@@ -1246,7 +1252,7 @@ class ActivityDaySummarySnapshotsMixin:
 
         for item in self.db.daily_author_activity.find({"date": day_date}, {"_id": 0, "author": 1, "timeZoneId": 1}):
             source_raw_author = str(item.get("author") or "Unknown User")
-            raw_author = composed(self).resolve_author_alias(source_raw_author)
+            raw_author = composed(self).resolve_activity_author(source_raw_author)
 
             if not raw_author:
                 continue
@@ -1271,7 +1277,7 @@ class ActivityDaySummarySnapshotsMixin:
             if _is_device_profile_raw_author(raw_author):
                 continue
 
-            if str(profile.get("profileType") or "person") == "publisher":
+            if profile.get("publisherRawAuthor") or str(profile.get("profileType") or "person") == "publisher":
                 continue
 
             authors.append(self._empty_completed_day_author_row(raw_author, profile))
@@ -1373,7 +1379,7 @@ class ActivityDaySummarySnapshotsMixin:
             return None
 
         version = self.activity_day_summary_snapshot_version()
-        raw_author = composed(self).resolve_author_alias(author)
+        raw_author = composed(self).resolve_activity_author(author)
         doc = self.db.activity_author_day_summary_snapshots.find_one(
             {"date": start_date, "rawAuthor": raw_author, "snapshotVersion": version},
             {"_id": 0, "payload.reportsPage": 1},

@@ -167,7 +167,7 @@ class ActivitySummaryService(
             daily_items = [
                 item
                 for item in daily_items
-                if composed(self).resolve_author_alias(str(item.get("author") or "Unknown User")) == scoped_raw_author
+                if composed(self).resolve_activity_author(str(item.get("author") or "Unknown User")) == scoped_raw_author
             ]
         if date_mode == "authorLocalToday":
             daily_items = [
@@ -201,7 +201,7 @@ class ActivitySummaryService(
             report_rows_for_daily_items = [
                 row
                 for row in report_rows_for_daily_items
-                if composed(self).resolve_author_alias(str(row.get("author") or "Unknown User")) == scoped_raw_author
+                if composed(self).resolve_activity_author(str(row.get("author") or "Unknown User")) == scoped_raw_author
             ]
         for row in report_rows_for_daily_items:
             report_rows_by_daily_key.setdefault(
@@ -210,11 +210,12 @@ class ActivitySummaryService(
             ).append(row)
         break_buckets = composed(self)._break_buckets_for_daily_items(daily_items)
         mark_break_source_overlaps(break_buckets, daily_items)
-        meeting_buckets = composed(self)._meeting_buckets_for_daily_items(daily_items, now)
+        break_buckets = composed(self).group_activity_buckets(break_buckets)
+        meeting_buckets = composed(self).group_activity_buckets(composed(self)._meeting_buckets_for_daily_items(daily_items, now))
         telegram_gaps = composed(self)._telegram_gaps_for_daily_items(daily_items)
         telegram_gap_counted: set[tuple[str, str]] = set()
         daily_author_dates_with_hourly = {
-            (composed(self).resolve_author_alias(str(item.get("author") or "Unknown User")), str(item.get("date") or ""))
+            (composed(self).resolve_activity_author(str(item.get("author") or "Unknown User")), str(item.get("date") or ""))
             for item in daily_items
             if item.get("date") and item.get("hourlyActivity")
         }
@@ -233,7 +234,7 @@ class ActivitySummaryService(
 
         for item in daily_items:
             source_raw_author = item.get("author") or "Unknown User"
-            raw_author = composed(self).resolve_author_alias(source_raw_author)
+            raw_author = composed(self).resolve_activity_author(source_raw_author)
             if source_raw_author in hidden_device_authors:
                 continue
 
@@ -683,7 +684,7 @@ class ActivitySummaryService(
                     if raw_author in hidden_device_authors or _is_device_profile_raw_author(raw_author):
                         continue
 
-                    if str(profile.get("profileType") or "person") == "publisher":
+                    if profile.get("publisherRawAuthor") or str(profile.get("profileType") or "person") == "publisher":
                         continue
 
                     authors_by_raw[raw_author] = self._empty_completed_day_author_row(raw_author, profile)
@@ -696,14 +697,14 @@ class ActivitySummaryService(
                     }
             if not authors_by_raw:
                 for raw_author in {
-                    composed(self).resolve_author_alias(str(author or "Unknown User"))
+                    composed(self).resolve_activity_author(str(author or "Unknown User"))
                     for author in self.db.raw_activity_events.distinct("author", {"date": start_date})
                     if str(author or "").strip()
                 }:
                     if raw_author in profiles:
                         composed(self)._ensure_summary_author(authors_by_raw, raw_author, profiles)
                 for raw_author, profile in profiles.items():
-                    if not str(profile.get("telegramUsername") or "").strip():
+                    if profile.get("publisherRawAuthor") or not str(profile.get("telegramUsername") or "").strip():
                         continue
                     composed(self)._ensure_summary_author(authors_by_raw, raw_author, profiles)
 

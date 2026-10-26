@@ -301,5 +301,5 @@ class AuthorStatusEventsService(MongoComposableMixin):
         return True
 
     def _author_uses_telegram_workday(self, raw_author: str) -> bool:
-        profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0, "telegramUsername": 1}) or {}
-        return bool(str(profile.get("telegramUsername") or "").strip())
+        profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"_id": 0, "telegramUsername": 1, "publisherRawAuthor": 1}) or {}
+        return bool(str(profile.get("telegramUsername") or "").strip()) and not bool(profile.get("publisherRawAuthor"))

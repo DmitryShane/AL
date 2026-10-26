@@ -17,7 +17,7 @@ class CalendarService(MongoComposableMixin):
         authors_by_raw = {item["rawAuthor"]: item for item in authors}
         publisher_raw_authors = {
             str(item.get("rawAuthor") or "")
-            for item in self.db.author_profiles.find({"profileType": PUBLISHER_PROFILE_TYPE}, {"_id": 0, "rawAuthor": 1})
+            for item in self.db.author_profiles.find({"$or": [{"profileType": PUBLISHER_PROFILE_TYPE}, {"publisherRawAuthor": {"$exists": True}}]}, {"_id": 0, "rawAuthor": 1})
             if item.get("rawAuthor")
         }
         marks = []

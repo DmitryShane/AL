@@ -1,3 +1,6 @@
+import { AuthorPublisherAssignment } from "../publisherProfiles/AuthorPublisherAssignment";
+import { PublisherAuthorJobStatus } from "../publisherProfiles/PublisherAuthorJobStatus";
+import type { PublisherAuthorsController } from "../publisherProfiles/usePublisherAuthors";
 import type { Dispatch, SetStateAction } from "react";
 import { AuthorAvatar } from "../../../AuthorAvatar";
 import type { AuthorProfile } from "../../../../types/dashboard";
@@ -46,6 +49,7 @@ type ActivityRebuildProgress = {
 };
 
 type AuthorProfilesTabProps = {
+  publisherAuthors: PublisherAuthorsController;
   profiles: AuthorProfile[];
   drafts: Record<string, AuthorProfile>;
   newProfile: AuthorProfile;
@@ -115,6 +119,7 @@ function formatRebuildUtcTime(value: string | undefined): string {
 }
 
 export function AuthorProfilesTab({
+  publisherAuthors,
   profiles,
   drafts,
   newProfile,
@@ -172,6 +177,7 @@ export function AuthorProfilesTab({
 <>
       <div className="panel" data-doc-target="settings-author-profiles-editor">
 <h2>Author Profiles</h2>
+<PublisherAuthorJobStatus controller={publisherAuthors} />
 <p className="settings-caption">
   Telegram and Discord mappings link chat and meeting events to the author.
   Raw Author must exactly match the value sent by activity logger plugins.
@@ -403,6 +409,7 @@ export function AuthorProfilesTab({
           Enabled
         </label>
         <div className="profile-actions">
+          <AuthorPublisherAssignment author={profile.rawAuthor} controller={publisherAuthors} disabled={settingsReadOnly} />
           <button
             className={settingsSaveButtonClassName(saveStatus[profile.rawAuthor], true)}
             onClick={() => onSaveProfile(profile.rawAuthor)}

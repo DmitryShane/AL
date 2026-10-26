@@ -39,7 +39,7 @@ class ReportListingService(MongoComposableMixin):
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
         if author:
-            query["author"] = {"$in": composed(self).author_alias_keys(author)}
+            query["author"] = {"$in": composed(self).activity_author_keys(author)}
 
         if source:
             query["source"] = source
@@ -207,7 +207,7 @@ class ReportListingService(MongoComposableMixin):
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
         if author:
-            query["author"] = {"$in": composed(self).author_alias_keys(author)}
+            query["author"] = {"$in": composed(self).activity_author_keys(author)}
 
         if source:
             query["source"] = source
@@ -220,7 +220,7 @@ class ReportListingService(MongoComposableMixin):
         profiles: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         row_author = str(item.get("author") or "Unknown User")
-        resolved_author = composed(self).resolve_author_alias(row_author)
+        resolved_author = composed(self).resolve_activity_author(row_author)
         profile = profiles.get(resolved_author, {})
 
         return {

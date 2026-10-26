@@ -1,3 +1,4 @@
+import { usePublisherAuthors } from "../components/settings/tabs/publisherProfiles/usePublisherAuthors";
 import { useEffect, useState } from "react";
 import { apiFetch } from "../api/client";
 import { SETTINGS_TAB_STORAGE_KEY } from "../constants/dashboard";
@@ -122,6 +123,7 @@ export function SettingsPage({
   currentUser: SiteUser;
   onSaved: () => void;
 }) {
+  const publisherAuthors = usePublisherAuthors(onSaved, currentUser.role === "admin" || currentUser.role === "editor");
   const profiles = summary?.activitySummary.profiles ?? [];
   const personProfiles = profiles.filter((profile) => profile.profileType !== "publisher");
   const aliases = summary?.activitySummary.authorAliases ?? [];
@@ -920,7 +922,7 @@ export function SettingsPage({
         ) : settingsTab === "deviceProfiles" ? (
           <DeviceProfilesTab />
         ) : settingsTab === "publisherProfiles" ? (
-          <PublisherProfilesTab />
+          <PublisherProfilesTab controller={publisherAuthors} />
         ) : settingsTab === "redirects" ? (
           <AuthorRedirectsTab
             profiles={personProfiles}
@@ -938,6 +940,7 @@ export function SettingsPage({
           />
         ) : settingsTab === "authors" ? (
           <AuthorProfilesTab
+            publisherAuthors={publisherAuthors}
             profiles={personProfiles}
             drafts={drafts}
             newProfile={newProfile}

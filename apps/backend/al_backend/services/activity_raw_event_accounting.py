@@ -335,6 +335,8 @@ class ActivityRawEventAccountingMixin:
         context.setdefault("dirtyDaily", set()).add(daily_key)
 
     def _batch_day_session_doc(self, raw_author: str, day_date: str) -> dict[str, Any]:
+        if composed(self).is_publisher_member(raw_author):
+            return {}
         context = getattr(self, "_raw_event_batch_accounting", None)
         query = {"rawAuthor": raw_author, "date": day_date}
         projection = {"_id": 0, "startedAt": 1}
@@ -541,8 +543,8 @@ class ActivityRawEventAccountingMixin:
         context = getattr(self, "_raw_event_batch_accounting", None)
         cache = context.setdefault("requiresTelegramOnline", {}) if context is not None else {}
         if raw_author not in cache:
-            profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"telegramUsername": 1}) or {}
-            cache[raw_author] = bool(str(profile.get("telegramUsername") or "").strip())
+            profile = self.db.author_profiles.find_one({"rawAuthor": raw_author}, {"telegramUsername": 1, "publisherRawAuthor": 1}) or {}
+            cache[raw_author] = bool(str(profile.get("telegramUsername") or "").strip()) and not bool(profile.get("publisherRawAuthor"))
         return cache[raw_author]
 
     def _workday_interval_deltas(

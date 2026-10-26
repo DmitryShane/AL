@@ -50,7 +50,7 @@ class ActivitySummaryReportsMixin:
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
         if author:
-            query["author"] = {"$in": composed(self).author_alias_keys(author)}
+            query["author"] = {"$in": composed(self).activity_author_keys(author)}
 
         if source:
             query["source"] = source
@@ -82,8 +82,9 @@ class ActivitySummaryReportsMixin:
             ):
                 continue
 
-            profile = profiles.get(item.get("author") or "Unknown User", {})
-            item["displayName"] = _display_name(item.get("author"), profile)
+            resolved_author = composed(self).resolve_activity_author(item.get("author"))
+            profile = profiles.get(resolved_author, {})
+            item["displayName"] = _display_name(resolved_author, profile)
             item["team"] = profile.get("team", "")
             item["receivedAt"] = _iso(item.get("receivedAt"))
             reports.append(item)
@@ -106,7 +107,7 @@ class ActivitySummaryReportsMixin:
         query = _report_date_query(start_date, end_date, date_mode, profiles, now)
 
         if author:
-            query["author"] = {"$in": composed(self).author_alias_keys(author)}
+            query["author"] = {"$in": composed(self).activity_author_keys(author)}
 
         if source:
             query["source"] = source
@@ -213,7 +214,7 @@ class ActivitySummaryReportsMixin:
                 continue
 
             if total >= offset and len(reports) < limit:
-                resolved_author = composed(self).resolve_author_alias(item.get("author") or "Unknown User")
+                resolved_author = composed(self).resolve_activity_author(item.get("author") or "Unknown User")
                 profile = profiles.get(resolved_author, {})
                 item["displayName"] = _display_name(resolved_author, profile)
                 item["team"] = profile.get("team", "")

@@ -56,6 +56,7 @@ class AuthorRepository(MongoComposableMixin):
             if _is_device_profile_raw_author(name) and name not in devices and name not in aliases:
                 continue
             raw = composed(self).resolve_author_alias(name)
+            raw = str(profiles.get(raw, {}).get("publisherRawAuthor") or raw)
             profile = profiles.get(raw, {})
             result[raw] = {
                 "rawAuthor": raw,
@@ -106,6 +107,8 @@ class AuthorRepository(MongoComposableMixin):
             profile = profiles.get(raw_author)
             if profile is None:
                 profile = profiles_by_normalized_key.get(_normalize_author(raw_author), {})
+            if profile.get("publisherRawAuthor"):
+                continue
             author_activity = latest_activity_by_author.get(raw_author, {})
             gh_ui = _github_username_ui_default(raw_author, profile)
             gh_fetch = _github_username_for_avatar_fetch(raw_author, profile)

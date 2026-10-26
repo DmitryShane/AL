@@ -46,6 +46,7 @@ class ActivitySummaryAnalyticsMixin:
                 raw_author
                 and raw_author not in alias_sources
                 and not _is_analytics_device_author(raw_author, raw_devices)
+                and not profile.get("publisherRawAuthor")
                 and str(profile.get("profileType") or "person") != "publisher"
             )
 
@@ -54,7 +55,7 @@ class ActivitySummaryAnalyticsMixin:
             if not source_author:
                 continue
 
-            raw_author = composed(self).resolve_author_alias(source_author)
+            raw_author = composed(self).resolve_activity_author(source_author)
 
             if analytics_author_allowed(raw_author):
                 authors.add(raw_author)

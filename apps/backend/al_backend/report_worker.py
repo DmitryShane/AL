@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .services.activity_mutation_lock import serialized_activity_mutation
+
 import logging
 import os
 import signal
@@ -141,6 +143,7 @@ class ReportWorker:
     def run_once(self) -> int:
         return self._run_once_with_container(self.container, self.worker_id)
 
+    @serialized_activity_mutation
     def _run_once_with_container(self, container: BackendContainer, worker_id: str) -> int:
         processed = 0
 

@@ -1,3 +1,5 @@
+import type { PublisherAuthorsController } from "./usePublisherAuthors";
+import { PublisherAuthorJobStatus } from "./PublisherAuthorJobStatus";
 import { useEffect, useMemo, useState } from "react";
 import { AuthorAvatar } from "../../../AuthorAvatar";
 import type { DeviceProfile } from "../deviceProfiles/types";
@@ -13,7 +15,8 @@ const emptyDraft: PublisherDraft = {
   displayName: ""
 };
 
-export function PublisherProfilesTab() {
+export function PublisherProfilesTab({ controller }: { controller: PublisherAuthorsController }) {
+  const [authorDrafts, setAuthorDrafts] = useState<Record<string, string>>({});
   const [profiles, setProfiles] = useState<PublisherProfile[]>([]);
   const [devices, setDevices] = useState<DeviceProfile[]>([]);
   const [draft, setDraft] = useState<PublisherDraft>(emptyDraft);
@@ -24,7 +27,7 @@ export function PublisherProfilesTab() {
 
   useEffect(() => {
     void reload();
-  }, []);
+  }, [controller.job?.status]);
 
   async function reload() {
     setLoading(true);
@@ -33,6 +36,7 @@ export function PublisherProfilesTab() {
     try {
       const data = await loadPublisherProfiles();
       setProfiles(data.publisherProfiles);
+      await controller.refresh();
       setDevices(data.deviceProfiles);
       setDeviceDrafts({});
     } catch (loadError) {
@@ -128,10 +132,11 @@ export function PublisherProfilesTab() {
       <div className="device-profiles-panel-head">
         <div>
           <h2>Publisher Profiles</h2>
-          <p className="settings-caption">Device-only publisher or external tester profiles. Link auto-created device profiles to show their activity as one author.</p>
+          <p className="settings-caption">Publisher or external tester profiles. Link devices and authors to combine their activity.</p>
         </div>
       </div>
       {error ? <p className="settings-error">{error}</p> : null}
+      <PublisherAuthorJobStatus controller={controller} />
       <div className="profile-create-card publisher-profile-create-card">
         <label>
           Publisher Name
@@ -154,6 +159,7 @@ export function PublisherProfilesTab() {
           <div className="profile-table-head">
             <span>Publisher</span>
             <span>Avatar</span>
+            <span>Linked Authors</span>
             <span>Linked Devices</span>
             <span>Add Device</span>
             <span>Actions</span>
@@ -178,6 +184,18 @@ export function PublisherProfilesTab() {
                   onChange={(event) => void handleAvatarUpload(profile, event.target.files?.[0])}
                 />
               </span>
+              <div className="publisher-profile-linked-authors">
+                {(profile.authors ?? []).map(author => <div key={author.rawAuthor}>
+                  <strong>{author.displayName}</strong>{" "}
+                  <button type="button" disabled={controller.busy} onClick={() => void controller.assign(profile.rawAuthor, author.rawAuthor, false)}>Unlink author</button>
+                </div>)}
+                {!profile.authors?.length && <span>No linked authors</span>}
+                <select aria-label={`Author for ${profile.displayName}`} value={authorDrafts[profile.rawAuthor] ?? ""} disabled={controller.busy} onChange={e => setAuthorDrafts(d => ({ ...d, [profile.rawAuthor]: e.target.value }))}>
+                  <option value="">Select author</option>
+                  {controller.authors.map(a => <option key={a.rawAuthor} value={a.rawAuthor}>{a.displayName}</option>)}
+                </select>
+                <button type="button" disabled={controller.busy || !authorDrafts[profile.rawAuthor]} onClick={() => void controller.assign(profile.rawAuthor, authorDrafts[profile.rawAuthor], true)}>Link author</button>
+              </div>
               <span className="publisher-profile-linked-devices">
                 {profile.devices.length ? profile.devices.map((device) => (
                   <button

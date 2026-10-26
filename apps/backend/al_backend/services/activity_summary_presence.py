@@ -21,7 +21,7 @@ class ActivitySummaryPresenceMixin:
         meeting_lookup = self._meeting_lookup_for_reports(report_rows)
 
         for report in report_rows:
-            raw_author = composed(self).resolve_author_alias(str(report.get("author") or "Unknown User"))
+            raw_author = composed(self).resolve_activity_author(str(report.get("author") or "Unknown User"))
 
             if raw_author not in authors_by_raw:
                 continue
@@ -56,7 +56,7 @@ class ActivitySummaryPresenceMixin:
             latest_by_author[raw_author] = {"report": report, "sortAt": report_sort_at}
 
         for daily in self.db.daily_author_activity.find(query, {"_id": 0}):
-            raw_author = composed(self).resolve_author_alias(str(daily.get("author") or "Unknown User"))
+            raw_author = composed(self).resolve_activity_author(str(daily.get("author") or "Unknown User"))
 
             if raw_author not in authors_by_raw:
                 continue
@@ -140,7 +140,7 @@ class ActivitySummaryPresenceMixin:
 
             latest: dict[str, Any] | None = None
             latest_at: dt.datetime | None = None
-            alias_keys = composed(self).author_alias_keys(raw_author)
+            alias_keys = composed(self).activity_author_keys(raw_author)
 
             for report in self.db.report_rows.find({"author": {"$in": alias_keys}}, {"_id": 0}):
                 if report.get("source") == "status" or report.get("reportType") == "status":

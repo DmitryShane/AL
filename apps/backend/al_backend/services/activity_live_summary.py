@@ -11,6 +11,7 @@ from ..hourly_fill_rules import (
     merge_hourly_activity,
 )
 from ..mongo_composable import MongoComposableMixin
+from ..backend_composable_host import composed
 
 
 class ActivityLiveSummaryService(MongoComposableMixin):
@@ -338,7 +339,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
         daily_author_dates_with_hourly = daily_author_dates_with_hourly or set()
 
         for session in self.db.meeting_sessions.find({}, {"_id": 0}):
-            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            raw_author = composed(self).resolve_activity_author(session.get("rawAuthor"))
 
             if scoped_raw_author and raw_author != scoped_raw_author:
                 continue
@@ -393,7 +394,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
         meeting_buckets = meeting_buckets if meeting_buckets is not None else {}
         totals.setdefault("meetingSeconds", 0)
         for session in self.db.day_sessions.find({}, {"_id": 0}):
-            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            raw_author = composed(self).resolve_activity_author(session.get("rawAuthor"))
             day_date = str(session.get("date") or "")
             started_at = _coerce_datetime(session.get("startedAt"))
 
@@ -424,7 +425,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
                 totals["telegramDaySeconds"] += day_delta_seconds
 
         for interval in self.db.break_intervals.find(_report_date_query(start_date, end_date, date_mode, profiles, now), {"_id": 0}):
-            raw_author = interval.get("rawAuthor") or "Unknown User"
+            raw_author = composed(self).resolve_activity_author(interval.get("rawAuthor"))
             break_date = interval.get("date") or ""
 
             if not _date_in_summary_scope(break_date, raw_author, profiles, interval.get("timeZoneId"), now, start_date, end_date, date_mode):
@@ -443,7 +444,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
         meeting_bucket_keys_from_daily_items = set(meeting_buckets)
 
         for interval in self.db.meeting_intervals.find(meeting_query, {"_id": 0}):
-            raw_author = str(interval.get("rawAuthor") or "Unknown User")
+            raw_author = composed(self).resolve_activity_author(interval.get("rawAuthor"))
             time_zone_id = _author_time_zone_id(raw_author, profiles, interval.get("timeZoneId"))
             meeting_dates = _meeting_interval_scope_dates(start_date, end_date, date_mode, now, time_zone_id)
 
@@ -492,7 +493,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
                 merge_hourly_activity(hourly_author["hourlyActivity"], interval_bucket[meeting_key])
 
         for session in self.db.meeting_sessions.find({}, {"_id": 0}):
-            raw_author = str(session.get("rawAuthor") or "Unknown User")
+            raw_author = composed(self).resolve_activity_author(session.get("rawAuthor"))
             started_at = _coerce_datetime(session.get("startedAt"))
 
             if not started_at:
@@ -511,7 +512,7 @@ class ActivityLiveSummaryService(MongoComposableMixin):
             author_row["activeMeeting"] = True
 
         for session in self.db.break_sessions.find({}, {"_id": 0}):
-            raw_author = session.get("rawAuthor") or "Unknown User"
+            raw_author = composed(self).resolve_activity_author(session.get("rawAuthor"))
             started_at = _coerce_datetime(session.get("startedAt"))
 
             if not started_at:
