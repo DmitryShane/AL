@@ -238,3 +238,31 @@ def test_member_keeps_workday_settings_without_workday_gate_or_prompts():
     assert repo.claim_due_telegram_day_reminders(now=NOW + dt.timedelta(hours=12)) == []
     repo.set_publisher_author("Publisher", "Alice", False)
     assert repo._batch_day_session_doc("Alice", DAY)["startedAt"] == NOW
+
+
+@pytest.mark.parametrize("mode,start,end", [
+    ("authorLocalToday", None, None),
+    (None, "2026-05-01", "2026-05-14"),
+    (None, None, None),
+])
+@pytest.mark.parametrize("has_activity", [False, True])
+def test_live_and_range_summaries_do_not_readd_linked_authors(mode, start, end, has_activity):
+    repo = setup_repo()
+    if has_activity:
+        add_daily(repo, "Alice", 120)
+    repo.set_publisher_author("Publisher", "Alice", True)
+
+    def read():
+        return repo.activity_summary(date_mode=mode, start_date=start, end_date=end, now=NOW)
+
+    result = read()
+    authors = {item["rawAuthor"]: item for item in result["authors"]}
+    assert "Alice" not in authors
+    assert "Publisher" in authors
+    assert authors["Publisher"]["activeSeconds"] == (120 if has_activity else 0)
+    assert "Alice" not in {item["rawAuthor"] for item in result["hourlyActivityByAuthor"]}
+    assert [item["rawAuthor"] for item in repo.author_profiles()] == ["Publisher"]
+
+    repo.set_publisher_author("Publisher", "Alice", False)
+    restored = {item["rawAuthor"]: item for item in read()["authors"]}
+    assert restored["Alice"]["activeSeconds"] == (120 if has_activity else 0)

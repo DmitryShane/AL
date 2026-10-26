@@ -643,7 +643,8 @@ class ActivitySummaryService(
                 if raw_author in hidden_device_authors:
                     continue
 
-                composed(self)._ensure_summary_author(authors_by_raw, raw_author, profiles)
+                activity_author = composed(self).resolve_activity_author(raw_author)
+                composed(self)._ensure_summary_author(authors_by_raw, activity_author, profiles)
 
         for raw_author, author_row in authors_by_raw.items():
             if raw_author in hourly_by_author:
