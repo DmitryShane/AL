@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from ..activity_math import dt, _coerce_datetime, _isoformat_or_none, _new_id, _normalize_author, _normalize_telegram_username, _valid_time_zone_id
 from ..backend_composable_host import composed
 from ..mongo_composable import MongoComposableMixin
+
+
+LOGGER = logging.getLogger(__name__)
+MEETING_CLAIM_TIMEOUT = dt.timedelta(seconds=120)
+MEETING_DELIVERY_WINDOW = dt.timedelta(minutes=15)
 
 
 class TelegramMeetingDeliveryService(MongoComposableMixin):
@@ -30,96 +39,112 @@ class TelegramMeetingDeliveryService(MongoComposableMixin):
             return []
 
         local_date = local_now.date().isoformat()
-        days = {int(day) for day in settings.get("daysOfWeek", [0, 1, 2, 3, 4])}
-        if local_now.weekday() not in days or local_now < scheduled_local:
-            return []
-
-        existing = self.db.telegram_meeting_notifications.find_one({"date": local_date}, {"_id": 0})
-        meeting_recording = self._meeting_recording_started_today(local_now, now)
-        if meeting_recording:
-            if existing and existing.get("status") == "sent":
+        collection = self.db.telegram_meeting_notifications
+        existing = collection.find_one({"date": local_date}, {"_id": 0})
+        if not existing:
+            days = {int(day) for day in settings.get("daysOfWeek", [0, 1, 2, 3, 4])}
+            if local_now.weekday() not in days or local_now < scheduled_local:
                 return []
 
-            reminder_id = str((existing or {}).get("reminderId") or _new_id())
-            self.db.telegram_meeting_notifications.update_one(
-                {"date": local_date},
-                {
-                    "$set": {
-                        "date": local_date,
-                        "status": "closed",
-                        "closeAction": "meeting_already_started",
-                        "meetingRecordingId": meeting_recording.get("recordingId"),
-                        "meetingStartedAt": meeting_recording.get("startedAt"),
-                        "closedAt": now,
-                        "updatedAt": now,
-                    },
-                    "$setOnInsert": {
-                        "reminderId": reminder_id,
-                        "createdAt": now,
-                    },
-                },
-                upsert=True,
-            )
+            doc = {
+                "reminderId": _new_id(),
+                "date": local_date,
+                "time": settings.get("time"),
+                "timeZoneId": time_zone_id,
+                "scheduledAt": scheduled_local.astimezone(dt.UTC),
+                "status": "pending",
+                "attemptCount": 0,
+                "createdAt": now,
+                "updatedAt": now,
+            }
+            try:
+                collection.update_one({"date": local_date}, {"$setOnInsert": doc}, upsert=True)
+            except DuplicateKeyError:
+                # Another poller created this date between the read and the upsert.
+                pass
+            existing = collection.find_one({"date": local_date}, {"_id": 0})
+
+        if not existing or existing.get("status") not in {"pending", "claimed"}:
+            return []
+        reminder_id = str(existing.get("reminderId") or "")
+        if not reminder_id:
             return []
 
-        if existing:
-            if existing.get("status") != "pending":
+        scheduled_at = _coerce_datetime(existing.get("scheduledAt"))
+        if scheduled_at is None:
+            try:
+                saved_zone = _valid_time_zone_id(existing.get("timeZoneId")) or time_zone_id
+                saved_hour, saved_minute = str(existing.get("time") or settings.get("time") or "10:00").split(":", 1)
+                scheduled_at = dt.datetime.combine(
+                    dt.date.fromisoformat(existing["date"]),
+                    dt.time(int(saved_hour), int(saved_minute)),
+                    tzinfo=ZoneInfo(saved_zone),
+                ).astimezone(dt.UTC)
+            except (ValueError, TypeError, KeyError):
                 return []
-
-            reminder_id = str(existing.get("reminderId") or "")
-            if not reminder_id:
-                return []
-
-            self.db.telegram_meeting_notifications.update_one(
-                {"reminderId": reminder_id},
-                {"$set": {"status": "claimed", "lastClaimedAt": now, "updatedAt": now}},
-            )
-            return [self._telegram_meeting_notification_payload(existing)]
-
-        mention_authors = self._meeting_notification_mention_authors(settings.get("authorRawAuthors", []), local_date)
-        reminder_id = _new_id()
-
-        if not mention_authors:
-            self.db.telegram_meeting_notifications.update_one(
-                {"date": local_date},
-                {
-                    "$set": {
-                        "date": local_date,
-                        "status": "closed",
-                        "closeAction": "empty_mention_list",
-                        "closedAt": now,
-                        "updatedAt": now,
-                    },
-                    "$setOnInsert": {
-                        "reminderId": reminder_id,
-                        "createdAt": now,
-                    },
-                },
-                upsert=True,
-            )
+        if now < scheduled_at:
             return []
 
-        doc = {
+        # Compare the observed lease as well as status so concurrent readers cannot
+        # both claim it, or close a lease that another poller has just renewed.
+        lease_query = {
             "reminderId": reminder_id,
-            "date": local_date,
-            "time": settings.get("time"),
-            "timeZoneId": time_zone_id,
-            "scheduledAt": scheduled_local.astimezone(dt.UTC),
-            "mentionAuthors": mention_authors,
-            "status": "claimed",
-            "lastClaimedAt": now,
-            "createdAt": now,
-            "updatedAt": now,
+            "status": existing["status"],
+            "lastClaimedAt": existing.get("lastClaimedAt"),
+            "createdAt": existing.get("createdAt"),
         }
-        self.db.telegram_meeting_notifications.update_one(
-            {"date": local_date},
-            {"$setOnInsert": doc},
-            upsert=True,
-        )
-        saved = self.db.telegram_meeting_notifications.find_one({"date": local_date}, {"_id": 0}) or doc
-        if saved.get("reminderId") != reminder_id or saved.get("status") != "claimed":
+        close_fields: dict[str, Any] = {}
+        if now >= scheduled_at + MEETING_DELIVERY_WINDOW:
+            close_fields["closeAction"] = "delivery_window_expired"
+        else:
+            claimed_at = _coerce_datetime(existing.get("lastClaimedAt")) or _coerce_datetime(existing.get("createdAt"))
+            if existing["status"] == "claimed" and claimed_at and now < claimed_at + MEETING_CLAIM_TIMEOUT:
+                return []
+            meeting_recording = self._meeting_recording_started_today(local_now, now)
+            if meeting_recording:
+                close_fields = {
+                    "closeAction": "meeting_already_started",
+                    "meetingRecordingId": meeting_recording.get("recordingId"),
+                    "meetingStartedAt": meeting_recording.get("startedAt"),
+                }
+
+        mention_authors = []
+        if not close_fields:
+            mention_authors = self._meeting_notification_mention_authors(settings.get("authorRawAuthors", []), local_date)
+            if not mention_authors:
+                close_fields["closeAction"] = "empty_mention_list"
+
+        if close_fields:
+            closed = collection.find_one_and_update(
+                lease_query,
+                {"$set": {**close_fields, "status": "closed", "closedAt": now, "updatedAt": now}},
+                return_document=ReturnDocument.AFTER,
+            )
+            if closed and close_fields["closeAction"] == "delivery_window_expired":
+                LOGGER.info(
+                    "Meeting invitation closed: reminderId=%s attemptCount=%s reason=delivery_window_expired",
+                    reminder_id, closed.get("attemptCount", 0),
+                )
             return []
 
+        saved = collection.find_one_and_update(
+            lease_query,
+            {
+                "$set": {
+                    "status": "claimed", "lastClaimedAt": now, "updatedAt": now,
+                    "mentionAuthors": mention_authors, "scheduledAt": scheduled_at,
+                },
+                "$inc": {"attemptCount": 1},
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        if not saved:
+            return []
+        if existing["status"] == "claimed":
+            LOGGER.info(
+                "Meeting invitation reclaimed: reminderId=%s attemptCount=%s reason=claim_timeout",
+                reminder_id, saved["attemptCount"],
+            )
         return [self._telegram_meeting_notification_payload(saved)]
 
     def _meeting_notification_mention_authors(self, raw_authors: list[str], local_date: str) -> list[dict[str, Any]]:
